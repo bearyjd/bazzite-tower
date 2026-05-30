@@ -1,181 +1,173 @@
-# image-template
+# bazzite-tower
 
-This repository is meant to be a template for building your own custom [bootc](https://github.com/bootc-dev/bootc) image. This template is the recommended way to make customizations to any image published by the Universal Blue Project.
+A custom [bootc](https://github.com/bootc-dev/bootc) image derived from `ghcr.io/ublue-os/bazzite-nvidia-open:stable`, tailored for an NVIDIA RTX-equipped desktop workstation that doubles as a virtualization host and developer machine. Built nightly, signed with cosign, published to `ghcr.io/bearyjd/bazzite-tower`.
 
-# Community
+## Why this exists
 
-If you have questions about this template after following the instructions, try the following spaces:
-- [Universal Blue Forums](https://universal-blue.discourse.group/)
-- [Universal Blue Discord](https://discord.gg/WEu6BdFEtp)
-- [bootc discussion forums](https://github.com/bootc-dev/bootc/discussions) - This is not an Universal Blue managed space, but is an excellent resource if you run into issues with building bootc images.
+Stock Bazzite KDE is excellent for gaming, but every install needs the same post-boot setup: enable libvirt sockets, run `ujust setup-virtualization` (which is broken on the modular libvirt that ships in F44+), add yourself to libvirt and kvm groups, install Docker on top of Podman, drag in dev tooling. `bazzite-tower` bakes all of that into the image so the first boot is the only boot you need.
 
-# How to Use
+This is a **desktop (tower-form-factor) variant** — not for handhelds or Steam Deck. NVIDIA open kernel modules target RTX 30/40 series; older cards (pre-Turing) need the proprietary driver variant of Bazzite instead.
 
-To get started on your first bootc image, simply read and follow the steps in the next few headings.
-If you prefer instructions in video form, TesterTech created an excellent tutorial, embedded below.
+## What's included beyond stock Bazzite
 
-[![Video Tutorial](https://img.youtube.com/vi/IxBl11Zmq5w/0.jpg)](https://www.youtube.com/watch?v=IxBl11Zmq5wE)
+### Virtualization stack (qemu:///system works on first boot)
 
-## Step 0: Prerequisites
+- `qemu-kvm`, `libvirt`, `libvirt-daemon-kvm`, `libvirt-client`
+- `virt-manager`, `virt-install`, `virt-viewer`
+- `edk2-ovmf` (UEFI firmware for VMs)
+- `guestfs-tools`, `spice-gtk3`
 
-These steps assume you have the following:
-- A Github Account
-- A machine running a bootc image (e.g. Bazzite, Bluefin, Aurora, or Fedora Atomic)
-- Experience installing and using CLI programs
+### Developer tooling
 
-## Step 1: Preparing the Template
+- `android-tools` — adb/fastboot for device flashing
+- `flatpak-builder` — build local Flatpaks
+- `restic`, `rclone` — backup and cloud sync
+- `zsh` — alternative shell
+- `ccache` — compile caching for native builds
+- `podman-machine`, `podman-tui` — Podman VM and TUI
 
-### Step 1a: Copying the Template
+### Docker CE alongside Podman
 
-Select `Use this Template` on this page. You can set the name and description of your repository to whatever you would like, but all other settings should be left untouched.
+Docker CE is installed from the upstream `download.docker.com` repo (not Fedora's `moby-engine`):
 
-Once you have finished copying the template, you need to enable the Github Actions workflows for your new repository.
-To enable the workflows, go to the `Actions` tab of the new repository and click the button to enable workflows.
+- `docker-ce`, `docker-ce-cli`, `containerd.io`
+- `docker-buildx-plugin`, `docker-compose-plugin`
 
-### Step 1b: Cloning the New Repository
+The Docker repo file ships with **every section disabled**. Packages are pulled in via `--enablerepo=docker-ce-stable` only during the image-build transaction, so the repo never participates in runtime updates.
 
-Here I will defer to the much superior GitHub documentation on the matter. You can use whichever method is easiest.
-[GitHub Documentation](https://docs.github.com/en/repositories/creating-and-managing-repositories/cloning-a-repository)
+`iptable_nat` is registered in `/etc/modules-load.d/docker.conf` for docker-in-docker workloads.
 
-Once you have the repository on your local drive, proceed to the next step.
+## Design choices
 
-## Step 2: Initial Setup
+### Modular libvirt (no manual `ujust setup-virtualization`)
 
-### Step 2a: Creating a Cosign Key
+Fedora 44+ defaults to modular libvirt: per-driver daemons (`virtqemud`, `virtnetworkd`, `virtstoraged`, `virtnodedevd`) replace the monolithic `libvirtd`. `bazzite-tower` enables all four modular sockets at build time. The legacy `libvirtd.service` is masked so it can't race the modular daemons — that race is the root cause of broken `ujust setup-virtualization` on stock images. `libvirtd.socket` is enabled separately as a legacy compatibility shim; its shipped `Conflicts=` directive prevents it from binding the runtime socket against `virtqemud.socket`.
 
-Container signing is important for end-user security and is enabled on all Universal Blue images. By default the image builds *will fail* if you don't.
+### Two-layered libvirt/kvm access for the default user
 
-First, install the [cosign CLI tool](https://edu.chainguard.dev/open-source/sigstore/cosign/how-to-install-cosign/#installing-cosign-with-the-cosign-binary)
-With the cosign tool installed, run inside your repo folder:
+Bootc images don't bake in a default user — the first user is created by KDE Plasma's initial-setup on first boot. `bazzite-tower` uses two complementary mechanisms to give that user immediate virtualization access:
 
-```bash
-COSIGN_PASSWORD="" cosign generate-key-pair
-```
+1. **Polkit rule** (`/etc/polkit-1/rules.d/50-libvirt-wheel.rules`) — grants `unix-group:wheel` access to `org.libvirt.unix.manage` and `org.libvirt.unix.monitor`. Anyone in `wheel` can talk to `qemu:///system` from `virt-manager` and `virsh` immediately, no logout required.
+2. **First-boot oneshot** (`bazzite-tower-add-user-to-virt-groups.service`) — finds the first UID≥1000 user and runs `usermod -aG libvirt,kvm`. This grants real group membership for tools that check `groups` and for raw `/dev/kvm` access (polkit only covers libvirt). The unit retries every boot until a regular user exists, then writes a marker file (`/var/lib/bazzite-tower/virt-groups-applied`) so it stops running.
 
-The signing key will be used in GitHub Actions and will not work if it is password protected.
+Result: `virsh -c qemu:///system list` and `virt-manager` work on first login; `qemu-system-x86_64 -enable-kvm` works after one logout/login cycle.
 
-> [!WARNING]
-> Be careful to *never* accidentally commit `cosign.key` into your git repo. If this key goes out to the public, the security of your repository is compromised.
+### Docker CE instead of podman-docker
 
-Next, you need to add the key to GitHub. This makes use of GitHub's secret signing system.
+`podman-docker` (the package that aliases `docker` to `podman`) is removed at build time. Docker CE is installed alongside Podman. Both daemons can coexist — different binaries, different sockets, different state — pick whichever your workflow expects without alias trickery.
 
-<details>
-    <summary>Using the Github Web Interface (preferred)</summary>
+The Docker daemon is **not** enabled at boot. Run `sudo systemctl enable --now docker` only if you actually want it; otherwise stay on Podman.
 
-Go to your repository settings, under `Secrets and Variables` -> `Actions`
-![image](https://user-images.githubusercontent.com/1264109/216735595-0ecf1b66-b9ee-439e-87d7-c8cc43c2110a.png)
-Add a new secret and name it `SIGNING_SECRET`, then paste the contents of `cosign.key` into the secret and save it. Make sure it's the .key file and not the .pub file. Once done, it should look like this:
-![image](https://user-images.githubusercontent.com/1264109/216735690-2d19271f-cee2-45ac-a039-23e6a4c16b34.png)
-</details>
-<details>
-<summary>Using the Github CLI</summary>
+### Disabled-by-default external repos
 
-If you have the `github-cli` installed, run:
+External repos (currently just Docker CE) are dropped on disk with `enabled=0`. Packages are pulled via `--enablerepo=` flags during the build transaction only. Result: zero background traffic to external repos, no surprise upgrades, no third-party participation in runtime `bootc upgrade`.
+
+### Packages explicitly excluded
+
+To keep the image lean and focused, these are **not** installed even though some sibling images include them: `python3-ramalama`, `bcc`, `bpftrace`, `bpftop`, `tiptop`, `sysprof`, `nicstat`, `numactl`, `usbmuxd`, VS Code. Install any of them via `rpm-ostree install` or `flatpak` as needed.
+
+## Installing
+
+From any bootc-based system (Bazzite, Bluefin, Aurora, Silverblue, Fedora Atomic):
 
 ```bash
-gh secret set SIGNING_SECRET < cosign.key
+sudo bootc switch ghcr.io/bearyjd/bazzite-tower:latest
+sudo systemctl reboot
 ```
-</details>
 
-### Step 2b: Choosing Your Base Image
+The image is signed with cosign — the public key lives at `cosign.pub` in this repo. Bazzite's bootc policy enforces signature verification by default.
 
-To choose a base image, simply modify the line in the container file starting with `FROM`. This will be the image your image derives from, and is your starting point for modifications.
-For a base image, you can choose any of the Universal Blue images or start from a Fedora Atomic system. Below this paragraph is a dropdown with a non-exhaustive list of potential base images.
+## Tags
 
-<details>
-    <summary>Base Images</summary>
+- `latest` — current build of `main`
+- `latest.YYYYMMDD` — same image, date-stamped
+- `YYYYMMDD` — date-only tag
 
-- Bazzite: `ghcr.io/ublue-os/bazzite:stable`
-- Aurora: `ghcr.io/ublue-os/aurora:stable`
-- Bluefin: `ghcr.io/ublue-os/bluefin:stable`
-- Universal Blue Base: `ghcr.io/ublue-os/base-main:latest`
-- Fedora: `quay.io/fedora/fedora-bootc:42`
+CI rebuilds nightly at 10:05 UTC and on every push to `main`.
 
-You can find more Universal Blue images on the [packages page](https://github.com/orgs/ublue-os/packages).
-</details>
+## Hardware target
 
-If you don't know which image to pick, choosing the one your system is currently on is the best bet for a smooth transition. To find out what image your system currently uses, run the following command:
+- Desktop tower (not handheld / Deck)
+- NVIDIA RTX 30 / 40 series with **open** kernel modules
+- KVM-capable CPU (Intel VT-x or AMD-V)
+- Sufficient RAM for KDE Plasma + concurrent VMs
+
+If you have an older NVIDIA card (10/20 series, Maxwell/Pascal), rebase to a proprietary-driver Bazzite variant instead — open modules don't support pre-Turing.
+
+## Repository layout
+
+| Path | Purpose |
+|---|---|
+| `Containerfile` | Image build definition (`FROM` + invoke `build.sh`) |
+| `build_files/build.sh` | All customizations: packages, repos, units, polkit, first-boot oneshot |
+| `disk_config/disk.toml` | qcow2/raw config for bootc-image-builder |
+| `disk_config/iso-kde.toml` | KDE Plasma ISO config |
+| `disk_config/iso-gnome.toml` | GNOME ISO config |
+| `.github/workflows/build.yml` | CI: build, push to GHCR, sign with cosign |
+| `.github/workflows/build-disk.yml` | CI: produce qcow2 + anaconda-iso artifacts on demand |
+| `cosign.pub` | Public key for verifying signed images |
+| `Justfile` | Local build/run recipes (see below) |
+
+## Local build & VM testing
+
+Quick path for testing changes before rebasing your real machine:
+
 ```bash
-sudo bootc status
+just build               # build the container image locally
+just build-qcow2         # turn it into a bootable qcow2
+just run-vm-qcow2        # boot the qcow2 in qemu, browser console at localhost:8006
 ```
-This will show you all the info you need to know about your current image. The image you are currently on is displayed after `Booted image:`. Paste that information after the `FROM` statement in the Containerfile to set it as your base image.
 
-### Step 2c: Changing Names
+`just spawn-vm` boots via `systemd-vmspawn` instead, if you'd rather skip the browser console. Run `just` with no arguments for the full recipe list. Detailed Justfile documentation is below.
 
-Change the first line in the [Justfile](./Justfile) to your image's name.
-
-To commit and push all the files changed and added in step 2 into your Github repository:
-```bash
-git add Containerfile Justfile cosign.pub
-git commit -m "Initial Setup"
-git push
-```
-Once pushed, go look at the Actions tab on your Github repository's page.  The green checkmark should be showing on the top commit, which means your new image is ready!
-
-## Step 3: Switch to Your Image
-
-From your bootc system, run the following command substituting in your Github username and image name where noted.
-```bash
-sudo bootc switch ghcr.io/<username>/<image_name>
-```
-This should queue your image for the next reboot, which you can do immediately after the command finishes. You have officially set up your custom image! See the following section for an explanation of the important parts of the template for customization.
+---
 
 # Repository Contents
 
 ## Containerfile
 
-The [Containerfile](./Containerfile) defines the operations used to customize the selected image.This file is the entrypoint for your image build, and works exactly like a regular podman Containerfile. For reference, please see the [Podman Documentation](https://docs.podman.io/en/latest/Introduction.html).
+The [Containerfile](./Containerfile) defines the operations used to customize the selected image. This file is the entrypoint for the image build and works exactly like a regular podman Containerfile. For reference, see the [Podman Documentation](https://docs.podman.io/en/latest/Introduction.html).
 
 ## build.sh
 
-The [build.sh](./build_files/build.sh) file is called from your Containerfile. It is the best place to install new packages or make any other customization to your system. There are customization examples contained within it for your perusal.
+The [build.sh](./build_files/build.sh) file is called from the Containerfile. It is where every customization in this image lives: package installs, repo files, systemd unit drops, polkit rules, and the first-boot oneshot. Edit this file to change what's in the image.
 
 ## build.yml
 
-The [build.yml](./.github/workflows/build.yml) Github Actions workflow creates your custom OCI image and publishes it to the Github Container Registry (GHCR). By default, the image name will match the Github repository name. There are several environment variables at the start of the workflow which may be of interest to change.
+The [build.yml](./.github/workflows/build.yml) GitHub Actions workflow creates the custom OCI image and publishes it to the GitHub Container Registry (GHCR). The image name matches the GitHub repository name. Several environment variables at the start of the workflow may be of interest to change.
 
 # Building Disk Images
 
-This template provides an out of the box workflow for creating disk images (ISO, qcow, raw) for your custom OCI image which can be used to directly install onto your machines.
+This template provides an out-of-the-box workflow for creating disk images (ISO, qcow, raw) for the custom OCI image, which can be used to directly install onto machines.
 
-This template provides a way to upload the disk images that is generated from the workflow to a S3 bucket. The disk images will also be available as an artifact from the job, if you wish to use an alternate provider. To upload to S3 we use [rclone](https://rclone.org/) which is able to use [many S3 providers](https://rclone.org/s3/).
+This template provides a way to upload the disk images generated from the workflow to an S3 bucket. The disk images will also be available as artifacts from the job if you wish to use an alternate provider. To upload to S3 we use [rclone](https://rclone.org/), which supports [many S3 providers](https://rclone.org/s3/).
 
 ## Setting Up ISO Builds
 
-The [build-disk.yml](./.github/workflows/build-disk.yml) Github Actions workflow creates a disk image from your OCI image by utilizing the [bootc-image-builder](https://osbuild.org/docs/bootc/). In order to use this workflow you must complete the following steps:
+The [build-disk.yml](./.github/workflows/build-disk.yml) GitHub Actions workflow creates a disk image from your OCI image using the [bootc-image-builder](https://osbuild.org/docs/bootc/). To use this workflow:
 
 1. Modify `disk_config/iso.toml` to point to your custom container image before generating an ISO image.
-2. If you changed your image name from the default in `build.yml` then in the `build-disk.yml` file edit the `IMAGE_REGISTRY`, `IMAGE_NAME` and `DEFAULT_TAG` environment variables with the correct values. If you did not make changes, skip this step.
-3. Finally, if you want to upload your disk images to S3 then you will need to add your S3 configuration to the repository's Action secrets. This can be found by going to your repository settings, under `Secrets and Variables` -> `Actions`. You will need to add the following
-  - `S3_PROVIDER` - Must match one of the values from the [supported list](https://rclone.org/s3/)
-  - `S3_BUCKET_NAME` - Your unique bucket name
-  - `S3_ACCESS_KEY_ID` - It is recommended that you make a separate key just for this workflow
-  - `S3_SECRET_ACCESS_KEY` - See above.
-  - `S3_REGION` - The region your bucket lives in. If you do not know then set this value to `auto`.
-  - `S3_ENDPOINT` - This value will be specific to the bucket as well.
+2. If you changed your image name from the default in `build.yml`, then in `build-disk.yml` edit the `IMAGE_REGISTRY`, `IMAGE_NAME`, and `DEFAULT_TAG` environment variables to match. If you didn't, skip this step.
+3. If you want to upload your disk images to S3, add the S3 configuration to the repository's Action secrets (Settings → Secrets and Variables → Actions):
+   - `S3_PROVIDER` — must match one of the values from the [supported list](https://rclone.org/s3/)
+   - `S3_BUCKET_NAME` — your unique bucket name
+   - `S3_ACCESS_KEY_ID` — recommended to make a separate key for this workflow
+   - `S3_SECRET_ACCESS_KEY` — see above
+   - `S3_REGION` — the region your bucket lives in (set to `auto` if you don't know)
+   - `S3_ENDPOINT` — provider-specific endpoint URL
 
-Once the workflow is done, you'll find the disk images either in your S3 bucket or as part of the summary under `Artifacts` after the workflow is completed.
-
-# Artifacthub
-
-This template comes with the necessary tooling to index your image on [artifacthub.io](https://artifacthub.io). Use the `artifacthub-repo.yml` file at the root to verify yourself as the publisher. This is important to you for a few reasons:
-
-- The value of artifacthub is it's one place for people to index their custom images, and since we depend on each other to learn, it helps grow the community. 
-- You get to see your pet project listed with the other cool projects in Cloud Native.
-- Since the site puts your README front and center, it's a good way to learn how to write a good README, learn some marketing, finding your audience, etc. 
-
-[Discussion Thread](https://universal-blue.discourse.group/t/listing-your-custom-image-on-artifacthub/6446)
+Once the workflow is done, disk images land either in your S3 bucket or as part of the run summary under `Artifacts`.
 
 # Justfile Documentation
 
-The `Justfile` contains various commands and configurations for building and managing container images and virtual machine images using Podman and other utilities.
-To use it, you must have installed [just](https://just.systems/man/en/introduction.html) from your package manager or manually. It is available by default on all Universal Blue images.
+The `Justfile` contains commands and configurations for building and managing container images and virtual machine images using Podman and other utilities.
+To use it you must have [just](https://just.systems/man/en/introduction.html) installed from your package manager or manually. It's available by default on all Universal Blue images.
 
 ## Environment Variables
 
-- `image_name`: The name of the image (default: "image-template").
-- `default_tag`: The default tag for the image (default: "latest").
-- `bib_image`: The Bootc Image Builder (BIB) image (default: "quay.io/centos-bootc/bootc-image-builder:latest").
+- `image_name` — the name of the image (default: `bazzite-tower`)
+- `default_tag` — the default tag for the image (default: `latest`)
+- `bib_image` — the Bootc Image Builder image (default: `quay.io/centos-bootc/bootc-image-builder:latest`)
 
 ## Building The Image
 
@@ -188,12 +180,12 @@ just build $target_image $tag
 ```
 
 Arguments:
-- `$target_image`: The tag you want to apply to the image (default: `$image_name`).
-- `$tag`: The tag for the image (default: `$default_tag`).
+- `$target_image` — the tag to apply to the image (default: `$image_name`)
+- `$tag` — the tag for the image (default: `$default_tag`)
 
 ## Building and Running Virtual Machines and ISOs
 
-The below commands all build QCOW2 images. To produce or use a different type of image, substitute in the command with that type in the place of `qcow2`. The available types are `qcow2`, `iso`, and `raw`.
+The commands below build QCOW2 images by default. To produce or use a different type of image, substitute `qcow2` with that type. Available types: `qcow2`, `iso`, `raw`.
 
 ### `just build-qcow2`
 
@@ -221,7 +213,7 @@ just run-vm-qcow2 $target_image $tag
 
 ### `just spawn-vm`
 
-Runs a virtual machine using systemd-vmspawn.
+Runs a virtual machine using `systemd-vmspawn`.
 
 ```bash
 just spawn-vm rebuild="0" type="qcow2" ram="6G"
@@ -243,7 +235,7 @@ Cleans the repository by removing build artifacts.
 
 ### `just lint`
 
-Runs shell check on all Bash scripts.
+Runs shellcheck on all Bash scripts.
 
 ### `just format`
 
@@ -251,14 +243,8 @@ Runs shfmt on all Bash scripts.
 
 ## Additional resources
 
-For additional driver support, ublue maintains a set of scripts and container images available at [ublue-akmod](https://github.com/ublue-os/akmods). These images include the necessary scripts to install multiple kernel drivers within the container (Nvidia, OpenRazer, Framework...). The documentation provides guidance on how to properly integrate these drivers into your container image.
+For additional driver support, ublue maintains a set of scripts and container images at [ublue-akmods](https://github.com/ublue-os/akmods). These images include scripts to install multiple kernel drivers within the container (Nvidia, OpenRazer, Framework, etc.) — useful if you need to extend `bazzite-tower` with additional hardware support.
 
-## Community Examples
+---
 
-These are images derived from this template (or similar enough to this template). Reference them when building your image!
-
-- [m2Giles' OS](https://github.com/m2giles/m2os)
-- [bOS](https://github.com/bsherman/bos)
-- [Homer](https://github.com/bketelsen/homer/)
-- [Amy OS](https://github.com/astrovm/amyos)
-- [VeneOS](https://github.com/Venefilyn/veneos)
+Originally derived from the [ublue-os/image-template](https://github.com/ublue-os/image-template). Community resources: [Universal Blue Forums](https://universal-blue.discourse.group/), [Universal Blue Discord](https://discord.gg/WEu6BdFEtp), [bootc discussion forums](https://github.com/bootc-dev/bootc/discussions).

@@ -1,12 +1,12 @@
 # bazzite-tower
 
-A custom [bootc](https://github.com/bootc-dev/bootc) image derived from `ghcr.io/ublue-os/bazzite-nvidia-open:stable`, tailored for an NVIDIA RTX-equipped desktop workstation that doubles as a virtualization host and developer machine. Built weekly, signed with cosign, published to `ghcr.io/bearyjd/bazzite-tower`.
+A custom [bootc](https://github.com/bootc-dev/bootc) image derived from `ghcr.io/ublue-os/bazzite-nvidia:stable`, tailored for an NVIDIA RTX-equipped desktop/laptop workstation that doubles as a virtualization host and developer machine. Built weekly, signed with cosign, published to `ghcr.io/bearyjd/bazzite-tower`.
 
 ## Why this exists
 
 Stock Bazzite KDE is excellent for gaming, but every install needs the same post-boot setup: enable libvirt sockets, run `ujust setup-virtualization` (which is broken on the modular libvirt that ships in F44+), add yourself to libvirt and kvm groups, install Docker on top of Podman, drag in dev tooling. `bazzite-tower` bakes all of that into the image so the first boot is the only boot you need.
 
-This is a **desktop (tower-form-factor) variant** — not for handhelds or Steam Deck. NVIDIA open kernel modules target RTX 30/40 series; older cards (pre-Turing) need the proprietary driver variant of Bazzite instead.
+This is a **desktop/laptop variant** — not for handhelds or Steam Deck. It uses the **proprietary NVIDIA driver** rather than the open kernel modules: on hybrid (Optimus) laptops the proprietary driver is currently the more reliable choice for suspend/resume and power management, which the open modules still struggle with (see [Design choices](#nvidia-proprietary-driver-over-open-modules)). If you prefer the open modules (NVIDIA's default for Turing+), rebase the `FROM` to `bazzite-nvidia-open:stable`.
 
 ## What's included beyond stock Bazzite
 
@@ -53,6 +53,12 @@ The Docker repo file ships with **every section disabled**. Packages are pulled 
 The stack is socket-activated and enabled at boot, so `vm-start` is rarely needed — it's there for when you've manually stopped the daemons.
 
 ## Design choices
+
+### NVIDIA proprietary driver over open modules
+
+NVIDIA's open kernel modules are the default for Turing+ since driver R560 and are at performance parity, so they're the obvious pick on paper. But this image targets a **hybrid (Optimus) laptop** where the priority is reliable *host* dGPU use — PRIME render offload plus dependable suspend/resume — not GPU passthrough. That's exactly where the open modules still lag: NVIDIA's own driver docs list power management as a known-incomplete area, and upstream `open-gpu-kernel-modules` bug reports of suspend/hibernate failures on Intel+NVIDIA hybrid laptops remained open into 2026. Bazzite users on hybrid laptops have reported better stability (and lower idle power) on the proprietary driver.
+
+So `bazzite-tower` builds on `bazzite-nvidia:stable` (proprietary). On an RTX 40-series (Ada) card the proprietary driver is fully supported; the open modules remain one `FROM`-line swap away (`bazzite-nvidia-open:stable`) if you'd rather track NVIDIA's open default — and `bootc rollback` makes trying either low-risk.
 
 ### Modular libvirt (no manual `ujust setup-virtualization`)
 
@@ -111,12 +117,12 @@ CI rebuilds weekly (Sunday 06:00 UTC) and on every push to `main`.
 
 ## Hardware target
 
-- Desktop tower (not handheld / Deck)
-- NVIDIA RTX 30 / 40 series with **open** kernel modules
+- Desktop or laptop (not handheld / Deck)
+- NVIDIA GPU on the **proprietary** driver (developed against an RTX 4070 Max-Q / Ada on a hybrid Optimus laptop)
 - KVM-capable CPU (Intel VT-x or AMD-V)
 - Sufficient RAM for KDE Plasma + concurrent VMs
 
-If you have an older NVIDIA card (10/20 series, Maxwell/Pascal), rebase to a proprietary-driver Bazzite variant instead — open modules don't support pre-Turing.
+The proprietary driver supports Maxwell and newer, so there's no pre-Turing cutoff here. If you'd rather run NVIDIA's open kernel modules (default for Turing+), swap the Containerfile `FROM` to `bazzite-nvidia-open:stable` and rebuild.
 
 ## Repository layout
 

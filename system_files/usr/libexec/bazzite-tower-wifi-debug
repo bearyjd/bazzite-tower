@@ -24,6 +24,12 @@ echo
 echo "== loaded firmware / op_mode / version floor (track as kernel + firmware update) =="
 sudo dmesg 2>/dev/null | grep -iE 'loaded firmware|op_mode|minimum version|maximum version|no suitable firmware' | tail -n 12 || echo "  none"
 echo
+echo "== kernel + firmware package versions (compare against upstream fixes) =="
+echo "  running kernel: $(uname -r)"
+for p in kernel kernel-core linux-firmware iwlwifi-mvm-firmware iwlwifi-dvm-firmware; do
+    v=$(rpm -q "${p}" 2>/dev/null) && [[ "${v}" != *"not installed"* ]] && echo "  ${v}"
+done
+echo
 echo "== loaded wireless modules =="
 lsmod | grep -iE 'iwlwifi|iwlmvm|iwlmld|cfg80211|mac80211' || echo "  no wireless modules loaded"
 echo
@@ -52,8 +58,11 @@ else
     echo "  no wifi interface found via 'iw dev'"
 fi
 echo
-echo "== iwlwifi firmware shipped in image =="
-ls /usr/lib/firmware/iwlwifi-* 2>/dev/null | head || echo "  no iwlwifi-* firmware files found"
+echo "== BE200 (gl-c0-fm-c0) firmware versions present (newer files = upstream progress) =="
+ls -1 /usr/lib/firmware/iwlwifi-gl-c0-fm-c0-* 2>/dev/null | sed 's#.*/##' || echo "  none for this card"
+echo
+echo "== all iwlwifi firmware present (total file count) =="
+printf '  files: %s\n' "$(ls /usr/lib/firmware/iwlwifi-* 2>/dev/null | wc -l)"
 echo
 echo "== live kernel cmdline (note intel_iommu / iommu=pt) =="
 cat /proc/cmdline

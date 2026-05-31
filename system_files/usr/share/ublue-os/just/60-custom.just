@@ -47,7 +47,8 @@ wifi-debug:
     #!/usr/bin/bash
     # Collects everything needed to root-cause "the Wi-Fi card isn't even there":
     # PCI/USB enumeration, driver load, firmware crashes/DMAR faults, rfkill
-    # blocks, NetworkManager state, and the live kernel cmdline (IOMMU kargs).
+    # blocks, the NetworkManager wifi backend + supplicant, a driver-level scan
+    # that bypasses NetworkManager, and the live kernel cmdline (IOMMU kargs).
     # Read-only and safe to run offline. Pipe to a file to share: `ujust wifi-debug > wifi.txt`
     set +e
     echo "== rfkill (soft/hard radio blocks) =="
@@ -60,16 +61,35 @@ wifi-debug:
     lsusb 2>/dev/null | grep -iE 'wireless|wi-?fi|802\.11|wlan' || echo "  none"
     echo
     echo "== iwlwifi / 80211 kernel messages (look for DMAR faults, ucode errors) =="
-    sudo dmesg 2>/dev/null | grep -iE 'iwlwifi|iwlmvm|cfg80211|mac80211|firmware|DMAR' | tail -n 40 || echo "  none"
+    sudo dmesg 2>/dev/null | grep -iE 'iwlwifi|iwlmvm|iwlmld|cfg80211|mac80211|firmware|DMAR' | tail -n 40 || echo "  none"
     echo
     echo "== loaded wireless modules =="
-    lsmod | grep -iE 'iwlwifi|iwlmvm|cfg80211|mac80211' || echo "  no wireless modules loaded"
+    lsmod | grep -iE 'iwlwifi|iwlmvm|iwlmld|cfg80211|mac80211' || echo "  no wireless modules loaded"
     echo
     echo "== NetworkManager devices =="
     nmcli -f DEVICE,TYPE,STATE device 2>/dev/null || echo "  nmcli unavailable"
     echo
     echo "== NetworkManager radio =="
     nmcli radio 2>/dev/null || echo "  nmcli unavailable"
+    echo
+    echo "== NetworkManager wifi backend (must match a RUNNING supplicant below) =="
+    grep -rHiE 'wifi\.backend' /etc/NetworkManager /usr/lib/NetworkManager 2>/dev/null || echo "  (unset → NetworkManager default: wpa_supplicant)"
+    echo
+    echo "== supplicant services (the selected backend has to be active) =="
+    for svc in wpa_supplicant iwd; do printf '  %-16s ' "${svc}:"; systemctl is-active "${svc}" 2>/dev/null || true; done
+    echo
+    echo "== driver-level scan, bypassing NetworkManager (proves the radio itself works) =="
+    dev=$(iw dev 2>/dev/null | awk '/Interface/{print $2; exit}')
+    if [[ -n "${dev:-}" ]]; then
+        sudo ip link set "${dev}" up 2>/dev/null
+        count=$(sudo iw dev "${dev}" scan 2>/dev/null | grep -c '^[[:space:]]*SSID:')
+        echo "  ${dev}: ${count} networks visible at the driver level"
+        echo "  NOTE: if this is >0 but NetworkManager shows the device 'unavailable',"
+        echo "        the radio is FINE — the fault is the wifi.backend above pointing at"
+        echo "        a supplicant that isn't running (e.g. wifi.backend=iwd, iwd inactive)."
+    else
+        echo "  no wifi interface found via 'iw dev'"
+    fi
     echo
     echo "== iwlwifi firmware shipped in image =="
     ls /usr/lib/firmware/iwlwifi-* 2>/dev/null | head || echo "  no iwlwifi-* firmware files found"

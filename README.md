@@ -62,9 +62,11 @@ For tooling that still expects the monolithic `/run/libvirt/libvirt-sock`, `virt
 
 The default NAT network (shipped by `libvirt-daemon-config-network`) is marked autostart at build time by creating the `autostart/default.xml` symlink that `virsh net-autostart` would — so guests get networking on first boot without manual setup.
 
-### IOMMU enabled for PCI passthrough
+### IOMMU + VFIO enabled for GPU passthrough
 
 `intel_iommu=on iommu=pt` are baked in as kernel arguments via a bootc `kargs.d` fragment (`/usr/lib/bootc/kargs.d/00-iommu.toml`), enabling VFIO/PCI passthrough to guests. This uses bootc's native karg mechanism rather than `rpm-ostree kargs`, which can't run during an image build. Target hardware is Intel (ThinkPad P1); `iommu=pt` keeps DMA-remapping overhead off host-only devices.
+
+A second fragment (`/usr/lib/bootc/kargs.d/10-vfio.toml`) adds `rd.driver.pre=vfio-pci vfio_pci.disable_vga=1` to load `vfio-pci` early. These prepare for passthrough but bind nothing on their own — choose a binding strategy and add `vfio-pci.ids=…` (static) or a libvirt hook (dynamic) when ready. The ThinkPad P1's RTX 4070 Max-Q is a muxless Optimus dGPU (render-only, no display outputs), so guest output is viewed via Looking Glass; the `kvmfr` module and its `kvmfr.static_size_mb` default come from the Bazzite base.
 
 ### Two-layered libvirt/kvm access for the default user
 

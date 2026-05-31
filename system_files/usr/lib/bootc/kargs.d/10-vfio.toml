@@ -1,0 +1,19 @@
+# VFIO PCI passthrough prep for GPU passthrough to a libvirt guest.
+#
+# These load vfio-pci early in the initramfs and quiet its VGA arbitration so it
+# can claim a passthrough device cleanly. They match the current ThinkPad cmdline
+# and are binding-strategy-agnostic: on their own they bind NOTHING (there is no
+# vfio-pci.ids here), so the host driver still gets the GPU until you opt in.
+#
+# This is a MUXLESS Optimus laptop — the RTX 4070 Max-Q is render-only:
+#   01:00.0 3D controller [10de:2820]   (no display outputs, no HDMI-audio function)
+# so the dGPU framebuffer is only viewable via Looking Glass. The kvmfr module and
+# the kvmfr.static_size_mb default karg already come from the Bazzite base.
+#
+# To enable STATIC binding (dGPU dedicated to the guest at boot — recommended for
+# a muxless Looking Glass setup, since the laptop panel runs on the Intel iGPU),
+# add the single device id (there is no separate audio function to list):
+#   kargs = ["rd.driver.pre=vfio-pci", "vfio_pci.disable_vga=1", "vfio-pci.ids=10de:2820"]
+# Muxless passthrough also usually needs the GPU vBIOS handed to the guest via a
+# <rom file='...'/> entry in the domain XML.
+kargs = ["rd.driver.pre=vfio-pci", "vfio_pci.disable_vga=1"]

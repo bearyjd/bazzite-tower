@@ -6,6 +6,18 @@ COPY build_files /
 # Desktop variant — not deck-based, tracks F44+
 FROM ghcr.io/ublue-os/bazzite-nvidia-open:stable
 
+# OCI image labels. These are baked into the image for local `podman build`;
+# CI additionally layers ArtifactHub/metadata labels via docker/metadata-action.
+LABEL org.opencontainers.image.title="bazzite-tower"
+LABEL org.opencontainers.image.description="Bazzite desktop + QEMU/libvirt/Docker for ThinkPad P1"
+LABEL org.opencontainers.image.source="https://github.com/bearyjd/bazzite-tower"
+
+### SYSTEM FILES
+# Static content baked verbatim into the image: systemd units, ujust recipes,
+# and bootc kernel-argument fragments. Copied before build.sh runs so it can
+# enable the units that land here.
+COPY system_files/ /
+
 ### MODIFICATIONS
 RUN --mount=type=bind,from=ctx,source=/,target=/ctx \
     --mount=type=cache,dst=/var/cache \

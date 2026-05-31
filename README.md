@@ -49,8 +49,17 @@ The Docker repo file ships with **every section disabled**. Packages are pulled 
 | `ujust vm-list` | `virsh -c qemu:///system list --all` |
 | `ujust vm-net-status` | `virsh -c qemu:///system net-list --all` |
 | `ujust fix-vm-groups` | Add the current user to `kvm`, `libvirt`, `docker` (then log out/in) |
+| `ujust wifi-debug` | Dump Wi-Fi diagnostics (rfkill, `lspci`, `iwlwifi`/`DMAR` dmesg, modules, NetworkManager, firmware, kernel cmdline) — read-only, works offline |
 
 The stack is socket-activated and enabled at boot, so `vm-start` is rarely needed — it's there for when you've manually stopped the daemons.
+
+### Wi-Fi not detected?
+
+If the Wi-Fi card isn't detected after a boot — no `wlan0`, NetworkManager shows no Wi-Fi device — run `ujust wifi-debug` (it works without a network) and read the output top-down:
+
+- **`rfkill` shows a hard block** → a physical/Fn switch or a BIOS setting, not the image.
+- **`lspci` doesn't list the Intel card at all** → disabled in BIOS or a hardware/seating issue.
+- **`lspci` lists the card but `dmesg` shows `iwlwifi ... DMAR` faults or `Failed to start ... ucode`** → the IOMMU is knocking out `iwlwifi`. The ThinkPad P1's Intel AX211 (Wi-Fi 6E, CNVi) can fail to initialize under `intel_iommu=on`, and the wireless device then never registers — which looks like the card is missing. Confirm by rebooting, pressing `e` in GRUB, removing `intel_iommu=on iommu=pt` from the `linux` line, and booting once. If Wi-Fi returns, the IOMMU karg (`/usr/lib/bootc/kargs.d/00-iommu.toml`, added for PCI passthrough) is the cause — drop that fragment (or the kargs) if you don't need VFIO passthrough, and rebuild.
 
 ## Design choices
 

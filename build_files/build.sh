@@ -167,5 +167,14 @@ EOF
 # regular user exists, then drops a marker so it stops running.
 systemctl enable bazzite-tower-firstboot.service
 
+# ── Wi-Fi backend guard: don't let a stale wifi.backend=iwd strand Wi-Fi ───────
+# /etc persists across a bootc rebase, so a `wifi.backend=iwd` file from a
+# previous image can outlive its enabled iwd service — NetworkManager then points
+# at a supplicant that never runs and every Wi-Fi device reports `unavailable`.
+# This unit runs before NetworkManager each boot and forces the default
+# wpa_supplicant backend whenever iwd is selected but not enabled (and backs off
+# again the moment iwd is properly enabled). Ships in system_files/.
+systemctl enable bazzite-tower-wifi-backend-guard.service
+
 # ── Cleanup ───────────────────────────────────────────────────────────────────
 dnf clean all

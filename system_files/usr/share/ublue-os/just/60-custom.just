@@ -8,12 +8,12 @@
 # Start the libvirt virtualization stack (modular daemons)
 [group('Virtualization')]
 vm-start:
-    sudo systemctl start virtqemud.socket virtnetworkd.socket virtstoraged.socket virtnodedevd.socket
+    sudo systemctl start virtqemud.socket virtnetworkd.socket virtnodedevd.socket virtnwfilterd.socket virtstoraged.socket virtproxyd.socket
 
 # Stop the libvirt virtualization stack (modular daemons)
 [group('Virtualization')]
 vm-stop:
-    sudo systemctl stop virtqemud.socket virtnetworkd.socket virtstoraged.socket virtnodedevd.socket
+    sudo systemctl stop virtqemud.socket virtnetworkd.socket virtnodedevd.socket virtnwfilterd.socket virtstoraged.socket virtproxyd.socket
 
 # List all VMs known to the system libvirt instance
 [group('Virtualization')]
@@ -36,6 +36,7 @@ fix-vm-groups:
             groups="${groups:+$groups,}$group"
         fi
     done
+    [ -n "$groups" ] || { echo "None of kvm/libvirt/docker exist on this system."; exit 1; }
     sudo usermod -aG "$groups" "$USER"
     echo "Added $USER to: $groups"
     echo "Log out and back in (or reboot) for the new group membership to take effect."

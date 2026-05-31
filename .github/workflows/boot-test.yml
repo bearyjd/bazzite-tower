@@ -1,0 +1,141 @@
+---
+# Layer 3 of docs/downstream-change-tracking.md — runtime boot test.
+#
+# Where the smoke gate in build.yml proves the customizations are *present*, this
+# boots the image's systemd as PID 1 with `systemd-nspawn --boot` and runs
+# tests/boot-check.sh inside it, so the QEMU stack and the Wi-Fi guard are
+# exercised *at runtime* — most importantly it connects to qemu:///system, the
+# end-to-end proof that the qemu user resolves and virtqemud initializes
+# (regression #8). GitHub-hosted runners have no /dev/kvm, so a full KVM/TCG VM
+# boot isn't practical; nspawn shares the host kernel and gives a fast, reliable
+# systemd-level boot. kargs application (needs a bootloader) is out of scope here
+# and stays covered by the smoke test's kargs.d presence check.
+#
+# This is an independent signal, not a promotion gate: it builds its own image
+# and, on scheduled/manual runs, opens a `boot-test-failure` issue on failure.
+name: Boot test
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'Containerfile'
+      - 'build_files/**'
+      - 'system_files/**'
+      - 'tests/boot-check.sh'
+      - '.github/workflows/boot-test.yml'
+  schedule:
+    - cron: '0 7 * * 0'  # 07:00 UTC Sunday — after the 06:00 image build
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write   # open/close the boot-test-failure issue on scheduled runs
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  TEST_IMAGE: bazzite-tower:boottest
+
+jobs:
+  boot-test:
+    name: Boot image under systemd-nspawn
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - name: Maximize build space
+        uses: ublue-os/remove-unwanted-software@695eb75bc387dbcd9685a8e72d23439d8686cba6
+
+      - name: Install systemd-nspawn
+        run: sudo apt-get update && sudo apt-get install -y systemd-container
+
+      - name: Build image
+        run: podman build --pull=newer -t "${TEST_IMAGE}" .
+
+      - name: Export rootfs
+        run: |
+          set -euo pipefail
+          mkdir -p rootfs
+          cid="$(podman create "${TEST_IMAGE}")"
+          podman export "${cid}" | sudo tar -x -C rootfs
+          podman rm "${cid}" >/dev/null
+
+      - name: Inject boot-test oneshot
+        run: |
+          set -euo pipefail
+          sudo install -Dm755 tests/boot-check.sh rootfs/usr/local/bin/boot-check.sh
+          sudo install -Dm644 /dev/stdin rootfs/etc/systemd/system/bazzite-tower-boottest.service <<'EOF'
+          [Unit]
+          Description=bazzite-tower runtime boot test
+          After=multi-user.target
+          [Service]
+          Type=oneshot
+          ExecStart=/usr/local/bin/boot-check.sh
+          [Install]
+          WantedBy=multi-user.target
+          EOF
+          sudo mkdir -p rootfs/etc/systemd/system/multi-user.target.wants
+          sudo ln -sf ../bazzite-tower-boottest.service \
+            rootfs/etc/systemd/system/multi-user.target.wants/bazzite-tower-boottest.service
+          # Seed FAIL so a wedged/timed-out boot reads as failure, not success.
+          echo FAIL | sudo tee rootfs/boot-test-result >/dev/null
+
+      - name: Boot under systemd-nspawn
+        run: |
+          # boot-check.sh powers the container off when done; timeout is a backstop.
+          sudo timeout 600 systemd-nspawn \
+            --directory=rootfs \
+            --boot \
+            --register=no \
+            --console=read-only \
+            --machine=bztest </dev/null || true
+
+      - name: Evaluate result
+        run: |
+          set -uo pipefail
+          echo "===== boot-check log ====="
+          sudo cat rootfs/boot-test-log 2>/dev/null || echo "(no log captured — container may not have booted)"
+          result="$(sudo cat rootfs/boot-test-result 2>/dev/null || echo MISSING)"
+          echo "===== result: ${result} ====="
+          [[ "${result}" == "PASS" ]]
+
+      - name: Open/refresh boot-test issue on failure
+        if: failure() && github.event_name != 'pull_request'
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
+        with:
+          script: |
+            const label = 'boot-test-failure';
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const body = [
+              `The runtime **boot test** failed on \`${context.ref}\` (event \`${context.eventName}\`).`,
+              ``,
+              `Run: ${runUrl}`,
+              ``,
+              `The image booted under systemd-nspawn but a runtime check failed — most likely the qemu:///system connect (qemu user / virtqemud init) or the Wi-Fi backend guard. The smoke gate only checks these are *configured*; this checks they *work*. See \`docs/downstream-change-tracking.md\` and the run's boot-check log.`,
+            ].join('\n');
+            const { owner, repo } = context.repo;
+            const open = await github.rest.issues.listForRepo({ owner, repo, state: 'open', labels: label });
+            if (open.data.length > 0) {
+              await github.rest.issues.createComment({ owner, repo, issue_number: open.data[0].number, body });
+            } else {
+              await github.rest.issues.create({ owner, repo, title: '🧪 Runtime boot test failing', labels: [label], body });
+            }
+
+      - name: Close boot-test issue on success
+        if: success() && github.event_name != 'pull_request' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
+        with:
+          script: |
+            const label = 'boot-test-failure';
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const { owner, repo } = context.repo;
+            const open = await github.rest.issues.listForRepo({ owner, repo, state: 'open', labels: label });
+            for (const issue of open.data) {
+              await github.rest.issues.createComment({ owner, repo, issue_number: issue.number, body: `Boot test is green again (${runUrl}). Closing.` });
+              await github.rest.issues.update({ owner, repo, issue_number: issue.number, state: 'closed' });
+            }

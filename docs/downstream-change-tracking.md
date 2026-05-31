@@ -1,8 +1,8 @@
 # Staying in sync with upstream Bazzite without silently breaking
 
-**Status:** Layers 1, 2, 4 and 5 implemented (gate + smoke tests + upstream
-package-diff early warning + issue notifications). Layer 3 (boot test) and the
-Section 4 digest-pin decision remain to do.
+**Status:** Layers 1–5 implemented (gate + smoke tests + runtime boot test +
+upstream package-diff early warning + issue notifications). The Section 4
+digest-pin decision is the only open item.
 **Goal:** keep `bazzite-tower` riding the cutting edge of upstream Bazzite
 (`ghcr.io/ublue-os/bazzite-nvidia:stable`) while guaranteeing that an upstream
 change can never silently land a broken image on the laptop — and that we get a
@@ -139,6 +139,19 @@ non-zero on the first failure, called from the `test` job. Near-zero cost,
 catches a large fraction of regressions.
 
 ### Layer 3 — Boot test (the only thing that proves *runtime* behavior)
+
+> **Implemented (with a hosted-runner-friendly twist).** GitHub-hosted runners
+> have no `/dev/kvm`, so instead of a TCG VM boot,
+> `.github/workflows/boot-test.yml` boots the image's systemd as PID 1 with
+> `systemd-nspawn --boot` and runs `tests/boot-check.sh` inside it. That reliably
+> exercises socket activation, the oneshots and the guard, and — the key check —
+> **connects to `qemu:///system`**, the end-to-end proof the qemu user resolves
+> and `virtqemud` initializes (regression #8). Checks that genuinely need a real
+> kernel/bootloader/netfilter (kargs application, full NM device management, the
+> Docker daemon) are SOFT (reported, non-fatal); kargs presence stays covered by
+> the smoke test. Runs on image-affecting PRs, weekly (Sun 07:00 UTC, after the
+> build), and on demand; scheduled failures open a `boot-test-failure` issue.
+> The original VM-based sketch below is kept for reference.
 
 Reuse the existing [`build-disk.yml`](../.github/workflows/build-disk.yml) qcow2
 output. Boot it (TCG is acceptable if the runner has no `/dev/kvm`; we only need

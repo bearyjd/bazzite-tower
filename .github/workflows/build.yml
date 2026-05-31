@@ -5,7 +5,7 @@ on:
     branches:
       - main
   schedule:
-    - cron: '05 10 * * *'  # 10:05am UTC everyday
+    - cron: '0 6 * * 0'  # 06:00 UTC every Sunday
   push:
     branches:
       - main
@@ -14,8 +14,8 @@ on:
   workflow_dispatch:
 
 env:
-  IMAGE_DESC: "My Customized Universal Blue Image"
-  IMAGE_KEYWORDS: "bootc,ublue,universal-blue"
+  IMAGE_DESC: "Bazzite desktop + QEMU/libvirt/Docker for ThinkPad P1"
+  IMAGE_KEYWORDS: "bootc,ublue,universal-blue,bazzite,virtualization"
   IMAGE_LOGO_URL: "https://avatars.githubusercontent.com/u/120078124?s=200&v=4"  # Put your own image here for a fancy profile on https://artifacthub.io/!
   IMAGE_NAME: "${{ github.event.repository.name }}"  # output image name, usually same as repo name
   IMAGE_REGISTRY: "ghcr.io/${{ github.repository_owner }}"  # do not edit
@@ -34,6 +34,11 @@ jobs:
       contents: read
       packages: write
       id-token: write
+
+    # Exposed as env so step `if:` guards can test for its presence — the
+    # `secrets` context is not available directly inside `if:` expressions.
+    env:
+      SIGNING_SECRET: ${{ secrets.SIGNING_SECRET }}
 
     steps:
       - name: Prepare environment
@@ -71,7 +76,7 @@ jobs:
             type=raw,value=${{ env.DEFAULT_TAG }}
             type=raw,value=${{ env.DEFAULT_TAG }}.{{date 'YYYYMMDD'}}
             type=raw,value={{date 'YYYYMMDD'}}
-            type=sha,enable=${{ github.event_name == 'pull_request' }}
+            type=sha,prefix=,format=short
             type=ref,event=pr
           labels: |
             io.artifacthub.package.readme-url=https://raw.githubusercontent.com/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}/${{ github.sha }}/README.md
@@ -153,18 +158,22 @@ jobs:
           username: ${{ env.REGISTRY_USER }}
           password: ${{ env.REGISTRY_PASSWORD }}
 
-      # This section is optional and only needs to be enabled if you plan on distributing
-      # your project for others to consume. You will need to create a public and private key
-      # using Cosign and save the private key as a repository secret in Github for this workflow
-      # to consume. For more details, review the image signing section of the README.
+      # Image signing with cosign. These steps run automatically once a
+      # SIGNING_SECRET repository secret exists; until then they are skipped via
+      # the `env.SIGNING_SECRET != ''` guard, so the build never fails on its
+      # absence. To enable signing:
+      #   1. cosign generate-key-pair        # produces cosign.key + cosign.pub
+      #   2. Add the cosign.key contents as the SIGNING_SECRET repo secret
+      #      (Settings -> Secrets and variables -> Actions -> New repository secret).
+      #   3. Commit the existing cosign.pub so consumers can verify with --key.
       - name: Install Cosign
         uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
-        if: github.event_name != 'pull_request' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+        if: github.event_name != 'pull_request' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && env.SIGNING_SECRET != ''
         with:
           cosign-release: 'v2.6.3'
 
       - name: Sign container image
-        if: github.event_name != 'pull_request' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+        if: github.event_name != 'pull_request' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && env.SIGNING_SECRET != ''
         run: |
           IMAGE_FULL="${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAME }}"
           for tag in ${{ steps.metadata.outputs.tags }}; do

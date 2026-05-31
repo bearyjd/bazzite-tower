@@ -1,6 +1,6 @@
 # bazzite-tower
 
-A custom [bootc](https://github.com/bootc-dev/bootc) image derived from `ghcr.io/ublue-os/bazzite-nvidia-open:stable`, tailored for an NVIDIA RTX-equipped desktop workstation that doubles as a virtualization host and developer machine. Built nightly, signed with cosign, published to `ghcr.io/bearyjd/bazzite-tower`.
+A custom [bootc](https://github.com/bootc-dev/bootc) image derived from `ghcr.io/ublue-os/bazzite-nvidia-open:stable`, tailored for an NVIDIA RTX-equipped desktop workstation that doubles as a virtualization host and developer machine. Built weekly, signed with cosign, published to `ghcr.io/bearyjd/bazzite-tower`.
 
 ## Why this exists
 
@@ -105,8 +105,9 @@ The image is signed with cosign — the public key lives at `cosign.pub` in this
 - `latest` — current build of `main`
 - `latest.YYYYMMDD` — same image, date-stamped
 - `YYYYMMDD` — date-only tag
+- `<short-sha>` — the 7-character git SHA of the build commit
 
-CI rebuilds nightly at 10:05 UTC and on every push to `main`.
+CI rebuilds weekly (Sunday 06:00 UTC) and on every push to `main`.
 
 ## Hardware target
 

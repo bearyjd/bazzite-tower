@@ -2,9 +2,13 @@
 FROM scratch AS ctx
 COPY build_files /
 
-# Base: bazzite KDE + Nvidia open kernel modules (RTX 30/40 series recommended)
+# Base: bazzite KDE + proprietary NVIDIA driver. Chosen over the -open variant
+# for more reliable suspend/resume and power management on this Optimus laptop —
+# the open kernel modules still have known gaps there (NVIDIA's own docs flag
+# power management; upstream hybrid-laptop suspend bugs remained open into 2026).
+# Swap to ghcr.io/ublue-os/bazzite-nvidia-open:stable to use the open modules.
 # Desktop variant — not deck-based, tracks F44+
-FROM ghcr.io/ublue-os/bazzite-nvidia-open:stable
+FROM ghcr.io/ublue-os/bazzite-nvidia:stable
 
 # OCI image labels. These are baked into the image for local `podman build`;
 # CI additionally layers ArtifactHub/metadata labels via docker/metadata-action.

@@ -1,6 +1,8 @@
 # Staying in sync with upstream Bazzite without silently breaking
 
-**Status:** design / tracking doc (no CI changes yet)
+**Status:** Layers 1, 2 and 5 implemented (gate + smoke tests + issue
+notifications). Layers 3 (boot test) and 4 (package-diff early warning), and the
+Section 4 digest-pin decision, remain to do.
 **Goal:** keep `bazzite-tower` riding the cutting edge of upstream Bazzite
 (`ghcr.io/ublue-os/bazzite-nvidia:stable`) while guaranteeing that an upstream
 change can never silently land a broken image on the laptop — and that we get a
@@ -74,6 +76,13 @@ The specific upstream changes that can trigger each failure:
 ---
 
 ## 3. The plan (layered, in priority order)
+
+> **Implemented (Layers 1, 2, 5).** `build.yml` now runs `tests/smoke.sh`
+> against the freshly built image *before* the login/push steps, so a failing
+> assertion stops the job and `:latest` is never overwritten. On a
+> push/schedule failure it opens (or comments on) a deduplicated `ci-failure`
+> issue, and closes it again when the default branch goes green. Run the same
+> checks locally with `just smoke`. Layers 3 and 4 below are still to do.
 
 ### Layer 1 — Promotion gating (highest value)
 

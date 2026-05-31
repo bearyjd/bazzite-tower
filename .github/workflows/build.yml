@@ -34,6 +34,7 @@ jobs:
       contents: read
       packages: write
       id-token: write
+      issues: write   # open/close a tracking issue when the gate fails
 
     # Exposed as env so step `if:` guards can test for its presence — the
     # `secrets` context is not available directly inside `if:` expressions.
@@ -110,6 +111,16 @@ jobs:
           labels: ${{ steps.metadata.outputs.labels }}
           oci: false
 
+      # ── Promotion gate ──────────────────────────────────────────────────────
+      # Run offline assertions against the freshly built (not-yet-pushed) image.
+      # This step sits BEFORE login/push, so a failure here means the broken
+      # image is never published: the `:latest` tag the laptop tracks stays on
+      # the last-good image, and the issue-on-failure step below alerts us.
+      # Runs on PRs too (red check, no issue) so regressions surface pre-merge.
+      - name: Smoke test built image
+        run: |
+          podman run --rm -i "${IMAGE_NAME}:${DEFAULT_TAG}" bash -s < tests/smoke.sh
+
       # Rechunk is a script that we use on Universal Blue to make sure there isnt a single huge layer when your image gets published.
       # This does not make your image faster to download, just provides better resumability and fixes a few errors.
       # Documentation for Rechunk is provided on their github repository at https://github.com/hhd-dev/rechunk
@@ -184,3 +195,49 @@ jobs:
           COSIGN_EXPERIMENTAL: false
           COSIGN_PRIVATE_KEY: ${{ secrets.SIGNING_SECRET }}
           COSIGN_PASSWORD: ""
+
+      # ── Notification: open/refresh a tracking issue when the gate fails ───────
+      # PR failures already show as a red check on the PR, so only file an issue
+      # for push/schedule runs on the default branch. Deduplicated by the
+      # `ci-failure` label: comment on the existing open issue instead of opening
+      # a second one. (GitHub also emails the cron's last editor on a scheduled
+      # failure, so this is the tracked, in-repo complement to that.)
+      - name: Open tracking issue on failure
+        if: failure() && github.event_name != 'pull_request'
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
+        with:
+          script: |
+            const label = 'ci-failure';
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const body = [
+              `The **${context.workflow}** workflow failed on \`${context.ref}\` (commit \`${context.sha.slice(0,7)}\`, event \`${context.eventName}\`).`,
+              ``,
+              `Run: ${runUrl}`,
+              ``,
+              `This usually means an upstream Bazzite change broke the build or tripped a smoke-test assertion (qemu user, modular \`virt*.socket\`s, the Wi-Fi backend guard, IOMMU kargs, Docker CE). Because the gate runs before push, \`:latest\` was **not** updated and the laptop is still on the last-good image.`,
+              ``,
+              `See \`docs/downstream-change-tracking.md\` for the failure model and which area each check maps to.`,
+            ].join('\n');
+            const { owner, repo } = context.repo;
+            const existing = await github.rest.issues.listForRepo({ owner, repo, state: 'open', labels: label });
+            if (existing.data.length > 0) {
+              await github.rest.issues.createComment({ owner, repo, issue_number: existing.data[0].number, body });
+            } else {
+              await github.rest.issues.create({ owner, repo, title: '🚨 Image build/smoke gate failing', labels: [label], body });
+            }
+
+      # Close the tracking issue once the gate is green again on the default
+      # branch, so an open `ci-failure` issue always means "currently broken".
+      - name: Close tracking issue on success
+        if: success() && github.event_name != 'pull_request' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
+        with:
+          script: |
+            const label = 'ci-failure';
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const { owner, repo } = context.repo;
+            const open = await github.rest.issues.listForRepo({ owner, repo, state: 'open', labels: label });
+            for (const issue of open.data) {
+              await github.rest.issues.createComment({ owner, repo, issue_number: issue.number, body: `Gate is green again on \`${context.ref}\` (${runUrl}). Closing.` });
+              await github.rest.issues.update({ owner, repo, issue_number: issue.number, state: 'closed' });
+            }

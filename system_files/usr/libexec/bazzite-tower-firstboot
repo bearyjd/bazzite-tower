@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+# bazzite-tower-firstboot — grant the first regular user virtualization and
+# container access.
+#
+# Bootc images don't bake in a default user; the first user is created by the
+# desktop initial-setup flow on first boot. That may not have happened yet when
+# this unit first runs, so we exit cleanly (without dropping the marker) when no
+# regular user exists and let the unit retry on the next boot. Once a user is
+# found and the groups are applied, we drop the marker and the unit's
+# ConditionPathExists keeps it from running again.
+set -euo pipefail
+
+marker=/var/lib/.bazzite-tower-groups-done
+
+# First human account: uid >= 1000, below the "nobody" sentinel (65534).
+user=$(awk -F: '$3 >= 1000 && $3 < 65534 { print $1; exit }' /etc/passwd)
+if [[ -z "${user}" ]]; then
+    echo "bazzite-tower-firstboot: no regular user yet, retrying next boot"
+    exit 0
+fi
+
+# Only add groups that exist, so a package layout change can never abort the run.
+present=()
+for group in kvm libvirt docker; do
+    if getent group "${group}" >/dev/null; then
+        present+=("${group}")
+    else
+        echo "bazzite-tower-firstboot: group '${group}' absent, skipping"
+    fi
+done
+
+if [[ ${#present[@]} -gt 0 ]]; then
+    groups_csv=$(IFS=,; echo "${present[*]}")
+    /usr/sbin/usermod -aG "${groups_csv}" "${user}"
+    echo "bazzite-tower-firstboot: added ${user} to ${groups_csv}"
+fi
+
+touch "${marker}"

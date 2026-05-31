@@ -3,28 +3,31 @@
 set -euo pipefail
 
 # ── QEMU / libvirt / KVM stack ────────────────────────────────────────────────
+# config-network/config-nwfilter ship the default NAT network and nwfilter rules.
 dnf install -y \
-    qemu-kvm \
-    libvirt \
-    libvirt-daemon-kvm \
-    libvirt-client \
-    virt-manager \
-    virt-install \
-    virt-viewer \
     edk2-ovmf \
     guestfs-tools \
-    spice-gtk3
+    libvirt \
+    libvirt-client \
+    libvirt-daemon-config-network \
+    libvirt-daemon-config-nwfilter \
+    libvirt-daemon-kvm \
+    qemu-kvm \
+    spice-gtk3 \
+    virt-install \
+    virt-manager \
+    virt-viewer
 
 # ── DX-equivalent dev tooling (Fedora repos) ──────────────────────────────────
 dnf install -y \
     android-tools \
-    flatpak-builder \
-    restic \
-    rclone \
-    zsh \
     ccache \
+    flatpak-builder \
     podman-machine \
-    podman-tui
+    podman-tui \
+    rclone \
+    restic \
+    zsh
 
 # ── Docker CE ─────────────────────────────────────────────────────────────────
 # Mirror of https://download.docker.com/linux/fedora/docker-ce.repo with every
@@ -107,27 +110,44 @@ dnf install -y --enablerepo=docker-ce-stable \
     docker-compose-plugin
 
 # ── docker-in-docker: load iptable_nat at boot ────────────────────────────────
-install -Dm644 /dev/stdin /etc/modules-load.d/docker.conf <<'EOF'
+install -Dm644 /dev/stdin /etc/modules-load.d/iptable_nat.conf <<'EOF'
 iptable_nat
 EOF
 
-# ── Fix libvirt service setup ─────────────────────────────────────────────────
-# Mask the legacy monolithic daemon — it conflicts with the modern modular ones
-# (this is the root cause of the broken ujust setup-virtualization)
+# ── libvirt: modular daemons + Docker service ─────────────────────────────────
+# Bazzite/F44+ ships modular libvirt: one socket-activated daemon per driver
+# (virtqemud, virtnetworkd, ...) instead of the monolithic libvirtd. Mask the
+# legacy libvirtd.service so it can't race the modular daemons — that race is the
+# root cause of the broken stock `ujust setup-virtualization`.
 systemctl mask libvirtd.service
 
-# Enable modern modular libvirt daemons — virt works on first boot, no manual steps
+# Enable the per-driver sockets. Each primary .socket carries Also= directives
+# that pull in its matching -ro and -admin sockets, so the primaries are enough.
 systemctl enable virtqemud.socket
-systemctl enable virtqemud-ro.socket
-systemctl enable virtqemud-admin.socket
 systemctl enable virtnetworkd.socket
-systemctl enable virtstoraged.socket
 systemctl enable virtnodedevd.socket
+systemctl enable virtnwfilterd.socket
+systemctl enable virtstoraged.socket
 
-# Legacy libvirtd.socket: enabled so tools probing the legacy socket path see it.
-# libvirtd.service stays masked so the modular daemons own the runtime socket;
-# libvirtd.socket's shipped Conflicts= keeps it from racing virtqemud.socket.
-systemctl enable libvirtd.socket
+# virtproxyd serves the legacy /run/libvirt/libvirt-sock path that older tooling
+# expects, forwarding to the modular daemons. It is the modular replacement for
+# libvirtd.socket: the two declare Conflicts= on the same socket path, so we
+# enable only this one (libvirtd.socket would be inert anyway — its service is
+# masked).
+systemctl enable virtproxyd.socket
+
+# Docker daemon starts at boot (Docker CE is baked in alongside Podman).
+systemctl enable docker.service
+
+# ── libvirt default NAT network: autostart on boot ────────────────────────────
+# libvirt-daemon-config-network ships the default NAT network definition. Mark it
+# autostart by creating the symlink `virsh net-autostart` would — the daemons
+# aren't running at build time, so virsh itself can't be used. Idempotent and
+# guarded on the definition existing.
+if [[ -f /etc/libvirt/qemu/networks/default.xml ]]; then
+    install -d /etc/libvirt/qemu/networks/autostart
+    ln -sfn ../default.xml /etc/libvirt/qemu/networks/autostart/default.xml
+fi
 
 # ── Polkit: wheel → qemu:///system access (immediate, no logout required) ─────
 install -Dm644 /dev/stdin /etc/polkit-1/rules.d/50-libvirt-wheel.rules <<'EOF'
@@ -140,36 +160,12 @@ polkit.addRule(function(action, subject) {
 });
 EOF
 
-# ── First-boot oneshot: add the first regular user to libvirt and kvm groups ──
-# Polkit covers libvirt access for wheel users, but raw /dev/kvm and tools that
-# check `groups` membership need real group entries. The unit retries every
-# boot until a regular user exists, then writes a marker so it stops running.
-install -Dm755 /dev/stdin /usr/libexec/bazzite-tower-add-user-to-virt-groups <<'EOF'
-#!/usr/bin/env bash
-set -euo pipefail
-marker=/var/lib/bazzite-tower/virt-groups-applied
-user=$(awk -F: '$3>=1000 && $3<65534 {print $1; exit}' /etc/passwd || true)
-[[ -z "$user" ]] && exit 0
-/usr/sbin/usermod -aG libvirt,kvm "$user"
-install -d /var/lib/bazzite-tower
-touch "$marker"
-EOF
-
-install -Dm644 /dev/stdin /usr/lib/systemd/system/bazzite-tower-add-user-to-virt-groups.service <<'EOF'
-[Unit]
-Description=Add first regular user to libvirt and kvm groups
-ConditionPathExists=!/var/lib/bazzite-tower/virt-groups-applied
-
-[Service]
-Type=oneshot
-ExecStart=/usr/libexec/bazzite-tower-add-user-to-virt-groups
-RemainAfterExit=yes
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-systemctl enable bazzite-tower-add-user-to-virt-groups.service
+# ── First-boot oneshot: add the first regular user to the virt + docker groups ─
+# Polkit covers libvirt access for wheel users, but raw /dev/kvm, the docker
+# socket, and tools that check `groups` membership need real group entries. The
+# unit and its helper ship in system_files/; the unit retries every boot until a
+# regular user exists, then drops a marker so it stops running.
+systemctl enable bazzite-tower-firstboot.service
 
 # ── Cleanup ───────────────────────────────────────────────────────────────────
 dnf clean all

@@ -109,6 +109,27 @@ dnf install -y --enablerepo=docker-ce-stable \
     docker-buildx-plugin \
     docker-compose-plugin
 
+# ── System users from packaged sysusers.d snippets ────────────────────────────
+# A plain `dnf install` in a container build does NOT run systemd-sysusers the
+# way an rpm-ostree compose does, so packages that declare their accounts via
+# /usr/lib/sysusers.d/*.conf — notably qemu — never get those users created.
+# Without the 'qemu' user, virtqemud aborts at startup ("Failed to parse user
+# 'qemu'") and the socket-activated service crash-loops into start-limit-hit on
+# every boot, so qemu:///system never comes up.
+#
+# Complication seen on this base: it ships orphan `qemu:` lines in /etc/shadow
+# and /etc/gshadow with no matching /etc/passwd or /etc/group entry. sysusers
+# writes passwd+group+shadow+gshadow as one transaction and aborts — rolling the
+# whole thing back — when it hits the pre-existing gshadow line, so it silently
+# creates nothing. Strip those orphans first (no-op if absent), then materialize.
+sed -i '/^qemu:/d' /etc/shadow /etc/gshadow
+systemd-sysusers
+# Belt-and-suspenders: if no sysusers.d snippet shipped the qemu user, create it
+# directly. libvirt resolves it by name at runtime, so a dynamic system uid (-r)
+# is fine. Guarded so a future packaging change can't break the build.
+getent group  qemu >/dev/null || groupadd -r qemu
+getent passwd qemu >/dev/null || useradd  -r -g qemu -d / -s /sbin/nologin -c "qemu user" qemu
+
 # ── docker-in-docker: load iptable_nat at boot ────────────────────────────────
 install -Dm644 /dev/stdin /etc/modules-load.d/iptable_nat.conf <<'EOF'
 iptable_nat

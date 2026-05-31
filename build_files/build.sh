@@ -3,28 +3,31 @@
 set -euo pipefail
 
 # ── QEMU / libvirt / KVM stack ────────────────────────────────────────────────
+# config-network/config-nwfilter ship the default NAT network and nwfilter rules.
 dnf install -y \
-    qemu-kvm \
-    libvirt \
-    libvirt-daemon-kvm \
-    libvirt-client \
-    virt-manager \
-    virt-install \
-    virt-viewer \
     edk2-ovmf \
     guestfs-tools \
-    spice-gtk3
+    libvirt \
+    libvirt-client \
+    libvirt-daemon-config-network \
+    libvirt-daemon-config-nwfilter \
+    libvirt-daemon-kvm \
+    qemu-kvm \
+    spice-gtk3 \
+    virt-install \
+    virt-manager \
+    virt-viewer
 
 # ── DX-equivalent dev tooling (Fedora repos) ──────────────────────────────────
 dnf install -y \
     android-tools \
-    flatpak-builder \
-    restic \
-    rclone \
-    zsh \
     ccache \
+    flatpak-builder \
     podman-machine \
-    podman-tui
+    podman-tui \
+    rclone \
+    restic \
+    zsh
 
 # ── Docker CE ─────────────────────────────────────────────────────────────────
 # Mirror of https://download.docker.com/linux/fedora/docker-ce.repo with every
@@ -107,27 +110,44 @@ dnf install -y --enablerepo=docker-ce-stable \
     docker-compose-plugin
 
 # ── docker-in-docker: load iptable_nat at boot ────────────────────────────────
-install -Dm644 /dev/stdin /etc/modules-load.d/docker.conf <<'EOF'
+install -Dm644 /dev/stdin /etc/modules-load.d/iptable_nat.conf <<'EOF'
 iptable_nat
 EOF
 
-# ── Fix libvirt service setup ─────────────────────────────────────────────────
-# Mask the legacy monolithic daemon — it conflicts with the modern modular ones
-# (this is the root cause of the broken ujust setup-virtualization)
+# ── libvirt: modular daemons + Docker service ─────────────────────────────────
+# Bazzite/F44+ ships modular libvirt: one socket-activated daemon per driver
+# (virtqemud, virtnetworkd, ...) instead of the monolithic libvirtd. Mask the
+# legacy libvirtd.service so it can't race the modular daemons — that race is the
+# root cause of the broken stock `ujust setup-virtualization`.
 systemctl mask libvirtd.service
 
-# Enable modern modular libvirt daemons — virt works on first boot, no manual steps
+# Enable the per-driver sockets. Each primary .socket carries Also= directives
+# that pull in its matching -ro and -admin sockets, so the primaries are enough.
 systemctl enable virtqemud.socket
-systemctl enable virtqemud-ro.socket
-systemctl enable virtqemud-admin.socket
 systemctl enable virtnetworkd.socket
-systemctl enable virtstoraged.socket
 systemctl enable virtnodedevd.socket
+systemctl enable virtnwfilterd.socket
+systemctl enable virtstoraged.socket
 
-# Legacy libvirtd.socket: enabled so tools probing the legacy socket path see it.
-# libvirtd.service stays masked so the modular daemons own the runtime socket;
-# libvirtd.socket's shipped Conflicts= keeps it from racing virtqemud.socket.
-systemctl enable libvirtd.socket
+# virtproxyd serves the legacy /run/libvirt/libvirt-sock path that older tooling
+# expects, forwarding to the modular daemons. It is the modular replacement for
+# libvirtd.socket: the two declare Conflicts= on the same socket path, so we
+# enable only this one (libvirtd.socket would be inert anyway — its service is
+# masked).
+systemctl enable virtproxyd.socket
+
+# Docker daemon starts at boot (Docker CE is baked in alongside Podman).
+systemctl enable docker.service
+
+# ── libvirt default NAT network: autostart on boot ────────────────────────────
+# libvirt-daemon-config-network ships the default NAT network definition. Mark it
+# autostart by creating the symlink `virsh net-autostart` would — the daemons
+# aren't running at build time, so virsh itself can't be used. Idempotent and
+# guarded on the definition existing.
+if [[ -f /etc/libvirt/qemu/networks/default.xml ]]; then
+    install -d /etc/libvirt/qemu/networks/autostart
+    ln -sfn ../default.xml /etc/libvirt/qemu/networks/autostart/default.xml
+fi
 
 # ── Polkit: wheel → qemu:///system access (immediate, no logout required) ─────
 install -Dm644 /dev/stdin /etc/polkit-1/rules.d/50-libvirt-wheel.rules <<'EOF'

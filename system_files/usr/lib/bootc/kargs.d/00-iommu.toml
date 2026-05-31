@@ -1,0 +1,10 @@
+# Enable the Intel IOMMU for PCI/VFIO passthrough to libvirt guests.
+#
+# This is the bootc-native way to bake kernel arguments into the image: bootc
+# reads /usr/lib/bootc/kargs.d/*.toml and applies the kargs at install and on
+# every upgrade. `rpm-ostree kargs` cannot be used here because it requires a
+# booted ostree deployment and is a no-op during a container build.
+#
+# Target hardware is Intel (ThinkPad P1). iommu=pt limits DMA remapping to
+# devices actually assigned to guests, avoiding the overhead on host devices.
+kargs = ["intel_iommu=on", "iommu=pt"]

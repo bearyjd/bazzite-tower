@@ -57,9 +57,9 @@ The default NAT network (shipped by `libvirt-daemon-config-network`) is marked a
 Bootc images don't bake in a default user — the first user is created by KDE Plasma's initial-setup on first boot. `bazzite-tower` uses two complementary mechanisms to give that user immediate virtualization access:
 
 1. **Polkit rule** (`/etc/polkit-1/rules.d/50-libvirt-wheel.rules`) — grants `unix-group:wheel` access to `org.libvirt.unix.manage` and `org.libvirt.unix.monitor`. Anyone in `wheel` can talk to `qemu:///system` from `virt-manager` and `virsh` immediately, no logout required.
-2. **First-boot oneshot** (`bazzite-tower-add-user-to-virt-groups.service`) — finds the first UID≥1000 user and runs `usermod -aG libvirt,kvm`. This grants real group membership for tools that check `groups` and for raw `/dev/kvm` access (polkit only covers libvirt). The unit retries every boot until a regular user exists, then writes a marker file (`/var/lib/bazzite-tower/virt-groups-applied`) so it stops running.
+2. **First-boot oneshot** (`bazzite-tower-firstboot.service`) — runs after `systemd-user-sessions.service`, finds the first UID≥1000 user, and runs `usermod -aG kvm,libvirt,docker` (adding only groups that exist). This grants real group membership for tools that check `groups`, for raw `/dev/kvm` access, and for the rootless `docker` socket (polkit only covers libvirt). The unit retries every boot until a regular user exists, then writes a marker file (`/var/lib/.bazzite-tower-groups-done`) so it stops running.
 
-Result: `virsh -c qemu:///system list` and `virt-manager` work on first login; `qemu-system-x86_64 -enable-kvm` works after one logout/login cycle.
+Result: `virsh -c qemu:///system list` and `virt-manager` work on first login; `qemu-system-x86_64 -enable-kvm` and `docker` (without `sudo`) work after one logout/login cycle.
 
 ### Docker CE instead of podman-docker
 

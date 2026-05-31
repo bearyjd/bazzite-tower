@@ -1,0 +1,96 @@
+---
+# Layer 4 of docs/downstream-change-tracking.md — upstream "what changed" early
+# warning. Each day it pulls the base image, builds a package manifest, and diffs
+# it against the last-seen manifest committed under docs/manifests/. If anything
+# in our blast radius (qemu/libvirt/NetworkManager/Docker/kernel/systemd/polkit/
+# bootc) moved, it opens or comments on a `base-bump` heads-up issue — so a risky
+# upstream change gets human eyes BEFORE the next image build, even when the build
+# would still pass. The smoke gate in build.yml remains the thing that actually
+# blocks a broken image; this is purely informational.
+name: Watch upstream base
+
+on:
+  schedule:
+    - cron: '0 5 * * *'  # 05:00 UTC daily — ahead of the Sunday 06:00 build
+  workflow_dispatch:
+
+permissions:
+  contents: write   # commit the refreshed manifest back to the repo
+  issues: write     # open/refresh the heads-up issue
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: true
+
+env:
+  BASE_IMAGE: ghcr.io/ublue-os/bazzite-nvidia:stable
+  MANIFEST: docs/manifests/bazzite-nvidia-stable.txt
+
+jobs:
+  watch:
+    name: Diff upstream base packages
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - name: Generate current manifest
+        id: manifest
+        run: |
+          set -euo pipefail
+          podman pull "${BASE_IMAGE}"
+          echo "digest=$(podman image inspect --format '{{ .Digest }}' "${BASE_IMAGE}")" >> "${GITHUB_OUTPUT}"
+          # NAME VERSION-RELEASE.ARCH per line, sorted — the stable input base-diff expects.
+          podman run --rm "${BASE_IMAGE}" \
+            rpm -qa --qf '%{NAME} %{VERSION}-%{RELEASE}.%{ARCH}\n' \
+            | sort > /tmp/new-manifest.txt
+          echo "Collected $(wc -l < /tmp/new-manifest.txt) packages."
+
+      - name: Diff against last-seen manifest
+        id: diff
+        run: python3 ci/base-diff.py "${MANIFEST}" /tmp/new-manifest.txt
+
+      - name: Open/refresh heads-up issue
+        if: steps.diff.outputs.changed == 'true'
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
+        env:
+          REPORT: ${{ steps.diff.outputs.report }}
+          BASE_DIGEST: ${{ steps.manifest.outputs.digest }}
+        with:
+          script: |
+            const label = 'base-bump';
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const body = [
+              `Upstream \`${process.env.BASE_IMAGE || 'ghcr.io/ublue-os/bazzite-nvidia:stable'}\` moved.`,
+              `Digest: \`${process.env.BASE_DIGEST}\``,
+              ``,
+              `Blast-radius package changes (qemu / libvirt / NetworkManager / Docker / kernel / systemd / polkit / bootc):`,
+              ``,
+              process.env.REPORT,
+              ``,
+              `The smoke gate in \`build.yml\` still blocks a broken build — this is a heads-up to eyeball the change first. ${runUrl}`,
+            ].join('\n');
+            const { owner, repo } = context.repo;
+            const open = await github.rest.issues.listForRepo({ owner, repo, state: 'open', labels: label });
+            if (open.data.length > 0) {
+              await github.rest.issues.createComment({ owner, repo, issue_number: open.data[0].number, body });
+            } else {
+              await github.rest.issues.create({ owner, repo, title: '⬆️ Upstream base package changes', labels: [label], body });
+            }
+
+      - name: Record refreshed manifest
+        run: |
+          set -euo pipefail
+          mkdir -p "$(dirname "${MANIFEST}")"
+          cp /tmp/new-manifest.txt "${MANIFEST}"
+          if git diff --quiet -- "${MANIFEST}"; then
+            echo "Manifest unchanged; nothing to commit."
+            exit 0
+          fi
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add "${MANIFEST}"
+          git commit -m "chore(base-watch): refresh bazzite-nvidia:stable manifest"
+          for i in 1 2 3 4; do
+            git push && break || { echo "push failed, retry ${i}"; sleep $((2 ** i)); }
+          done

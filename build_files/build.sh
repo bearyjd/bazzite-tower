@@ -160,36 +160,12 @@ polkit.addRule(function(action, subject) {
 });
 EOF
 
-# ── First-boot oneshot: add the first regular user to libvirt and kvm groups ──
-# Polkit covers libvirt access for wheel users, but raw /dev/kvm and tools that
-# check `groups` membership need real group entries. The unit retries every
-# boot until a regular user exists, then writes a marker so it stops running.
-install -Dm755 /dev/stdin /usr/libexec/bazzite-tower-add-user-to-virt-groups <<'EOF'
-#!/usr/bin/env bash
-set -euo pipefail
-marker=/var/lib/bazzite-tower/virt-groups-applied
-user=$(awk -F: '$3>=1000 && $3<65534 {print $1; exit}' /etc/passwd || true)
-[[ -z "$user" ]] && exit 0
-/usr/sbin/usermod -aG libvirt,kvm "$user"
-install -d /var/lib/bazzite-tower
-touch "$marker"
-EOF
-
-install -Dm644 /dev/stdin /usr/lib/systemd/system/bazzite-tower-add-user-to-virt-groups.service <<'EOF'
-[Unit]
-Description=Add first regular user to libvirt and kvm groups
-ConditionPathExists=!/var/lib/bazzite-tower/virt-groups-applied
-
-[Service]
-Type=oneshot
-ExecStart=/usr/libexec/bazzite-tower-add-user-to-virt-groups
-RemainAfterExit=yes
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-systemctl enable bazzite-tower-add-user-to-virt-groups.service
+# ── First-boot oneshot: add the first regular user to the virt + docker groups ─
+# Polkit covers libvirt access for wheel users, but raw /dev/kvm, the docker
+# socket, and tools that check `groups` membership need real group entries. The
+# unit and its helper ship in system_files/; the unit retries every boot until a
+# regular user exists, then drops a marker so it stops running.
+systemctl enable bazzite-tower-firstboot.service
 
 # ── Cleanup ───────────────────────────────────────────────────────────────────
 dnf clean all

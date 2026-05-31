@@ -1,0 +1,16 @@
+[Unit]
+Description=Add first regular user to kvm, libvirt, and docker groups
+Documentation=https://github.com/bearyjd/bazzite-tower
+# Run once user logins are permitted, by which point the desktop initial-setup
+# flow has had a chance to create the first regular user (uid 1000).
+After=systemd-user-sessions.service
+# Stop running once the groups have been applied.
+ConditionPathExists=!/var/lib/.bazzite-tower-groups-done
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/libexec/bazzite-tower-firstboot
+
+[Install]
+WantedBy=multi-user.target

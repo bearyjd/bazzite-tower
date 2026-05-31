@@ -1,0 +1,136 @@
+---
+# Layer 3 of docs/downstream-change-tracking.md — runtime boot test.
+#
+# Where the smoke gate in build.yml proves the customizations are *present*, this
+# boots the image's systemd as PID 1 (`podman run --systemd=always`) and runs
+# tests/boot-check.sh inside it via `podman exec`, so the QEMU stack and the
+# Wi-Fi guard are exercised *at runtime* — most importantly it connects to
+# qemu:///system, the end-to-end proof that the qemu user resolves and virtqemud
+# initializes (regression #8). GitHub-hosted runners have no /dev/kvm, so a full
+# KVM/TCG VM boot isn't practical; running the image's own systemd under podman
+# (which these ublue/Bazzite images are built to support) is fast and reliable.
+# kargs application (needs a bootloader) is out of scope here and stays covered
+# by the smoke test's kargs.d presence check.
+#
+# This is an independent signal, not a promotion gate: it builds its own image
+# and, on scheduled/manual runs, opens a `boot-test-failure` issue on failure.
+name: Boot test
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'Containerfile'
+      - 'build_files/**'
+      - 'system_files/**'
+      - 'tests/boot-check.sh'
+      - '.github/workflows/boot-test.yml'
+  schedule:
+    - cron: '0 7 * * 0'  # 07:00 UTC Sunday — after the 06:00 image build
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write   # open/close the boot-test-failure issue on scheduled runs
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  TEST_IMAGE: bazzite-tower:boottest
+
+jobs:
+  boot-test:
+    name: Boot image and check runtime behaviour
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - name: Maximize build space
+        uses: ublue-os/remove-unwanted-software@695eb75bc387dbcd9685a8e72d23439d8686cba6
+
+      - name: Build image
+        run: podman build --pull=newer -t "${TEST_IMAGE}" .
+
+      - name: Boot image and run runtime checks
+        run: |
+          set -uo pipefail
+          # Boot the image's own systemd as PID 1. --privileged maximises the
+          # chance services (virtqemud) initialise; --systemd=always + /sbin/init
+          # forces the systemd boot path regardless of the image's default CMD.
+          podman run -d --name bztest --privileged --systemd=always \
+            "${TEST_IMAGE}" /sbin/init
+
+          # Wait for the boot to settle (running or degraded — some units can't
+          # come up in a container, which is fine; the checks target specific ones).
+          booted=
+          for i in $(seq 1 90); do
+            state="$(podman exec bztest systemctl is-system-running 2>/dev/null || true)"
+            echo "[${i}] is-system-running: ${state:-<none>}"
+            case "${state}" in
+              running|degraded) booted=1; break ;;
+            esac
+            sleep 2
+          done
+
+          if [[ -z "${booted}" ]]; then
+            echo "::error::image systemd never reached running/degraded"
+            echo "===== journal (tail) ====="
+            podman exec bztest journalctl --no-pager -n 120 2>/dev/null || podman logs bztest || true
+            podman rm -f bztest >/dev/null 2>&1 || true
+            exit 1
+          fi
+
+          podman cp tests/boot-check.sh bztest:/usr/local/bin/boot-check.sh
+          podman exec bztest chmod +x /usr/local/bin/boot-check.sh
+
+          echo "===== boot-check.sh ====="
+          podman exec bztest /usr/local/bin/boot-check.sh
+          rc=$?
+
+          echo "===== journal: virtqemud + wifi guard ====="
+          podman exec bztest journalctl --no-pager -n 80 \
+            -u virtqemud.service -u virtqemud.socket \
+            -u bazzite-tower-wifi-backend-guard.service 2>/dev/null || true
+
+          podman rm -f bztest >/dev/null 2>&1 || true
+          exit "${rc}"
+
+      - name: Open/refresh boot-test issue on failure
+        if: failure() && github.event_name != 'pull_request'
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
+        with:
+          script: |
+            const label = 'boot-test-failure';
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const body = [
+              `The runtime **boot test** failed on \`${context.ref}\` (event \`${context.eventName}\`).`,
+              ``,
+              `Run: ${runUrl}`,
+              ``,
+              `The image booted but a runtime check failed — most likely the qemu:///system connect (qemu user / virtqemud init) or the Wi-Fi backend guard. The smoke gate only checks these are *configured*; this checks they *work*. See \`docs/downstream-change-tracking.md\` and the run's boot-check + journal output.`,
+            ].join('\n');
+            const { owner, repo } = context.repo;
+            const open = await github.rest.issues.listForRepo({ owner, repo, state: 'open', labels: label });
+            if (open.data.length > 0) {
+              await github.rest.issues.createComment({ owner, repo, issue_number: open.data[0].number, body });
+            } else {
+              await github.rest.issues.create({ owner, repo, title: '🧪 Runtime boot test failing', labels: [label], body });
+            }
+
+      - name: Close boot-test issue on success
+        if: success() && github.event_name != 'pull_request' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
+        with:
+          script: |
+            const label = 'boot-test-failure';
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const { owner, repo } = context.repo;
+            const open = await github.rest.issues.listForRepo({ owner, repo, state: 'open', labels: label });
+            for (const issue of open.data) {
+              await github.rest.issues.createComment({ owner, repo, issue_number: issue.number, body: `Boot test is green again (${runUrl}). Closing.` });
+              await github.rest.issues.update({ owner, repo, issue_number: issue.number, state: 'closed' });
+            }

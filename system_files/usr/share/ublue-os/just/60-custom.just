@@ -40,3 +40,8 @@ fix-vm-groups:
     sudo usermod -aG "$groups" "$USER"
     echo "Added $USER to: $groups"
     echo "Log out and back in (or reboot) for the new group membership to take effect."
+
+# Diagnose a missing or non-working Wi-Fi card (read-only; works with no network)
+[group('Diagnostics')]
+wifi-debug:
+    @/usr/libexec/bazzite-tower-wifi-debug

@@ -142,16 +142,18 @@ catches a large fraction of regressions.
 
 > **Implemented (with a hosted-runner-friendly twist).** GitHub-hosted runners
 > have no `/dev/kvm`, so instead of a TCG VM boot,
-> `.github/workflows/boot-test.yml` boots the image's systemd as PID 1 with
-> `systemd-nspawn --boot` and runs `tests/boot-check.sh` inside it. That reliably
-> exercises socket activation, the oneshots and the guard, and — the key check —
-> **connects to `qemu:///system`**, the end-to-end proof the qemu user resolves
-> and `virtqemud` initializes (regression #8). Checks that genuinely need a real
-> kernel/bootloader/netfilter (kargs application, full NM device management, the
-> Docker daemon) are SOFT (reported, non-fatal); kargs presence stays covered by
-> the smoke test. Runs on image-affecting PRs, weekly (Sun 07:00 UTC, after the
-> build), and on demand; scheduled failures open a `boot-test-failure` issue.
-> The original VM-based sketch below is kept for reference.
+> `.github/workflows/boot-test.yml` boots the image's own systemd as PID 1 with
+> `podman run --systemd=always` (a path these ublue/Bazzite images are built to
+> support) and runs `tests/boot-check.sh` inside it via `podman exec`. That
+> reliably exercises socket activation, the oneshots and the guard, and — the key
+> check — **connects to `qemu:///system`**, the end-to-end proof the qemu user
+> resolves and `virtqemud` initializes (regression #8). Checks that genuinely
+> need a real kernel/bootloader/netfilter (kargs application, full NM device
+> management, the Docker daemon) are SOFT (reported, non-fatal); kargs presence
+> stays covered by the smoke test. Runs on image-affecting PRs, weekly (Sun 07:00
+> UTC, after the build), and on demand; scheduled failures open a
+> `boot-test-failure` issue. The original VM-based sketch below is kept for
+> reference.
 
 Reuse the existing [`build-disk.yml`](../.github/workflows/build-disk.yml) qcow2
 output. Boot it (TCG is acceptable if the runner has no `/dev/kvm`; we only need

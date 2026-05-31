@@ -40,3 +40,39 @@ fix-vm-groups:
     sudo usermod -aG "$groups" "$USER"
     echo "Added $USER to: $groups"
     echo "Log out and back in (or reboot) for the new group membership to take effect."
+
+# Diagnose a missing or non-working Wi-Fi card (read-only; works with no network)
+[group('Diagnostics')]
+wifi-debug:
+    #!/usr/bin/bash
+    # Collects everything needed to root-cause "the Wi-Fi card isn't even there":
+    # PCI/USB enumeration, driver load, firmware crashes/DMAR faults, rfkill
+    # blocks, NetworkManager state, and the live kernel cmdline (IOMMU kargs).
+    # Read-only and safe to run offline. Pipe to a file to share: `ujust wifi-debug > wifi.txt`
+    set +e
+    echo "== rfkill (soft/hard radio blocks) =="
+    rfkill list 2>/dev/null || echo "  rfkill unavailable"
+    echo
+    echo "== PCI network controllers (driver in 'Kernel driver in use') =="
+    lspci -nnk | grep -iA3 -E 'network|wireless|wi-?fi|802\.11' || echo "  no PCI network controller matched — card not enumerated (BIOS/hardware?)"
+    echo
+    echo "== USB wireless devices =="
+    lsusb 2>/dev/null | grep -iE 'wireless|wi-?fi|802\.11|wlan' || echo "  none"
+    echo
+    echo "== iwlwifi / 80211 kernel messages (look for DMAR faults, ucode errors) =="
+    sudo dmesg 2>/dev/null | grep -iE 'iwlwifi|iwlmvm|cfg80211|mac80211|firmware|DMAR' | tail -n 40 || echo "  none"
+    echo
+    echo "== loaded wireless modules =="
+    lsmod | grep -iE 'iwlwifi|iwlmvm|cfg80211|mac80211' || echo "  no wireless modules loaded"
+    echo
+    echo "== NetworkManager devices =="
+    nmcli -f DEVICE,TYPE,STATE device 2>/dev/null || echo "  nmcli unavailable"
+    echo
+    echo "== NetworkManager radio =="
+    nmcli radio 2>/dev/null || echo "  nmcli unavailable"
+    echo
+    echo "== iwlwifi firmware shipped in image =="
+    ls /usr/lib/firmware/iwlwifi-* 2>/dev/null | head || echo "  no iwlwifi-* firmware files found"
+    echo
+    echo "== live kernel cmdline (note intel_iommu / iommu=pt) =="
+    cat /proc/cmdline

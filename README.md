@@ -38,6 +38,20 @@ The Docker repo file ships with **every section disabled**. Packages are pulled 
 
 `iptable_nat` is registered in `/etc/modules-load.d/iptable_nat.conf` for docker-in-docker workloads.
 
+### VM management recipes (`ujust`)
+
+`bazzite-tower` ships extra `ujust` recipes (in `/usr/share/ublue-os/just/60-custom.just`) for driving the modular libvirt stack:
+
+| Recipe | What it does |
+|---|---|
+| `ujust vm-start` | Start the modular libvirt sockets (`virtqemud`, `virtnetworkd`, `virtstoraged`, `virtnodedevd`) |
+| `ujust vm-stop` | Stop those sockets |
+| `ujust vm-list` | `virsh -c qemu:///system list --all` |
+| `ujust vm-net-status` | `virsh -c qemu:///system net-list --all` |
+| `ujust fix-vm-groups` | Add the current user to `kvm`, `libvirt`, `docker` (then log out/in) |
+
+The stack is socket-activated and enabled at boot, so `vm-start` is rarely needed — it's there for when you've manually stopped the daemons.
+
 ## Design choices
 
 ### Modular libvirt (no manual `ujust setup-virtualization`)

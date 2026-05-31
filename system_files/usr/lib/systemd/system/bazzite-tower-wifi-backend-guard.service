@@ -1,0 +1,15 @@
+[Unit]
+Description=Revert NetworkManager wifi.backend to wpa_supplicant when iwd is selected but not enabled
+Documentation=https://github.com/bearyjd/bazzite-tower
+# Run before NetworkManager so the backend is already correct when NM starts —
+# no NM restart needed. Needs /etc writable, which local-fs.target guarantees.
+After=local-fs.target
+Before=NetworkManager.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/libexec/bazzite-tower-wifi-backend-guard
+
+[Install]
+WantedBy=multi-user.target

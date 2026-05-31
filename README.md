@@ -55,11 +55,13 @@ The stack is socket-activated and enabled at boot, so `vm-start` is rarely neede
 
 ### Wi-Fi not detected?
 
-If the Wi-Fi card isn't detected after a boot — no `wlan0`, NetworkManager shows no Wi-Fi device — run `ujust wifi-debug` (it works without a network) and read the output top-down:
+If Wi-Fi looks dead after a boot — no networks, NetworkManager shows no usable Wi-Fi device — run `ujust wifi-debug` (it works without a network) and read it top-down. **Check the easy, common causes before assuming a driver/firmware problem:**
 
+- **`nmcli` shows the device as `unavailable` (not `disconnected`), but the driver-level scan in `wifi-debug` finds networks** → the radio is fine; NetworkManager's **wifi backend is pointing at a supplicant that isn't running.** The classic case: `/etc/NetworkManager/conf.d/iwd.conf` sets `wifi.backend=iwd` while `iwd` is inactive (`wpa_supplicant` is what's actually running). This frequently happens after a `bootc` **rebase**, because `/etc` persists: a `wifi.backend=iwd` file from a previous image survives, but the enabled `iwd` service does not. Fix: revert to the default backend with `sudo mv /etc/NetworkManager/conf.d/iwd.conf ~/iwd.conf.disabled && sudo systemctl restart NetworkManager` (or `sudo systemctl enable --now iwd` if you actually want `iwd`).
 - **`rfkill` shows a hard block** → a physical/Fn switch or a BIOS setting, not the image.
-- **`lspci` doesn't list the Intel card at all** → disabled in BIOS or a hardware/seating issue.
-- **`lspci` lists the card but `dmesg` shows `iwlwifi ... DMAR` faults or `Failed to start ... ucode`** → the IOMMU is knocking out `iwlwifi`. The ThinkPad P1's Intel AX211 (Wi-Fi 6E, CNVi) can fail to initialize under `intel_iommu=on`, and the wireless device then never registers — which looks like the card is missing. Confirm by rebooting, pressing `e` in GRUB, removing `intel_iommu=on iommu=pt` from the `linux` line, and booting once. If Wi-Fi returns, the IOMMU karg (`/usr/lib/bootc/kargs.d/00-iommu.toml`, added for PCI passthrough) is the cause — drop that fragment (or the kargs) if you don't need VFIO passthrough, and rebuild.
+- **`lspci` doesn't list the wireless card at all** → disabled in BIOS or a hardware/seating issue.
+- **`lspci` lists the card but `dmesg` shows `iwlwifi ... DMAR` faults or `Failed to start ... ucode`** → the IOMMU is knocking out `iwlwifi`. An Intel CNVi card can fail to initialize under `intel_iommu=on`, and the wireless device then never registers. Confirm by rebooting, pressing `e` in GRUB, removing `intel_iommu=on iommu=pt` from the `linux` line, and booting once. If Wi-Fi returns, the IOMMU karg (`/usr/lib/bootc/kargs.d/00-iommu.toml`, added for PCI passthrough) is the cause — drop that fragment if you don't need VFIO passthrough, and rebuild.
+- **Intel BE200 (Wi-Fi 7) specifically:** newer kernels (6.15+) drive it with the new `iwlmld` op-mode and require firmware ≥ v100 — there is no usable `iwlmvm` fallback, so don't bother downgrading firmware. If `wifi-debug`'s driver-level scan works, the BE200 itself is fine and the problem is upstream of the driver (almost always the backend issue above).
 
 ## Design choices
 

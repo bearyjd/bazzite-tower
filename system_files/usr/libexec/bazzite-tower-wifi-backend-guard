@@ -1,0 +1,53 @@
+#!/usr/bin/env bash
+# bazzite-tower-wifi-backend-guard — keep the NetworkManager Wi-Fi backend alive.
+#
+# Failure mode this prevents: a config sets `wifi.backend=iwd` while `iwd` is not
+# enabled, so NetworkManager points at a supplicant that never runs and every
+# Wi-Fi device shows up as `unavailable` (looks like the card vanished). This is
+# easy to hit after a `bootc` rebase, because /etc persists: a `wifi.backend=iwd`
+# file from a previous image survives, but the enabled `iwd` service does not.
+#
+# Behaviour: if any config selects the iwd backend but iwd is not enabled, drop a
+# late-sorting override that restores the default wpa_supplicant backend. Remove
+# that override again the moment iwd is properly enabled — so a deliberate
+# `systemctl enable iwd` is always respected. Idempotent; runs every boot.
+set -euo pipefail
+
+guard=/etc/NetworkManager/conf.d/zzz-bazzite-tower-wifi-backend-guard.conf
+
+# Does any NON-guard NetworkManager config select the iwd backend?
+iwd_selected=0
+while IFS= read -r -d '' f; do
+    [[ "${f}" == "${guard}" ]] && continue
+    if grep -qiE '^[[:space:]]*wifi\.backend[[:space:]]*=[[:space:]]*iwd' "${f}"; then
+        iwd_selected=1
+        break
+    fi
+done < <(find /etc/NetworkManager /usr/lib/NetworkManager -name '*.conf' -print0 2>/dev/null)
+
+# Is iwd actually set up to run? (is-enabled is readable this early in boot.)
+iwd_ok=0
+if systemctl is-enabled --quiet iwd 2>/dev/null; then
+    iwd_ok=1
+fi
+
+if [[ "${iwd_selected}" -eq 1 && "${iwd_ok}" -eq 0 ]]; then
+    # Only write if missing/changed, so we don't thrash the file every boot.
+    if ! grep -q '^wifi.backend=wpa_supplicant$' "${guard}" 2>/dev/null; then
+        install -Dm644 /dev/stdin "${guard}" <<'EOF'
+# Added automatically by bazzite-tower-wifi-backend-guard.service.
+# A NetworkManager config selected wifi.backend=iwd but iwd is not enabled,
+# which leaves every Wi-Fi device 'unavailable'. This override restores the
+# default wpa_supplicant backend. To use iwd instead, run
+#   sudo systemctl enable --now iwd
+# and reboot — this file is then removed automatically.
+[device]
+wifi.backend=wpa_supplicant
+EOF
+        echo "bazzite-tower-wifi-backend-guard: iwd selected but not enabled; forced wifi.backend=wpa_supplicant"
+    fi
+elif [[ -f "${guard}" ]]; then
+    # No longer needed (iwd got enabled, or the iwd selection went away).
+    rm -f "${guard}"
+    echo "bazzite-tower-wifi-backend-guard: condition cleared; removed backend override"
+fi

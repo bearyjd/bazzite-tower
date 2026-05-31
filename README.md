@@ -49,8 +49,19 @@ The Docker repo file ships with **every section disabled**. Packages are pulled 
 | `ujust vm-list` | `virsh -c qemu:///system list --all` |
 | `ujust vm-net-status` | `virsh -c qemu:///system net-list --all` |
 | `ujust fix-vm-groups` | Add the current user to `kvm`, `libvirt`, `docker` (then log out/in) |
+| `ujust wifi-debug` | Dump Wi-Fi diagnostics (rfkill, `lspci`, `iwlwifi`/`DMAR` dmesg, modules, NetworkManager, firmware, kernel cmdline) — read-only, works offline |
 
 The stack is socket-activated and enabled at boot, so `vm-start` is rarely needed — it's there for when you've manually stopped the daemons.
+
+### Wi-Fi not detected?
+
+If Wi-Fi looks dead after a boot — no networks, NetworkManager shows no usable Wi-Fi device — run `ujust wifi-debug` (it works without a network) and read it top-down. **Check the easy, common causes before assuming a driver/firmware problem:**
+
+- **`nmcli` shows the device as `unavailable` (not `disconnected`), but the driver-level scan in `wifi-debug` finds networks** → the radio is fine; NetworkManager's **wifi backend is pointing at a supplicant that isn't running.** The classic case: `/etc/NetworkManager/conf.d/iwd.conf` sets `wifi.backend=iwd` while `iwd` is inactive (`wpa_supplicant` is what's actually running). This frequently happens after a `bootc` **rebase**, because `/etc` persists: a `wifi.backend=iwd` file from a previous image survives, but the enabled `iwd` service does not. `bazzite-tower` ships a guard for exactly this (see [Wi-Fi backend guard](#wi-fi-backend-guard)), so on a fresh boot it self-corrects; to fix a running session immediately, revert to the default backend with `sudo mv /etc/NetworkManager/conf.d/iwd.conf ~/iwd.conf.disabled && sudo systemctl restart NetworkManager` (or `sudo systemctl enable --now iwd` if you actually want `iwd`).
+- **`rfkill` shows a hard block** → a physical/Fn switch or a BIOS setting, not the image.
+- **`lspci` doesn't list the wireless card at all** → disabled in BIOS or a hardware/seating issue.
+- **`lspci` lists the card but `dmesg` shows `iwlwifi ... DMAR` faults or `Failed to start ... ucode`** → the IOMMU is knocking out `iwlwifi`. An Intel CNVi card can fail to initialize under `intel_iommu=on`, and the wireless device then never registers. Confirm by rebooting, pressing `e` in GRUB, removing `intel_iommu=on iommu=pt` from the `linux` line, and booting once. If Wi-Fi returns, the IOMMU karg (`/usr/lib/bootc/kargs.d/00-iommu.toml`, added for PCI passthrough) is the cause — drop that fragment if you don't need VFIO passthrough, and rebuild.
+- **Intel BE200 (Wi-Fi 7) specifically:** newer kernels (6.15+) drive it with the new `iwlmld` op-mode and require firmware ≥ v100 — there is no usable `iwlmvm` fallback, so don't bother downgrading firmware. If `wifi-debug`'s driver-level scan works, the BE200 itself is fine and the problem is upstream of the driver (almost always the backend issue above).
 
 ## Design choices
 
@@ -59,6 +70,12 @@ The stack is socket-activated and enabled at boot, so `vm-start` is rarely neede
 NVIDIA's open kernel modules are the default for Turing+ since driver R560 and are at performance parity, so they're the obvious pick on paper. But this image targets a **hybrid (Optimus) laptop** where the priority is reliable *host* dGPU use — PRIME render offload plus dependable suspend/resume — not GPU passthrough. That's exactly where the open modules still lag: NVIDIA's own driver docs list power management as a known-incomplete area, and upstream `open-gpu-kernel-modules` bug reports of suspend/hibernate failures on Intel+NVIDIA hybrid laptops remained open into 2026. Bazzite users on hybrid laptops have reported better stability (and lower idle power) on the proprietary driver.
 
 So `bazzite-tower` builds on `bazzite-nvidia:stable` (proprietary). On an RTX 40-series (Ada) card the proprietary driver is fully supported; the open modules remain one `FROM`-line swap away (`bazzite-nvidia-open:stable`) if you'd rather track NVIDIA's open default — and `bootc rollback` makes trying either low-risk.
+
+### Wi-Fi backend guard
+
+NetworkManager picks a Wi-Fi backend (`wpa_supplicant` by default, or `iwd`). Because `/etc` persists across a `bootc` rebase, a `wifi.backend=iwd` config from a previous image can outlive its enabled `iwd` service — NetworkManager then points at a supplicant that never runs, and **every Wi-Fi device reports `unavailable`** (which looks exactly like a missing card, even though the radio is fine).
+
+`bazzite-tower-wifi-backend-guard.service` runs before `NetworkManager` on each boot. If any config selects `wifi.backend=iwd` while `iwd` is not enabled, it drops a late-sorting override (`/etc/NetworkManager/conf.d/zzz-bazzite-tower-wifi-backend-guard.conf`) restoring the default `wpa_supplicant` backend — and removes that override automatically the moment `iwd` is properly enabled, so a deliberate `sudo systemctl enable --now iwd` is always respected. The backend is corrected before NM starts, so no restart is needed.
 
 ### Modular libvirt (no manual `ujust setup-virtualization`)
 

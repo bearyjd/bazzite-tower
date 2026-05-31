@@ -1,8 +1,8 @@
 # Staying in sync with upstream Bazzite without silently breaking
 
-**Status:** Layers 1, 2 and 5 implemented (gate + smoke tests + issue
-notifications). Layers 3 (boot test) and 4 (package-diff early warning), and the
-Section 4 digest-pin decision, remain to do.
+**Status:** Layers 1, 2, 4 and 5 implemented (gate + smoke tests + upstream
+package-diff early warning + issue notifications). Layer 3 (boot test) and the
+Section 4 digest-pin decision remain to do.
 **Goal:** keep `bazzite-tower` riding the cutting edge of upstream Bazzite
 (`ghcr.io/ublue-os/bazzite-nvidia:stable`) while guaranteeing that an upstream
 change can never silently land a broken image on the laptop — and that we get a
@@ -158,6 +158,15 @@ closes the Wi-Fi and virtqemud silent-runtime gap that Layer 2 can only
 approximate.
 
 ### Layer 4 — Upstream "what changed" early warning
+
+> **Implemented.** `.github/workflows/base-watch.yml` runs daily (05:00 UTC,
+> ahead of the Sunday build): it pulls `bazzite-nvidia:stable`, builds a package
+> manifest, and `ci/base-diff.py` diffs it against the last-seen manifest stored
+> at `docs/manifests/bazzite-nvidia-stable.txt`, filtered to the blast-radius
+> regex. On a blast-radius change it opens/comments on a deduplicated
+> `base-bump` issue with a `name old → new` summary, then commits the refreshed
+> manifest back (`docs/**` is in `build.yml`'s `paths-ignore`, so that commit
+> doesn't trigger an image rebuild). First run just records the baseline.
 
 On each scheduled run, before/after pulling the base:
 

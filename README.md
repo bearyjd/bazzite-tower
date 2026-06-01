@@ -81,6 +81,8 @@ NetworkManager picks a Wi-Fi backend (`wpa_supplicant` by default, or `iwd`). Be
 
 Fedora 44+ defaults to modular libvirt: per-driver daemons (`virtqemud`, `virtnetworkd`, `virtnodedevd`, `virtnwfilterd`, `virtstoraged`) replace the monolithic `libvirtd`. `bazzite-tower` enables those modular sockets at build time (enabling each primary `.socket` also pulls in its `-ro`/`-admin` variants via the unit's `Also=` directive). The legacy `libvirtd.service` is masked so it can't race the modular daemons — that race is the root cause of broken `ujust setup-virtualization` on stock images.
 
+A container `dnf install` doesn't run `systemd-sysusers` the way an rpm-ostree compose does, so the `qemu` system user that the libvirt packages declare via `sysusers.d` is never created — and `virtqemud` then aborts at startup (`Failed to parse user 'qemu'`) and crash-loops, so `qemu:///system` would silently never come up. `build.sh` materializes that user at build time: it strips the orphan `qemu:` shadow/gshadow lines the base image ships (which otherwise make `systemd-sysusers` roll the whole transaction back and create nothing), runs `systemd-sysusers`, then falls back to a guarded `groupadd`/`useradd`. The [runtime boot test](#continuous-testing--upstream-tracking) connects to `qemu:///system` on every change to keep this honest.
+
 For tooling that still expects the monolithic `/run/libvirt/libvirt-sock`, `virtproxyd.socket` is enabled. `virtproxyd` is the modular drop-in for that legacy path: it forwards to the per-driver daemons. It and `libvirtd.socket` both declare `Conflicts=` on the same socket path, so only `virtproxyd.socket` is enabled (`libvirtd.socket` would be inert anyway with its service masked).
 
 The default NAT network (shipped by `libvirt-daemon-config-network`) is marked autostart at build time by creating the `autostart/default.xml` symlink that `virsh net-autostart` would — so guests get networking on first boot without manual setup.
@@ -111,6 +113,18 @@ External repos (currently just Docker CE) are dropped on disk with `enabled=0`. 
 ### Packages explicitly excluded
 
 To keep the image lean and focused, these are **not** installed even though some sibling images include them: `python3-ramalama`, `bcc`, `bpftrace`, `bpftop`, `tiptop`, `sysprof`, `nicstat`, `numactl`, `usbmuxd`, VS Code. Install any of them via `rpm-ostree install` or `flatpak` as needed.
+
+## Continuous testing & upstream tracking
+
+This image rides `bazzite-nvidia:stable` and the laptop rebases onto `:latest`, so **"the build is green" has to also mean "the image works."** A green build can still publish a silently-broken image — e.g. an upstream change makes the qemu-user logic create nothing, `virtqemud` crash-loops on boot, and `qemu:///system` never comes up, yet nothing ever errors at build time. Three layers guard that gap; the full failure model and the reasoning behind each layer live in [`docs/downstream-change-tracking.md`](./docs/downstream-change-tracking.md).
+
+| Layer | Where | What it does |
+|---|---|---|
+| **Smoke gate** | `build.yml` → [`tests/smoke.sh`](./tests/smoke.sh) | Offline assertions against the freshly built image, run **before** push: qemu user resolves, the five `virt*.socket`s are enabled, `libvirtd` is masked, the Wi-Fi guard / first-boot / Docker units are enabled, IOMMU kargs present. A failure blocks the push, so `:latest` stays on the last-good image. |
+| **Runtime boot test** | `boot-test.yml` → [`tests/boot-check.sh`](./tests/boot-check.sh) | Boots the image's own systemd under `podman --systemd=always` and proves the stack *works*: socket-activates `virtqemud` and connects to `qemu:///system` (the end-to-end check for the qemu-user regression), and confirms the Wi-Fi backend guard ran clean. |
+| **Upstream early warning** | `base-watch.yml` → [`ci/base-diff.py`](./ci/base-diff.py) | Daily, diffs the base image's package manifest (tracked under `docs/manifests/`) against the last-seen one, filtered to the blast-radius packages (qemu/libvirt/NetworkManager/Docker/kernel/systemd/polkit/bootc). A change opens a heads-up issue **before** the next build. |
+
+Each failing layer opens — and later auto-closes — a labelled tracking issue (`ci-failure`, `boot-test-failure`, `base-bump`). Reproduce the smoke gate locally with `just smoke`.
 
 ## Installing
 
@@ -151,8 +165,14 @@ The proprietary driver supports Maxwell and newer, so there's no pre-Turing cuto
 | `disk_config/disk.toml` | qcow2/raw config for bootc-image-builder |
 | `disk_config/iso-kde.toml` | KDE Plasma ISO config |
 | `disk_config/iso-gnome.toml` | GNOME ISO config |
-| `.github/workflows/build.yml` | CI: build, push to GHCR, sign with cosign |
+| `.github/workflows/build.yml` | CI: build, **smoke-test gate**, push to GHCR, sign with cosign |
 | `.github/workflows/build-disk.yml` | CI: produce qcow2 + anaconda-iso artifacts on demand |
+| `.github/workflows/boot-test.yml` | CI: boot the image under systemd and check runtime behaviour |
+| `.github/workflows/base-watch.yml` | CI: daily upstream base package-diff early warning |
+| `tests/smoke.sh` | Offline assertions run against the built image (the CI gate; also `just smoke`) |
+| `tests/boot-check.sh` | Runtime checks run inside the booted image by `boot-test.yml` |
+| `ci/base-diff.py` | Filters the upstream package diff to the blast-radius packages |
+| `docs/downstream-change-tracking.md` | How the image stays current with upstream Bazzite without silently breaking |
 | `cosign.pub` | Public key for verifying signed images |
 | `Justfile` | Local build/run recipes (see below) |
 
@@ -162,6 +182,7 @@ Quick path for testing changes before rebasing your real machine:
 
 ```bash
 just build               # build the container image locally
+just smoke               # offline smoke-test the built image (same assertions as the CI gate)
 just build-qcow2         # turn it into a bootable qcow2
 just run-vm-qcow2        # boot the qcow2 in qemu, browser console at localhost:8006
 ```
@@ -230,6 +251,16 @@ just build $target_image $tag
 Arguments:
 - `$target_image` — the tag to apply to the image (default: `$image_name`)
 - `$tag` — the tag for the image (default: `$default_tag`)
+
+### `just smoke`
+
+Runs the offline smoke test (`tests/smoke.sh`) against a built image — the same assertions as the CI promotion gate, with no VM required.
+
+```bash
+just smoke $target_image $tag
+```
+
+It executes `podman run --rm -i "$target_image:$tag" bash -s < tests/smoke.sh`, so build the image first (`just build`). Exits non-zero if any customization (qemu user, modular `virt*.socket`s, the Wi-Fi guard, IOMMU kargs, Docker CE) is missing.
 
 ## Building and Running Virtual Machines and ISOs
 

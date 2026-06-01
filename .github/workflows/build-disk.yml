@@ -100,6 +100,10 @@ jobs:
           image: ${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAME }}:${{ env.DEFAULT_TAG }}
           chown: ${{ env.USER_UID }}:${{ env.USER_GID }}
           types: ${{ matrix.type }}
+          # The bazzite-nvidia base declares no default root filesystem, so BIB
+          # aborts manifest generation ("no default root filesystem type
+          # specified in container"). Bazzite installs to btrfs.
+          rootfs: btrfs
           additional-args: --use-librepo=True
 
       - name: Upload disk images and Checksum to Job Artifacts

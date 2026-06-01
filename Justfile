@@ -229,9 +229,11 @@ build-iso-live $target_image=("ghcr.io/bearyjd/" + image_name) $tag=default_tag:
     mkdir -p "${PWD}/output"
     work="$(mktemp -d)"
     git clone --depth 1 https://github.com/ublue-os/titanoboa "$work/titanoboa"
-    ( cd "$work/titanoboa" && sudo TITANOBOA_CTR_IMAGE="${target_image}:${tag}" ./main.sh )
-    iso="$(ls -t "$work"/titanoboa/*.iso 2>/dev/null | head -1 || true)"
-    if [ -n "$iso" ]; then
+    # main.sh prints the produced ISO's path as its only stdout line (progress
+    # goes to stderr); capture it exactly like the titanoboa action does, rather
+    # than guessing the output dir.
+    iso="$(cd "$work/titanoboa" && sudo TITANOBOA_CTR_IMAGE="${target_image}:${tag}" ./main.sh)"
+    if [ -n "${iso:-}" ] && [ -f "$iso" ]; then
         sudo chown "$(id -u):$(id -g)" "$iso"
         mv "$iso" "${PWD}/output/"
         echo "ISO: ${PWD}/output/$(basename "$iso")"

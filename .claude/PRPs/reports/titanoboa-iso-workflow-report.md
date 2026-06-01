@@ -21,6 +21,12 @@ Scaffolded the titanoboa live-ISO path: a new `build-iso.yml` CI workflow (prima
 | 3 | `just build-iso-live` recipe | DONE (unverified) | Documented `main.sh` clone method; marked UNVERIFIED. Justfile parses. |
 | 4 | Sync docs + memory | DEFERRED | Deliberate: won't claim "ISO works" before the spike proves it |
 
+## Post-implementation review (code-reviewer pass)
+An independent review of `main..feat/titanoboa-iso` caught **1 HIGH + 3 MEDIUM/LOW** (all fixed in the follow-up commit):
+- **HIGH** — `build-iso-live` globbed `$work/titanoboa/*.iso`, but titanoboa writes to a CWD-relative `output/`, so a *successful* build reported "No ISO produced" and `rm -rf` then deleted it. Fixed by capturing `main.sh` stdout (the ISO path), mirroring the action.
+- MED — added `set -euo pipefail` to the S3 run-block; concurrency group now includes `github.event_name` so dispatch vs weekly schedule don't cancel each other.
+- LOW — corrected the titanoboa pin comment date (`#138`, 2026-05-19); aligned `remove-unwanted-software` to `cc0becac… # v9` (matches build-disk.yml).
+
 ## Validation Results
 
 | Level | Status | Notes |

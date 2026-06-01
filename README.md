@@ -120,9 +120,9 @@ This image rides `bazzite-nvidia:stable` and the laptop rebases onto `:latest`, 
 
 | Layer | Where | What it does |
 |---|---|---|
-| **Smoke gate** | `build.yml` → [`tests/smoke.sh`](./tests/smoke.sh) | Offline assertions against the freshly built image, run **before** push: qemu user resolves, the five `virt*.socket`s are enabled, `libvirtd` is masked, the Wi-Fi guard / first-boot / Docker units are enabled, IOMMU kargs present. A failure blocks the push, so `:latest` stays on the last-good image. |
+| **Smoke gate** | `build.yml` → [`tests/smoke.sh`](./tests/smoke.sh) | Offline assertions against the freshly built image, run **before** push: qemu user resolves, the six `virt*.socket`s are enabled, `libvirtd` is masked, the Wi-Fi guard / first-boot / Docker units are enabled, IOMMU kargs present. A failure blocks the push, so `:latest` stays on the last-good image. |
 | **Runtime boot test** | `boot-test.yml` → [`tests/boot-check.sh`](./tests/boot-check.sh) | Boots the image's own systemd under `podman --systemd=always` and proves the stack *works*: socket-activates `virtqemud` and connects to `qemu:///system` (the end-to-end check for the qemu-user regression), and confirms the Wi-Fi backend guard ran clean. |
-| **Upstream early warning** | `base-watch.yml` → [`ci/base-diff.py`](./ci/base-diff.py) | Daily, diffs the base image's package manifest (tracked under `docs/manifests/`) against the last-seen one, filtered to the blast-radius packages (qemu/libvirt/NetworkManager/Docker/kernel/systemd/polkit/bootc). A change opens a heads-up issue **before** the next build. |
+| **Upstream early warning** | `base-watch.yml` → [`ci/base-diff.py`](./ci/base-diff.py) | Daily, diffs the base image's package manifest (committed to `docs/manifests/` after the first run) against the last-seen one, filtered to the blast-radius packages (qemu/libvirt/NetworkManager/Docker/kernel/systemd/polkit/bootc). A change opens a heads-up issue **before** the next build. |
 
 Each failing layer opens — and later auto-closes — a labelled tracking issue (`ci-failure`, `boot-test-failure`, `base-bump`). Reproduce the smoke gate locally with `just smoke`.
 

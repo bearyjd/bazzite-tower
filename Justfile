@@ -212,9 +212,33 @@ build-qcow2 $target_image=("localhost/" + image_name) $tag=default_tag: && (_bui
 [group('Build Virtal Machine Image')]
 build-raw $target_image=("localhost/" + image_name) $tag=default_tag: && (_build-bib target_image tag "raw" "disk_config/disk.toml")
 
-# Build an ISO virtual machine image
+# Build an anaconda installer ISO via bootc-image-builder.
+# BROKEN: upstream blockers (bootc-image-builder#1188 + bazzite#3418). Prefer
+# `build-iso-live` (titanoboa) below. Kept for if/when upstream is fixed.
 [group('Build Virtal Machine Image')]
 build-iso $target_image=("localhost/" + image_name) $tag=default_tag: && (_build-bib target_image tag "iso" "disk_config/iso-kde.toml")
+
+# Build a bootable live installer ISO with titanoboa (the working ISO path).
+# Needs sudo + KVM + tens of GB free. Clones titanoboa and runs its documented
+# main.sh. UNVERIFIED on this image — the first run is the spike (mirrors the
+# build-iso.yml CI workflow). The produced ISO lands in ./output/.
+[group('Build Virtal Machine Image')]
+build-iso-live $target_image=("ghcr.io/bearyjd/" + image_name) $tag=default_tag:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    mkdir -p "${PWD}/output"
+    work="$(mktemp -d)"
+    git clone --depth 1 https://github.com/ublue-os/titanoboa "$work/titanoboa"
+    ( cd "$work/titanoboa" && sudo TITANOBOA_CTR_IMAGE="${target_image}:${tag}" ./main.sh )
+    iso="$(ls -t "$work"/titanoboa/*.iso 2>/dev/null | head -1 || true)"
+    if [ -n "$iso" ]; then
+        sudo chown "$(id -u):$(id -g)" "$iso"
+        mv "$iso" "${PWD}/output/"
+        echo "ISO: ${PWD}/output/$(basename "$iso")"
+    else
+        echo "No ISO produced — check the titanoboa output above."
+    fi
+    rm -rf "$work"
 
 # Rebuild a QCOW2 virtual machine image
 [group('Build Virtal Machine Image')]

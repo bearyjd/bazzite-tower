@@ -1,0 +1,171 @@
+---
+# Build a bootable live/installer ISO with titanoboa (ublue's live-ISO toolchain).
+#
+# This is the replacement for the bootc-image-builder anaconda-iso path, which is
+# upstream-broken (osbuild/bootc-image-builder#1188 + ublue-os/bazzite#3418).
+# titanoboa is what ublue itself uses to build real Bazzite ISOs.
+#
+# STATUS: primary-path, NOT yet verified end-to-end. titanoboa requires the source
+# image to satisfy its "container-native ISO contract" (iso.yaml, kernel+initramfs,
+# grub modules, EFI binaries). If this build fails, the fallback is bazzite's
+# `installer/` payload-builder — see
+# .claude/PRPs/plans/completed/titanoboa-iso-workflow.plan.md (Task 1b). A green
+# build still needs a manual boot test in a VM before the ISO is trusted (#3418).
+#
+# Dispatch + weekly only — ISO builds are heavy. No pull_request trigger by design.
+name: Build live ISO
+
+on:
+  workflow_dispatch:
+    inputs:
+      upload-to-s3:
+        description: "Upload the ISO to S3 instead of job artifacts"
+        required: false
+        default: false
+        type: boolean
+  schedule:
+    - cron: '0 8 * * 0'  # 08:00 UTC Sunday — after the 06:00 image build
+
+env:
+  IMAGE_NAME: "${{ github.event.repository.name }}"
+  IMAGE_REGISTRY: "ghcr.io/${{ github.repository_owner }}"
+  DEFAULT_TAG: "latest"
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  build-iso:
+    name: Build live ISO (amd64)
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: read
+      issues: write   # open/close the iso-failure tracking issue on scheduled runs
+    # Exposed as env so step `if:` guards can test for its presence — the `secrets`
+    # context is not available directly inside `if:` expressions.
+    env:
+      SIGNING_SECRET: ${{ secrets.SIGNING_SECRET }}
+
+    steps:
+      - name: Prepare environment
+        run: |
+          # Lowercase the image uri (GitHub usernames can be capitalized).
+          echo "IMAGE_REGISTRY=${IMAGE_REGISTRY,,}" >> ${GITHUB_ENV}
+          echo "IMAGE_NAME=${IMAGE_NAME,,}" >> ${GITHUB_ENV}
+
+      - name: Maximize build space
+        uses: ublue-os/remove-unwanted-software@695eb75bc387dbcd9685a8e72d23439d8686cba6
+        with:
+          remove-codeql: true
+
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      # titanoboa pulls the published image and builds a live ISO. It needs sudo +
+      # container caps, which the composite action sets internally. If the build
+      # fails for lack of disk, add bazzite's 70G btrfs loopback at
+      # /var/lib/containers/storage (see build_iso.yml in ublue-os/bazzite).
+      - name: Build live ISO
+        id: build
+        uses: ublue-os/titanoboa@5c457c3d0518bd17e754be0fd98a60d29d26abb4 # main @ 2026-05-31
+        with:
+          image-ref: ${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAME }}:${{ env.DEFAULT_TAG }}
+          iso-dest: ${{ github.workspace }}/output/${{ env.IMAGE_NAME }}-${{ env.DEFAULT_TAG }}-live-amd64.iso
+
+      - name: Stage ISO + checksum
+        id: stage
+        run: |
+          set -euo pipefail
+          ISO_PATH="${{ steps.build.outputs.iso-dest }}"
+          UPLOAD_DIR="${{ github.workspace }}/upload"
+          mkdir -p "${UPLOAD_DIR}"
+          mv "${ISO_PATH}" "${UPLOAD_DIR}/"
+          ISO_NAME="$(basename "${ISO_PATH}")"
+          ( cd "${UPLOAD_DIR}" && sha256sum "${ISO_NAME}" | tee "${ISO_NAME}-CHECKSUM" )
+          echo "upload-dir=${UPLOAD_DIR}" >> "${GITHUB_OUTPUT}"
+
+      # Signing mirrors build.yml: runs only once a SIGNING_SECRET exists. Unlike
+      # the image (signed by digest), an ISO is a blob, so sign-blob.
+      - name: Install Cosign
+        if: env.SIGNING_SECRET != ''
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: 'v2.6.3'
+
+      - name: Sign ISO
+        if: env.SIGNING_SECRET != ''
+        env:
+          COSIGN_PRIVATE_KEY: ${{ secrets.SIGNING_SECRET }}
+          COSIGN_PASSWORD: ""
+          UPLOAD_DIR: ${{ steps.stage.outputs.upload-dir }}
+        run: |
+          set -euo pipefail
+          for iso in "${UPLOAD_DIR}"/*.iso; do
+            cosign sign-blob -y --key env://COSIGN_PRIVATE_KEY "${iso}" --output-signature "${iso}.sig"
+          done
+
+      - name: Upload ISO to job artifacts
+        if: ${{ !inputs.upload-to-s3 }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ env.IMAGE_NAME }}-live-iso
+          path: ${{ steps.stage.outputs.upload-dir }}
+          if-no-files-found: error
+          compression-level: 0
+          overwrite: true
+
+      - name: Upload ISO to S3
+        if: ${{ inputs.upload-to-s3 }}
+        env:
+          RCLONE_CONFIG_S3_TYPE: s3
+          RCLONE_CONFIG_S3_PROVIDER: ${{ secrets.S3_PROVIDER }}
+          RCLONE_CONFIG_S3_ACCESS_KEY_ID: ${{ secrets.S3_ACCESS_KEY_ID }}
+          RCLONE_CONFIG_S3_SECRET_ACCESS_KEY: ${{ secrets.S3_SECRET_ACCESS_KEY }}
+          RCLONE_CONFIG_S3_REGION: ${{ secrets.S3_REGION }}
+          RCLONE_CONFIG_S3_ENDPOINT: ${{ secrets.S3_ENDPOINT }}
+          SOURCE_DIR: ${{ steps.stage.outputs.upload-dir }}
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y rclone
+          rclone copy "${SOURCE_DIR}" "S3:${{ secrets.S3_BUCKET_NAME }}/iso"
+
+      # Mirrors build.yml's tracking-issue pattern (dedup by label, close on green).
+      - name: Open tracking issue on failure
+        if: failure() && github.event_name != 'pull_request'
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
+        with:
+          script: |
+            const label = 'iso-failure';
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const body = [
+              `The **${context.workflow}** workflow failed on \`${context.ref}\` (event \`${context.eventName}\`).`,
+              ``,
+              `Run: ${runUrl}`,
+              ``,
+              `The titanoboa live-ISO build failed. Most likely the image does not satisfy titanoboa's ISO contract (would need the \`installer/\` payload-builder fallback) or titanoboa's API shifted (it is mid-revamp; bazzite tracks a fork). See \`docs/CODEMAPS/ci-cd.md\` and the titanoboa-iso plan.`,
+            ].join('\n');
+            const { owner, repo } = context.repo;
+            const open = await github.rest.issues.listForRepo({ owner, repo, state: 'open', labels: label });
+            if (open.data.length > 0) {
+              await github.rest.issues.createComment({ owner, repo, issue_number: open.data[0].number, body });
+            } else {
+              await github.rest.issues.create({ owner, repo, title: '💿 Live ISO build failing', labels: [label], body });
+            }
+
+      - name: Close tracking issue on success
+        if: success() && github.event_name != 'pull_request' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
+        with:
+          script: |
+            const label = 'iso-failure';
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const { owner, repo } = context.repo;
+            const open = await github.rest.issues.listForRepo({ owner, repo, state: 'open', labels: label });
+            for (const issue of open.data) {
+              await github.rest.issues.createComment({ owner, repo, issue_number: issue.number, body: `Live ISO build is green again (${runUrl}). Closing.` });
+              await github.rest.issues.update({ owner, repo, issue_number: issue.number, state: 'closed' });
+            }

@@ -5,3 +5,6 @@ _build-*/**
 
 # oh-my-claudecode local state
 .omc/
+
+# transient analysis reports (codemap diffs, etc.)
+.reports/

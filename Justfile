@@ -219,29 +219,29 @@ build-raw $target_image=("localhost/" + image_name) $tag=default_tag: && (_build
 build-iso $target_image=("localhost/" + image_name) $tag=default_tag: && (_build-bib target_image tag "iso" "disk_config/iso-kde.toml")
 
 # Build a bootable live installer ISO with titanoboa (the working ISO path).
-# Needs sudo + KVM + tens of GB free. Clones titanoboa and runs its documented
-# main.sh. UNVERIFIED on this image — the first run is the spike (mirrors the
-# build-iso.yml CI workflow). The produced ISO lands in ./output/.
+# Builds the installer/ payload image FROM the base, then feeds it to titanoboa.
+# Needs sudo + KVM + tens of GB free. UNVERIFIED first cut — expect a few
+# build/spike iterations. The produced ISO lands in ./output/.
 [group('Build Virtal Machine Image')]
-build-iso-live $target_image=("ghcr.io/bearyjd/" + image_name) $tag=default_tag:
+build-iso-live $base_image=("ghcr.io/bearyjd/" + image_name) $tag=default_tag:
     #!/usr/bin/env bash
     set -euo pipefail
     mkdir -p "${PWD}/output"
+    # Live-ISO payload (live session + Anaconda) built FROM the base image.
+    sudo podman build \
+        --cap-add sys_admin --security-opt label=disable --squash \
+        --build-arg BASE_IMAGE="${base_image}:${tag}" \
+        -t "localhost/bazzite-tower-payload:${tag}" installer/
     work="$(mktemp -d)"
     git clone --depth 1 https://github.com/ublue-os/titanoboa "$work/titanoboa"
-    # titanoboa consumes the image from LOCAL (root) podman storage — it does NOT
-    # pull it (it only pulls its own builder base). Pull it first, outside the
-    # $(...) capture so the pull progress doesn't pollute the captured ISO path.
-    sudo podman pull "${target_image}:${tag}"
-    # main.sh prints the produced ISO's path as its only stdout line (progress
-    # goes to stderr); capture it exactly like the titanoboa action does.
-    iso="$(cd "$work/titanoboa" && sudo TITANOBOA_CTR_IMAGE="${target_image}:${tag}" ./main.sh)"
+    # main.sh prints the produced ISO's path as its only stdout line; capture it.
+    iso="$(cd "$work/titanoboa" && sudo TITANOBOA_CTR_IMAGE="localhost/bazzite-tower-payload:${tag}" ./main.sh)"
     if [ -n "${iso:-}" ] && [ -f "$iso" ]; then
         sudo chown "$(id -u):$(id -g)" "$iso"
         mv "$iso" "${PWD}/output/"
         echo "ISO: ${PWD}/output/$(basename "$iso")"
     else
-        echo "No ISO produced — check the titanoboa output above."
+        echo "No ISO produced — check the output above."
     fi
     rm -rf "$work"
 

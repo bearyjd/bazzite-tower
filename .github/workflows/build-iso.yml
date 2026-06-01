@@ -67,12 +67,21 @@ jobs:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
-      # titanoboa consumes the image from LOCAL (root) podman storage — it does
-      # NOT pull it (it only pulls its own builder base). Pull our image first.
-      - name: Pull image into local storage
+      # titanoboa can't use the plain image (it lacks the live/installer layer).
+      # Build the payload image (installer/) FROM bazzite-tower, then feed THAT.
+      # Privileged build: the payload build.sh runs dracut/podman/dnf scriptlets.
+      # This also leaves the payload in local (root) podman storage, which is
+      # where titanoboa reads its image from.
+      - name: Build live-ISO payload
         run: |
           set -euo pipefail
-          sudo podman pull "${IMAGE_REGISTRY}/${IMAGE_NAME}:${DEFAULT_TAG}"
+          sudo podman build \
+            --cap-add sys_admin \
+            --security-opt label=disable \
+            --squash \
+            --build-arg BASE_IMAGE="${IMAGE_REGISTRY}/${IMAGE_NAME}:${DEFAULT_TAG}" \
+            -t "localhost/${IMAGE_NAME}-payload:${DEFAULT_TAG}" \
+            installer/
 
       # If the build fails for lack of disk, add bazzite's 70G btrfs loopback at
       # /var/lib/containers/storage (see build_iso.yml in ublue-os/bazzite).
@@ -80,7 +89,7 @@ jobs:
         id: build
         uses: ublue-os/titanoboa@5c457c3d0518bd17e754be0fd98a60d29d26abb4 # main @ 2026-05-19 (#138); mid-revamp, no tagged release to pin
         with:
-          image-ref: ${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAME }}:${{ env.DEFAULT_TAG }}
+          image-ref: localhost/${{ env.IMAGE_NAME }}-payload:${{ env.DEFAULT_TAG }}
           iso-dest: ${{ github.workspace }}/output/${{ env.IMAGE_NAME }}-${{ env.DEFAULT_TAG }}-live-amd64.iso
 
       - name: Stage ISO + checksum

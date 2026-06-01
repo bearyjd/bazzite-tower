@@ -1,0 +1,10 @@
+# titanoboa / bootc-image-builder ISO config. build_iso.sh reads `.label` (the
+# ISO volume label, which must match root=live:CDLABEL= below) and `.grub2.*`.
+label: "bazzite-tower-Live"
+grub2:
+  timeout: 10
+  default: 0
+  entries:
+    - name: "bazzite-tower Live ISO"
+      linux: "/images/pxeboot/vmlinuz quiet rhgb root=live:CDLABEL=bazzite-tower-Live enforcing=0 rd.live.image"
+      initrd: "/images/pxeboot/initrd.img"

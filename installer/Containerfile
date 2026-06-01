@@ -1,0 +1,22 @@
+# Live-ISO payload image (NOT the installed OS).
+#
+# Layers the live session + Anaconda installer onto bazzite-tower so the result
+# satisfies titanoboa's container-native ISO contract (iso.yaml, a dmsquash-live
+# initramfs, livesys, EFI in /boot/efi). titanoboa consumes THIS image, not the
+# plain bazzite-tower image — see installer/src/build.sh and the README.
+#
+# Build (privileged; titanoboa's build steps need these):
+#   sudo podman build --cap-add sys_admin --security-opt label=disable --squash \
+#     --build-arg BASE_IMAGE=ghcr.io/bearyjd/bazzite-tower:latest \
+#     -t localhost/bazzite-tower-payload:latest installer/
+#
+# STATUS: minimal first cut, UNVERIFIED. Ported and trimmed from
+# github.com/ublue-os/titanoboa examples/bazzite (which is explicitly "not for
+# production"). Bazzite polish (branding, secureboot UX, bootloader-restore,
+# steam-deck, the vanilla-kernel swap) is intentionally omitted.
+ARG BASE_IMAGE=ghcr.io/bearyjd/bazzite-tower:latest
+FROM ${BASE_IMAGE}
+COPY ./src /src
+RUN --mount=type=cache,target=/var/tmp/libdnf5,id=libdnf5 \
+    /src/build.sh
+RUN rm -fr /src

@@ -20,8 +20,6 @@ on:
       - main
     paths:
       - './disk_config/disk.toml'
-      - './disk_config/iso-kde.toml'
-      - './disk_config/iso-gnome.toml'
       - './.github/workflows/build-disk.yml'
 
 env:
@@ -41,20 +39,19 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Each leg pairs a bootc-image-builder output type with its config file.
-        # The two anaconda-iso legs differ only by desktop config, so they need
-        # distinct variant names (used for artifact / S3 paths) to avoid both
-        # writing the same output/bootiso/install.iso into one destination.
+        # Each leg pairs a bootc-image-builder output type with its config file,
+        # with a distinct variant name (used for the artifact name + S3 subpath).
+        #
+        # anaconda-iso is intentionally NOT built. Two open upstream bugs block a
+        # usable ISO: BIB can't read the base image's file:// repo GPG keys during
+        # depsolve (osbuild/bootc-image-builder#1188), and Anaconda installs of
+        # Bazzite are not usable even past that (ublue-os/bazzite#3418). qcow2 is
+        # the supported artifact; the primary install path is `bootc switch`. To
+        # revisit ISOs, use ublue's ISO toolchain (titanoboa), not BIB anaconda-iso.
         include:
           - variant: qcow2
             type: qcow2
             config: ./disk_config/disk.toml
-          - variant: iso-kde
-            type: anaconda-iso
-            config: ./disk_config/iso-kde.toml
-          - variant: iso-gnome
-            type: anaconda-iso
-            config: ./disk_config/iso-gnome.toml
     permissions:
       contents: read
       packages: read

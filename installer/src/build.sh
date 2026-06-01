@@ -48,7 +48,10 @@ cp -v /boot/efi/EFI/fedora/grubx64.efi /boot/efi/EFI/BOOT/fbx64.efi || true
 systemd-firstboot --timezone UTC || true
 
 # The live root is a small tmpfs overlay; ostree install needs room in /var/tmp.
-rm -rf /var/tmp
+# `|| :` because the dnf build cache is bind-mounted at /var/tmp/libdnf5 during
+# this build, so the mountpoint itself can't be removed (and need not be — the
+# cache mount isn't committed to the image, and var-tmp.mount overlays it at boot).
+rm -rf /var/tmp || :
 mkdir -p /var/tmp
 cat >/etc/systemd/system/var-tmp.mount <<'EOF'
 [Unit]

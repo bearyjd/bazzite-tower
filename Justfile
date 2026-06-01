@@ -229,9 +229,12 @@ build-iso-live $target_image=("ghcr.io/bearyjd/" + image_name) $tag=default_tag:
     mkdir -p "${PWD}/output"
     work="$(mktemp -d)"
     git clone --depth 1 https://github.com/ublue-os/titanoboa "$work/titanoboa"
+    # titanoboa consumes the image from LOCAL (root) podman storage — it does NOT
+    # pull it (it only pulls its own builder base). Pull it first, outside the
+    # $(...) capture so the pull progress doesn't pollute the captured ISO path.
+    sudo podman pull "${target_image}:${tag}"
     # main.sh prints the produced ISO's path as its only stdout line (progress
-    # goes to stderr); capture it exactly like the titanoboa action does, rather
-    # than guessing the output dir.
+    # goes to stderr); capture it exactly like the titanoboa action does.
     iso="$(cd "$work/titanoboa" && sudo TITANOBOA_CTR_IMAGE="${target_image}:${tag}" ./main.sh)"
     if [ -n "${iso:-}" ] && [ -f "$iso" ]; then
         sudo chown "$(id -u):$(id -g)" "$iso"

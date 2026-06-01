@@ -67,9 +67,14 @@ jobs:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
-      # titanoboa pulls the published image and builds a live ISO. It needs sudo +
-      # container caps, which the composite action sets internally. If the build
-      # fails for lack of disk, add bazzite's 70G btrfs loopback at
+      # titanoboa consumes the image from LOCAL (root) podman storage — it does
+      # NOT pull it (it only pulls its own builder base). Pull our image first.
+      - name: Pull image into local storage
+        run: |
+          set -euo pipefail
+          sudo podman pull "${IMAGE_REGISTRY}/${IMAGE_NAME}:${DEFAULT_TAG}"
+
+      # If the build fails for lack of disk, add bazzite's 70G btrfs loopback at
       # /var/lib/containers/storage (see build_iso.yml in ublue-os/bazzite).
       - name: Build live ISO
         id: build

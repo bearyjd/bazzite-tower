@@ -166,7 +166,7 @@ The proprietary driver supports Maxwell and newer, so there's no pre-Turing cuto
 | `disk_config/iso-kde.toml` | KDE Plasma ISO config |
 | `disk_config/iso-gnome.toml` | GNOME ISO config |
 | `.github/workflows/build.yml` | CI: build, **smoke-test gate**, push to GHCR, sign with cosign |
-| `.github/workflows/build-disk.yml` | CI: produce qcow2 + anaconda-iso artifacts on demand |
+| `.github/workflows/build-disk.yml` | CI: produce qcow2 + KDE/GNOME anaconda-iso artifacts on demand |
 | `.github/workflows/boot-test.yml` | CI: boot the image under systemd and check runtime behaviour |
 | `.github/workflows/base-watch.yml` | CI: daily upstream base package-diff early warning |
 | `tests/smoke.sh` | Offline assertions run against the built image (the CI gate; also `just smoke`) |
@@ -215,7 +215,7 @@ This template provides a way to upload the disk images generated from the workfl
 
 The [build-disk.yml](./.github/workflows/build-disk.yml) GitHub Actions workflow creates a disk image from your OCI image using the [bootc-image-builder](https://osbuild.org/docs/bootc/). To use this workflow:
 
-1. Modify `disk_config/iso.toml` to point to your custom container image before generating an ISO image.
+1. The ISO configs (`disk_config/iso-kde.toml`, `disk_config/iso-gnome.toml`) already point at `ghcr.io/bearyjd/bazzite-tower:latest`; the workflow builds a qcow2 plus both ISOs as separate matrix legs. Edit those configs only if you fork the image to a different name.
 2. If you changed your image name from the default in `build.yml`, then in `build-disk.yml` edit the `IMAGE_REGISTRY`, `IMAGE_NAME`, and `DEFAULT_TAG` environment variables to match. If you didn't, skip this step.
 3. If you want to upload your disk images to S3, add the S3 configuration to the repository's Action secrets (Settings → Secrets and Variables → Actions):
    - `S3_PROVIDER` — must match one of the values from the [supported list](https://rclone.org/s3/)

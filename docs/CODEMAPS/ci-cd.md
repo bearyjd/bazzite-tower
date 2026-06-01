@@ -10,7 +10,7 @@
 |---|---|---|---|
 | `build.yml` | push main (ignores README/docs/**), PR, Sun 06:00 UTC, dispatch | build → **smoke gate** (`tests/smoke.sh`, pre-push) → login → push GHCR → cosign sign by digest (if `SIGNING_SECRET`) | `ci-failure` |
 | `boot-test.yml` | PR (build paths), Sun 07:00 UTC, dispatch | build → `podman run --systemd=always /sbin/init` → wait running/degraded → exec `tests/boot-check.sh` | `boot-test-failure` |
-| `base-watch.yml` | daily 05:00 UTC, dispatch | pull base → `rpm -qa` manifest → `ci/base-diff.py` vs `docs/manifests/` → commit refreshed manifest | `base-bump` |
+| `base-watch.yml` | daily 05:00 UTC, dispatch | pull base → `rpm -qa` manifest → `ci/base-diff.py` vs last-seen baseline in `docs/manifests/` (written on first run) → commit refreshed manifest | `base-bump` |
 | `build-disk.yml` | dispatch (platform amd64/arm64), PR (disk_config paths) | bootc-image-builder → qcow2 + anaconda-iso → artifact or S3 | — |
 
 **Gate ordering** in `build.yml`: the smoke test runs *before* login/push, so a

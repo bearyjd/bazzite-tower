@@ -163,10 +163,10 @@ The proprietary driver supports Maxwell and newer, so there's no pre-Turing cuto
 | `build_files/build.sh` | All customizations: packages, repos, units, polkit, first-boot oneshot |
 | `system_files/` | Static content copied verbatim into the image (systemd units, ujust recipes, bootc kargs) |
 | `disk_config/disk.toml` | qcow2/raw config for bootc-image-builder |
-| `disk_config/iso-kde.toml` | KDE Plasma ISO config |
-| `disk_config/iso-gnome.toml` | GNOME ISO config |
+| `disk_config/iso-kde.toml` | KDE Plasma ISO config (not built in CI — see ISO note) |
+| `disk_config/iso-gnome.toml` | GNOME ISO config (not built in CI — see ISO note) |
 | `.github/workflows/build.yml` | CI: build, **smoke-test gate**, push to GHCR, sign with cosign |
-| `.github/workflows/build-disk.yml` | CI: produce qcow2 + KDE/GNOME anaconda-iso artifacts on demand |
+| `.github/workflows/build-disk.yml` | CI: produce a qcow2 disk image on demand (anaconda-iso disabled — upstream blockers) |
 | `.github/workflows/boot-test.yml` | CI: boot the image under systemd and check runtime behaviour |
 | `.github/workflows/base-watch.yml` | CI: daily upstream base package-diff early warning |
 | `tests/smoke.sh` | Offline assertions run against the built image (the CI gate; also `just smoke`) |
@@ -211,11 +211,11 @@ This template provides an out-of-the-box workflow for creating disk images (ISO,
 
 This template provides a way to upload the disk images generated from the workflow to an S3 bucket. The disk images will also be available as artifacts from the job if you wish to use an alternate provider. To upload to S3 we use [rclone](https://rclone.org/), which supports [many S3 providers](https://rclone.org/s3/).
 
-## Setting Up ISO Builds
+## Setting Up Disk Image Builds
 
 The [build-disk.yml](./.github/workflows/build-disk.yml) GitHub Actions workflow creates a disk image from your OCI image using the [bootc-image-builder](https://osbuild.org/docs/bootc/). To use this workflow:
 
-1. The ISO configs (`disk_config/iso-kde.toml`, `disk_config/iso-gnome.toml`) already point at `ghcr.io/bearyjd/bazzite-tower:latest`; the workflow builds a qcow2 plus both ISOs as separate matrix legs. Edit those configs only if you fork the image to a different name.
+1. **ISO builds are disabled; the workflow produces a qcow2 only.** `bootc-image-builder`'s `anaconda-iso` can't be built from this image: it fails depsolve on the base image's `file://` repo GPG keys ([bootc-image-builder#1188](https://github.com/osbuild/bootc-image-builder/issues/1188), open), and Anaconda installs of Bazzite aren't usable even past that ([bazzite#3418](https://github.com/ublue-os/bazzite/issues/3418)). The `iso-kde.toml`/`iso-gnome.toml` configs are kept for when ISOs move to ublue's own toolchain (titanoboa), not BIB. For day-to-day installs use `bootc switch` (see [Installing](#installing)).
 2. If you changed your image name from the default in `build.yml`, then in `build-disk.yml` edit the `IMAGE_REGISTRY`, `IMAGE_NAME`, and `DEFAULT_TAG` environment variables to match. If you didn't, skip this step.
 3. If you want to upload your disk images to S3, add the S3 configuration to the repository's Action secrets (Settings → Secrets and Variables → Actions):
    - `S3_PROVIDER` — must match one of the values from the [supported list](https://rclone.org/s3/)

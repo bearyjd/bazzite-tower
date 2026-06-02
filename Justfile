@@ -226,6 +226,13 @@ build-iso $target_image=("localhost/" + image_name) $tag=default_tag: && (_build
 build-iso-live $base_image=("ghcr.io/bearyjd/" + image_name) $tag=default_tag:
     #!/usr/bin/env bash
     set -euo pipefail
+    # Prime sudo and keep the credential alive. The payload build is long enough
+    # that sudo's timestamp would otherwise expire before the titanoboa step,
+    # which then re-prompts inside $(...) and times out reading the password.
+    sudo -v
+    ( while true; do sudo -n true; sleep 50; kill -0 "$$" 2>/dev/null || exit; done ) &
+    _sudo_keepalive=$!
+    trap 'kill "${_sudo_keepalive}" 2>/dev/null || true' EXIT
     mkdir -p "${PWD}/output"
     # Live-ISO payload (live session + Anaconda) built FROM the base image.
     sudo podman build \

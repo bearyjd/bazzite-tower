@@ -212,9 +212,49 @@ build-qcow2 $target_image=("localhost/" + image_name) $tag=default_tag: && (_bui
 [group('Build Virtal Machine Image')]
 build-raw $target_image=("localhost/" + image_name) $tag=default_tag: && (_build-bib target_image tag "raw" "disk_config/disk.toml")
 
-# Build an ISO virtual machine image
+# Build an anaconda installer ISO via bootc-image-builder.
+# BROKEN: upstream blockers (bootc-image-builder#1188 + bazzite#3418). Prefer
+# `build-iso-live` (titanoboa) below. Kept for if/when upstream is fixed.
 [group('Build Virtal Machine Image')]
 build-iso $target_image=("localhost/" + image_name) $tag=default_tag: && (_build-bib target_image tag "iso" "disk_config/iso-kde.toml")
+
+# Build a bootable live installer ISO with titanoboa (the working ISO path).
+# Builds the installer/ payload image FROM the base, then feeds it to titanoboa.
+# Needs sudo + KVM + tens of GB free. UNVERIFIED first cut — expect a few
+# build/spike iterations. The produced ISO lands in ./output/.
+[group('Build Virtal Machine Image')]
+build-iso-live $base_image=("ghcr.io/bearyjd/" + image_name) $tag=default_tag:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    # Prime sudo and keep the credential alive. The payload build is long enough
+    # that sudo's timestamp would otherwise expire before the titanoboa step,
+    # which then re-prompts inside $(...) and times out reading the password.
+    sudo -v
+    ( while true; do sudo -n true; sleep 50; kill -0 "$$" 2>/dev/null || exit; done ) &
+    _sudo_keepalive=$!
+    trap 'kill "${_sudo_keepalive}" 2>/dev/null || true' EXIT
+    mkdir -p "${PWD}/output"
+    # Live-ISO payload (live session + Anaconda) built FROM the base image.
+    sudo podman build \
+        --cap-add sys_admin --security-opt label=disable --squash \
+        --build-arg BASE_IMAGE="${base_image}:${tag}" \
+        -t "localhost/bazzite-tower-payload:${tag}" installer/
+    work="$(mktemp -d)"
+    git clone --depth 1 https://github.com/ublue-os/titanoboa "$work/titanoboa"
+    # main.sh prints the produced ISO's path as its only stdout line; capture it.
+    iso="$(cd "$work/titanoboa" && sudo TITANOBOA_CTR_IMAGE="localhost/bazzite-tower-payload:${tag}" ./main.sh)"
+    if [ -n "${iso:-}" ] && [ -f "$iso" ]; then
+        # titanoboa runs as root, so the ISO and its parent dir are root-owned.
+        # Move it out as root (root can write the user-owned ./output), then
+        # hand ownership back to the user.
+        dest="${PWD}/output/$(basename "$iso")"
+        sudo mv "$iso" "$dest"
+        sudo chown "$(id -u):$(id -g)" "$dest"
+        echo "ISO: $dest"
+    else
+        echo "No ISO produced — check the output above."
+    fi
+    sudo rm -rf "$work"
 
 # Rebuild a QCOW2 virtual machine image
 [group('Build Virtal Machine Image')]

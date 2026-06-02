@@ -163,10 +163,12 @@ The proprietary driver supports Maxwell and newer, so there's no pre-Turing cuto
 | `build_files/build.sh` | All customizations: packages, repos, units, polkit, first-boot oneshot |
 | `system_files/` | Static content copied verbatim into the image (systemd units, ujust recipes, bootc kargs) |
 | `disk_config/disk.toml` | qcow2/raw config for bootc-image-builder |
-| `disk_config/iso-kde.toml` | KDE Plasma ISO config (not built in CI — see ISO note) |
-| `disk_config/iso-gnome.toml` | GNOME ISO config (not built in CI — see ISO note) |
+| `disk_config/iso-kde.toml` | bootc-image-builder anaconda-iso config (unused — see ISO note) |
+| `disk_config/iso-gnome.toml` | bootc-image-builder anaconda-iso config (unused — see ISO note) |
+| `installer/` | Live-ISO payload (live KDE session + Anaconda) built FROM bazzite-tower, fed to titanoboa by `build-iso.yml` / `just build-iso-live` |
 | `.github/workflows/build.yml` | CI: build, **smoke-test gate**, push to GHCR, sign with cosign |
 | `.github/workflows/build-disk.yml` | CI: produce a qcow2 disk image on demand (anaconda-iso disabled — upstream blockers) |
+| `.github/workflows/build-iso.yml` | CI: build a bootable, Secure-Boot live/installer ISO via titanoboa |
 | `.github/workflows/boot-test.yml` | CI: boot the image under systemd and check runtime behaviour |
 | `.github/workflows/base-watch.yml` | CI: daily upstream base package-diff early warning |
 | `tests/smoke.sh` | Offline assertions run against the built image (the CI gate; also `just smoke`) |
@@ -215,7 +217,7 @@ This template provides a way to upload the disk images generated from the workfl
 
 The [build-disk.yml](./.github/workflows/build-disk.yml) GitHub Actions workflow creates a disk image from your OCI image using the [bootc-image-builder](https://osbuild.org/docs/bootc/). To use this workflow:
 
-1. **ISO builds are disabled; the workflow produces a qcow2 only.** `bootc-image-builder`'s `anaconda-iso` can't be built from this image: it fails depsolve on the base image's `file://` repo GPG keys ([bootc-image-builder#1188](https://github.com/osbuild/bootc-image-builder/issues/1188), open), and Anaconda installs of Bazzite aren't usable even past that ([bazzite#3418](https://github.com/ublue-os/bazzite/issues/3418)). The `iso-kde.toml`/`iso-gnome.toml` configs are kept for when ISOs move to ublue's own toolchain (titanoboa), not BIB. For day-to-day installs use `bootc switch` (see [Installing](#installing)).
+1. **Two artifacts, two tools.** `build-disk.yml` builds a **qcow2** (rootfs=btrfs) for VM testing. **Bootable ISOs** are built separately by [`build-iso.yml`](./.github/workflows/build-iso.yml) using [titanoboa](https://github.com/ublue-os/titanoboa) (ublue's live-ISO toolchain), **not** `bootc-image-builder`'s `anaconda-iso` — that path is upstream-broken ([BIB#1188](https://github.com/osbuild/bootc-image-builder/issues/1188), [bazzite#3418](https://github.com/ublue-os/bazzite/issues/3418)). The ISO is built from the [`installer/`](./installer) payload image (a live KDE session + Anaconda that installs bazzite-tower via `ostreecontainer`); it boots under **Secure Boot** (the payload swaps in a Fedora-signed kernel) and can be built locally with `just build-iso-live`. The `iso-kde.toml`/`iso-gnome.toml` files are leftover BIB configs and are unused. For an existing bootc system, `bootc switch` (see [Installing](#installing)) is still the simplest path.
 2. If you changed your image name from the default in `build.yml`, then in `build-disk.yml` edit the `IMAGE_REGISTRY`, `IMAGE_NAME`, and `DEFAULT_TAG` environment variables to match. If you didn't, skip this step.
 3. If you want to upload your disk images to S3, add the S3 configuration to the repository's Action secrets (Settings → Secrets and Variables → Actions):
    - `S3_PROVIDER` — must match one of the values from the [supported list](https://rclone.org/s3/)

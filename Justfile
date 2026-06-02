@@ -244,13 +244,17 @@ build-iso-live $base_image=("ghcr.io/bearyjd/" + image_name) $tag=default_tag:
     # main.sh prints the produced ISO's path as its only stdout line; capture it.
     iso="$(cd "$work/titanoboa" && sudo TITANOBOA_CTR_IMAGE="localhost/bazzite-tower-payload:${tag}" ./main.sh)"
     if [ -n "${iso:-}" ] && [ -f "$iso" ]; then
-        sudo chown "$(id -u):$(id -g)" "$iso"
-        mv "$iso" "${PWD}/output/"
-        echo "ISO: ${PWD}/output/$(basename "$iso")"
+        # titanoboa runs as root, so the ISO and its parent dir are root-owned.
+        # Move it out as root (root can write the user-owned ./output), then
+        # hand ownership back to the user.
+        dest="${PWD}/output/$(basename "$iso")"
+        sudo mv "$iso" "$dest"
+        sudo chown "$(id -u):$(id -g)" "$dest"
+        echo "ISO: $dest"
     else
         echo "No ISO produced — check the output above."
     fi
-    rm -rf "$work"
+    sudo rm -rf "$work"
 
 # Rebuild a QCOW2 virtual machine image
 [group('Build Virtal Machine Image')]

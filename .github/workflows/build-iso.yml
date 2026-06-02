@@ -83,8 +83,20 @@ jobs:
             -t "localhost/${IMAGE_NAME}-payload:${DEFAULT_TAG}" \
             installer/
 
-      # If the build fails for lack of disk, add bazzite's 70G btrfs loopback at
-      # /var/lib/containers/storage (see build_iso.yml in ublue-os/bazzite).
+      # Work around the titanoboa action's iso-dest handling: it runs plain
+      # `realpath` on the destination *before* creating it, which errors when the
+      # path doesn't exist yet. Pre-create the dir + an empty file so realpath
+      # resolves; the action then moves the built ISO over it. (Local
+      # `just build-iso-live` avoids this — it captures main.sh stdout directly.)
+      - name: Prepare ISO destination
+        run: |
+          set -euo pipefail
+          mkdir -p "${{ github.workspace }}/output"
+          : > "${{ github.workspace }}/output/${{ env.IMAGE_NAME }}-${{ env.DEFAULT_TAG }}-live-amd64.iso"
+
+      # Disk has been fine on the hosted runner so far; if a future build runs
+      # out, add bazzite's 70G btrfs loopback at /var/lib/containers/storage
+      # (see build_iso.yml in ublue-os/bazzite).
       - name: Build live ISO
         id: build
         uses: ublue-os/titanoboa@5c457c3d0518bd17e754be0fd98a60d29d26abb4 # main @ 2026-05-19 (#138); mid-revamp, no tagged release to pin

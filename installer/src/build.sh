@@ -15,6 +15,11 @@ mount -o remount,rw /proc/sys || true
 # Embed the image to install so the live ISO can install fully offline.
 podman pull "${INSTALL_IMAGE}"
 
+# Secure Boot: swap the ublue-signed kernel for a vanilla Fedora-signed one so
+# the ISO boots SB-on anywhere. Must run BEFORE the dracut regen below so the
+# initramfs targets the new kernel.
+bash /src/titanoboa_hook_preinitramfs.sh
+
 # Live initramfs: add the dmsquash-live modules so the ISO can mount its
 # squashfs as the live root. Without this the ISO boots but finds no root.
 dnf install -y dracut-live

@@ -38,7 +38,16 @@ jobs:
         id: manifest
         run: |
           set -euo pipefail
-          podman pull "${BASE_IMAGE}"
+          # ghcr.io intermittently 502s mid-blob-copy, which reds the daily watch on
+          # a transient hiccup (see runs 26809957858 / 26875899950). Retry the pull
+          # before giving up — same backoff idiom as the push retry below.
+          for i in 1 2 3 4 5; do
+            podman pull "${BASE_IMAGE}" && break
+            echo "podman pull failed (attempt ${i}); retrying in $((2 ** i))s"
+            sleep $((2 ** i))
+          done
+          podman image exists "${BASE_IMAGE}" \
+            || { echo "::error::could not pull ${BASE_IMAGE} after retries"; exit 1; }
           echo "digest=$(podman image inspect --format '{{ .Digest }}' "${BASE_IMAGE}")" >> "${GITHUB_OUTPUT}"
           # NAME VERSION-RELEASE.ARCH per line, sorted — the stable input base-diff expects.
           podman run --rm "${BASE_IMAGE}" \

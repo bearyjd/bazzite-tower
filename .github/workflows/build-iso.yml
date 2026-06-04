@@ -5,12 +5,13 @@
 # upstream-broken (osbuild/bootc-image-builder#1188 + ublue-os/bazzite#3418).
 # titanoboa is what ublue itself uses to build real Bazzite ISOs.
 #
-# STATUS: primary-path, NOT yet verified end-to-end. titanoboa requires the source
-# image to satisfy its "container-native ISO contract" (iso.yaml, kernel+initramfs,
-# grub modules, EFI binaries). If this build fails, the fallback is bazzite's
-# `installer/` payload-builder — see
-# .claude/PRPs/plans/completed/titanoboa-iso-workflow.plan.md (Task 1b). A green
-# build still needs a manual boot test in a VM before the ISO is trusted (#3418).
+# STATUS: verified end-to-end. Boot-tested in a VM on 2026-06-04 — the live ISO
+# reaches the KDE live desktop under enforcing UEFI Secure Boot, with the
+# shim->grub->kernel signature chain holding against Microsoft keys (clears the
+# bazzite#3418 boot-trust concern). titanoboa requires the source image to satisfy
+# its "container-native ISO contract" (iso.yaml, kernel+initramfs, grub modules,
+# EFI binaries); if a future build fails, the fallback is bazzite's `installer/`
+# payload-builder — see .claude/PRPs/plans/titanoboa-iso-workflow.plan.md (Task 1b).
 #
 # Dispatch + weekly only — ISO builds are heavy. No pull_request trigger by design.
 name: Build live ISO

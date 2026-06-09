@@ -91,6 +91,15 @@ The default NAT network (shipped by `libvirt-daemon-config-network`) is marked a
 
 `intel_iommu=on iommu=pt` are baked in as kernel arguments via a bootc `kargs.d` fragment (`/usr/lib/bootc/kargs.d/00-iommu.toml`), enabling VFIO/PCI passthrough to guests. This uses bootc's native karg mechanism rather than `rpm-ostree kargs`, which can't run during an image build. Target hardware is Intel (ThinkPad P1); `iommu=pt` keeps DMA-remapping overhead off host-only devices.
 
+### Intel display & suspend stability
+
+The target panel (Intel iGPU on Meteor Lake) throws eDP link/PLL errors with flicker and post-resume corruption when the i915 driver's panel power-saving is left on, and `s2idle` suspend has been implicated in the same faults. Two more bootc `kargs.d` fragments address this:
+
+- `10-i915-display.toml` — `i915.enable_dc=0 i915.enable_psr=0 i915.enable_psr2_sel_fetch=0` disable Display C-states and Panel Self Refresh (the three are one intervention). Cost is marginally higher panel power; the trade is a stable display.
+- `20-suspend.toml` — `mem_sleep_default=deep` defaults to S3 suspend instead of `s2idle` for a cleaner suspend/resume. Safe to ship unconditionally: firmware without S3 (some Meteor Lake BIOSes lock it) silently falls back to `s2idle` — check the live mode with `cat /sys/power/mem_sleep` (the bracketed entry is active).
+
+Each is its own fragment, so you can drop either independently if your hardware is happy without it. Like the IOMMU karg, these use bootc's native mechanism rather than `rpm-ostree kargs` (which only sets per-machine local state and can't run during an image build).
+
 ### Two-layered libvirt/kvm access for the default user
 
 Bootc images don't bake in a default user — the first user is created by KDE Plasma's initial-setup on first boot. `bazzite-tower` uses two complementary mechanisms to give that user immediate virtualization access:
@@ -120,7 +129,7 @@ This image rides `bazzite-nvidia:stable` and the laptop rebases onto `:latest`, 
 
 | Layer | Where | What it does |
 |---|---|---|
-| **Smoke gate** | `build.yml` → [`tests/smoke.sh`](./tests/smoke.sh) | Offline assertions against the freshly built image, run **before** push: qemu user resolves, the six `virt*.socket`s are enabled, `libvirtd` is masked, the Wi-Fi guard / first-boot / Docker units are enabled, IOMMU kargs present. A failure blocks the push, so `:latest` stays on the last-good image. |
+| **Smoke gate** | `build.yml` → [`tests/smoke.sh`](./tests/smoke.sh) | Offline assertions against the freshly built image, run **before** push: qemu user resolves, the six `virt*.socket`s are enabled, `libvirtd` is masked, the Wi-Fi guard / first-boot / Docker units are enabled, the IOMMU / i915 / suspend kargs are present. A failure blocks the push, so `:latest` stays on the last-good image. |
 | **Runtime boot test** | `boot-test.yml` → [`tests/boot-check.sh`](./tests/boot-check.sh) | Boots the image's own systemd under `podman --systemd=always` and proves the stack *works*: socket-activates `virtqemud` and connects to `qemu:///system` (the end-to-end check for the qemu-user regression), and confirms the Wi-Fi backend guard ran clean. |
 | **Upstream early warning** | `base-watch.yml` → [`ci/base-diff.py`](./ci/base-diff.py) | Daily, diffs the base image's package manifest (committed to `docs/manifests/` after the first run) against the last-seen one, filtered to the blast-radius packages (qemu/libvirt/NetworkManager/Docker/kernel/systemd/polkit/bootc). A change opens a heads-up issue **before** the next build. |
 
@@ -262,7 +271,7 @@ Runs the offline smoke test (`tests/smoke.sh`) against a built image — the sam
 just smoke $target_image $tag
 ```
 
-It executes `podman run --rm -i "$target_image:$tag" bash -s < tests/smoke.sh`, so build the image first (`just build`). Exits non-zero if any customization (qemu user, modular `virt*.socket`s, the Wi-Fi guard, IOMMU kargs, Docker CE) is missing.
+It executes `podman run --rm -i "$target_image:$tag" bash -s < tests/smoke.sh`, so build the image first (`just build`). Exits non-zero if any customization (qemu user, modular `virt*.socket`s, the Wi-Fi guard, the IOMMU / i915 / suspend kargs, Docker CE) is missing.
 
 ## Building and Running Virtual Machines and ISOs
 

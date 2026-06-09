@@ -1,0 +1,13 @@
+# Default the system to S3 ("deep") suspend instead of s2idle. On this hardware
+# s2idle leaves the i915/PCH partially powered and has been implicated in the eDP
+# PLL errors and unreliable resume; deep gives a cleaner suspend/resume cycle.
+#
+# Baked in the bootc-native way (see 00-iommu.toml) — applied at install and on
+# every upgrade. Kept as its own fragment, separate from the i915 display flags,
+# because it's an independent concern (suspend mode, not graphics) and so it can
+# be removed on its own.
+#
+# Safe to ship unconditionally: if a BIOS doesn't expose S3 (some Meteor Lake
+# firmware locks it), the kernel silently falls back to s2idle. Verify the active
+# mode after boot with `cat /sys/power/mem_sleep` — the bracketed entry is live.
+kargs = ["mem_sleep_default=deep"]

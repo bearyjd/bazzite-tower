@@ -1,0 +1,14 @@
+# Intel iGPU (i915) display-stability flags for the target Meteor Lake panel:
+# disable Panel Self Refresh and Display C-states, which on this hardware trigger
+# eDP link/PLL errors, flicker, and post-resume corruption.
+#
+# Same bootc-native mechanism as 00-iommu.toml: bootc reads
+# /usr/lib/bootc/kargs.d/*.toml and applies these at install and on every
+# upgrade. `rpm-ostree kargs` cannot be used here — it requires a booted ostree
+# deployment and is a no-op during a container build.
+#
+# The three flags are one intervention (disabling PSR without DC, or vice versa,
+# isn't useful), so they live together in one fragment. Cost is marginally higher
+# panel power with self-refresh off; the trade is a stable display. Drop this
+# fragment if your panel is happy on the upstream defaults.
+kargs = ["i915.enable_dc=0", "i915.enable_psr=0", "i915.enable_psr2_sel_fetch=0"]

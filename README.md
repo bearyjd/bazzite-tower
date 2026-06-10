@@ -1,8 +1,6 @@
 <div align="center">
 
-# 🗼 bazzite-tower
-
-*Bazzite KDE + proprietary NVIDIA, baked into a bootc image that's ready to virtualize and develop on the first boot.*
+<img src="docs/assets/banner.svg" alt="bazzite-tower — a bootc desktop image: Bazzite KDE + proprietary NVIDIA + QEMU/KVM" width="880">
 
 [![Build](https://img.shields.io/github/actions/workflow/status/bearyjd/bazzite-tower/build.yml?branch=main&style=for-the-badge&logo=githubactions&logoColor=white&label=build)](https://github.com/bearyjd/bazzite-tower/actions/workflows/build.yml)
 [![Boot test](https://img.shields.io/github/actions/workflow/status/bearyjd/bazzite-tower/boot-test.yml?branch=main&style=for-the-badge&logo=linuxcontainers&logoColor=white&label=boot%20test)](https://github.com/bearyjd/bazzite-tower/actions/workflows/boot-test.yml)

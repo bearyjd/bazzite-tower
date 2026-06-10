@@ -1,7 +1,10 @@
 <div align="center">
 
 <h1>
-  <img src="docs/assets/banner.svg" alt="bazzite-tower" width="880">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/banner.svg">
+    <img src="docs/assets/banner-light.svg" alt="bazzite-tower" width="880">
+  </picture>
 </h1>
 
 [![Build](https://img.shields.io/github/actions/workflow/status/bearyjd/bazzite-tower/build.yml?branch=main&style=for-the-badge&logo=githubactions&logoColor=white&label=build)](https://github.com/bearyjd/bazzite-tower/actions/workflows/build.yml)

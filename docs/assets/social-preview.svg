@@ -1,0 +1,52 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 640" width="1280" height="640" role="img" aria-label="bazzite-tower — a bootc desktop image (Bazzite KDE + NVIDIA + QEMU/KVM)">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0.35" y2="1">
+      <stop offset="0" stop-color="#0E1426"/>
+      <stop offset="0.55" stop-color="#0A0E1C"/>
+      <stop offset="1" stop-color="#070910"/>
+    </linearGradient>
+    <radialGradient id="glowBlue" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#2E8EE6" stop-opacity="0.45"/>
+      <stop offset="1" stop-color="#2E8EE6" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="glowGreen" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#93DC18" stop-opacity="0.5"/>
+      <stop offset="1" stop-color="#93DC18" stop-opacity="0"/>
+    </radialGradient>
+    <pattern id="dots" width="34" height="34" patternUnits="userSpaceOnUse">
+      <circle cx="2" cy="2" r="1.4" fill="#9FC7FF" opacity="0.05"/>
+    </pattern>
+  </defs>
+  
+  <g>
+    <rect width="1280" height="640" fill="url(#bg)"/>
+    <rect width="1280" height="640" fill="url(#dots)"/>
+    <circle cx="352" cy="330" r="300" fill="url(#glowBlue)"/>
+    <circle cx="352" cy="118" r="150" fill="url(#glowGreen)"/>
+    <polygon points="187,476 352,558 352,598 187,516" fill="#1B3A6B"/>
+    <polygon points="517,476 352,558 352,598 517,516" fill="#122A50"/>
+    <polygon points="352,394 517,476 352,558 187,476" fill="#2A5596"/>
+    <polygon points="187,420 352,502 352,542 187,460" fill="#1E50A2"/>
+    <polygon points="517,420 352,502 352,542 517,460" fill="#163C7A"/>
+    <polygon points="352,338 517,420 352,502 187,420" fill="#2E69C8"/>
+    <polygon points="187,364 352,446 352,486 187,404" fill="#1D74C8"/>
+    <polygon points="517,364 352,446 352,486 517,404" fill="#155799"/>
+    <polygon points="352,282 517,364 352,446 187,364" fill="#2E8EE6"/>
+    <polygon points="187,308 352,390 352,430 187,348" fill="#1D99F3"/>
+    <polygon points="517,308 352,390 352,430 517,348" fill="#1576BD"/>
+    <polygon points="352,226 517,308 352,390 187,308" fill="#4FB2F8"/>
+    <polygon points="187,252 352,334 352,374 187,292" fill="#28B8E6"/>
+    <polygon points="517,252 352,334 352,374 517,292" fill="#1E8FB4"/>
+    <polygon points="352,170 517,252 352,334 187,252" fill="#57CDF2"/>
+    <polygon points="187,196 352,278 352,318 187,236" fill="#76B900"/>
+    <polygon points="517,196 352,278 352,318 517,236" fill="#5A8C00"/>
+    <polygon points="352,114 517,196 352,278 187,196" fill="#93DC18"/>
+    <polygon points="352,114 517,196 352,278 187,196" fill="none" stroke="#C8F56A" stroke-width="2" opacity="0.9"/>
+  <text x="588" y="236" font-family="'Fira Code', 'DejaVu Sans Mono', monospace" font-size="24" letter-spacing="6" fill="#5FA8E6">BUILT ON BOOTC</text>
+  <text x="588" y="322" font-family="Cantarell, 'Segoe UI', sans-serif" font-weight="800" font-size="82" fill="#F4F7FF">bazzite-tower</text>
+  <text x="588" y="374" font-family="Cantarell, 'Segoe UI', sans-serif" font-size="29" fill="#AEB9D6">Bazzite KDE · proprietary NVIDIA · QEMU/KVM</text>
+  <rect x="588" y="402" width="560" height="2" rx="1" fill="#1D99F3" opacity="0.4"/>
+  <text x="588" y="446" font-family="'Fira Code', 'DejaVu Sans Mono', monospace" font-size="25" fill="#6E7A9C">ghcr.io/bearyjd/bazzite-tower</text>
+  <text x="588" y="486" font-family="Cantarell, 'Segoe UI', sans-serif" font-size="22" fill="#52607F">first-boot virtualization · dev tooling · cosign-signed</text>
+  </g>
+</svg>

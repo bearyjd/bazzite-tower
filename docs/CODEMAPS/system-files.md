@@ -29,4 +29,4 @@ Applied at install and on every upgrade.
 
 - `00-iommu.toml` → `kargs = ["intel_iommu=on", "iommu=pt"]` — VFIO/PCI passthrough
 - `10-i915-display.toml` → `kargs = ["i915.enable_dc=0", "i915.enable_psr=0", "i915.enable_psr2_sel_fetch=0"]` — disable Intel PSR/DC; fixes eDP PLL errors/flicker on the Meteor Lake panel
-- `20-suspend.toml` → `kargs = ["mem_sleep_default=deep"]` — default to S3 deep suspend (silently falls back to s2idle if firmware lacks S3)
+- `20-suspend.toml` → `kargs = ["mem_sleep_default=s2idle"]` — pin s2idle; MTL has no working S3 and defaulting to deep caused resume bounce + i915 PHY A / C10 (cx0) PLL corruption

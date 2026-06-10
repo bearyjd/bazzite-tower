@@ -93,10 +93,10 @@ The default NAT network (shipped by `libvirt-daemon-config-network`) is marked a
 
 ### Intel display & suspend stability
 
-The target panel (Intel iGPU on Meteor Lake) throws eDP link/PLL errors with flicker and post-resume corruption when the i915 driver's panel power-saving is left on, and `s2idle` suspend has been implicated in the same faults. Two more bootc `kargs.d` fragments address this:
+The target panel (Intel iGPU on Meteor Lake) throws eDP link/PLL errors with flicker and post-resume corruption when the i915 driver's panel power-saving is left on. Separately, a kernel 7.0 regression corrupts the i915 PHY A / C10 (cx0) PLL state on s2idle resume (~30s of flip-done timeouts and a sluggish display after wake). Two more bootc `kargs.d` fragments address these:
 
-- `10-i915-display.toml` — `i915.enable_dc=0 i915.enable_psr=0 i915.enable_psr2_sel_fetch=0` disable Display C-states and Panel Self Refresh (the three are one intervention). Cost is marginally higher panel power; the trade is a stable display.
-- `20-suspend.toml` — `mem_sleep_default=deep` defaults to S3 suspend instead of `s2idle` for a cleaner suspend/resume. Safe to ship unconditionally: firmware without S3 (some Meteor Lake BIOSes lock it) silently falls back to `s2idle` — check the live mode with `cat /sys/power/mem_sleep` (the bracketed entry is active).
+- `10-i915-display.toml` — `i915.enable_dc=0 i915.enable_psr=0 i915.enable_psr2_sel_fetch=0` disable Display C-states and Panel Self Refresh (the three are one intervention). Cost is marginally higher panel power; the trade is a stable display. (These mitigate the panel power-saving faults; they do **not** fix the PHY A resume regression on their own.)
+- `20-suspend.toml` — `mem_sleep_default=s2idle` pins s2idle suspend. Meteor Lake has no working S3 ("deep") suspend; an earlier attempt to default to deep made resume worse (bounce behaviour), so we pin s2idle explicitly rather than relying on the firmware fallback. Check the live mode with `cat /sys/power/mem_sleep` (the bracketed entry is active). The PHY A resume regression itself needs an upstream kernel fix — `scripts/check-i915-resume-fix.sh` (weekly user timer) watches for it.
 
 Each is its own fragment, so you can drop either independently if your hardware is happy without it. Like the IOMMU karg, these use bootc's native mechanism rather than `rpm-ostree kargs` (which only sets per-machine local state and can't run during an image build).
 

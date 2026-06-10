@@ -1,4 +1,4 @@
-<!-- Generated: 2026-05-31 | Files scanned: 27 | Token estimate: ~550 -->
+<!-- Generated: 2026-06-10 | Files scanned: 41 | Token estimate: ~600 -->
 # Architecture
 
 **Type:** bootc OS-image repo — a declarative Fedora/Bazzite derivative. There is
@@ -19,8 +19,10 @@ build_files/build.sh ──RUN───┘        │
                             bootc container lint
                                       │   CI: smoke gate → push GHCR → cosign sign (by digest)
                                       ▼
-                   ghcr.io/bearyjd/bazzite-tower:latest
-                                      │   bootc switch / weekly rebase
+                   ghcr.io/bearyjd/bazzite-tower:latest ──┐
+                                      │                    │ installer/ payload + titanoboa
+                  bootc switch /      │                    ▼
+                  weekly rebase       │          live/installer ISO  (Secure Boot OK)
                                       ▼
                           laptop OS (ThinkPad P1)
 ```
@@ -30,6 +32,7 @@ build_files/build.sh ──RUN───┘        │
 - `Containerfile` — build entry: FROM base → COPY system_files → RUN build.sh → lint
 - `build_files/build.sh` — all image customization (201 lines)
 - `system_files/` — static content baked verbatim into the image (units, recipes, kargs, helpers)
+- `installer/` — separate payload builder for the live/installer ISO (titanoboa input)
 - `Justfile` — local build / VM / test recipes
 - `.github/workflows/build.yml` — CI build + gate + push + sign
 
@@ -37,5 +40,6 @@ build_files/build.sh ──RUN───┘        │
 
 - [image-build.md](image-build.md) — the `build.sh` pipeline (what the build does)
 - [system-files.md](system-files.md) — what ships in the image (runtime surface)
+- [iso-build.md](iso-build.md) — the live/installer ISO (separate `installer/` payload)
 - [ci-cd.md](ci-cd.md) — workflows, promotion gate, tests
 - [dependencies.md](dependencies.md) — base image, repos, packages, actions

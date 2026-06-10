@@ -1,7 +1,7 @@
-<!-- Generated: 2026-05-31 | Files scanned: 7 | Token estimate: ~700 -->
+<!-- Generated: 2026-06-10 | Files scanned: 8 | Token estimate: ~720 -->
 # CI / CD
 
-4 workflows + 2 test scripts + 1 diff filter. Full failure model:
+5 workflows + 2 test scripts + 1 diff filter. Full failure model:
 [`../downstream-change-tracking.md`](../downstream-change-tracking.md).
 
 ## Workflows (`.github/workflows/`)
@@ -13,6 +13,10 @@
 | `base-watch.yml` | daily 05:00 UTC, dispatch | pull base → `rpm -qa` manifest → `ci/base-diff.py` vs last-seen baseline in `docs/manifests/` (written on first run) → commit refreshed manifest | `base-bump` |
 | `build-disk.yml` | dispatch (platform amd64/arm64), PR (disk.toml path) | bootc-image-builder → qcow2 disk image (rootfs=btrfs) → artifact or S3. anaconda-iso disabled: upstream BIB#1188 + bazzite#3418 | — |
 | `build-iso.yml` | dispatch, Sun 08:00 UTC | `podman build installer/` payload (live session + Anaconda, Fedora-signed kernel for Secure Boot) → titanoboa → bootable ISO → checksum + cosign sign-blob → artifact or S3 | `iso-failure` |
+
+The `installer/` payload + titanoboa contract is documented in
+[iso-build.md](iso-build.md). `base-watch.yml` retries the base-image pull
+before failing (transient GHCR 502s).
 
 **Gate ordering** in `build.yml`: the smoke test runs *before* login/push, so a
 broken image is never published (`:latest` stays last-good). Each gated workflow
@@ -32,4 +36,5 @@ docker-ce* / containerd* / moby*`. Emits a markdown report + `GITHUB_OUTPUT` `ch
 ## Local mirror (Justfile)
 
 `just smoke` = the build.yml gate. Also `just build`, `just build-qcow2`,
-`just run-vm-qcow2`, `just spawn-vm`, `just check`/`lint`/`format`.
+`just run-vm-qcow2`, `just spawn-vm`, `just build-iso-live` (payload + titanoboa
+ISO), `just check`/`lint`/`format`.

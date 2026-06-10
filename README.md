@@ -1,4 +1,25 @@
-# bazzite-tower
+<div align="center">
+
+<h1>
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/banner.svg">
+    <img src="docs/assets/banner-light.svg" alt="bazzite-tower" width="880">
+  </picture>
+</h1>
+
+[![Build](https://img.shields.io/github/actions/workflow/status/bearyjd/bazzite-tower/build.yml?branch=main&style=for-the-badge&logo=githubactions&logoColor=white&label=build)](https://github.com/bearyjd/bazzite-tower/actions/workflows/build.yml)
+[![Boot test](https://img.shields.io/github/actions/workflow/status/bearyjd/bazzite-tower/boot-test.yml?branch=main&style=for-the-badge&logo=linuxcontainers&logoColor=white&label=boot%20test)](https://github.com/bearyjd/bazzite-tower/actions/workflows/boot-test.yml)
+[![License](https://img.shields.io/github/license/bearyjd/bazzite-tower?style=for-the-badge&color=4c8bf5)](LICENSE)
+[![Image](https://img.shields.io/badge/ghcr.io-bazzite--tower-2496ED?style=for-the-badge&logo=podman&logoColor=white)](https://github.com/users/bearyjd/packages/container/package/bazzite-tower)
+
+![bootc](https://img.shields.io/badge/bootc-immutable-0a0a0a?style=for-the-badge&logo=linux&logoColor=white)
+![Fedora](https://img.shields.io/badge/Fedora-51A2DA?style=for-the-badge&logo=fedora&logoColor=white)
+![KDE Plasma](https://img.shields.io/badge/KDE_Plasma-1D99F3?style=for-the-badge&logo=kde&logoColor=white)
+![NVIDIA](https://img.shields.io/badge/NVIDIA-76B900?style=for-the-badge&logo=nvidia&logoColor=white)
+![QEMU/KVM](https://img.shields.io/badge/QEMU%2FKVM-EE0000?style=for-the-badge&logo=qemu&logoColor=white)
+![cosign](https://img.shields.io/badge/signed-cosign-FBC02D?style=for-the-badge&logo=sigstore&logoColor=black)
+
+</div>
 
 A custom [bootc](https://github.com/bootc-dev/bootc) image derived from `ghcr.io/ublue-os/bazzite-nvidia:stable`, tailored for an NVIDIA RTX-equipped desktop/laptop workstation that doubles as a virtualization host and developer machine. Built weekly, signed with cosign, published to `ghcr.io/bearyjd/bazzite-tower`.
 

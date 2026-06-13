@@ -121,6 +121,15 @@ Microcode: `microcode_ctl` is layered at the latest Fedora revision in `build.sh
 Early-load takes effect once the initramfs is regenerated (on a base bump); confirm
 the running revision with `grep -m1 microcode /proc/cpuinfo`.
 
+## Module blacklists (lean boot)
+
+`…/modprobe.d/blacklist-unused-gpu.conf` blacklists **amdgpu** / **amdxcp** — there
+is no AMD GPU on this machine, and no display path (including DisplayPort-alt over
+USB-C/Thunderbolt, which the Intel iGPU drives) depends on them. `xe` is left
+loaded on purpose. Revert by deleting the file. If `lsmod | grep amdgpu` still
+shows it loaded after a rebase, it's initramfs-embedded — add the kernel arg
+`rd.driver.blacklist=amdgpu` (new kargs.d fragment) as the stronger lever.
+
 Runtime surface (units, helpers, kargs): [docs/CODEMAPS/system-files.md](./CODEMAPS/system-files.md).
 
 ## Publish pipeline (operator view)

@@ -118,6 +118,12 @@ else
     bad "SOF topology ABI unreadable (/usr/lib/firmware/intel/sof-tplg)"
 fi
 
+echo "== GPU module blacklist =="
+# No AMD GPU exists on this hardware; amdgpu/amdxcp are blacklisted as a lean-boot
+# optimization. xe is intentionally left loaded.
+check "unused-GPU blacklist present" test -f /usr/lib/modprobe.d/blacklist-unused-gpu.conf
+check "amdgpu blacklisted" grep -qx 'blacklist amdgpu' /usr/lib/modprobe.d/blacklist-unused-gpu.conf
+
 echo "== Docker CE =="
 check "docker present"     command -v docker
 check "containerd present" command -v containerd

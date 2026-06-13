@@ -197,5 +197,54 @@ systemctl enable bazzite-tower-firstboot.service
 # again the moment iwd is properly enabled). Ships in system_files/.
 systemctl enable bazzite-tower-wifi-backend-guard.service
 
+# ── SOF audio firmware: pin to the kernel's topology ABI ──────────────────────
+# The 7.0 kernel this image ships carries a SOF driver at topology ABI 3.23, but
+# current alsa-sof-firmware ships topologies built at ABI 3.29. A topology newer
+# than the kernel's ABI can't be instantiated ("FW reported error: 9" / "failed
+# widget list set up"); WirePlumber then re-links the dead sink ~10x/s until
+# PipeWire sets the card profile to off — i.e. no audio at all. So pin the
+# firmware to the newest build whose topology ABI is <= the kernel's, and verify
+# it: the build fails loudly rather than shipping silent-but-broken audio.
+#
+# KERNEL_SOF_ABI_*: the kernel's SOF topology ABI. Bump these — and raise
+# SOF_FW_PIN to a newer firmware — when a future kernel moves its SOF ABI past
+# 3.23 (confirm on a booted host with `journalctl -k | grep "Kernel ABI"`). That
+# is the single edit needed to lift this pin.
+KERNEL_SOF_ABI_MAJ=3
+KERNEL_SOF_ABI_MIN=23
+# SOF_FW_PIN — NEEDS CONFIRMATION against the live Fedora repos. It must be the
+# newest alsa-sof-firmware whose shipped .tplg ABI is <= 3.23. Inspect with:
+#     dnf --showduplicates list alsa-sof-firmware
+# and verify a candidate by extracting its sof-tplg and running
+# /usr/libexec/bazzite-tower-sof-abi on it. The ABI gate below is the backstop:
+# a wrong pin (ABI too new, or a version that doesn't exist) fails the build.
+SOF_FW_PIN="2024.09.2"
+
+# Expected case: the base ships a newer build, so downgrade. Fall back to a plain
+# install for the (unlikely) case the base is already older/equal or absent.
+dnf downgrade -y "alsa-sof-firmware-${SOF_FW_PIN}" \
+    || dnf install -y "alsa-sof-firmware-${SOF_FW_PIN}"
+# Hold it for the rest of this build so no later transaction pulls it forward.
+# Best-effort: the plugin may be absent on the base, and the runtime is immutable
+# anyway (no `dnf upgrade` ever runs on the laptop), so never fail the build on it
+# — the install order above plus the ABI gate below are the real guarantees.
+dnf versionlock add alsa-sof-firmware 2>/dev/null \
+    || echo "note: dnf versionlock unavailable; relying on install order + ABI gate"
+
+# Authoritative gate: the shipped topology ABI must not exceed the kernel's, or
+# audio is silently broken on the laptop. Read it offline from the .tplg files.
+sof_abi="$(/usr/libexec/bazzite-tower-sof-abi /usr/lib/firmware/intel/sof-tplg)" || {
+    echo "ERROR: could not read the shipped SOF topology ABI" >&2
+    exit 1
+}
+read -r sof_maj sof_min _sof_patch <<<"${sof_abi}"
+if (( sof_maj > KERNEL_SOF_ABI_MAJ \
+      || (sof_maj == KERNEL_SOF_ABI_MAJ && sof_min > KERNEL_SOF_ABI_MIN) )); then
+    echo "ERROR: shipped SOF topology ABI ${sof_maj}.${sof_min} exceeds kernel ABI ${KERNEL_SOF_ABI_MAJ}.${KERNEL_SOF_ABI_MIN}" >&2
+    echo "       lower SOF_FW_PIN to an older alsa-sof-firmware build (see comment above)." >&2
+    exit 1
+fi
+echo "SOF topology ABI ${sof_maj}.${sof_min} <= kernel ABI ${KERNEL_SOF_ABI_MAJ}.${KERNEL_SOF_ABI_MIN} (firmware ${SOF_FW_PIN}) — ok"
+
 # ── Cleanup ───────────────────────────────────────────────────────────────────
 dnf clean all

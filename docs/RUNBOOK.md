@@ -51,6 +51,7 @@ Tag scheme (`latest`, `latest.YYYYMMDD`, `YYYYMMDD`, `<short-sha>`):
 |---|---|
 | Current/rollback deployment, signature | `bootc status` |
 | Suspend mode actually in effect | `cat /sys/power/mem_sleep` (bracketed entry is active; expect `[s2idle]`) |
+| SOF audio ABI matches kernel | `journalctl -k -b 0 \| grep -E "Topology: ABI\|Kernel ABI"` (the two must match); offline: `/usr/libexec/bazzite-tower-sof-abi` |
 | Virt stack up | `systemctl is-active virtqemud.socket` · `virsh -c qemu:///system list --all` |
 | Default NAT network | `ujust vm-net-status` |
 | Wi-Fi diagnostics (offline) | `ujust wifi-debug` |
@@ -66,7 +67,29 @@ CI mirrors these: `tests/smoke.sh` (offline, the gate) and `tests/boot-check.sh`
 | `virtqemud` won't start | upstream change dropped the `qemu` system user | rebuilt/guarded in `build.sh`; the smoke + boot tests catch regressions |
 | Can't manage VMs as your user | user not yet in `kvm`/`libvirt`/`docker` | `ujust fix-vm-groups`, then re-login (the first-boot oneshot adds the first user automatically) |
 | Display flicker / ~30s sluggish wake | i915 PSR/DC or `deep` suspend on Meteor Lake | baked kargs disable PSR/DC and pin `s2idle`; verify `cat /sys/power/mem_sleep` |
+| No audio; card profile `off`; journal floods with `FW reported error: 9` | SOF topology ABI newer than the kernel's SOF driver ABI | firmware pinned to an ABI-≤3.23 build in `build.sh` and gated in CI; verify with `/usr/libexec/bazzite-tower-sof-abi` vs `journalctl -k \| grep "Kernel ABI"` |
 | Secure Boot refuses the image | — | the image kernel is signed with the shared ublue MOK (already enrolled on ublue/Bazzite hosts); no MOK work needed when switching ublue↔bazzite-tower |
+
+## Audio: SOF firmware ABI pin
+
+The on-board Intel HDA/SOF analog codec needs a firmware **topology** whose ABI is
+no newer than the kernel's SOF driver ABI. The 7.0 kernel here is at ABI **3.23**;
+stock `alsa-sof-firmware` moved to **3.29**, which can't be instantiated (`FW
+reported error: 9` / `failed widget list set up`) — WirePlumber then re-links the
+dead sink ~10×/s until PipeWire sets the card profile to `off`.
+
+- **Fix in the image:** `build_files/build.sh` pins `alsa-sof-firmware` to the
+  newest build whose `.tplg` ABI is ≤ 3.23 (`SOF_FW_PIN`) and **fails the build**
+  if the shipped topology ABI exceeds `KERNEL_SOF_ABI_*`. `tests/smoke.sh`
+  re-asserts the ABI offline; `tests/boot-check.sh` fails on the storm signatures.
+- **Seatbelt:** `…/wireplumber.conf.d/90-tower-sof-backoff.conf` shortens the
+  SOF node's idle/error suspend window so a future regression degrades to one dead
+  route instead of a journal storm. It is not a substitute for the pin.
+- **Lifting the pin** when a future kernel advances its SOF ABI: bump
+  `KERNEL_SOF_ABI_MAJ/MIN` in `build.sh` (and the matching constants in
+  `tests/smoke.sh`) to the new `journalctl -k | grep "Kernel ABI"` value, then
+  raise `SOF_FW_PIN`. Confirm a candidate firmware's ABI with
+  `/usr/libexec/bazzite-tower-sof-abi <path-to-extracted-sof-tplg>`.
 
 Runtime surface (units, helpers, kargs): [docs/CODEMAPS/system-files.md](./CODEMAPS/system-files.md).
 

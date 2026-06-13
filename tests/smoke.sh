@@ -82,6 +82,27 @@ check "suspend kargs.d fragment present" test -f /usr/lib/bootc/kargs.d/20-suspe
 check_enabled "bazzite-tower-firstboot.service"
 check "firstboot helper is executable" test -x /usr/libexec/bazzite-tower-firstboot
 
+echo "== SOF audio ABI =="
+# The 7.0 kernel ships a SOF driver at topology ABI 3.23; a firmware topology
+# built at a newer ABI can't be instantiated and storms the journal until
+# PipeWire turns the card off. build.sh pins alsa-sof-firmware and gates the ABI
+# at build time; re-assert it offline here so a base/firmware change that slips a
+# newer topology past the pin fails this gate too. Reads the .tplg files directly.
+check "SOF ABI helper present"                  test -x /usr/libexec/bazzite-tower-sof-abi
+check "WirePlumber SOF backoff drop-in present" test -f /usr/share/wireplumber/wireplumber.conf.d/90-tower-sof-backoff.conf
+KERNEL_SOF_ABI_MAJ=3   # keep in sync with build_files/build.sh KERNEL_SOF_ABI_*
+KERNEL_SOF_ABI_MIN=23
+if sof_abi="$(/usr/libexec/bazzite-tower-sof-abi /usr/lib/firmware/intel/sof-tplg 2>/dev/null)"; then
+    read -r m n _ <<<"${sof_abi}"
+    if (( m < KERNEL_SOF_ABI_MAJ || (m == KERNEL_SOF_ABI_MAJ && n <= KERNEL_SOF_ABI_MIN) )); then
+        pass "SOF topology ABI ${m}.${n} <= kernel ${KERNEL_SOF_ABI_MAJ}.${KERNEL_SOF_ABI_MIN}"
+    else
+        bad "SOF topology ABI ${m}.${n} exceeds kernel ${KERNEL_SOF_ABI_MAJ}.${KERNEL_SOF_ABI_MIN}"
+    fi
+else
+    bad "SOF topology ABI unreadable (/usr/lib/firmware/intel/sof-tplg)"
+fi
+
 echo "== Docker CE =="
 check "docker present"     command -v docker
 check "containerd present" command -v containerd

@@ -1,0 +1,97 @@
+#!/usr/bin/env python3
+"""Print the SOF topology ABI of the shipped firmware, offline.
+
+The bug this guards (see docs/RUNBOOK.md "SOF audio"): the kernel's SOF driver
+supports a fixed topology ABI (3.23 on the 7.0 kernel this image ships), but the
+alsa-sof-firmware package moved its topologies to a newer ABI (3.29). A topology
+built at an ABI newer than the kernel understands fails to instantiate at runtime
+("FW reported error: 9", "failed widget list set up"), and WirePlumber then
+re-links the dead sink in a tight loop until PipeWire abandons the card.
+
+build_files/build.sh pins the firmware to an ABI<=3.23 build; this helper lets the
+build gate and tests/smoke.sh *verify* that pin held, with no booted kernel.
+
+How it reads the ABI offline: SOF wraps DSP/topology blobs in `struct sof_abi_hdr`
+  { u32 magic; u32 type; u32 size; u32 abi; ... }
+with magic 0x00464F53 (bytes "SOF\\0") and `abi` packed as
+  (major << 24) | (minor << 12) | patch.
+Every blob in a given firmware build carries that build's SOF_ABI_VERSION, so the
+maximum ABI found across the shipped .tplg files equals the topology ABI the
+kernel reports as "Topology: ABI <maj>:<min>:<patch>". We scan whole topology
+files rather than trust a fixed offset, so a minimal topology can't fool us.
+
+Usage:
+    bazzite-tower-sof-abi [PATH ...]
+PATH may be a .tplg file or a directory (scanned recursively for *.tplg).
+Default: /usr/lib/firmware/intel/sof-tplg
+
+Prints "MAJOR MINOR PATCH" (e.g. "3 23 0") for the highest ABI found and exits 0.
+Exits 2 if no SOF ABI marker was found in any input (caller decides severity).
+"""
+import os
+import struct
+import sys
+
+SOF_ABI_MAGIC = b"SOF\x00"  # 0x00464F53, little-endian
+DEFAULT_PATH = "/usr/lib/firmware/intel/sof-tplg"
+
+
+def iter_tplg(paths: list[str]) -> list[str]:
+    """Expand the given paths into a flat list of .tplg files."""
+    files: list[str] = []
+    for path in paths:
+        if os.path.isdir(path):
+            for root, _dirs, names in os.walk(path):
+                files.extend(
+                    os.path.join(root, n) for n in names if n.endswith(".tplg")
+                )
+        elif os.path.isfile(path):
+            files.append(path)
+    return files
+
+
+def max_abi(path: str) -> tuple[int, int, int] | None:
+    """Return the highest (major, minor, patch) ABI in one .tplg, or None."""
+    try:
+        with open(path, "rb") as fh:
+            blob = fh.read()
+    except OSError:
+        return None
+
+    best: tuple[int, int, int] | None = None
+    start = 0
+    while True:
+        idx = blob.find(SOF_ABI_MAGIC, start)
+        if idx < 0:
+            break
+        start = idx + 1
+        # abi dword lives at magic + 12 (magic, type, size, abi).
+        off = idx + 12
+        if off + 4 > len(blob):
+            continue
+        (packed,) = struct.unpack_from("<I", blob, off)
+        ver = ((packed >> 24) & 0xFF, (packed >> 12) & 0xFFF, packed & 0xFFF)
+        # A sane SOF ABI is 3.x; skip stray magic-byte coincidences.
+        if ver[0] == 0 or ver[0] > 9:
+            continue
+        if best is None or ver > best:
+            best = ver
+    return best
+
+
+def main() -> int:
+    paths = sys.argv[1:] or [DEFAULT_PATH]
+    overall: tuple[int, int, int] | None = None
+    for tplg in iter_tplg(paths):
+        ver = max_abi(tplg)
+        if ver and (overall is None or ver > overall):
+            overall = ver
+    if overall is None:
+        print("no SOF ABI marker found", file=sys.stderr)
+        return 2
+    print(f"{overall[0]} {overall[1]} {overall[2]}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

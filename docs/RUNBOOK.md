@@ -52,6 +52,8 @@ Tag scheme (`latest`, `latest.YYYYMMDD`, `YYYYMMDD`, `<short-sha>`):
 | Current/rollback deployment, signature | `bootc status` |
 | Suspend mode actually in effect | `cat /sys/power/mem_sleep` (bracketed entry is active; expect `[s2idle]`) |
 | SOF audio ABI matches kernel | `journalctl -k -b 0 \| grep -E "Topology: ABI\|Kernel ABI"` (the two must match); offline: `/usr/libexec/bazzite-tower-sof-abi` |
+| CPU MCE / RAS summary | `sudo ras-mc-ctl --summary` · `sudo ras-mc-ctl --errors` |
+| Running CPU microcode revision | `grep -m1 microcode /proc/cpuinfo` (and `journalctl -k \| grep -i microcode`) |
 | Virt stack up | `systemctl is-active virtqemud.socket` · `virsh -c qemu:///system list --all` |
 | Default NAT network | `ujust vm-net-status` |
 | Wi-Fi diagnostics (offline) | `ujust wifi-debug` |
@@ -68,6 +70,7 @@ CI mirrors these: `tests/smoke.sh` (offline, the gate) and `tests/boot-check.sh`
 | Can't manage VMs as your user | user not yet in `kvm`/`libvirt`/`docker` | `ujust fix-vm-groups`, then re-login (the first-boot oneshot adds the first user automatically) |
 | Display flicker / ~30s sluggish wake | i915 PSR/DC or `deep` suspend on Meteor Lake | baked kargs disable PSR/DC and pin `s2idle`; verify `cat /sys/power/mem_sleep` |
 | No audio; card profile `off`; journal floods with `FW reported error: 9` | SOF topology ABI newer than the kernel's SOF driver ABI | firmware pinned to an ABI-≤3.23 build in `build.sh` and gated in CI; verify with `/usr/libexec/bazzite-tower-sof-abi` vs `journalctl -k \| grep "Kernel ABI"` |
+| Frequent corrected MCEs in the journal | corrected CPU **cache** errors on Meteor Lake (EDAC `igen6` ECC counters 0/0 → not DRAM) | `rasdaemon` records/decodes them; `mcelog` is masked (its trigger tried to offline a CPU). Decode with `sudo ras-mc-ctl --errors` |
 | Secure Boot refuses the image | — | the image kernel is signed with the shared ublue MOK (already enrolled on ublue/Bazzite hosts); no MOK work needed when switching ublue↔bazzite-tower |
 
 ## Audio: SOF firmware ABI pin
@@ -90,6 +93,30 @@ dead sink ~10×/s until PipeWire sets the card profile to `off`.
   `tests/smoke.sh`) to the new `journalctl -k | grep "Kernel ABI"` value, then
   raise `SOF_FW_PIN`. Confirm a candidate firmware's ABI with
   `/usr/libexec/bazzite-tower-sof-abi <path-to-extracted-sof-tplg>`.
+
+## CPU MCEs (corrected cache errors)
+
+This Meteor Lake CPU logs corrected machine-check events (~115/boot observed) that
+are **CPU cache**, not DRAM — EDAC `igen6` ECC counters stay at 0/0. `rasdaemon`
+collects and decodes them; `mcelog` is masked.
+
+```bash
+sudo ras-mc-ctl --summary    # counts by type since boot
+sudo ras-mc-ctl --errors     # decoded per-event detail (bank, address, type)
+```
+
+Reading the result:
+
+- **Corrected** errors spread across cores/cache ways are common and generally
+  benign — the CPU corrected them and continued.
+- Corrected errors **localized to a single core / cache line** that recur are a
+  possible RMA signal; capture `ras-mc-ctl --errors` over several boots.
+- **Any _uncorrected_ MCE is an escalation** — treat as failing hardware: save the
+  decode, and roll back / power down rather than continue.
+
+Microcode: `microcode_ctl` is layered at the latest Fedora revision in `build.sh`.
+Early-load takes effect once the initramfs is regenerated (on a base bump); confirm
+the running revision with `grep -m1 microcode /proc/cpuinfo`.
 
 Runtime surface (units, helpers, kargs): [docs/CODEMAPS/system-files.md](./CODEMAPS/system-files.md).
 

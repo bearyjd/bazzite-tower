@@ -82,6 +82,14 @@ check "suspend kargs.d fragment present" test -f /usr/lib/bootc/kargs.d/20-suspe
 check_enabled "bazzite-tower-firstboot.service"
 check "firstboot helper is executable" test -x /usr/libexec/bazzite-tower-firstboot
 
+echo "== RAS / MCE =="
+# rasdaemon replaces mcelog for MCE collection/decoding; mcelog is masked because
+# its cache-error-trigger tried to offline a CPU on this Meteor Lake box.
+check "rasdaemon present (ras-mc-ctl)" command -v ras-mc-ctl
+check_enabled "rasdaemon.service"
+check_masked  "mcelog.service"
+check "microcode_ctl present" rpm -q microcode_ctl
+
 echo "== SOF audio ABI =="
 # The 7.0 kernel ships a SOF driver at topology ABI 3.23; a firmware topology
 # built at a newer ABI can't be instantiated and storms the journal until

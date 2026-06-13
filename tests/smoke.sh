@@ -84,6 +84,11 @@ check "nvme kargs.d fragment present" test -f /usr/lib/bootc/kargs.d/40-nvme.tom
 check_enabled "bazzite-tower-firstboot.service"
 check "firstboot helper is executable" test -x /usr/libexec/bazzite-tower-firstboot
 
+echo "== Storage health (SMART) =="
+check "smartctl present"      command -v smartctl
+check_enabled "smartd.service"
+check "smartd.conf present"   test -f /etc/smartmontools/smartd.conf
+
 echo "== RAS / MCE =="
 # rasdaemon replaces mcelog for MCE collection/decoding; mcelog is masked because
 # its cache-error-trigger tried to offline a CPU on this Meteor Lake box.

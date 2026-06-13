@@ -197,6 +197,13 @@ systemctl enable bazzite-tower-firstboot.service
 # again the moment iwd is properly enabled). Ships in system_files/.
 systemctl enable bazzite-tower-wifi-backend-guard.service
 
+# ── Storage health monitoring (SMART) ─────────────────────────────────────────
+# smartd runs scheduled self-tests and watches SMART health for both NVMe drives,
+# logging warnings to the journal (no MTA on this image). Config ships in
+# system_files/etc/smartmontools/smartd.conf.
+dnf install -y smartmontools
+systemctl enable smartd.service
+
 # ── RAS / MCE handling ────────────────────────────────────────────────────────
 # This box logs ~115 corrected CPU cache-error MCEs per boot on Meteor Lake. EDAC
 # igen6 ECC counters read 0/0, so these are CPU cache, not DRAM. Two changes:

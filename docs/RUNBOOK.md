@@ -55,6 +55,7 @@ Tag scheme (`latest`, `latest.YYYYMMDD`, `YYYYMMDD`, `<short-sha>`):
 | CPU MCE / RAS summary | `sudo ras-mc-ctl --summary` · `sudo ras-mc-ctl --errors` |
 | Running CPU microcode revision | `grep -m1 microcode /proc/cpuinfo` (and `journalctl -k \| grep -i microcode`) |
 | Tracked kernel args applied (no dupes) | `cat /proc/cmdline` — expect each tracked karg exactly once (IOMMU, `kvmfr.static_size_mb=128`, `vfio_pci.disable_vga=1`, `kvm.ignore_msrs=1`, `nvme_core.default_ps_max_latency_us=0`) |
+| NVMe SMART health / self-tests | `sudo smartctl -H /dev/nvme0` · `/dev/nvme1`; smartd warnings + scheduled tests: `journalctl -u smartd` |
 | Virt stack up | `systemctl is-active virtqemud.socket` · `virsh -c qemu:///system list --all` |
 | Default NAT network | `ujust vm-net-status` |
 | Wi-Fi diagnostics (offline) | `ujust wifi-debug` |
@@ -72,6 +73,7 @@ CI mirrors these: `tests/smoke.sh` (offline, the gate) and `tests/boot-check.sh`
 | Display flicker / ~30s sluggish wake | i915 PSR/DC or `deep` suspend on Meteor Lake | baked kargs disable PSR/DC and pin `s2idle`; verify `cat /sys/power/mem_sleep` |
 | No audio; card profile `off`; journal floods with `FW reported error: 9` | SOF topology ABI newer than the kernel's SOF driver ABI | firmware pinned to an ABI-≤3.23 build in `build.sh` and gated in CI; verify with `/usr/libexec/bazzite-tower-sof-abi` vs `journalctl -k \| grep "Kernel ABI"` |
 | Frequent corrected MCEs in the journal | corrected CPU **cache** errors on Meteor Lake (EDAC `igen6` ECC counters 0/0 → not DRAM) | `rasdaemon` records/decodes them; `mcelog` is masked (its trigger tried to offline a CPU). Decode with `sudo ras-mc-ctl --errors` |
+| `smartd` warns of media errors / available-spare drop | NVMe wear or developing fault | `journalctl -u smartd`; confirm with `sudo smartctl -a /dev/nvmeN`; a falling available-spare or rising media-error count is an escalation/back-up signal |
 | Secure Boot refuses the image | — | the image kernel is signed with the shared ublue MOK (already enrolled on ublue/Bazzite hosts); no MOK work needed when switching ublue↔bazzite-tower |
 
 ## Audio: SOF firmware ABI pin

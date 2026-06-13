@@ -79,6 +79,8 @@ echo "== Boot args / first-boot =="
 check "IOMMU kargs.d fragment present" test -f /usr/lib/bootc/kargs.d/00-iommu.toml
 check "i915 display kargs.d fragment present" test -f /usr/lib/bootc/kargs.d/10-i915-display.toml
 check "suspend kargs.d fragment present" test -f /usr/lib/bootc/kargs.d/20-suspend.toml
+check "vfio/kvm kargs.d fragment present" test -f /usr/lib/bootc/kargs.d/30-vfio-kvm.toml
+check "nvme kargs.d fragment present" test -f /usr/lib/bootc/kargs.d/40-nvme.toml
 check_enabled "bazzite-tower-firstboot.service"
 check "firstboot helper is executable" test -x /usr/libexec/bazzite-tower-firstboot
 

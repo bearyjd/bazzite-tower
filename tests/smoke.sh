@@ -118,6 +118,11 @@ else
     bad "SOF topology ABI unreadable (/usr/lib/firmware/intel/sof-tplg)"
 fi
 
+echo "== Defaults (swappiness / indexer) =="
+check "swappiness sysctl present" test -f /usr/lib/sysctl.d/99-tower-swappiness.conf
+check "swappiness set to 10"      grep -qE '^vm\.swappiness[[:space:]]*=[[:space:]]*10$' /usr/lib/sysctl.d/99-tower-swappiness.conf
+check "baloo exclude config present" test -f /etc/xdg/baloofilerc
+
 echo "== GPU module blacklist =="
 # No AMD GPU exists on this hardware; amdgpu/amdxcp are blacklisted as a lean-boot
 # optimization. xe is intentionally left loaded.

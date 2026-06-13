@@ -56,6 +56,8 @@ Tag scheme (`latest`, `latest.YYYYMMDD`, `YYYYMMDD`, `<short-sha>`):
 | Running CPU microcode revision | `grep -m1 microcode /proc/cpuinfo` (and `journalctl -k \| grep -i microcode`) |
 | Tracked kernel args applied (no dupes) | `cat /proc/cmdline` — expect each tracked karg exactly once (IOMMU, `kvmfr.static_size_mb=128`, `vfio_pci.disable_vga=1`, `kvm.ignore_msrs=1`, `nvme_core.default_ps_max_latency_us=0`) |
 | NVMe SMART health / self-tests | `sudo smartctl -H /dev/nvme0` · `/dev/nvme1`; smartd warnings + scheduled tests: `journalctl -u smartd` |
+| Swappiness in effect | `sysctl vm.swappiness` (expect `10`) |
+| Indexer excludes applied | `balooctl6 config show excludeFilters` (expect `.gradle`, build/cache dirs) |
 | Virt stack up | `systemctl is-active virtqemud.socket` · `virsh -c qemu:///system list --all` |
 | Default NAT network | `ujust vm-net-status` |
 | Wi-Fi diagnostics (offline) | `ujust wifi-debug` |
@@ -129,6 +131,15 @@ USB-C/Thunderbolt, which the Intel iGPU drives) depends on them. `xe` is left
 loaded on purpose. Revert by deleting the file. If `lsmod | grep amdgpu` still
 shows it loaded after a rebase, it's initramfs-embedded — add the kernel arg
 `rd.driver.blacklist=amdgpu` (new kargs.d fragment) as the stronger lever.
+
+## Tuning defaults (swappiness, indexer)
+
+- `…/sysctl.d/99-tower-swappiness.conf` sets `vm.swappiness=10` (zram was filling
+  while RAM was free). Override at `/etc/sysctl.d/`; verify `sysctl vm.swappiness`.
+- `/etc/xdg/baloofilerc` seeds baloo's `exclude filters` with build/cache trees
+  (`.gradle`, `target`, `build`, language caches; `node_modules` is already a baloo
+  default). It only seeds new users — a user's `~/.config/baloofilerc` overrides it.
+  Re-index after editing with `balooctl6 disable && balooctl6 enable`.
 
 Runtime surface (units, helpers, kargs): [docs/CODEMAPS/system-files.md](./CODEMAPS/system-files.md).
 

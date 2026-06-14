@@ -63,6 +63,11 @@ Tag scheme (`latest`, `latest.YYYYMMDD`, `YYYYMMDD`, `<short-sha>`):
 | Default NAT network | `ujust vm-net-status` |
 | Wi-Fi diagnostics (offline) | `ujust wifi-debug` |
 
+**One-shot sweep:** [`scripts/tower-diagnostic.sh`](../scripts/tower-diagnostic.sh)
+runs all of the above (SOF/ABI, MCE/RAS, i915 resume, thermals, SMART, rpm-ostree)
+in one pass. Run with `sudo` for the root-only checks:
+`sudo ./scripts/tower-diagnostic.sh`.
+
 CI mirrors these: `tests/smoke.sh` (offline, the gate) and `tests/boot-check.sh`
 (runtime). See [docs/CODEMAPS/ci-cd.md](./CODEMAPS/ci-cd.md).
 

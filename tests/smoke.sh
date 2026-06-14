@@ -68,6 +68,10 @@ check "libvirt-wheel polkit rule present" test -f /etc/polkit-1/rules.d/50-libvi
 check "qemu-system-x86_64 present" command -v qemu-system-x86_64
 check "virsh present"              command -v virsh
 check "virt-install present"       command -v virt-install
+# Looking Glass: kvmfr host module is base-provided; the version-coupled client is
+# installed on demand via this ujust recipe (not baked). Assert the recipe shipped.
+check "looking-glass-client ujust recipe present" \
+    grep -q 'install-looking-glass-client' /usr/share/ublue-os/just/60-custom.just
 
 echo "== Wi-Fi backend guard =="
 check_enabled "bazzite-tower-wifi-backend-guard.service"

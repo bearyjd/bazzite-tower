@@ -197,5 +197,49 @@ systemctl enable bazzite-tower-firstboot.service
 # again the moment iwd is properly enabled). Ships in system_files/.
 systemctl enable bazzite-tower-wifi-backend-guard.service
 
+# ── Storage health monitoring (SMART) ─────────────────────────────────────────
+# smartd runs scheduled self-tests and watches SMART health for both NVMe drives,
+# logging warnings to the journal (no MTA on this image). Config ships in
+# system_files/etc/smartmontools/smartd.conf.
+dnf install -y smartmontools
+systemctl enable smartd.service
+
+# ── RAS / MCE handling ────────────────────────────────────────────────────────
+# This box logs ~115 corrected CPU cache-error MCEs per boot on Meteor Lake. EDAC
+# igen6 ECC counters read 0/0, so these are CPU cache, not DRAM. Two changes:
+#   1. rasdaemon — the modern RAS collector. It records and decodes MCEs into a
+#      local store queryable with `ras-mc-ctl --summary`/`--errors`.
+#   2. mask mcelog — redundant with rasdaemon, and on this box its
+#      cache-error-trigger tried to *offline a CPU* when it hit the corrected-error
+#      threshold (it failed only because the trigger script was buggy). Masking
+#      removes that footgun for good.
+dnf install -y rasdaemon
+systemctl enable rasdaemon.service
+systemctl mask mcelog.service
+
+# Latest Intel microcode. Meteor Lake has shipped corrected-cache-error microcode
+# updates; this box was seen on revision 0x28. `dnf install` upgrades microcode_ctl
+# to the newest in the Fedora repos when the base is older (no-op if already
+# current). Note early-load takes effect once the initramfs is regenerated (on a
+# base bump); verify the running revision per docs/RUNBOOK.md.
+dnf install -y microcode_ctl
+
+# ── CPU power/thermal: balanced baseline ──────────────────────────────────────
+# The box boots into the firmware's low-power state (cpufreq EPP=power, ACPI
+# platform_profile=low-power) with no power daemon, throttling a plugged-in
+# homelab (96 throttle events/boot observed). Install thermald for proper Meteor
+# Lake thermal management, and enable a oneshot that sets a balanced EPP + platform
+# profile at boot (helper + unit ship in system_files/).
+dnf install -y thermald
+systemctl enable thermald.service
+systemctl enable bazzite-tower-power-tuning.service
+
+# NOTE on SOF audio: the analog/HDMI codec is driven the legacy-HDA way on this
+# image via the snd_intel_dspcfg.dsp_driver=1 kernel arg (kargs.d/25-audio-sof-bypass.toml),
+# NOT by downgrading firmware. The kernel's SOF driver is at topology ABI 3.23 while
+# stock alsa-sof-firmware ships ABI 3.29, and Fedora's repos no longer carry an
+# ABI-≤3.23 build to downgrade to — so the firmware can't be pinned. Forcing the
+# legacy HDA path sidesteps SOF entirely. See docs/RUNBOOK.md "Audio".
+
 # ── Cleanup ───────────────────────────────────────────────────────────────────
 dnf clean all

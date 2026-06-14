@@ -1,0 +1,31 @@
+# Bypass the broken SOF/DSP audio path by forcing the legacy Intel HDA driver.
+#
+# Hardware (ThinkPad P1 Gen 7, 21KV001CUS, Core Ultra 9 185H / Meteor Lake-P):
+#   - Audio controller: Intel MTL-P HD Audio [8086:7e28], driver sof-audio-pci-intel-mtl
+#   - Codec 0: Realtek ALC287  -> headphones + analog/headset mic
+#   - Speaker amp: TI TAS2781 (TIAS2781:00 on I2C), bound to the ALC287 codec as an
+#     HDA *side-codec* ("snd_hda_codec_alc269 ... bound i2c-TIAS2781:00 (ops
+#     tas2781_hda_comp_ops)") -> driven over the HDA path, NOT a SOF-only route
+#   - Codec 2: Intel MTL HDMI -> HDMI/DP audio
+#   - 2x internal DMIC array -> SOF/DSP only
+#
+# Root cause of the dead audio: the kernel's SOF IPC4 driver is at topology ABI
+# 3.23, but alsa-sof-firmware 2025.12.2 ships IPC4 topologies at ABI 3.29. When
+# playback starts on pcm0p ("HDA Analog" = speakers/headphones), the kernel sends a
+# module-create IPC the firmware (ADSPFW 2.14.1.1) can't parse -> "failed to create
+# module pipeline.1" / "ipc error 0x11000007" / "ASoC error (-22) at
+# snd_soc_pcm_component_prepare"; PipeWire retries at ~10 Hz (94k+ errors/boot).
+# Fedora's repos no longer carry an ABI-<=3.23 alsa-sof-firmware to downgrade to.
+#
+#   snd_intel_dspcfg.dsp_driver=1
+#     Forces the legacy snd_hda_intel driver (1 = legacy HDA; 3 = SOF). Because the
+#     speakers (TAS2781), headphones (ALC287), HDMI, and the analog/headset mic all
+#     live on the HDA codec path, they all work on legacy HDA. This is the documented
+#     SOF workaround, and upstream even hardcodes legacy HDA for some ThinkPads in
+#     intel-dsp-config. Trade-off: the 2 internal DMICs and SOF DSP effects are lost.
+#
+# Revert by deleting this fragment (re-enables SOF). bootc-native, same as
+# 00-iommu.toml. After reboot: `journalctl -k | grep -i dsp_driver`, then confirm
+# speakers/headphones/HDMI play. See docs/RUNBOOK.md "Audio". If you need the DMIC
+# array back, the alternative is the sof-bin firmware overlay (RUNBOOK).
+kargs = ["snd_intel_dspcfg.dsp_driver=1"]

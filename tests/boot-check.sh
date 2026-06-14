@@ -49,6 +49,16 @@ hard "wifi guard not failed"    not_failed bazzite-tower-wifi-backend-guard.serv
 # NM device management is unreliable in a container — informational only.
 soft "NetworkManager active"    systemctl is-active --quiet NetworkManager.service
 
+say "== SOF audio (ABI-mismatch regression guard) =="
+# A SOF topology/kernel ABI mismatch surfaces as these kernel + ASoC lines and,
+# left unchecked, storms the journal until PipeWire turns the card off. The CI
+# container has no SOF hardware, so this passes vacuously there; on a real boot
+# journal it catches the regression. HARD: any occurrence fails the boot test.
+hard "no SOF 'FW reported error: 9'" \
+    bash -c '! journalctl -k -b 0 --no-pager 2>/dev/null | grep -q "FW reported error: 9"'
+hard "no SOF 'failed widget list set up'" \
+    bash -c '! journalctl -b 0 --no-pager 2>/dev/null | grep -q "failed widget list set up"'
+
 say "== first-boot oneshot =="
 soft "firstboot service not failed" not_failed bazzite-tower-firstboot.service
 

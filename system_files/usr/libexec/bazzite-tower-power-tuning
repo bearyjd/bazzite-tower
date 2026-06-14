@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+# bazzite-tower-power-tuning — set a balanced power/perf baseline at boot.
+#
+# This ThinkPad P1 Gen 7 runs as a plugged-in homelab/VFIO tower, but boots into
+# the firmware's most conservative state: cpufreq EPP=power and ACPI
+# platform_profile=low-power, with no power daemon managing it (96 throttle events
+# per boot observed). That caps CPU throughput for VMs and builds. Nudge both to a
+# balanced baseline. Idempotent and defensive: skips any knob that's absent or
+# read-only (older firmware, a different cpufreq driver). thermald handles thermal
+# limits separately. Runs every boot; EPP can also reset across suspend, so re-run
+# manually after resume if you care (or wire a system-sleep hook).
+set -uo pipefail
+
+# ACPI platform profile -> balanced, only if the firmware offers that choice.
+prof=/sys/firmware/acpi/platform_profile
+if [[ -w "${prof}" ]] && grep -qw balanced /sys/firmware/acpi/platform_profile_choices 2>/dev/null; then
+    echo balanced > "${prof}" 2>/dev/null || true
+fi
+
+# intel_pstate energy_performance_preference -> balance_performance on every CPU.
+for epp in /sys/devices/system/cpu/cpu*/cpufreq/energy_performance_preference; do
+    [[ -w "${epp}" ]] || continue
+    echo balance_performance > "${epp}" 2>/dev/null || true
+done
+
+exit 0

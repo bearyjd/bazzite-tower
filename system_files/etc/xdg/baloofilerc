@@ -1,0 +1,15 @@
+# bazzite-tower default config for baloo, the KDE file indexer (baloo_file).
+#
+# baloo was observed indexing heavily here; the biggest wins are keeping it out of
+# dependency/build/cache trees. This sets the "exclude filters" (folder/file *name*
+# patterns, location-independent). KConfig REPLACES the key rather than merging, so
+# this list intentionally re-states baloo's important built-in defaults (build
+# artifacts, VCS dirs, VM images) and ADDS the dev/build/cache trees that drive the
+# churn (.gradle, target, build output, language caches). node_modules is already a
+# baloo default; .gradle and the rest are the additions.
+#
+# System default in /etc/xdg; a user's ~/.config/baloofilerc overrides it (so this
+# only seeds new users / a clean reinstall). Tune via System Settings -> "File
+# Search", or inspect with `balooctl6 config show excludeFilters`.
+[General]
+exclude filters=*~,*.part,*.o,*.la,*.lo,*.loT,*.moc,moc_*.cpp,qrc_*.cpp,ui_*.h,cmake_install.cmake,CMakeCache.txt,CTestTestfile.cmake,libtool,config.status,*.gcode,*.so,*.so.*,*.a,*.rej,*.swp,*.swap,*.orig,*.map,*.db,*.img,*.vdi,*.vbox*,*.qcow2,*.vmdk,*.vhd,*.vhdx,*.iso,*.class,*.pyc,*.pyo,*.elc,*.qmlc,*.jsc,CVS,.svn,.git,_darcs,.bzr,.hg,CMakeFiles,__pycache__,node_modules,node_packages,.npm,.yarn,.gradle,.m2,.cargo,target,build,dist,.next,.nuxt,.svelte-kit,.venv,venv,.tox,.mypy_cache,.pytest_cache,.ruff_cache,.cache,.ccache,vendor,.terraform,core-dumps,lost+found

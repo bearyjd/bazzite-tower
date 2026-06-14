@@ -1,0 +1,18 @@
+# VFIO / KVM passthrough tuning — codifies kernel args that were live on the
+# target machine but previously untracked, so a clean reinstall now reproduces
+# them. ADDITIVE only: none of these are Bazzite base defaults, so there is no
+# duplication with the base cmdline (confirm after a rebase with `cat /proc/cmdline`
+# — each should appear exactly once). Same bootc-native mechanism as 00-iommu.toml:
+# bootc applies /usr/lib/bootc/kargs.d/*.toml at install and on every upgrade.
+#
+#   kvmfr.static_size_mb=128  — Looking Glass kvmfr shared-memory device sized at
+#                               128 MiB (the host->guest framebuffer region).
+#   vfio_pci.disable_vga=1    — keep VFIO off the legacy VGA arbiter so a
+#                               passed-through GPU doesn't fight the host for VGA.
+#   kvm.ignore_msrs=1         — let the guest read/write unhandled MSRs instead of
+#                               injecting #GP (some Windows/driver stacks probe MSRs).
+#   kvm.report_ignored_msrs=0 — don't log every ignored MSR (avoids dmesg spam).
+#
+# Kept separate from 00-iommu.toml (intel_iommu / iommu=pt) so the IOMMU enablement
+# and this passthrough tuning remain independently revertible.
+kargs = ["kvmfr.static_size_mb=128", "vfio_pci.disable_vga=1", "kvm.ignore_msrs=1", "kvm.report_ignored_msrs=0"]

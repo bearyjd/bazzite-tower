@@ -1,4 +1,4 @@
-<!-- Generated: 2026-06-10 | Files scanned: 8 | Token estimate: ~720 -->
+<!-- Generated: 2026-06-14 | Files scanned: 8 | Token estimate: ~760 -->
 # CI / CD
 
 5 workflows + 2 test scripts + 1 diff filter. Full failure model:
@@ -24,8 +24,8 @@ opens — and later auto-closes — its labelled tracking issue.
 
 ## Test scripts (`tests/`)
 
-- `smoke.sh` (96L) — offline, `podman run -i <img> bash -s <`: asserts qemu user resolves, 6 `virt*.socket` enabled, `libvirtd` masked, default-net symlink, polkit rule, wifi-guard/firstboot/docker enabled, `iptable_nat`, IOMMU kargs present. Reports every failure, not just the first.
-- `boot-check.sh` (59L) — runtime, inside the booted image. HARD = qemu user resolves, virtqemud/virtnetworkd active, `virsh -c qemu:///system` connects, wifi-guard active + not-failed. SOFT (container limits) = NetworkManager, firstboot, docker.
+- `smoke.sh` (154L) — offline, `podman run -i <img> bash -s <`. Asserts: qemu user resolves; 6 `virt*.socket` enabled; `libvirtd` masked; default-net symlink; polkit rule; wifi-guard/firstboot/docker enabled; **docker group exists**; `iptable_nat`; **looking-glass-client ujust recipe present**; all 6 `kargs.d` fragments (incl. SOF bypass, vfio-kvm, nvme); **SOF bypass karg + WirePlumber backoff**; **CPU power tuning (thermald + power-tuning svc/helper)**; **RAS** (rasdaemon enabled, mcelog masked, microcode_ctl); **smartd**; **swappiness=10 + baloofilerc**; **journald 500M cap**; **amdgpu blacklist**; **cockpit-machines + cockpit.socket**. Reports every failure, not just the first.
+- `boot-check.sh` (69L) — runtime, inside the booted image. HARD = qemu user resolves, virtqemud/virtnetworkd active, `virsh -c qemu:///system` connects, wifi-guard active + not-failed, **no SOF `FW reported error: 9` / `failed widget list set up` in the boot journal**. SOFT (container limits) = NetworkManager, firstboot, docker.
 
 ## Diff filter (`ci/base-diff.py`)
 

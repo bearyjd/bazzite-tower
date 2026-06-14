@@ -81,21 +81,27 @@ CI mirrors these: `tests/smoke.sh` (offline, the gate) and `tests/boot-check.sh`
 
 ## Audio: SOF bypass (legacy HDA)
 
-The kernel's SOF driver is at topology ABI **3.23**, but stock `alsa-sof-firmware`
-ships topologies at ABI **3.29**. On Meteor Lake the DSP can't instantiate the
-newer topology's module pipelines, so every playback attempt fails (`failed to
-create module pipeline`, `ipc error 0x11000007`, `ASoC error (-22) at
-snd_soc_pcm_component_prepare`, `FW reported error: 9`) and PipeWire retries at
-~10 Hz — **94k+** error lines per boot and no working audio. Fedora's repos no
-longer carry an ABI-≤3.23 `alsa-sof-firmware`, so the firmware **cannot be
-downgraded** to match the kernel.
+**Hardware** (verified on the live box): Realtek **ALC287** HDA codec (headphones +
+analog/headset mic), **TI TAS2781** smart-amp speakers bound to the ALC287 as an HDA
+*side-codec* (`tas2781_hda_comp_ops`), Intel HDMI codec, and a 2-mic **DMIC** array
+that is SOF/DSP-only.
+
+The kernel's SOF IPC4 driver is at topology ABI **3.23**, but stock
+`alsa-sof-firmware` (2025.12.2) ships topologies at ABI **3.29**. When playback
+starts on `pcm0p` ("HDA Analog" = speakers/headphones) the kernel sends a
+module-create IPC the firmware (ADSPFW 2.14.1.1) can't parse — `failed to create
+module pipeline.1` / `ipc error 0x11000007` / `ASoC error (-22) at
+snd_soc_pcm_component_prepare` — and PipeWire retries at ~10 Hz (**94k+** errors per
+boot, dead audio). Fedora's repos no longer carry an ABI-≤3.23 `alsa-sof-firmware`,
+so the firmware **cannot be downgraded** to match the kernel.
 
 - **Fix in the image:** `kargs.d/25-audio-sof-bypass.toml` sets
-  `snd_intel_dspcfg.dsp_driver=1`, forcing the **legacy `snd_hda_intel` driver** and
-  bypassing SOF entirely. The Realtek analog codec and HDMI/DP audio are driven
-  directly by HDA, so the storm can't happen. **Trade-off:** no SOF DSP effects and
-  the digital-mic (DMIC) array is unavailable; speakers/headphones, line/analog
-  mic-in, and HDMI/DP audio work. Revert by deleting the fragment (re-enables SOF).
+  `snd_intel_dspcfg.dsp_driver=1`, forcing the **legacy `snd_hda_intel` driver**.
+  Because the speakers (TAS2781 via ALC287), headphones, HDMI, and analog/headset
+  mic all live on the HDA codec path, they all work on legacy HDA — this is the
+  documented SOF workaround (upstream even hardcodes legacy HDA for some ThinkPads
+  in `intel-dsp-config`). **Lost:** the 2 internal DMICs and SOF DSP effects. Revert
+  by deleting the fragment (re-enables SOF).
 - **Verify after reboot:** `journalctl -k | grep -i dsp_driver`,
   `journalctl -k | grep -c "FW reported error: 9"` (expect `0`), and
   `cat /proc/asound/cards` (one HDA card, no SOF storm).

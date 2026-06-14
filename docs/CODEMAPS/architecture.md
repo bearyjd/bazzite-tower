@@ -1,4 +1,4 @@
-<!-- Generated: 2026-06-10 | Files scanned: 41 | Token estimate: ~600 -->
+<!-- Generated: 2026-06-14 | Files scanned: 41 | Token estimate: ~600 -->
 # Architecture
 
 **Type:** bootc OS-image repo — a declarative Fedora/Bazzite derivative. There is
@@ -30,7 +30,7 @@ build_files/build.sh ──RUN───┘        │
 ## Entry points
 
 - `Containerfile` — build entry: FROM base → COPY system_files → RUN build.sh → lint
-- `build_files/build.sh` — all image customization (201 lines)
+- `build_files/build.sh` — all image customization (265 lines)
 - `system_files/` — static content baked verbatim into the image (units, recipes, kargs, helpers)
 - `installer/` — separate payload builder for the live/installer ISO (titanoboa input)
 - `Justfile` — local build / VM / test recipes

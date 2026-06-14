@@ -60,6 +60,7 @@ Tag scheme (`latest`, `latest.YYYYMMDD`, `YYYYMMDD`, `<short-sha>`):
 | Indexer excludes applied | `balooctl6 config show excludeFilters` (expect `.gradle`, build/cache dirs) |
 | CPU power baseline | `cat /sys/devices/system/cpu/cpu0/cpufreq/energy_performance_preference` (expect `balance_performance`); `cat /sys/firmware/acpi/platform_profile` (expect `balanced`); `systemctl is-active thermald` |
 | Virt stack up | `systemctl is-active virtqemud.socket` · `virsh -c qemu:///system list --all` |
+| Cockpit web management | `systemctl is-active cockpit.socket`; browse `https://<tower>:9090` (over Tailscale) — VMs (cockpit-machines), services, storage, podman, logs |
 | Default NAT network | `ujust vm-net-status` |
 | Wi-Fi diagnostics (offline) | `ujust wifi-debug` |
 

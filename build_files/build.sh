@@ -214,6 +214,16 @@ systemctl enable bazzite-tower-wifi-backend-guard.service
 dnf install -y smartmontools
 systemctl enable smartd.service
 
+# ── Cockpit: web-based system + VM management ─────────────────────────────────
+# Homelab management surface on :9090 — VMs (cockpit-machines drives the same
+# libvirt stack baked above), services, storage, logs, and podman. The base
+# already ships most of Cockpit (bridge/system/networkmanager/storaged/podman/
+# files/selinux); only cockpit-machines is missing, and the socket isn't enabled.
+# Add the VM module and enable socket activation (cockpit.socket listens, starts
+# cockpit on first connect). Reach it over Tailscale rather than exposing the LAN.
+dnf install -y cockpit cockpit-machines
+systemctl enable cockpit.socket
+
 # ── RAS / MCE handling ────────────────────────────────────────────────────────
 # This box logs ~115 corrected CPU cache-error MCEs per boot on Meteor Lake. EDAC
 # igen6 ECC counters read 0/0, so these are CPU cache, not DRAM. Two changes:

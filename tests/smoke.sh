@@ -136,6 +136,12 @@ check_enabled "docker.service"
 # iptable_nat is loaded at boot for docker-in-docker.
 check "iptable_nat modules-load.d present" test -f /etc/modules-load.d/iptable_nat.conf
 
+echo "== Cockpit (web management) =="
+# cockpit-machines (VM management) is the only piece missing from the base; the
+# socket is enabled so the UI is reachable on :9090.
+check "cockpit-machines present" rpm -q cockpit-machines
+check_enabled "cockpit.socket"
+
 echo
 if [[ "${fail}" -ne 0 ]]; then
     echo "SMOKE TESTS FAILED"

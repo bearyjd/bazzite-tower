@@ -117,18 +117,28 @@ dnf install -y --enablerepo=docker-ce-stable \
 # 'qemu'") and the socket-activated service crash-loops into start-limit-hit on
 # every boot, so qemu:///system never comes up.
 #
-# Complication seen on this base: it ships orphan `qemu:` lines in /etc/shadow
-# and /etc/gshadow with no matching /etc/passwd or /etc/group entry. sysusers
-# writes passwd+group+shadow+gshadow as one transaction and aborts — rolling the
-# whole thing back — when it hits the pre-existing gshadow line, so it silently
-# creates nothing. Strip those orphans first (no-op if absent), then materialize.
-sed -i '/^qemu:/d' /etc/shadow /etc/gshadow
+# Complication seen on this base: it ships orphan lines in /etc/shadow and
+# /etc/gshadow — an entry whose name has no matching /etc/passwd or /etc/group
+# (e.g. `qemu` in shadow, `qat` in gshadow, and possibly more). sysusers writes
+# passwd+group+shadow+gshadow as one transaction and aborts the WHOLE thing when
+# it hits any such pre-existing line ("Group X already exists"), so it silently
+# creates nothing — including the `docker` group, whose absence makes docker.socket
+# fail at every boot ("Failed to resolve group 'docker': Unknown group") and the
+# group then gets created late at a >1000 gid. Strip every orphan first (generic:
+# keep only shadow/gshadow lines whose name has a matching passwd/group entry),
+# then materialize. `cat >` rewrites in place, preserving the 0000 root:root perms.
+awk -F: 'NR==FNR{seen[$1];next} ($1 in seen)' /etc/group  /etc/gshadow > /tmp/gshadow.f && cat /tmp/gshadow.f > /etc/gshadow && rm -f /tmp/gshadow.f
+awk -F: 'NR==FNR{seen[$1];next} ($1 in seen)' /etc/passwd /etc/shadow  > /tmp/shadow.f  && cat /tmp/shadow.f  > /etc/shadow  && rm -f /tmp/shadow.f
 systemd-sysusers
-# Belt-and-suspenders: if no sysusers.d snippet shipped the qemu user, create it
-# directly. libvirt resolves it by name at runtime, so a dynamic system uid (-r)
-# is fine. Guarded so a future packaging change can't break the build.
-getent group  qemu >/dev/null || groupadd -r qemu
-getent passwd qemu >/dev/null || useradd  -r -g qemu -d / -s /sbin/nologin -c "qemu user" qemu
+# Belt-and-suspenders for the accounts our services need, in case a sysusers.d
+# snippet is absent or a future base change reintroduces the orphan problem. Both
+# are resolved by name, so dynamic system ids (-r) are fine.
+#   - qemu user+group: libvirt resolves 'qemu' by name; virtqemud aborts without it.
+#   - docker group: docker.socket sets the API socket group to 'docker' at early
+#     boot — bake it as a system group so it resolves before docker.socket starts.
+getent group  qemu   >/dev/null || groupadd -r qemu
+getent passwd qemu   >/dev/null || useradd  -r -g qemu -d / -s /sbin/nologin -c "qemu user" qemu
+getent group  docker >/dev/null || groupadd -r docker
 
 # ── docker-in-docker: load iptable_nat at boot ────────────────────────────────
 install -Dm644 /dev/stdin /etc/modules-load.d/iptable_nat.conf <<'EOF'

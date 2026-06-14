@@ -126,6 +126,9 @@ check "amdgpu blacklisted" grep -qx 'blacklist amdgpu' /usr/lib/modprobe.d/black
 echo "== Docker CE =="
 check "docker present"     command -v docker
 check "containerd present" command -v containerd
+# The 'docker' group must be baked into the image: docker.socket resolves it at
+# early boot, and if it's only created late at runtime the socket fails every boot.
+check "docker group exists (getent group docker)" getent group docker
 # Docker daemon set to start at boot.
 check_enabled "docker.service"
 # iptable_nat is loaded at boot for docker-in-docker.

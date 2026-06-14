@@ -116,6 +116,8 @@ echo "== Defaults (swappiness / indexer) =="
 check "swappiness sysctl present" test -f /usr/lib/sysctl.d/99-tower-swappiness.conf
 check "swappiness set to 10"      grep -qE '^vm\.swappiness[[:space:]]*=[[:space:]]*10$' /usr/lib/sysctl.d/99-tower-swappiness.conf
 check "baloo exclude config present" test -f /etc/xdg/baloofilerc
+check "journald size cap present" test -f /usr/lib/systemd/journald.conf.d/90-tower-journal-cap.conf
+check "journald cap is 500M" grep -qE '^SystemMaxUse=500M$' /usr/lib/systemd/journald.conf.d/90-tower-journal-cap.conf
 
 echo "== GPU module blacklist =="
 # No AMD GPU exists on this hardware; amdgpu/amdxcp are blacklisted as a lean-boot
@@ -126,6 +128,9 @@ check "amdgpu blacklisted" grep -qx 'blacklist amdgpu' /usr/lib/modprobe.d/black
 echo "== Docker CE =="
 check "docker present"     command -v docker
 check "containerd present" command -v containerd
+# The 'docker' group must be baked into the image: docker.socket resolves it at
+# early boot, and if it's only created late at runtime the socket fails every boot.
+check "docker group exists (getent group docker)" getent group docker
 # Docker daemon set to start at boot.
 check_enabled "docker.service"
 # iptable_nat is loaded at boot for docker-in-docker.

@@ -224,54 +224,95 @@ systemctl mask mcelog.service
 # base bump); verify the running revision per docs/RUNBOOK.md.
 dnf install -y microcode_ctl
 
-# ── SOF audio firmware: pin to the kernel's topology ABI ──────────────────────
+# ── SOF audio firmware: auto-resolve to the kernel's topology ABI ─────────────
 # The 7.0 kernel this image ships carries a SOF driver at topology ABI 3.23, but
 # current alsa-sof-firmware ships topologies built at ABI 3.29. A topology newer
 # than the kernel's ABI can't be instantiated ("FW reported error: 9" / "failed
 # widget list set up"); WirePlumber then re-links the dead sink ~10x/s until
-# PipeWire sets the card profile to off — i.e. no audio at all. So pin the
-# firmware to the newest build whose topology ABI is <= the kernel's, and verify
-# it: the build fails loudly rather than shipping silent-but-broken audio.
+# PipeWire sets the card profile to off — i.e. no audio at all.
 #
-# KERNEL_SOF_ABI_*: the kernel's SOF topology ABI. Bump these — and raise
-# SOF_FW_PIN to a newer firmware — when a future kernel moves its SOF ABI past
-# 3.23 (confirm on a booted host with `journalctl -k | grep "Kernel ABI"`). That
-# is the single edit needed to lift this pin.
+# Rather than hard-code a pin that drifts, resolve it at build time: walk the
+# available alsa-sof-firmware builds newest->oldest and pick the newest whose
+# *actual shipped topology ABI* is <= the kernel's. "Verify, don't guess." The
+# installed-ABI gate at the end is the backstop.
+#
+# KERNEL_SOF_ABI_*: the kernel's SOF topology ABI (journal: "... Kernel ABI 3:23:1").
+# Bumping these is the ONLY edit needed when a future kernel advances its SOF ABI —
+# the resolver then auto-selects a newer firmware. Confirm on a booted host with
+# `journalctl -k | grep "Kernel ABI"`.
 KERNEL_SOF_ABI_MAJ=3
 KERNEL_SOF_ABI_MIN=23
-# SOF_FW_PIN — NEEDS CONFIRMATION against the live Fedora repos. It must be the
-# newest alsa-sof-firmware whose shipped .tplg ABI is <= 3.23. Inspect with:
-#     dnf --showduplicates list alsa-sof-firmware
-# and verify a candidate by extracting its sof-tplg and running
-# /usr/libexec/bazzite-tower-sof-abi on it. The ABI gate below is the backstop:
-# a wrong pin (ABI too new, or a version that doesn't exist) fails the build.
-SOF_FW_PIN="2024.09.2"
 
-# Expected case: the base ships a newer build, so downgrade. Fall back to a plain
-# install for the (unlikely) case the base is already older/equal or absent.
-dnf downgrade -y "alsa-sof-firmware-${SOF_FW_PIN}" \
-    || dnf install -y "alsa-sof-firmware-${SOF_FW_PIN}"
-# Hold it for the rest of this build so no later transaction pulls it forward.
-# Best-effort: the plugin may be absent on the base, and the runtime is immutable
-# anyway (no `dnf upgrade` ever runs on the laptop), so never fail the build on it
-# — the install order above plus the ABI gate below are the real guarantees.
+# Tooling to inspect a candidate's .tplg without installing it: cpio to unpack a
+# downloaded rpm, plus the `dnf download` plugin. That plugin's virtual provide is
+# named differently on dnf5 (this base) vs dnf4, so try the known forms in order
+# and succeed on the first that resolves. (repoquery is built into dnf5 and pulled
+# in by dnf-plugins-core on dnf4.)
+dnf install -y cpio
+dnf install -y "dnf5-command(download)" \
+    || dnf install -y "dnf-command(download)" \
+    || dnf install -y dnf5-plugins \
+    || dnf install -y dnf-plugins-core
+
+# 0 if "<maj> <min> <patch>" is <= the kernel's SOF ABI.
+sof_abi_le_kernel() {
+    local maj min
+    read -r maj min _ <<<"$1"
+    (( maj < KERNEL_SOF_ABI_MAJ || (maj == KERNEL_SOF_ABI_MAJ && min <= KERNEL_SOF_ABI_MIN) ))
+}
+
+# Echo the newest alsa-sof-firmware version-release whose topology ABI <= kernel.
+resolve_sof_firmware() {
+    local evr workdir abi tplg evrs
+    evrs="$(dnf -q repoquery --available --queryformat '%{version}-%{release}\n' \
+            alsa-sof-firmware 2>/dev/null | sort -Vr | uniq || true)"
+    [[ -n "${evrs}" ]] || { echo "ERROR: no alsa-sof-firmware builds in the repos" >&2; return 1; }
+    for evr in ${evrs}; do
+        workdir="$(mktemp -d)"
+        if dnf -q download --destdir="${workdir}" "alsa-sof-firmware-${evr}" >/dev/null 2>&1; then
+            ( cd "${workdir}" && rpm2cpio ./*.rpm | cpio -idm --quiet '*/sof-tplg/*' 2>/dev/null )
+            tplg="${workdir}/usr/lib/firmware/intel/sof-tplg"
+            if abi="$(/usr/libexec/bazzite-tower-sof-abi "${tplg}" 2>/dev/null)" \
+               && sof_abi_le_kernel "${abi}"; then
+                echo "candidate ${evr}: topology ABI ${abi// /.} <= ${KERNEL_SOF_ABI_MAJ}.${KERNEL_SOF_ABI_MIN} — selected" >&2
+                echo "${evr}"
+                rm -rf "${workdir}"
+                return 0
+            fi
+            echo "candidate ${evr}: topology ABI ${abi:-?} too new — skipping" >&2
+        else
+            echo "candidate ${evr}: download failed — skipping" >&2
+        fi
+        rm -rf "${workdir}"
+    done
+    echo "ERROR: no alsa-sof-firmware build has topology ABI <= ${KERNEL_SOF_ABI_MAJ}.${KERNEL_SOF_ABI_MIN}" >&2
+    return 1
+}
+
+echo "Resolving alsa-sof-firmware to SOF topology ABI <= ${KERNEL_SOF_ABI_MAJ}.${KERNEL_SOF_ABI_MIN} ..."
+SOF_FW_EVR="$(resolve_sof_firmware)"
+echo "Selected alsa-sof-firmware-${SOF_FW_EVR}"
+
+# Install the resolved build (downgrade from the base's newer one) and hold it.
+dnf downgrade -y "alsa-sof-firmware-${SOF_FW_EVR}" \
+    || dnf install -y "alsa-sof-firmware-${SOF_FW_EVR}"
+# Hold it so no later transaction pulls it forward. Best-effort: the runtime is
+# immutable (no `dnf upgrade` runs on the laptop), so never fail the build on a
+# missing plugin — install order + the gate below are the real guarantees.
 dnf versionlock add alsa-sof-firmware 2>/dev/null \
     || echo "note: dnf versionlock unavailable; relying on install order + ABI gate"
 
-# Authoritative gate: the shipped topology ABI must not exceed the kernel's, or
-# audio is silently broken on the laptop. Read it offline from the .tplg files.
+# Authoritative gate: assert the *installed* topology ABI, in case install
+# resolution did something unexpected. Audio is silently broken if this is wrong.
 sof_abi="$(/usr/libexec/bazzite-tower-sof-abi /usr/lib/firmware/intel/sof-tplg)" || {
-    echo "ERROR: could not read the shipped SOF topology ABI" >&2
+    echo "ERROR: could not read the installed SOF topology ABI" >&2
     exit 1
 }
-read -r sof_maj sof_min _sof_patch <<<"${sof_abi}"
-if (( sof_maj > KERNEL_SOF_ABI_MAJ \
-      || (sof_maj == KERNEL_SOF_ABI_MAJ && sof_min > KERNEL_SOF_ABI_MIN) )); then
-    echo "ERROR: shipped SOF topology ABI ${sof_maj}.${sof_min} exceeds kernel ABI ${KERNEL_SOF_ABI_MAJ}.${KERNEL_SOF_ABI_MIN}" >&2
-    echo "       lower SOF_FW_PIN to an older alsa-sof-firmware build (see comment above)." >&2
+if ! sof_abi_le_kernel "${sof_abi}"; then
+    echo "ERROR: installed SOF topology ABI ${sof_abi// /.} exceeds kernel ABI ${KERNEL_SOF_ABI_MAJ}.${KERNEL_SOF_ABI_MIN}" >&2
     exit 1
 fi
-echo "SOF topology ABI ${sof_maj}.${sof_min} <= kernel ABI ${KERNEL_SOF_ABI_MAJ}.${KERNEL_SOF_ABI_MIN} (firmware ${SOF_FW_PIN}) — ok"
+echo "SOF topology ABI ${sof_abi// /.} <= kernel ABI ${KERNEL_SOF_ABI_MAJ}.${KERNEL_SOF_ABI_MIN} (alsa-sof-firmware-${SOF_FW_EVR}) — ok"
 
 # ── Cleanup ───────────────────────────────────────────────────────────────────
 dnf clean all

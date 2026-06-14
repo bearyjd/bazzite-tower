@@ -89,6 +89,12 @@ check "smartctl present"      command -v smartctl
 check_enabled "smartd.service"
 check "smartd.conf present"   test -f /etc/smartmontools/smartd.conf
 
+echo "== CPU power tuning =="
+check "thermald present"                command -v thermald
+check_enabled "thermald.service"
+check "power-tuning helper executable"  test -x /usr/libexec/bazzite-tower-power-tuning
+check_enabled "bazzite-tower-power-tuning.service"
+
 echo "== RAS / MCE =="
 # rasdaemon replaces mcelog for MCE collection/decoding; mcelog is masked because
 # its cache-error-trigger tried to offline a CPU on this Meteor Lake box.

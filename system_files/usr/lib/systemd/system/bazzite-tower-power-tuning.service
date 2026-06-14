@@ -1,0 +1,13 @@
+[Unit]
+Description=Balanced CPU power/perf baseline (EPP + ACPI platform profile)
+Documentation=https://github.com/bearyjd/bazzite-tower
+# cpufreq and ACPI platform-profile sysfs are present once basic init is up.
+After=basic.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/libexec/bazzite-tower-power-tuning
+
+[Install]
+WantedBy=multi-user.target

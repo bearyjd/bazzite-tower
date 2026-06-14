@@ -58,6 +58,7 @@ Tag scheme (`latest`, `latest.YYYYMMDD`, `YYYYMMDD`, `<short-sha>`):
 | NVMe SMART health / self-tests | `sudo smartctl -H /dev/nvme0` · `/dev/nvme1`; smartd warnings + scheduled tests: `journalctl -u smartd` |
 | Swappiness in effect | `sysctl vm.swappiness` (expect `10`) |
 | Indexer excludes applied | `balooctl6 config show excludeFilters` (expect `.gradle`, build/cache dirs) |
+| CPU power baseline | `cat /sys/devices/system/cpu/cpu0/cpufreq/energy_performance_preference` (expect `balance_performance`); `cat /sys/firmware/acpi/platform_profile` (expect `balanced`); `systemctl is-active thermald` |
 | Virt stack up | `systemctl is-active virtqemud.socket` · `virsh -c qemu:///system list --all` |
 | Default NAT network | `ujust vm-net-status` |
 | Wi-Fi diagnostics (offline) | `ujust wifi-debug` |
@@ -147,6 +148,22 @@ shows it loaded after a rebase, it's initramfs-embedded — add the kernel arg
   (`.gradle`, `target`, `build`, language caches; `node_modules` is already a baloo
   default). It only seeds new users — a user's `~/.config/baloofilerc` overrides it.
   Re-index after editing with `balooctl6 disable && balooctl6 enable`.
+
+## CPU power & thermal
+
+The box boots into the firmware's most conservative state — cpufreq
+`EPP=power`, ACPI `platform_profile=low-power` — with no power daemon, throttling a
+plugged-in homelab. The image sets a **balanced** baseline:
+
+- `bazzite-tower-power-tuning.service` (oneshot, runs `…/libexec/bazzite-tower-power-tuning`
+  at boot) sets `platform_profile=balanced` and cpufreq `EPP=balance_performance`
+  on every core. Idempotent; skips any knob that's absent/read-only.
+- `thermald.service` manages Meteor Lake thermal limits.
+- **Want more/less?** For max throughput edit the helper to write `performance`
+  (EPP) / `performance` (profile); to revert, mask the service
+  (`sudo systemctl mask bazzite-tower-power-tuning.service`). EPP can reset across
+  suspend — re-run `sudo /usr/libexec/bazzite-tower-power-tuning` after resume, or
+  add a `systemd-sleep` hook if that matters.
 
 Runtime surface (units, helpers, kargs): [docs/CODEMAPS/system-files.md](./CODEMAPS/system-files.md).
 

@@ -1,0 +1,21 @@
+# Bypass the broken SOF/DSP audio path by forcing the legacy Intel HDA driver.
+#
+# This Meteor Lake box ships a kernel whose SOF driver is at topology ABI 3.23,
+# while stock alsa-sof-firmware ships topologies at ABI 3.29. The DSP can't
+# instantiate the newer topology's module pipelines, so every playback attempt
+# fails ("failed to create module pipeline", "ipc error 0x11000007",
+# "ASoC error (-22) at snd_soc_pcm_component_prepare") and PipeWire re-tries at
+# ~10 Hz — 94k+ error lines per boot and no working audio. Fedora's repos no
+# longer carry an ABI-≤3.23 alsa-sof-firmware, so the firmware can't be downgraded
+# to match the kernel.
+#
+#   snd_intel_dspcfg.dsp_driver=1
+#     Forces the legacy snd_hda_intel driver (1 = legacy HDA; 3 = SOF). The analog
+#     codec (Realtek ALC) and HDMI/DP audio are driven directly by HDA, sidestepping
+#     SOF entirely — so the storm can't happen. Trade-off: no SOF DSP effects and the
+#     digital-mic (DMIC) array won't work; analog mic-in and speakers/headphones do.
+#
+# Revert by deleting this fragment (re-enables SOF). bootc-native mechanism, same as
+# 00-iommu.toml. Verify after reboot: `journalctl -k | grep -i dsp_driver`, then
+# `cat /proc/asound/cards` (HDA card, no SOF storm). See docs/RUNBOOK.md "Audio".
+kargs = ["snd_intel_dspcfg.dsp_driver=1"]

@@ -97,26 +97,14 @@ check_enabled "rasdaemon.service"
 check_masked  "mcelog.service"
 check "microcode_ctl present" rpm -q microcode_ctl
 
-echo "== SOF audio ABI =="
-# The 7.0 kernel ships a SOF driver at topology ABI 3.23; a firmware topology
-# built at a newer ABI can't be instantiated and storms the journal until
-# PipeWire turns the card off. build.sh pins alsa-sof-firmware and gates the ABI
-# at build time; re-assert it offline here so a base/firmware change that slips a
-# newer topology past the pin fails this gate too. Reads the .tplg files directly.
-check "SOF ABI helper present"                  test -x /usr/libexec/bazzite-tower-sof-abi
+echo "== Audio (SOF bypass) =="
+# SOF/DSP is bypassed via snd_intel_dspcfg.dsp_driver=1 (legacy HDA): the kernel's
+# SOF ABI (3.23) can't load stock firmware's ABI-3.29 topology, and no ABI-≤3.23
+# alsa-sof-firmware exists in the repos to downgrade to. Assert the bypass karg and
+# the WirePlumber backoff seatbelt (defense-in-depth if SOF is ever re-enabled).
+check "SOF bypass kargs.d fragment present" test -f /usr/lib/bootc/kargs.d/25-audio-sof-bypass.toml
+check "SOF bypass forces legacy HDA"        grep -q 'snd_intel_dspcfg.dsp_driver=1' /usr/lib/bootc/kargs.d/25-audio-sof-bypass.toml
 check "WirePlumber SOF backoff drop-in present" test -f /usr/share/wireplumber/wireplumber.conf.d/90-tower-sof-backoff.conf
-KERNEL_SOF_ABI_MAJ=3   # keep in sync with build_files/build.sh KERNEL_SOF_ABI_*
-KERNEL_SOF_ABI_MIN=23
-if sof_abi="$(/usr/libexec/bazzite-tower-sof-abi /usr/lib/firmware/intel/sof-tplg 2>/dev/null)"; then
-    read -r m n _ <<<"${sof_abi}"
-    if (( m < KERNEL_SOF_ABI_MAJ || (m == KERNEL_SOF_ABI_MAJ && n <= KERNEL_SOF_ABI_MIN) )); then
-        pass "SOF topology ABI ${m}.${n} <= kernel ${KERNEL_SOF_ABI_MAJ}.${KERNEL_SOF_ABI_MIN}"
-    else
-        bad "SOF topology ABI ${m}.${n} exceeds kernel ${KERNEL_SOF_ABI_MAJ}.${KERNEL_SOF_ABI_MIN}"
-    fi
-else
-    bad "SOF topology ABI unreadable (/usr/lib/firmware/intel/sof-tplg)"
-fi
 
 echo "== Defaults (swappiness / indexer) =="
 check "swappiness sysctl present" test -f /usr/lib/sysctl.d/99-tower-swappiness.conf

@@ -51,7 +51,7 @@ Tag scheme (`latest`, `latest.YYYYMMDD`, `YYYYMMDD`, `<short-sha>`):
 |---|---|
 | Current/rollback deployment, signature | `bootc status` |
 | Suspend mode actually in effect | `cat /sys/power/mem_sleep` (bracketed entry is active; expect `[s2idle]`) |
-| SOF audio ABI matches kernel | `journalctl -k -b 0 \| grep -E "Topology: ABI\|Kernel ABI"` (the two must match); offline: `/usr/libexec/bazzite-tower-sof-abi` |
+| Audio: SOF bypass active | `journalctl -k -b 0 \| grep -i dsp_driver` and `grep -c "FW reported error: 9"` should be 0; `cat /proc/asound/cards` shows the HDA card |
 | CPU MCE / RAS summary | `sudo ras-mc-ctl --summary` · `sudo ras-mc-ctl --errors` |
 | Running CPU microcode revision | `grep -m1 microcode /proc/cpuinfo` (and `journalctl -k \| grep -i microcode`) |
 | Tracked kernel args applied (no dupes) | `cat /proc/cmdline` — expect each tracked karg exactly once (IOMMU, `kvmfr.static_size_mb=128`, `vfio_pci.disable_vga=1`, `kvm.ignore_msrs=1`, `nvme_core.default_ps_max_latency_us=0`) |
@@ -73,33 +73,38 @@ CI mirrors these: `tests/smoke.sh` (offline, the gate) and `tests/boot-check.sh`
 | `virtqemud` won't start | upstream change dropped the `qemu` system user | rebuilt/guarded in `build.sh`; the smoke + boot tests catch regressions |
 | Can't manage VMs as your user | user not yet in `kvm`/`libvirt`/`docker` | `ujust fix-vm-groups`, then re-login (the first-boot oneshot adds the first user automatically) |
 | Display flicker / ~30s sluggish wake | i915 PSR/DC or `deep` suspend on Meteor Lake | baked kargs disable PSR/DC and pin `s2idle`; verify `cat /sys/power/mem_sleep` |
-| No audio; card profile `off`; journal floods with `FW reported error: 9` | SOF topology ABI newer than the kernel's SOF driver ABI | `build.sh` auto-resolves `alsa-sof-firmware` to an ABI-≤3.23 build and gates it in CI; verify with `/usr/libexec/bazzite-tower-sof-abi` vs `journalctl -k \| grep "Kernel ABI"` |
+| No audio; journal floods with `FW reported error: 9` / `failed to create module pipeline` | SOF topology ABI (3.29) newer than the kernel's SOF driver ABI (3.23); no ABI-≤3.23 firmware in repos to downgrade to | `25-audio-sof-bypass.toml` forces the legacy HDA driver (`snd_intel_dspcfg.dsp_driver=1`), sidestepping SOF; verify `journalctl -k \| grep -i dsp_driver` |
 | Frequent corrected MCEs in the journal | corrected CPU **cache** errors on Meteor Lake (EDAC `igen6` ECC counters 0/0 → not DRAM) | `rasdaemon` records/decodes them; `mcelog` is masked (its trigger tried to offline a CPU). Decode with `sudo ras-mc-ctl --errors` |
 | `smartd` warns of media errors / available-spare drop | NVMe wear or developing fault | `journalctl -u smartd`; confirm with `sudo smartctl -a /dev/nvmeN`; a falling available-spare or rising media-error count is an escalation/back-up signal |
 | Secure Boot refuses the image | — | the image kernel is signed with the shared ublue MOK (already enrolled on ublue/Bazzite hosts); no MOK work needed when switching ublue↔bazzite-tower |
 
-## Audio: SOF firmware ABI pin
+## Audio: SOF bypass (legacy HDA)
 
-The on-board Intel HDA/SOF analog codec needs a firmware **topology** whose ABI is
-no newer than the kernel's SOF driver ABI. The 7.0 kernel here is at ABI **3.23**;
-stock `alsa-sof-firmware` moved to **3.29**, which can't be instantiated (`FW
-reported error: 9` / `failed widget list set up`) — WirePlumber then re-links the
-dead sink ~10×/s until PipeWire sets the card profile to `off`.
+The kernel's SOF driver is at topology ABI **3.23**, but stock `alsa-sof-firmware`
+ships topologies at ABI **3.29**. On Meteor Lake the DSP can't instantiate the
+newer topology's module pipelines, so every playback attempt fails (`failed to
+create module pipeline`, `ipc error 0x11000007`, `ASoC error (-22) at
+snd_soc_pcm_component_prepare`, `FW reported error: 9`) and PipeWire retries at
+~10 Hz — **94k+** error lines per boot and no working audio. Fedora's repos no
+longer carry an ABI-≤3.23 `alsa-sof-firmware`, so the firmware **cannot be
+downgraded** to match the kernel.
 
-- **Fix in the image:** `build_files/build.sh` **auto-resolves** `alsa-sof-firmware`
-  at build time — it walks the available builds newest→oldest, inspects each
-  candidate's actual `.tplg` ABI, and installs the newest whose ABI is ≤
-  `KERNEL_SOF_ABI_*` (3.23). It then **fails the build** if the installed topology
-  ABI somehow still exceeds the kernel's. `tests/smoke.sh` re-asserts the ABI
-  offline; `tests/boot-check.sh` fails on the storm signatures. Nothing to hand-pin.
-- **Seatbelt:** `…/wireplumber.conf.d/90-tower-sof-backoff.conf` shortens the
-  SOF node's idle/error suspend window so a future regression degrades to one dead
-  route instead of a journal storm. It is not a substitute for the resolved build.
-- **Lifting the pin** when a future kernel advances its SOF ABI is a single edit:
-  bump `KERNEL_SOF_ABI_MAJ/MIN` in `build.sh` (and the matching constants in
-  `tests/smoke.sh`) to the new `journalctl -k | grep "Kernel ABI"` value — the
-  resolver then auto-selects a newer firmware. Check a `.tplg`'s ABI by hand with
-  `/usr/libexec/bazzite-tower-sof-abi <path-to-sof-tplg>`.
+- **Fix in the image:** `kargs.d/25-audio-sof-bypass.toml` sets
+  `snd_intel_dspcfg.dsp_driver=1`, forcing the **legacy `snd_hda_intel` driver** and
+  bypassing SOF entirely. The Realtek analog codec and HDMI/DP audio are driven
+  directly by HDA, so the storm can't happen. **Trade-off:** no SOF DSP effects and
+  the digital-mic (DMIC) array is unavailable; speakers/headphones, line/analog
+  mic-in, and HDMI/DP audio work. Revert by deleting the fragment (re-enables SOF).
+- **Verify after reboot:** `journalctl -k | grep -i dsp_driver`,
+  `journalctl -k | grep -c "FW reported error: 9"` (expect `0`), and
+  `cat /proc/asound/cards` (one HDA card, no SOF storm).
+- **Seatbelt (dormant while bypassed):** `…/wireplumber.conf.d/90-tower-sof-backoff.conf`
+  shortens the audio node's idle/error suspend window. It only matters if SOF is
+  re-enabled (fragment removed); harmless otherwise.
+- **Alternative considered, not taken:** overlay a matched ABI-3.23 firmware +
+  topology set from [thesofproject/sof-bin](https://github.com/thesofproject/sof-bin)
+  or Koji to keep full SOF + the mic array — more complex, depends on an external
+  source, and needs per-update version matching. Revisit if the DMIC array is needed.
 
 ## CPU MCEs (corrected cache errors)
 

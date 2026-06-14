@@ -78,6 +78,7 @@ CI mirrors these: `tests/smoke.sh` (offline, the gate) and `tests/boot-check.sh`
 | Wi-Fi gone after a rebase | stale `wifi.backend=iwd` with iwd not enabled | the `wifi-backend-guard` service auto-recovers on boot; inspect with `ujust wifi-debug` |
 | `virtqemud` won't start | upstream change dropped the `qemu` system user | rebuilt/guarded in `build.sh`; the smoke + boot tests catch regressions |
 | Can't manage VMs as your user | user not yet in `kvm`/`libvirt`/`docker` | `ujust fix-vm-groups`, then re-login (the first-boot oneshot adds the first user automatically) |
+| `docker.socket` fails at boot (`Failed to resolve group 'docker'`) | the `docker` group wasn't baked into the image (stale gshadow orphan made `systemd-sysusers` abort, so the group got created late) | `build.sh` now strips all shadow/gshadow orphans and bakes `groupadd -r docker`; the smoke test asserts the group exists |
 | Display flicker / ~30s sluggish wake | i915 PSR/DC or `deep` suspend on Meteor Lake | baked kargs disable PSR/DC and pin `s2idle`; verify `cat /sys/power/mem_sleep` |
 | No audio; journal floods with `FW reported error: 9` / `failed to create module pipeline` | SOF topology ABI (3.29) newer than the kernel's SOF driver ABI (3.23); no ABI-≤3.23 firmware in repos to downgrade to | `25-audio-sof-bypass.toml` forces the legacy HDA driver (`snd_intel_dspcfg.dsp_driver=1`), sidestepping SOF; verify `journalctl -k \| grep -i dsp_driver` |
 | Frequent corrected MCEs in the journal | corrected CPU **cache** errors on Meteor Lake (EDAC `igen6` ECC counters 0/0 → not DRAM) | `rasdaemon` records/decodes them; `mcelog` is masked (its trigger tried to offline a CPU). Decode with `sudo ras-mc-ctl --errors` |
@@ -159,6 +160,9 @@ shows it loaded after a rebase, it's initramfs-embedded — add the kernel arg
   (`.gradle`, `target`, `build`, language caches; `node_modules` is already a baloo
   default). It only seeds new users — a user's `~/.config/baloofilerc` overrides it.
   Re-index after editing with `balooctl6 disable && balooctl6 enable`.
+- `…/journald.conf.d/90-tower-journal-cap.conf` sets `SystemMaxUse=500M` (default
+  is 10% of the fs ≈ 730 GiB here). journald enforces it continuously — no
+  `journalctl --vacuum` timer needed. Check with `journalctl --disk-usage`.
 
 ## CPU power & thermal
 

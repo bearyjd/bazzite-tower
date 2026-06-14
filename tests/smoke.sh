@@ -79,8 +79,49 @@ echo "== Boot args / first-boot =="
 check "IOMMU kargs.d fragment present" test -f /usr/lib/bootc/kargs.d/00-iommu.toml
 check "i915 display kargs.d fragment present" test -f /usr/lib/bootc/kargs.d/10-i915-display.toml
 check "suspend kargs.d fragment present" test -f /usr/lib/bootc/kargs.d/20-suspend.toml
+check "vfio/kvm kargs.d fragment present" test -f /usr/lib/bootc/kargs.d/30-vfio-kvm.toml
+check "nvme kargs.d fragment present" test -f /usr/lib/bootc/kargs.d/40-nvme.toml
 check_enabled "bazzite-tower-firstboot.service"
 check "firstboot helper is executable" test -x /usr/libexec/bazzite-tower-firstboot
+
+echo "== Storage health (SMART) =="
+check "smartctl present"      command -v smartctl
+check_enabled "smartd.service"
+check "smartd.conf present"   test -f /etc/smartmontools/smartd.conf
+
+echo "== CPU power tuning =="
+check "thermald present"                command -v thermald
+check_enabled "thermald.service"
+check "power-tuning helper executable"  test -x /usr/libexec/bazzite-tower-power-tuning
+check_enabled "bazzite-tower-power-tuning.service"
+
+echo "== RAS / MCE =="
+# rasdaemon replaces mcelog for MCE collection/decoding; mcelog is masked because
+# its cache-error-trigger tried to offline a CPU on this Meteor Lake box.
+check "rasdaemon present (ras-mc-ctl)" command -v ras-mc-ctl
+check_enabled "rasdaemon.service"
+check_masked  "mcelog.service"
+check "microcode_ctl present" rpm -q microcode_ctl
+
+echo "== Audio (SOF bypass) =="
+# SOF/DSP is bypassed via snd_intel_dspcfg.dsp_driver=1 (legacy HDA): the kernel's
+# SOF ABI (3.23) can't load stock firmware's ABI-3.29 topology, and no ABI-≤3.23
+# alsa-sof-firmware exists in the repos to downgrade to. Assert the bypass karg and
+# the WirePlumber backoff seatbelt (defense-in-depth if SOF is ever re-enabled).
+check "SOF bypass kargs.d fragment present" test -f /usr/lib/bootc/kargs.d/25-audio-sof-bypass.toml
+check "SOF bypass forces legacy HDA"        grep -q 'snd_intel_dspcfg.dsp_driver=1' /usr/lib/bootc/kargs.d/25-audio-sof-bypass.toml
+check "WirePlumber SOF backoff drop-in present" test -f /usr/share/wireplumber/wireplumber.conf.d/90-tower-sof-backoff.conf
+
+echo "== Defaults (swappiness / indexer) =="
+check "swappiness sysctl present" test -f /usr/lib/sysctl.d/99-tower-swappiness.conf
+check "swappiness set to 10"      grep -qE '^vm\.swappiness[[:space:]]*=[[:space:]]*10$' /usr/lib/sysctl.d/99-tower-swappiness.conf
+check "baloo exclude config present" test -f /etc/xdg/baloofilerc
+
+echo "== GPU module blacklist =="
+# No AMD GPU exists on this hardware; amdgpu/amdxcp are blacklisted as a lean-boot
+# optimization. xe is intentionally left loaded.
+check "unused-GPU blacklist present" test -f /usr/lib/modprobe.d/blacklist-unused-gpu.conf
+check "amdgpu blacklisted" grep -qx 'blacklist amdgpu' /usr/lib/modprobe.d/blacklist-unused-gpu.conf
 
 echo "== Docker CE =="
 check "docker present"     command -v docker

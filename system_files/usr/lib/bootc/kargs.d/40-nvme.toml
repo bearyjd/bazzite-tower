@@ -1,0 +1,14 @@
+# NVMe APST-idle workaround — codifies a previously-untracked live kernel arg so a
+# clean reinstall reproduces it. ADDITIVE; not a Bazzite base default (confirm with
+# `cat /proc/cmdline` that it appears exactly once after a rebase).
+#
+#   nvme_core.default_ps_max_latency_us=0
+#     Disables NVMe Autonomous Power State Transitions (APST). The Samsung 990 EVO
+#     Plus in this machine drops into a deep idle power state whose exit latency the
+#     controller mis-reports, which on Linux causes I/O stalls and controller
+#     resets at idle. Capping the max allowed exit latency at 0 keeps the drive out
+#     of the broken low-power state.
+#
+# bootc-native mechanism, same as 00-iommu.toml. Its own fragment so the storage
+# workaround can be changed or reverted on its own.
+kargs = ["nvme_core.default_ps_max_latency_us=0"]

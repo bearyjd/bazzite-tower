@@ -1,3 +1,4 @@
+<!-- glowup:hero start -->
 <div align="center">
 
 <h1>
@@ -9,7 +10,7 @@
 
 [![Build](https://img.shields.io/github/actions/workflow/status/bearyjd/bazzite-tower/build.yml?branch=main&style=for-the-badge&logo=githubactions&logoColor=white&label=build)](https://github.com/bearyjd/bazzite-tower/actions/workflows/build.yml)
 [![Boot test](https://img.shields.io/github/actions/workflow/status/bearyjd/bazzite-tower/boot-test.yml?branch=main&style=for-the-badge&logo=linuxcontainers&logoColor=white&label=boot%20test)](https://github.com/bearyjd/bazzite-tower/actions/workflows/boot-test.yml)
-[![License](https://img.shields.io/github/license/bearyjd/bazzite-tower?style=for-the-badge&color=4c8bf5)](LICENSE)
+[![License](https://img.shields.io/badge/license-Apache_2.0-4c8bf5?style=for-the-badge)](LICENSE)
 [![Image](https://img.shields.io/badge/ghcr.io-bazzite--tower-2496ED?style=for-the-badge&logo=podman&logoColor=white)](https://github.com/users/bearyjd/packages/container/package/bazzite-tower)
 
 ![bootc](https://img.shields.io/badge/bootc-immutable-0a0a0a?style=for-the-badge&logo=linux&logoColor=white)
@@ -20,6 +21,7 @@
 ![cosign](https://img.shields.io/badge/signed-cosign-FBC02D?style=for-the-badge&logo=sigstore&logoColor=black)
 
 </div>
+<!-- glowup:hero end -->
 
 A custom [bootc](https://github.com/bootc-dev/bootc) image derived from `ghcr.io/ublue-os/bazzite-nvidia:stable`, tailored for an NVIDIA RTX-equipped desktop/laptop workstation that doubles as a virtualization host and developer machine. Built weekly, signed with cosign, published to `ghcr.io/bearyjd/bazzite-tower`.
 

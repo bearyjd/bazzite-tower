@@ -116,6 +116,8 @@ echo "== Defaults (swappiness / indexer) =="
 check "swappiness sysctl present" test -f /usr/lib/sysctl.d/99-tower-swappiness.conf
 check "swappiness set to 10"      grep -qE '^vm\.swappiness[[:space:]]*=[[:space:]]*10$' /usr/lib/sysctl.d/99-tower-swappiness.conf
 check "baloo exclude config present" test -f /etc/xdg/baloofilerc
+check "journald size cap present" test -f /usr/lib/systemd/journald.conf.d/90-tower-journal-cap.conf
+check "journald cap is 500M" grep -qE '^SystemMaxUse=500M$' /usr/lib/systemd/journald.conf.d/90-tower-journal-cap.conf
 
 echo "== GPU module blacklist =="
 # No AMD GPU exists on this hardware; amdgpu/amdxcp are blacklisted as a lean-boot

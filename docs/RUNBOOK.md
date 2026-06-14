@@ -160,6 +160,9 @@ shows it loaded after a rebase, it's initramfs-embedded — add the kernel arg
   (`.gradle`, `target`, `build`, language caches; `node_modules` is already a baloo
   default). It only seeds new users — a user's `~/.config/baloofilerc` overrides it.
   Re-index after editing with `balooctl6 disable && balooctl6 enable`.
+- `…/journald.conf.d/90-tower-journal-cap.conf` sets `SystemMaxUse=500M` (default
+  is 10% of the fs ≈ 730 GiB here). journald enforces it continuously — no
+  `journalctl --vacuum` timer needed. Check with `journalctl --disk-usage`.
 
 ## CPU power & thermal
 

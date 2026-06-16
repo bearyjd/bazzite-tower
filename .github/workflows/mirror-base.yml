@@ -1,0 +1,58 @@
+---
+# Mirror the pinned FC43 base into our own ghcr namespace so the Containerfile
+# `FROM` keeps resolving even if ublue prunes `bazzite-nvidia:stable-43` before
+# Fedora 43 EOL.
+#
+# Pinning by digest already protects against tag moves/deletes; this protects
+# against the digest itself being garbage-collected upstream. `skopeo copy --all`
+# preserves the multi-arch index digest, so the mirror's digest equals the
+# upstream digest the Containerfile pins — you can repoint `FROM` to
+#   ghcr.io/<owner>/bazzite-nvidia-base@sha256:829e0c...   (same digest)
+# if/when upstream drops it.
+#
+# After the first run, set the new `bazzite-nvidia-base` package to PUBLIC in the
+# GitHub UI (Packages -> bazzite-nvidia-base -> Package settings) so unauthenticated
+# `bootc`/`podman` pulls work. Remove this workflow when the pin is reverted.
+name: Mirror FC43 base
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 7 * * 1'  # Mondays 07:00 UTC — harmless no-op once mirrored
+
+env:
+  SRC: ghcr.io/ublue-os/bazzite-nvidia:stable-43
+  # Pin the exact verified digest so we never mirror a moved tag by accident.
+  SRC_DIGEST: ghcr.io/ublue-os/bazzite-nvidia@sha256:829e0cbd5c33b66a51a7a890c8f671c30391cacfd1b8fa5deedd1e495c17ace9
+  DST: ghcr.io/${{ github.repository_owner }}/bazzite-nvidia-base:stable-43
+
+jobs:
+  mirror:
+    name: Mirror bazzite-nvidia:stable-43 -> own ghcr
+    runs-on: ubuntu-24.04
+    permissions:
+      packages: write
+    steps:
+      - name: Install skopeo
+        run: sudo apt-get update && sudo apt-get install -y skopeo
+
+      - name: Log in to ghcr.io
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" \
+            | skopeo login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - name: Verify the source tag still points at the expected digest
+        run: |
+          live="$(skopeo inspect --no-tags --format '{{.Digest}}' "docker://${SRC}")"
+          want="${SRC_DIGEST##*@}"
+          echo "live=${live} want=${want}"
+          if [ "${live}" != "${want}" ]; then
+            echo "::warning::stable-43 tag moved (${live} != ${want}); mirroring the PINNED digest instead."
+          fi
+
+      - name: Mirror (all arches, preserves the index digest)
+        run: |
+          skopeo copy --all "docker://${SRC_DIGEST}" "docker://${DST}"
+          echo "Mirrored ${SRC_DIGEST}"
+          echo "      -> ${DST}"
+          skopeo inspect --no-tags --format 'mirror digest: {{.Digest}}' "docker://${DST}"

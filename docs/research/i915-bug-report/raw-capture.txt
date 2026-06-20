@@ -1,0 +1,106 @@
+########## SYSTEM ##########
+--- DMI product ---
+21KV001CUS
+ThinkPad P1 Gen 7
+N48ET33W (1.20 )
+--- CPU ---
+model name	: Intel(R) Core(TM) Ultra 9 185H
+--- iGPU lspci ---
+00:02.0 VGA compatible controller [0300]: Intel Corporation Meteor Lake-P [Intel Arc Graphics] [8086:7d55] (rev 08)
+	Subsystem: Lenovo Device [17aa:2234]
+	Kernel driver in use: i915
+	Kernel modules: i915, xe
+00:02.0 VGA compatible controller [0300]: Intel Corporation Meteor Lake-P [Intel Arc Graphics] [8086:7d55] (rev 08)
+	Subsystem: Lenovo Device [17aa:2234]
+	Kernel driver in use: i915
+	Kernel modules: i915, xe
+--- kernel ---
+Linux tower 7.0.9-ogc3.2.fc44.x86_64 #1 SMP PREEMPT_DYNAMIC Wed May 20 01:34:43 UTC 2026 x86_64 GNU/Linux
+--- mesa / firmware pkgs (host) ---
+mesa-dri-drivers-26.1.0-1.fc44.x86_64
+mesa-dri-drivers-26.1.0-1.fc44.i686
+linux-firmware-20260519-1.fc44.noarch
+kernel-7.0.9-ogc3.2.fc44.x86_64
+
+########## KERNEL CMDLINE (RAW - will be sanitized for posting) ##########
+BOOT_IMAGE=(hd1,gpt2)/ostree/default-<ostree-hash-redacted>/vmlinuz-7.0.9-ogc3.2.fc44.x86_64 rd.luks.uuid=luks-<redacted-uuid> rd.luks.uuid=luks-<redacted-uuid> rhgb quiet root=UUID=<redacted-uuid> rootflags=subvol=root rw ostree=/ostree/boot.1/default/<ostree-hash-redacted>/0 bluetooth.disable_ertm=1 i915.enable_gsc_proxy=0 nvme_core.default_ps_max_latency_us=0 kvm.ignore_msrs=1 kvm.report_ignored_msrs=0 kvmfr.static_size_mb=128 split_lock_detect=off intel_iommu=on iommu=pt rd.driver.pre=vfio-pci vfio_pci.disable_vga=1 i915.enable_dc=0 i915.enable_psr=0 i915.enable_psr2_sel_fetch=0 mem_sleep_default=deep
+
+########## i915 FIRMWARE VERSIONS (this boot) ##########
+i915 0000:00:02.0: [drm] Finished loading DMC firmware i915/mtl_dmc.bin (v2.23)
+i915 0000:00:02.0: [drm] Found meteorlake (device ID 7d55) integrated display version 14.00 stepping C0
+i915 0000:00:02.0: [drm] GT0: GuC firmware i915/mtl_guc_70.bin version 70.53.0
+i915 0000:00:02.0: [drm] GT1: GuC firmware i915/mtl_guc_70.bin version 70.53.0
+i915 0000:00:02.0: [drm] GT1: HuC firmware i915/mtl_huc_gsc.bin version 8.5.4
+i915 0000:00:02.0: [drm] GT1: Loaded GSC firmware i915/mtl_gsc_1.bin (cv1.0, r102.1.15.1926, svn 1)
+
+########## FULL FAILING-RESUME CASCADE (one representative event, this boot) ##########
+Jun 15 07:40:38 i915 0000:00:02.0: [drm] Found meteorlake (device ID 7d55) integrated display version 14.00 stepping C0
+Jun 15 07:40:45 nvidia 0000:01:00.0: [drm] No compatible format found
+Jun 15 07:40:59 i915 0000:00:02.0: [drm] *ERROR* GT1: GSC proxy component didn't bind within the expected timeout
+Jun 15 07:42:17 i915 0000:00:02.0: [drm] PHY A failed to request refclk
+Jun 15 21:32:15 i915 0000:00:02.0: [drm] *ERROR* Failed to bring PHY A to idle.
+Jun 15 21:32:15 i915 0000:00:02.0: [drm] *ERROR* PHY A Read 0c70 failed after 3 retries.
+Jun 15 21:32:15 i915 0000:00:02.0: [drm] *ERROR* PHY A Write 0c70 failed after 3 retries.
+Jun 15 21:32:15 i915 0000:00:02.0: [drm] *ERROR* Timeout waiting for DDI BUF A to get active
+Jun 15 21:32:16 i915 0000:00:02.0: [drm] *ERROR* Timed out waiting for DP idle patterns
+Jun 15 21:32:26 i915 0000:00:02.0: [drm] *ERROR* [CRTC:149:pipe A] flip_done timed out
+Jun 15 21:32:27 i915 0000:00:02.0: [drm] *ERROR* [CRTC:149:pipe A] mismatch in pixel_rate (expected 777410, found 58968)
+Jun 15 21:32:27 i915 0000:00:02.0: [drm] *ERROR* [CRTC:149:pipe A] mismatch in dpll_hw_state  
+Jun 15 21:32:27 i915 0000:00:02.0: [drm] *ERROR* expected:
+Jun 15 21:32:27 i915 0000:00:02.0: [drm] *ERROR* cx0pll_hw_state: lane_count: 4, ssc_enabled: no, use_c10: yes, tbt_mode: no
+Jun 15 21:32:27 i915 0000:00:02.0: [drm] *ERROR* c10pll_hw_state: clock: 810000, fracen: yes, 
+Jun 15 21:32:27 i915 0000:00:02.0: [drm] *ERROR* quot: 61440, rem: 0, den: 1,
+Jun 15 21:32:27 i915 0000:00:02.0: [drm] *ERROR* multiplier: 210, tx_clk_div: 0.
+Jun 15 21:32:27 i915 0000:00:02.0: [drm] *ERROR* c10pll_rawhw_state:
+Jun 15 21:32:27 i915 0000:00:02.0: [drm] *ERROR* tx: 0x10, cmn: 0x21
+Jun 15 21:32:27 i915 0000:00:02.0: [drm] *ERROR* found:
+Jun 15 21:32:27 i915 0000:00:02.0: [drm] *ERROR* cx0pll_hw_state: lane_count: 4, ssc_enabled: no, use_c10: yes, tbt_mode: no
+Jun 15 21:32:27 i915 0000:00:02.0: [drm] *ERROR* c10pll_hw_state: clock: 61440, fracen: no, 
+Jun 15 21:32:27 i915 0000:00:02.0: [drm] *ERROR* multiplier: 16, tx_clk_div: 0.
+Jun 15 21:32:27 i915 0000:00:02.0: [drm] *ERROR* c10pll_rawhw_state:
+Jun 15 21:32:27 i915 0000:00:02.0: [drm] *ERROR* tx: 0x0, cmn: 0x0
+Jun 15 21:32:27 i915 0000:00:02.0: [drm] *ERROR* [CRTC:149:pipe A] mismatch in hw.pipe_mode.crtc_clock (expected 777410, found 58968)
+Jun 15 21:32:27 i915 0000:00:02.0: [drm] *ERROR* [CRTC:149:pipe A] mismatch in hw.adjusted_mode.crtc_clock (expected 777410, found 58968)
+Jun 15 21:32:27 i915 0000:00:02.0: [drm] *ERROR* [CRTC:149:pipe A] mismatch in port_clock (expected 810000, found 61440)
+Jun 15 21:32:27 i915 0000:00:02.0: [drm] *ERROR* [CRTC:149:pipe A] mismatch in min_voltage_level (expected 1, found 0)
+Jun 15 21:32:37 i915 0000:00:02.0: [drm] *ERROR* flip_done timed out
+Jun 15 21:32:37 i915 0000:00:02.0: [drm] *ERROR* [CRTC:149:pipe A] commit wait timed out
+Jun 15 21:32:47 i915 0000:00:02.0: [drm] *ERROR* flip_done timed out
+Jun 15 21:32:47 i915 0000:00:02.0: [drm] *ERROR* [CONNECTOR:506:eDP-1] commit wait timed out
+Jun 15 21:32:58 i915 0000:00:02.0: [drm] *ERROR* flip_done timed out
+Jun 15 21:32:58 i915 0000:00:02.0: [drm] *ERROR* [PLANE:33:plane 1A] commit wait timed out
+Jun 15 21:32:58 i915 0000:00:02.0: [drm] PHY A failed to change powerdown state
+Jun 16 07:16:50 i915 0000:00:02.0: [drm] *ERROR* Timeout waiting for DDI BUF A to get active
+Jun 16 07:16:51 i915 0000:00:02.0: [drm] *ERROR* Timed out waiting for DP idle patterns
+Jun 16 07:17:01 i915 0000:00:02.0: [drm] *ERROR* [CRTC:149:pipe A] flip_done timed out
+Jun 16 07:17:02 i915 0000:00:02.0: [drm] *ERROR* [CRTC:149:pipe A] mismatch in pixel_rate (expected 777410, found 58968)
+Jun 16 07:17:02 i915 0000:00:02.0: [drm] *ERROR* [CRTC:149:pipe A] mismatch in dpll_hw_state  
+Jun 16 07:17:02 i915 0000:00:02.0: [drm] *ERROR* expected:
+Jun 16 07:17:02 i915 0000:00:02.0: [drm] *ERROR* cx0pll_hw_state: lane_count: 4, ssc_enabled: no, use_c10: yes, tbt_mode: no
+Jun 16 07:17:02 i915 0000:00:02.0: [drm] *ERROR* c10pll_hw_state: clock: 810000, fracen: yes, 
+Jun 16 07:17:02 i915 0000:00:02.0: [drm] *ERROR* quot: 61440, rem: 0, den: 1,
+Jun 16 07:17:02 i915 0000:00:02.0: [drm] *ERROR* multiplier: 210, tx_clk_div: 0.
+Jun 16 07:17:02 i915 0000:00:02.0: [drm] *ERROR* c10pll_rawhw_state:
+Jun 16 07:17:02 i915 0000:00:02.0: [drm] *ERROR* tx: 0x10, cmn: 0x21
+Jun 16 07:17:02 i915 0000:00:02.0: [drm] *ERROR* found:
+Jun 16 07:17:02 i915 0000:00:02.0: [drm] *ERROR* cx0pll_hw_state: lane_count: 4, ssc_enabled: no, use_c10: yes, tbt_mode: no
+Jun 16 07:17:02 i915 0000:00:02.0: [drm] *ERROR* c10pll_hw_state: clock: 61440, fracen: no, 
+Jun 16 07:17:02 i915 0000:00:02.0: [drm] *ERROR* multiplier: 16, tx_clk_div: 0.
+Jun 16 07:17:02 i915 0000:00:02.0: [drm] *ERROR* c10pll_rawhw_state:
+Jun 16 07:17:02 i915 0000:00:02.0: [drm] *ERROR* tx: 0x0, cmn: 0x0
+Jun 16 07:17:02 i915 0000:00:02.0: [drm] *ERROR* [CRTC:149:pipe A] mismatch in hw.pipe_mode.crtc_clock (expected 777410, found 58968)
+Jun 16 07:17:02 i915 0000:00:02.0: [drm] *ERROR* [CRTC:149:pipe A] mismatch in hw.adjusted_mode.crtc_clock (expected 777410, found 58968)
+Jun 16 07:17:02 i915 0000:00:02.0: [drm] *ERROR* [CRTC:149:pipe A] mismatch in port_clock (expected 810000, found 61440)
+Jun 16 07:17:02 i915 0000:00:02.0: [drm] *ERROR* [CRTC:149:pipe A] mismatch in min_voltage_level (expected 1, found 0)
+Jun 16 07:17:12 i915 0000:00:02.0: [drm] *ERROR* flip_done timed out
+Jun 16 07:17:12 i915 0000:00:02.0: [drm] *ERROR* [CRTC:149:pipe A] commit wait timed out
+Jun 16 07:17:22 i915 0000:00:02.0: [drm] *ERROR* flip_done timed out
+Jun 16 07:17:22 i915 0000:00:02.0: [drm] *ERROR* [CONNECTOR:506:eDP-1] commit wait timed out
+Jun 16 07:17:33 i915 0000:00:02.0: [drm] *ERROR* flip_done timed out
+Jun 16 07:17:33 i915 0000:00:02.0: [drm] *ERROR* [PLANE:33:plane 1A] commit wait timed out
+Jun 16 07:17:33 i915 0000:00:02.0: [drm] PHY A failed to change powerdown state
+Jun 17 06:23:04 i915 0000:00:02.0: [drm] *ERROR* Timeout waiting for DDI BUF A to get active
+Jun 17 06:23:05 i915 0000:00:02.0: [drm] *ERROR* Timed out waiting for DP idle patterns
+Jun 17 06:23:16 i915 0000:00:02.0: [drm] *ERROR* [CRTC:149:pipe A] flip_done timed out
+Jun 17 06:23:16 i915 0000:00:02.0: [drm] *ERROR* [CRTC:149:pipe A] mismatch in pixel_rate (expected 777410, found 58968)
+Jun 17 06:23:16 i915 0000:00:02.0: [drm] *ERROR* [CRTC:149:pipe A] mismatch in dpll_hw_state  

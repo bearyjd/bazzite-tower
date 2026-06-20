@@ -1,6 +1,6 @@
 # i915/MTL: C10 (cx0) PLL restored at parked idle clock on s2idle resume → eDP black-screen/flip_done storm (regression v6.19→v7.0, DPLL-framework conversion)
 
-> **Ready-to-post draft.** Target: gitlab.freedesktop.org/drm/i915/kernel. **Before posting:** (1) open and read the existing issues first — reported as **#16098** / **#16042**, but those numbers were decoded from a forum link and are *unverified*; search the tracker for "cx0 resume" / "C10 pll resume" to find the real one and post there as a comment instead of opening a duplicate. (2) Independently re-confirm the commit hashes below against your local tree before asserting them.
+> **Status (2026-06-20):** the upstream issue is **confirmed** — [drm/i915/kernel #16042](https://gitlab.freedesktop.org/drm/i915/kernel/-/issues/16042) ("Arrow Lake-P (P1 Gen 8) C10 PLL collapses to default state on s2idle resume — regression v6.19.13 → v7.0.3", Patrick Rodrigues, OPEN). It independently reaches this report's root cause. **Do NOT open a new issue** — post the additive comment in `COMMENT.md` there and attach `i915-warn-event-20260620.log`. This file is kept as the full standalone analysis. Still TODO before asserting hashes upstream: re-confirm `1a7fad2aea74` / `ac3423721117` against a local tree.
 
 ## Summary
 

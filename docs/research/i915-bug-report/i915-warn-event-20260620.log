@@ -1,0 +1,152 @@
+Jun 20 16:22:17 i915 0000:00:02.0: [drm:drm_dp_dpcd_read [drm_display_helper]] AUX A/DDI A/PHY A: 0x00300 AUX -> (ret=  3) 00 04 4b
+Jun 20 16:22:17 i915 0000:00:02.0: [drm:drm_dp_dpcd_write [drm_display_helper]] AUX A/DDI A/PHY A: 0x00300 AUX <- (ret=  3) 00 aa 01
+Jun 20 16:22:17 i915 0000:00:02.0: [drm:drm_dp_dpcd_write [drm_display_helper]] AUX A/DDI A/PHY A: 0x00600 AUX <- (ret=  1) 01
+Jun 20 16:22:17 i915 0000:00:02.0: [drm:drm_dp_dpcd_read [drm_display_helper]] AUX A/DDI A/PHY A: 0xf0005 AUX -> (ret=  1) 00
+Jun 20 16:22:17 i915 0000:00:02.0: [drm:drm_dp_dpcd_read [drm_display_helper]] AUX A/DDI A/PHY A: 0x00000 AUX -> (ret= 15) 14 1e 44 c1 00 00 01 c0 02 00 02 00 00 0b 80
+Jun 20 16:22:17 i915 0000:00:02.0: [drm:drm_dp_dpcd_read [drm_display_helper]] AUX A/DDI A/PHY A: 0x02200 AUX -> (ret= 15) 14 1e 44 c1 00 00 01 c0 02 00 02 00 00 0b 80
+Jun 20 16:22:17 i915 0000:00:02.0: [drm] *ERROR* Timeout waiting for DDI BUF A to get active
+Jun 20 16:22:17 i915 0000:00:02.0: [drm:drm_dp_dpcd_read [drm_display_helper]] AUX A/DDI A/PHY A: 0x00010 AUX -> (ret= 16) a4 1f 30 2a 76 2f bc 34 48 3f 60 54 78 69 34 9e
+Jun 20 16:22:17 i915 0000:00:02.0: [drm:drm_dp_dpcd_write [drm_display_helper]] AUX A/DDI A/PHY A: 0x00107 AUX <- (ret=  2) 80 01
+Jun 20 16:22:17 i915 0000:00:02.0: [drm:drm_dp_dpcd_write [drm_display_helper]] AUX A/DDI A/PHY A: 0x00101 AUX <- (ret=  1) 04
+Jun 20 16:22:17 i915 0000:00:02.0: [drm:drm_dp_dpcd_write [drm_display_helper]] AUX A/DDI A/PHY A: 0x00115 AUX <- (ret=  1) 07
+Jun 20 16:22:18 i915 0000:00:02.0: [drm:drm_dp_dpcd_write [drm_display_helper]] AUX A/DDI A/PHY A: 0x00102 AUX <- (ret=  5) 21 00 00 00 00
+Jun 20 16:22:18 i915 0000:00:02.0: [drm:drm_dp_dpcd_read [drm_display_helper]] AUX A/DDI A/PHY A: 0x00202 AUX -> (ret=  6) 00 00 80 00 11 11
+Jun 20 16:22:18 i915 0000:00:02.0: [drm:drm_dp_dpcd_write [drm_display_helper]] AUX A/DDI A/PHY A: 0x00103 AUX <- (ret=  4) 01 01 01 01
+Jun 20 16:22:18 i915 0000:00:02.0: [drm:drm_dp_dpcd_read [drm_display_helper]] AUX A/DDI A/PHY A: 0x00202 AUX -> (ret=  6) 00 00 00 00 22 22
+Jun 20 16:22:18 i915 0000:00:02.0: [drm:drm_dp_dpcd_write [drm_display_helper]] AUX A/DDI A/PHY A: 0x00103 AUX <- (ret=  4) 02 02 02 02
+Jun 20 16:22:18 i915 0000:00:02.0: [drm:drm_dp_dpcd_read [drm_display_helper]] AUX A/DDI A/PHY A: 0x00202 AUX -> (ret=  6) 00 00 00 00 33 33
+Jun 20 16:22:19 i915 0000:00:02.0: [drm:drm_dp_dpcd_write [drm_display_helper]] AUX A/DDI A/PHY A: 0x00103 AUX <- (ret=  4) 07 07 07 07
+Jun 20 16:22:19 i915 0000:00:02.0: [drm:drm_dp_dpcd_read [drm_display_helper]] AUX A/DDI A/PHY A: 0x00202 AUX -> (ret=  6) 00 00 00 00 33 33
+Jun 20 16:22:19 i915 0000:00:02.0: [drm:drm_dp_dpcd_write [drm_display_helper]] AUX A/DDI A/PHY A: 0x00102 AUX <- (ret=  1) 00
+Jun 20 16:22:19 i915 0000:00:02.0: [drm] *ERROR* Timed out waiting for DP idle patterns
+Jun 20 16:22:19 i915 0000:00:02.0: [drm:drm_dp_dpcd_read [drm_display_helper]] AUX A/DDI A/PHY A: 0x00344 AUX -> (ret=  1) 00
+Jun 20 16:22:19 i915 0000:00:02.0: [drm:drm_dp_dpcd_write [drm_display_helper]] AUX A/DDI A/PHY A: 0x00344 AUX <- (ret=  1) 80
+Jun 20 16:22:29 i915 0000:00:02.0: [drm] *ERROR* [CRTC:149:pipe A] flip_done timed out
+Jun 20 16:22:29 i915 0000:00:02.0: [drm] *ERROR* [CRTC:149:pipe A] mismatch in pixel_rate (expected 777410, found 58968)
+Jun 20 16:22:29 i915 0000:00:02.0: [drm] *ERROR* [CRTC:149:pipe A] mismatch in dpll_hw_state  
+Jun 20 16:22:29 i915 0000:00:02.0: [drm] *ERROR* expected:
+Jun 20 16:22:29 i915 0000:00:02.0: [drm] *ERROR* cx0pll_hw_state: lane_count: 4, ssc_enabled: no, use_c10: yes, tbt_mode: no
+Jun 20 16:22:29 i915 0000:00:02.0: [drm] *ERROR* c10pll_hw_state: clock: 810000, fracen: yes, 
+Jun 20 16:22:29 i915 0000:00:02.0: [drm] *ERROR* quot: 61440, rem: 0, den: 1,
+Jun 20 16:22:29 i915 0000:00:02.0: [drm] *ERROR* multiplier: 210, tx_clk_div: 0.
+Jun 20 16:22:29 i915 0000:00:02.0: [drm] *ERROR* c10pll_rawhw_state:
+Jun 20 16:22:29 i915 0000:00:02.0: [drm] *ERROR* tx: 0x10, cmn: 0x21
+Jun 20 16:22:29 i915 0000:00:02.0: [drm] *ERROR* pll[0] = 0x34, pll[1] = 0x0, pll[2] = 0x84, pll[3] = 0x1
+Jun 20 16:22:29 i915 0000:00:02.0: [drm] *ERROR* pll[4] = 0x0, pll[5] = 0x0, pll[6] = 0x0, pll[7] = 0x0
+Jun 20 16:22:29 i915 0000:00:02.0: [drm] *ERROR* pll[8] = 0x0, pll[9] = 0x1, pll[10] = 0x0, pll[11] = 0x0
+Jun 20 16:22:29 i915 0000:00:02.0: [drm] *ERROR* pll[12] = 0xf0, pll[13] = 0x0, pll[14] = 0x0, pll[15] = 0x0
+Jun 20 16:22:29 i915 0000:00:02.0: [drm] *ERROR* pll[16] = 0x84, pll[17] = 0xf, pll[18] = 0xe5, pll[19] = 0x23
+Jun 20 16:22:29 i915 0000:00:02.0: [drm] *ERROR* found:
+Jun 20 16:22:29 i915 0000:00:02.0: [drm] *ERROR* cx0pll_hw_state: lane_count: 4, ssc_enabled: no, use_c10: yes, tbt_mode: no
+Jun 20 16:22:29 i915 0000:00:02.0: [drm] *ERROR* c10pll_hw_state: clock: 61440, fracen: no, 
+Jun 20 16:22:29 i915 0000:00:02.0: [drm] *ERROR* multiplier: 16, tx_clk_div: 0.
+Jun 20 16:22:29 i915 0000:00:02.0: [drm] *ERROR* c10pll_rawhw_state:
+Jun 20 16:22:29 i915 0000:00:02.0: [drm] *ERROR* tx: 0x0, cmn: 0x0
+Jun 20 16:22:29 i915 0000:00:02.0: [drm] *ERROR* pll[0] = 0x0, pll[1] = 0x0, pll[2] = 0x0, pll[3] = 0x0
+Jun 20 16:22:29 i915 0000:00:02.0: [drm] *ERROR* pll[4] = 0x0, pll[5] = 0x0, pll[6] = 0x0, pll[7] = 0x0
+Jun 20 16:22:29 i915 0000:00:02.0: [drm] *ERROR* pll[8] = 0x0, pll[9] = 0x0, pll[10] = 0x0, pll[11] = 0x0
+Jun 20 16:22:29 i915 0000:00:02.0: [drm] *ERROR* pll[12] = 0x0, pll[13] = 0x0, pll[14] = 0x0, pll[15] = 0x0
+Jun 20 16:22:29 i915 0000:00:02.0: [drm] *ERROR* pll[16] = 0x0, pll[17] = 0x0, pll[18] = 0x0, pll[19] = 0x0
+Jun 20 16:22:29 i915 0000:00:02.0: [drm] *ERROR* [CRTC:149:pipe A] mismatch in hw.pipe_mode.crtc_clock (expected 777410, found 58968)
+Jun 20 16:22:29 i915 0000:00:02.0: [drm] *ERROR* [CRTC:149:pipe A] mismatch in hw.adjusted_mode.crtc_clock (expected 777410, found 58968)
+Jun 20 16:22:29 i915 0000:00:02.0: [drm] *ERROR* [CRTC:149:pipe A] mismatch in port_clock (expected 810000, found 61440)
+Jun 20 16:22:29 i915 0000:00:02.0: [drm] *ERROR* [CRTC:149:pipe A] mismatch in min_voltage_level (expected 1, found 0)
+Jun 20 16:22:29 i915 0000:00:02.0: [drm] pipe state doesn't match!
+Jun 20 16:22:29 WARNING: drivers/gpu/drm/i915/display/intel_modeset_verify.c:225 at verify_crtc_state+0x2b3/0x4e0 [i915], CPU#18: kwin_wayland/23415
+Jun 20 16:22:29  drm_panel_backlight_quirks gpu_sched drm_ttm_helper drm_exec drm_suballoc_helper i915 drm_buddy ttm video i2c_algo_bit drm_display_helper cec vfio_pci vfio_pci_core irqbypass vfio_iommu_type1 vfio v4l2loopback(O) iommufd videodev hid_logitech_new(O) hid_fanatec(O) hid_tmff_new(O) ryzen_smu(O) system76_thelio_io(O) system76_io(O) gcadapter_oc(O) kvmfr(O) fuse mc ntsync wmi pkcs8_key_parser ff_memless i2c_dev
+Jun 20 16:22:29 CPU: 18 UID: 1000 PID: 23415 Comm: kwin_wayland Tainted: P     U  W  O        7.0.9-ogc3.2.fc44.x86_64 #1 PREEMPT(lazy) 
+Jun 20 16:22:29 RIP: 0010:verify_crtc_state+0x2b9/0x4e0 [i915]
+Jun 20 16:22:29 Call Trace:
+Jun 20 16:22:29  <TASK>
+Jun 20 16:22:29  ? intel_connector_verify_state+0x5e/0x270 [i915]
+Jun 20 16:22:29  intel_modeset_verify_crtc+0x44/0x80 [i915]
+Jun 20 16:22:29  intel_atomic_commit_tail+0x954/0xd10 [i915]
+Jun 20 16:22:29  intel_atomic_commit+0x23d/0x280 [i915]
+Jun 20 16:22:29  drm_atomic_commit+0xb1/0xe0
+Jun 20 16:22:29  ? __pfx___drm_printfn_info+0x10/0x10
+Jun 20 16:22:29  drm_mode_atomic_ioctl+0x77f/0x8b0
+Jun 20 16:22:29  ? __pfx_drm_mode_atomic_ioctl+0x10/0x10
+Jun 20 16:22:29  drm_ioctl_kernel+0xae/0x100
+Jun 20 16:22:29  drm_ioctl+0x2d9/0x560
+Jun 20 16:22:29  ? __pfx_drm_mode_atomic_ioctl+0x10/0x10
+Jun 20 16:22:29  __x64_sys_ioctl+0xb9/0x100
+Jun 20 16:22:29  do_syscall_64+0x109/0x6e0
+Jun 20 16:22:29  ? ___sys_recvmsg+0xc6/0x100
+Jun 20 16:22:29  ? __sys_recvmsg+0xeb/0x100
+Jun 20 16:22:29  ? do_syscall_64+0x144/0x6e0
+Jun 20 16:22:29  ? __x64_sys_epoll_wait+0x70/0x120
+Jun 20 16:22:29  ? do_syscall_64+0x144/0x6e0
+Jun 20 16:22:29  ? do_syscall_64+0x144/0x6e0
+Jun 20 16:22:29  ? exc_page_fault+0x90/0x1f0
+Jun 20 16:22:29  ? __irq_exit_rcu+0x4c/0xf0
+Jun 20 16:22:29  entry_SYSCALL_64_after_hwframe+0x76/0x7e
+Jun 20 16:22:29 RIP: 0033:0x7febdbe8133d
+Jun 20 16:22:29  </TASK>
+Jun 20 16:22:29 ---[ end trace 0000000000000000 ]---
+Jun 20 16:22:30 i915 0000:00:02.0: [drm] DPLL 0: pll hw state mismatch
+Jun 20 16:22:30 WARNING: drivers/gpu/drm/i915/display/intel_dpll_mgr.c:4945 at verify_single_dpll_state+0x177/0x650 [i915], CPU#18: kwin_wayland/23415
+Jun 20 16:22:30  drm_panel_backlight_quirks gpu_sched drm_ttm_helper drm_exec drm_suballoc_helper i915 drm_buddy ttm video i2c_algo_bit drm_display_helper cec vfio_pci vfio_pci_core irqbypass vfio_iommu_type1 vfio v4l2loopback(O) iommufd videodev hid_logitech_new(O) hid_fanatec(O) hid_tmff_new(O) ryzen_smu(O) system76_thelio_io(O) system76_io(O) gcadapter_oc(O) kvmfr(O) fuse mc ntsync wmi pkcs8_key_parser ff_memless i2c_dev
+Jun 20 16:22:30 CPU: 18 UID: 1000 PID: 23415 Comm: kwin_wayland Tainted: P     U  W  O        7.0.9-ogc3.2.fc44.x86_64 #1 PREEMPT(lazy) 
+Jun 20 16:22:30 RIP: 0010:verify_single_dpll_state+0x181/0x650 [i915]
+Jun 20 16:22:30 Call Trace:
+Jun 20 16:22:30  <TASK>
+Jun 20 16:22:30  ? exc_invalid_op+0x1d/0x90
+Jun 20 16:22:30  ? verify_crtc_state+0x2e0/0x4e0 [i915]
+Jun 20 16:22:30  ? intel_connector_verify_state+0x5e/0x270 [i915]
+Jun 20 16:22:30  intel_dpll_state_verify+0x6d/0x220 [i915]
+Jun 20 16:22:30  intel_modeset_verify_crtc+0x4f/0x80 [i915]
+Jun 20 16:22:30  intel_atomic_commit_tail+0x954/0xd10 [i915]
+Jun 20 16:22:30  intel_atomic_commit+0x23d/0x280 [i915]
+Jun 20 16:22:30  drm_atomic_commit+0xb1/0xe0
+Jun 20 16:22:30  ? __pfx___drm_printfn_info+0x10/0x10
+Jun 20 16:22:30  drm_mode_atomic_ioctl+0x77f/0x8b0
+Jun 20 16:22:30  ? __pfx_drm_mode_atomic_ioctl+0x10/0x10
+Jun 20 16:22:30  drm_ioctl_kernel+0xae/0x100
+Jun 20 16:22:30  drm_ioctl+0x2d9/0x560
+Jun 20 16:22:30  ? __pfx_drm_mode_atomic_ioctl+0x10/0x10
+Jun 20 16:22:30  __x64_sys_ioctl+0xb9/0x100
+Jun 20 16:22:30  do_syscall_64+0x109/0x6e0
+Jun 20 16:22:30  ? ___sys_recvmsg+0xc6/0x100
+Jun 20 16:22:30  ? __sys_recvmsg+0xeb/0x100
+Jun 20 16:22:30  ? do_syscall_64+0x144/0x6e0
+Jun 20 16:22:30  ? __x64_sys_epoll_wait+0x70/0x120
+Jun 20 16:22:30  ? do_syscall_64+0x144/0x6e0
+Jun 20 16:22:30  ? do_syscall_64+0x144/0x6e0
+Jun 20 16:22:30  ? exc_page_fault+0x90/0x1f0
+Jun 20 16:22:30  ? __irq_exit_rcu+0x4c/0xf0
+Jun 20 16:22:30  entry_SYSCALL_64_after_hwframe+0x76/0x7e
+Jun 20 16:22:30 RIP: 0033:0x7febdbe8133d
+Jun 20 16:22:30  </TASK>
+Jun 20 16:22:30 ---[ end trace 0000000000000000 ]---
+Jun 20 16:22:30 i915 0000:00:02.0: [drm:drm_dp_dpcd_read [drm_display_helper]] AUX A/DDI A/PHY A: 0x00202 AUX -> (ret=  6) 00 00 00 00 33 33
+Jun 20 16:22:30 i915 0000:00:02.0: [drm:drm_dp_dpcd_read [drm_display_helper]] AUX A/DDI A/PHY A: 0x00202 AUX -> (ret=  6) 00 00 00 00 33 33
+Jun 20 16:22:40 i915 0000:00:02.0: [drm] *ERROR* flip_done timed out
+Jun 20 16:22:40 i915 0000:00:02.0: [drm] *ERROR* [CRTC:149:pipe A] commit wait timed out
+Jun 20 16:22:50 i915 0000:00:02.0: [drm] *ERROR* flip_done timed out
+Jun 20 16:22:50 i915 0000:00:02.0: [drm] *ERROR* [CONNECTOR:506:eDP-1] commit wait timed out
+Jun 20 16:23:00 i915 0000:00:02.0: [drm] *ERROR* flip_done timed out
+Jun 20 16:23:00 i915 0000:00:02.0: [drm] *ERROR* [PLANE:33:plane 1A] commit wait timed out
+Jun 20 16:23:01 i915 0000:00:02.0: [drm:drm_dp_dpcd_write [drm_display_helper]] AUX A/DDI A/PHY A: 0x00600 AUX <- (ret=  1) 02
+Jun 20 16:23:01 i915 0000:00:02.0: [drm] PHY A failed to change powerdown state
+Jun 20 16:23:02 i915 0000:00:02.0: [drm:drm_dp_dpcd_read [drm_display_helper]] AUX A/DDI A/PHY A: 0x00300 AUX -> (ret=  3) 00 04 4b
+Jun 20 16:23:02 i915 0000:00:02.0: [drm:drm_dp_dpcd_write [drm_display_helper]] AUX A/DDI A/PHY A: 0x00300 AUX <- (ret=  3) 00 aa 01
+Jun 20 16:23:02 i915 0000:00:02.0: [drm:drm_dp_dpcd_write [drm_display_helper]] AUX A/DDI A/PHY A: 0x00600 AUX <- (ret=  1) 01
+Jun 20 16:23:02 i915 0000:00:02.0: [drm:drm_dp_dpcd_read [drm_display_helper]] AUX A/DDI A/PHY A: 0xf0005 AUX -> (ret=  1) 00
+Jun 20 16:23:02 i915 0000:00:02.0: [drm:drm_dp_dpcd_read [drm_display_helper]] AUX A/DDI A/PHY A: 0x00000 AUX -> (ret= 15) 14 1e 44 c1 00 00 01 c0 02 00 02 00 00 0b 80
+Jun 20 16:23:02 i915 0000:00:02.0: [drm:drm_dp_dpcd_read [drm_display_helper]] AUX A/DDI A/PHY A: 0x02200 AUX -> (ret= 15) 14 1e 44 c1 00 00 01 c0 02 00 02 00 00 0b 80
+Jun 20 16:23:02 i915 0000:00:02.0: [drm:drm_dp_dpcd_read [drm_display_helper]] AUX A/DDI A/PHY A: 0x00010 AUX -> (ret= 16) a4 1f 30 2a 76 2f bc 34 48 3f 60 54 78 69 34 9e
+Jun 20 16:23:02 i915 0000:00:02.0: [drm:drm_dp_dpcd_write [drm_display_helper]] AUX A/DDI A/PHY A: 0x00107 AUX <- (ret=  2) 80 01
+Jun 20 16:23:02 i915 0000:00:02.0: [drm:drm_dp_dpcd_write [drm_display_helper]] AUX A/DDI A/PHY A: 0x00101 AUX <- (ret=  1) 04
+Jun 20 16:23:02 i915 0000:00:02.0: [drm:drm_dp_dpcd_write [drm_display_helper]] AUX A/DDI A/PHY A: 0x00115 AUX <- (ret=  1) 07
+Jun 20 16:23:02 i915 0000:00:02.0: [drm:drm_dp_dpcd_write [drm_display_helper]] AUX A/DDI A/PHY A: 0x00102 AUX <- (ret=  5) 21 00 00 00 00
+Jun 20 16:23:02 i915 0000:00:02.0: [drm:drm_dp_dpcd_read [drm_display_helper]] AUX A/DDI A/PHY A: 0x00202 AUX -> (ret=  6) 00 00 80 00 11 11
+Jun 20 16:23:02 i915 0000:00:02.0: [drm:drm_dp_dpcd_write [drm_display_helper]] AUX A/DDI A/PHY A: 0x00103 AUX <- (ret=  4) 01 01 01 01
+Jun 20 16:23:02 i915 0000:00:02.0: [drm:drm_dp_dpcd_read [drm_display_helper]] AUX A/DDI A/PHY A: 0x00202 AUX -> (ret=  6) 00 11 80 00 11 11
+Jun 20 16:23:02 i915 0000:00:02.0: [drm:drm_dp_dpcd_write [drm_display_helper]] AUX A/DDI A/PHY A: 0x00103 AUX <- (ret=  4) 01 01 01 01
+Jun 20 16:23:02 i915 0000:00:02.0: [drm:drm_dp_dpcd_read [drm_display_helper]] AUX A/DDI A/PHY A: 0x00202 AUX -> (ret=  6) 11 11 00 00 11 11
+Jun 20 16:23:02 i915 0000:00:02.0: [drm:drm_dp_dpcd_write [drm_display_helper]] AUX A/DDI A/PHY A: 0x00102 AUX <- (ret=  5) 07 01 01 01 01
+Jun 20 16:23:02 i915 0000:00:02.0: [drm:drm_dp_dpcd_read [drm_display_helper]] AUX A/DDI A/PHY A: 0x00202 AUX -> (ret=  6) 77 77 81 00 11 11
+Jun 20 16:23:02 i915 0000:00:02.0: [drm:drm_dp_dpcd_write [drm_display_helper]] AUX A/DDI A/PHY A: 0x00102 AUX <- (ret=  1) 00
+Jun 20 16:23:02 i915 0000:00:02.0: [drm:drm_dp_dpcd_read [drm_display_helper]] AUX A/DDI A/PHY A: 0x00344 AUX -> (ret=  1) 00
+Jun 20 16:23:02 i915 0000:00:02.0: [drm:drm_dp_dpcd_write [drm_display_helper]] AUX A/DDI A/PHY A: 0x00344 AUX <- (ret=  1) 80
+Jun 20 16:23:04 i915 0000:00:02.0: [drm:drm_dp_dpcd_read [drm_display_helper]] AUX A/DDI A/PHY A: 0x00202 AUX -> (ret=  6) 77 77 01 01 11 11

@@ -78,6 +78,52 @@ i915 0000:00:02.0: [drm] PHY A failed to change powerdown state
 ```
 The key line is the `found` PLL state: `c10pll clock 61440, multiplier 16`, `rawhw tx: 0x0, cmn: 0x0` — the PLL is parked/zeroed, i.e. **read back as-is and never reprogrammed to the expected 810000 / mult 210.** Reproduces on every s2idle resume (and on automatic display power-down/runtime-PM transitions).
 
+## Enriched capture — verify-path stack traces + zeroed PLL (`drm.debug=0x100`, 2026-06-20)
+
+Captured live on this host. Note the trigger here was **not** a full system suspend — it
+was an **automatic deep-idle / runtime-PM display re-enable** (the panel powered down on
+idle, then the warm restore on wake hit the same broken cx0 DPLL-restore path). So the bug
+is the **DPLL state restore on display re-enable**, not strictly s2idle.
+
+The atomic verify on resume (called from the compositor's `drm_mode_atomic_ioctl`) catches
+the parked PLL but only **WARNs** — it never reprograms:
+
+```
+[drm] DPLL 0: pll hw state mismatch
+WARNING: drivers/gpu/drm/i915/display/intel_dpll_mgr.c:4945 at verify_single_dpll_state+0x177/0x650 [i915], CPU#18: kwin_wayland/23415
+RIP: 0010:verify_single_dpll_state+0x181/0x650 [i915]
+Call Trace:
+ intel_dpll_state_verify+0x6d/0x220 [i915]
+ intel_modeset_verify_crtc+0x4f/0x80 [i915]
+ intel_atomic_commit_tail+0x954/0xd10 [i915]
+ intel_atomic_commit+0x23d/0x280 [i915]
+ drm_atomic_commit+0xb1/0xe0
+ drm_mode_atomic_ioctl+0x77f/0x8b0
+ drm_ioctl+0x2d9/0x560
+ __x64_sys_ioctl+0xb9/0x100
+ do_syscall_64 ...
+---[ end trace ]---
+```
+(A preceding `verify_crtc_state+0x2b3` WARNING at `intel_modeset_verify.c:225` —
+"pipe state doesn't match!" — fires on the same commit. Taint flags `P U W O` are from
+out-of-tree NVIDIA/system76 modules, unrelated to this fault.)
+
+**The decisive evidence** — the `found` PLL registers are entirely zero (PHY powered down),
+i.e. the resume readout adopts the parked state verbatim and the reprogram never runs:
+
+```
+expected:  c10pll clock 810000, multiplier 210, tx:0x10 cmn:0x21
+           pll[0]=0x34 pll[2]=0x84 pll[9]=0x1 pll[12]=0xf0 pll[16]=0x84 pll[17]=0xf pll[18]=0xe5 pll[19]=0x23 ...
+found:     c10pll clock  61440, multiplier  16, tx:0x0  cmn:0x0
+           pll[0..19] = 0x0   <-- entirely zero / parked
+-> mismatch in port_clock (expected 810000, found 61440); flip_done timed out; PHY A failed to change powerdown state
+```
+
+This confirms the code-reading hypothesis at runtime: the v7.0 DPLL framework reads the
+powered-down PLL back as "current", the warn-only `verify_single_dpll_state` `memcmp` does
+not force a reprogram, and the cx0-specific verify that v6.19 used to catch this was removed
+by `ac3423721117`. Full untrimmed log: `i915-warn-event-20260620.log`.
+
 ## Regression range
 
 | Kernel | Result |

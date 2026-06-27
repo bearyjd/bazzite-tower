@@ -39,9 +39,11 @@ WARNING: drivers/gpu/drm/i915/display/intel_dpll_mgr.c:4945 at verify_single_dpl
 
 > Paste as a **new** comment on #16042 — don't edit the first note; a new note timestamps the
 > data point and notifies subscribers. **Verify-before-post:** on the current 6.19 boot, after a
-> wake or two, run the one-liner below and post only if it's empty (it should be):
+> wake or two, run the one-liner below and post only if it's empty (it should be). The pattern is
+> deliberately tightened to the real bug signatures — a broad `PHY A failed` would falsely match the
+> benign boot line `PHY A failed to request refclk`:
 > ```
-> journalctl -k -b 0 | grep -iE 'PHY A failed|Failed to bring PHY A|mismatch in dpll_hw_state|flip_done timed out|verify_single_dpll_state'
+> journalctl -k -b 0 | grep -iE 'Failed to bring PHY A to idle|PHY A failed to change powerdown state|mismatch in dpll_hw_state|pll hw state mismatch|flip_done timed out|port_clock \(expected|verify_single_dpll_state'
 > ```
 
 **Update — confirmed-clean downgrade on the same machine; the kernel is the only changed variable.**

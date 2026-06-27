@@ -1,0 +1,89 @@
+# i915 MTL cx0/C10 PLL resume capture — 2026-06-27 09:09:10 -0400  host=tower
+# kernel : 6.19.11-ogc1.1.fc44.x86_64
+# drm.debug now: ?   (KMS readout lines only appear if it was 0x100 BEFORE the resume)
+# Attach this to the upstream bug report. No secrets in DRM logs.
+######## verify-path WARNING + stack + PLL register dump + error cascade ########
+Jun 26 21:09:51 Command line: BOOT_IMAGE=(hd1,gpt2)/ostree/default-173130aa0288f020ca32a5f85005a3427fed35476975ac00bb02c357445b0f34/vmlinuz-6.19.11-ogc1.1.fc44.x86_64 rd.luks.uuid=luks-94bb8ac3-b999-41fe-8e9a-ff4b5d7da3f3 rd.luks.uuid=luks-ec85f6b2-1799-4a81-a16c-fb0959ec572e rhgb quiet root=UUID=16425893-dcf9-4117-82c1-25e7fe296e70 rootflags=subvol=root rw ostree=/ostree/boot.1/default/173130aa0288f020ca32a5f85005a3427fed35476975ac00bb02c357445b0f34/0 bluetooth.disable_ertm=1 i915.enable_gsc_proxy=0 nvme_core.default_ps_max_latency_us=0 kvm.ignore_msrs=1 kvm.report_ignored_msrs=0 kvmfr.static_size_mb=128 split_lock_detect=off intel_iommu=on iommu=pt rd.driver.pre=vfio-pci vfio_pci.disable_vga=1 i915.enable_dc=0 i915.enable_psr=0 i915.enable_psr2_sel_fetch=0 mem_sleep_default=deep
+Jun 26 21:09:51 Kernel command line: BOOT_IMAGE=(hd1,gpt2)/ostree/default-173130aa0288f020ca32a5f85005a3427fed35476975ac00bb02c357445b0f34/vmlinuz-6.19.11-ogc1.1.fc44.x86_64 rd.luks.uuid=luks-94bb8ac3-b999-41fe-8e9a-ff4b5d7da3f3 rd.luks.uuid=luks-ec85f6b2-1799-4a81-a16c-fb0959ec572e rhgb quiet root=UUID=16425893-dcf9-4117-82c1-25e7fe296e70 rootflags=subvol=root rw ostree=/ostree/boot.1/default/173130aa0288f020ca32a5f85005a3427fed35476975ac00bb02c357445b0f34/0 bluetooth.disable_ertm=1 i915.enable_gsc_proxy=0 nvme_core.default_ps_max_latency_us=0 kvm.ignore_msrs=1 kvm.report_ignored_msrs=0 kvmfr.static_size_mb=128 split_lock_detect=off intel_iommu=on iommu=pt rd.driver.pre=vfio-pci vfio_pci.disable_vga=1 i915.enable_dc=0 i915.enable_psr=0 i915.enable_psr2_sel_fetch=0 mem_sleep_default=deep
+Jun 26 21:09:51 i8042: Warning: Keylock active
+Jun 26 21:09:51 i915 0000:00:02.0: [drm] Found meteorlake (device ID 7d55) integrated display version 14.00 stepping C0
+Jun 26 21:10:12 i915 0000:00:02.0: [drm] *ERROR* GT1: GSC proxy component didn't bind within the expected timeout
+Jun 26 21:10:40 caller igen6_register_mcis+0x4a/0x2e0 [igen6_edac] mapping multiple BARs
+Jun 26 21:10:40 intel_vpu 0000:00:0b.0: [drm] Firmware: intel/vpu/vpu_37xx_v1.bin, version: 20260305*MTL_CLIENT_SILICON-NVR+NN-deployment*dbda783919b77553afe5576a59881bca37fb6d7b*dbda783919b77553afe5576a59881bca37fb6d7b*dbda783919b
+Jun 26 21:10:40 intel_vpu 0000:00:0b.0: [drm] Scheduler mode: HW
+Jun 26 21:10:40 [drm] Initialized intel_vpu 1.0.0 for 0000:00:0b.0 on minor 0
+Jun 26 21:10:41 sof-audio-pci-intel-mtl 0000:00:1f.3: bound 0000:00:02.0 (ops intel_audio_component_bind_ops [i915])
+Jun 26 21:10:48 i915 0000:00:02.0: [drm] PHY A failed to request refclk
+Jun 26 21:11:02 nvidia-modeset: WARNING: GPU:0: Correcting number of heads for current head configuration (0x00)
+Jun 27 08:38:19 i915 0000:00:02.0: [drm:drm_dp_dpcd_write [drm_display_helper]] AUX A/DDI A/PHY A: 0x00600 AUX <- (ret=  1) 02
+Jun 27 08:38:19 i915 0000:00:02.0: [drm:drm_dp_dpcd_read [drm_display_helper]] AUX A/DDI A/PHY A: 0x00000 AUX -> (ret= 15) 14 1e 44 c1 00 00 01 c0 02 00 02 00 00 0b 80
+Jun 27 08:38:19 i915 0000:00:02.0: [drm:drm_dp_dpcd_read [drm_display_helper]] AUX A/DDI A/PHY A: 0x02200 AUX -> (ret= 15) 14 1e 44 c1 00 00 01 c0 02 00 02 00 00 0b 80
+Jun 27 08:38:19 i915 0000:00:02.0: [drm:drm_dp_dpcd_read [drm_display_helper]] AUX A/DDI A/PHY A: 0x00201 AUX -> (ret=  1) 00
+Jun 27 08:38:19 i915 0000:00:02.0: [drm:drm_dp_dpcd_read [drm_display_helper]] AUX A/DDI A/PHY A: 0x02005 AUX -> (ret=  1) 00
+Jun 27 08:38:19 i915 0000:00:02.0: [drm:drm_dp_dpcd_read [drm_display_helper]] AUX A/DDI A/PHY A: 0x0200b AUX -> (ret=  1) 00
+Jun 27 08:43:32 i915 0000:00:02.0: [drm:drm_dp_dpcd_read [drm_display_helper]] AUX A/DDI A/PHY A: 0x00300 AUX -> (ret=  3) 00 04 4b
+Jun 27 08:43:32 i915 0000:00:02.0: [drm:drm_dp_dpcd_write [drm_display_helper]] AUX A/DDI A/PHY A: 0x00300 AUX <- (ret=  3) 00 aa 01
+Jun 27 08:43:32 i915 0000:00:02.0: [drm:drm_dp_dpcd_write [drm_display_helper]] AUX A/DDI A/PHY A: 0x00600 AUX <- (ret=  1) 01
+Jun 27 08:43:32 i915 0000:00:02.0: [drm:drm_dp_dpcd_read [drm_display_helper]] AUX A/DDI A/PHY A: 0xf0005 AUX -> (ret=  1) 00
+Jun 27 08:43:32 i915 0000:00:02.0: [drm:drm_dp_dpcd_read [drm_display_helper]] AUX A/DDI A/PHY A: 0x00000 AUX -> (ret= 15) 14 1e 44 c1 00 00 01 c0 02 00 02 00 00 0b 80
+Jun 27 08:43:32 i915 0000:00:02.0: [drm:drm_dp_dpcd_read [drm_display_helper]] AUX A/DDI A/PHY A: 0x02200 AUX -> (ret= 15) 14 1e 44 c1 00 00 01 c0 02 00 02 00 00 0b 80
+Jun 27 08:43:32 i915 0000:00:02.0: [drm:drm_dp_dpcd_read [drm_display_helper]] AUX A/DDI A/PHY A: 0x00010 AUX -> (ret= 16) a4 1f 30 2a 76 2f bc 34 48 3f 60 54 78 69 34 9e
+Jun 27 08:43:32 i915 0000:00:02.0: [drm:drm_dp_dpcd_write [drm_display_helper]] AUX A/DDI A/PHY A: 0x00107 AUX <- (ret=  2) 80 01
+Jun 27 08:43:32 i915 0000:00:02.0: [drm:drm_dp_dpcd_write [drm_display_helper]] AUX A/DDI A/PHY A: 0x00101 AUX <- (ret=  1) 04
+Jun 27 08:43:32 i915 0000:00:02.0: [drm:drm_dp_dpcd_write [drm_display_helper]] AUX A/DDI A/PHY A: 0x00115 AUX <- (ret=  1) 07
+Jun 27 08:43:32 i915 0000:00:02.0: [drm:drm_dp_dpcd_write [drm_display_helper]] AUX A/DDI A/PHY A: 0x00102 AUX <- (ret=  5) 21 00 00 00 00
+Jun 27 08:43:32 i915 0000:00:02.0: [drm:drm_dp_dpcd_read [drm_display_helper]] AUX A/DDI A/PHY A: 0x00202 AUX -> (ret=  6) 00 00 80 00 11 11
+Jun 27 08:43:32 i915 0000:00:02.0: [drm:drm_dp_dpcd_write [drm_display_helper]] AUX A/DDI A/PHY A: 0x00103 AUX <- (ret=  4) 01 01 01 01
+Jun 27 08:43:32 i915 0000:00:02.0: [drm:drm_dp_dpcd_read [drm_display_helper]] AUX A/DDI A/PHY A: 0x00202 AUX -> (ret=  6) 00 11 80 00 11 11
+Jun 27 08:43:32 i915 0000:00:02.0: [drm:drm_dp_dpcd_write [drm_display_helper]] AUX A/DDI A/PHY A: 0x00103 AUX <- (ret=  4) 01 01 01 01
+Jun 27 08:43:32 i915 0000:00:02.0: [drm:drm_dp_dpcd_read [drm_display_helper]] AUX A/DDI A/PHY A: 0x00202 AUX -> (ret=  6) 11 11 00 00 11 11
+Jun 27 08:43:32 i915 0000:00:02.0: [drm:drm_dp_dpcd_write [drm_display_helper]] AUX A/DDI A/PHY A: 0x00102 AUX <- (ret=  5) 07 01 01 01 01
+Jun 27 08:43:32 i915 0000:00:02.0: [drm:drm_dp_dpcd_read [drm_display_helper]] AUX A/DDI A/PHY A: 0x00202 AUX -> (ret=  6) 77 77 81 00 11 11
+Jun 27 08:43:32 i915 0000:00:02.0: [drm:drm_dp_dpcd_write [drm_display_helper]] AUX A/DDI A/PHY A: 0x00102 AUX <- (ret=  1) 00
+Jun 27 08:43:32 i915 0000:00:02.0: [drm:drm_dp_dpcd_read [drm_display_helper]] AUX A/DDI A/PHY A: 0x00344 AUX -> (ret=  1) 00
+Jun 27 08:43:32 i915 0000:00:02.0: [drm:drm_dp_dpcd_write [drm_display_helper]] AUX A/DDI A/PHY A: 0x00344 AUX <- (ret=  1) 80
+Jun 27 08:43:34 i915 0000:00:02.0: [drm:drm_dp_dpcd_read [drm_display_helper]] AUX A/DDI A/PHY A: 0x00202 AUX -> (ret=  6) 77 77 01 01 11 11
+Jun 27 09:08:50 i915 0000:00:02.0: [drm:drm_dp_dpcd_write [drm_display_helper]] AUX A/DDI A/PHY A: 0x00600 AUX <- (ret=  1) 02
+Jun 27 09:08:50 i915 0000:00:02.0: [drm:drm_dp_dpcd_read [drm_display_helper]] AUX A/DDI A/PHY A: 0x00000 AUX -> (ret= 15) 14 1e 44 c1 00 00 01 c0 02 00 02 00 00 0b 80
+Jun 27 09:08:50 i915 0000:00:02.0: [drm:drm_dp_dpcd_read [drm_display_helper]] AUX A/DDI A/PHY A: 0x02200 AUX -> (ret= 15) 14 1e 44 c1 00 00 01 c0 02 00 02 00 00 0b 80
+Jun 27 09:08:50 i915 0000:00:02.0: [drm:drm_dp_dpcd_read [drm_display_helper]] AUX A/DDI A/PHY A: 0x00201 AUX -> (ret=  1) 00
+Jun 27 09:08:50 i915 0000:00:02.0: [drm:drm_dp_dpcd_read [drm_display_helper]] AUX A/DDI A/PHY A: 0x02005 AUX -> (ret=  1) 00
+Jun 27 09:08:50 i915 0000:00:02.0: [drm:drm_dp_dpcd_read [drm_display_helper]] AUX A/DDI A/PHY A: 0x0200b AUX -> (ret=  1) 00
+Jun 27 09:08:50 i915 0000:00:02.0: [drm:drm_dp_dpcd_read [drm_display_helper]] AUX A/DDI A/PHY A: 0x00300 AUX -> (ret=  3) 00 04 4b
+Jun 27 09:08:50 i915 0000:00:02.0: [drm:drm_dp_dpcd_write [drm_display_helper]] AUX A/DDI A/PHY A: 0x00300 AUX <- (ret=  3) 00 aa 01
+Jun 27 09:08:50 i915 0000:00:02.0: [drm:drm_dp_dpcd_write [drm_display_helper]] AUX A/DDI A/PHY A: 0x00600 AUX <- (ret=  1) 01
+Jun 27 09:08:50 i915 0000:00:02.0: [drm:drm_dp_dpcd_read [drm_display_helper]] AUX A/DDI A/PHY A: 0xf0005 AUX -> (ret=  1) 00
+Jun 27 09:08:50 i915 0000:00:02.0: [drm:drm_dp_dpcd_read [drm_display_helper]] AUX A/DDI A/PHY A: 0x00000 AUX -> (ret= 15) 14 1e 44 c1 00 00 01 c0 02 00 02 00 00 0b 80
+Jun 27 09:08:50 i915 0000:00:02.0: [drm:drm_dp_dpcd_read [drm_display_helper]] AUX A/DDI A/PHY A: 0x02200 AUX -> (ret= 15) 14 1e 44 c1 00 00 01 c0 02 00 02 00 00 0b 80
+Jun 27 09:08:50 i915 0000:00:02.0: [drm:drm_dp_dpcd_read [drm_display_helper]] AUX A/DDI A/PHY A: 0x00010 AUX -> (ret= 16) a4 1f 30 2a 76 2f bc 34 48 3f 60 54 78 69 34 9e
+Jun 27 09:08:50 i915 0000:00:02.0: [drm:drm_dp_dpcd_write [drm_display_helper]] AUX A/DDI A/PHY A: 0x00107 AUX <- (ret=  2) 80 01
+Jun 27 09:08:50 i915 0000:00:02.0: [drm:drm_dp_dpcd_write [drm_display_helper]] AUX A/DDI A/PHY A: 0x00101 AUX <- (ret=  1) 04
+Jun 27 09:08:50 i915 0000:00:02.0: [drm:drm_dp_dpcd_write [drm_display_helper]] AUX A/DDI A/PHY A: 0x00115 AUX <- (ret=  1) 07
+Jun 27 09:08:50 i915 0000:00:02.0: [drm:drm_dp_dpcd_write [drm_display_helper]] AUX A/DDI A/PHY A: 0x00102 AUX <- (ret=  5) 21 00 00 00 00
+Jun 27 09:08:50 i915 0000:00:02.0: [drm:drm_dp_dpcd_read [drm_display_helper]] AUX A/DDI A/PHY A: 0x00202 AUX -> (ret=  6) 00 00 80 00 11 11
+Jun 27 09:08:50 i915 0000:00:02.0: [drm:drm_dp_dpcd_write [drm_display_helper]] AUX A/DDI A/PHY A: 0x00103 AUX <- (ret=  4) 01 01 01 01
+Jun 27 09:08:50 i915 0000:00:02.0: [drm:drm_dp_dpcd_read [drm_display_helper]] AUX A/DDI A/PHY A: 0x00202 AUX -> (ret=  6) 00 11 80 00 11 11
+Jun 27 09:08:50 i915 0000:00:02.0: [drm:drm_dp_dpcd_write [drm_display_helper]] AUX A/DDI A/PHY A: 0x00103 AUX <- (ret=  4) 01 01 01 01
+Jun 27 09:08:50 i915 0000:00:02.0: [drm:drm_dp_dpcd_read [drm_display_helper]] AUX A/DDI A/PHY A: 0x00202 AUX -> (ret=  6) 11 11 00 00 11 11
+Jun 27 09:08:50 i915 0000:00:02.0: [drm:drm_dp_dpcd_write [drm_display_helper]] AUX A/DDI A/PHY A: 0x00102 AUX <- (ret=  5) 07 01 01 01 01
+Jun 27 09:08:50 i915 0000:00:02.0: [drm:drm_dp_dpcd_read [drm_display_helper]] AUX A/DDI A/PHY A: 0x00202 AUX -> (ret=  6) 77 77 81 00 11 11
+Jun 27 09:08:50 i915 0000:00:02.0: [drm:drm_dp_dpcd_write [drm_display_helper]] AUX A/DDI A/PHY A: 0x00102 AUX <- (ret=  1) 00
+Jun 27 09:08:50 i915 0000:00:02.0: [drm:drm_dp_dpcd_read [drm_display_helper]] AUX A/DDI A/PHY A: 0x00344 AUX -> (ret=  1) 00
+Jun 27 09:08:50 i915 0000:00:02.0: [drm:drm_dp_dpcd_write [drm_display_helper]] AUX A/DDI A/PHY A: 0x00344 AUX <- (ret=  1) 80
+Jun 27 09:08:50 i915 0000:00:02.0: [drm:drm_dp_dpcd_read [drm_display_helper]] AUX A/DDI A/PHY A: 0x00500 AUX -> (ret= 13) 00 00 00 00 00 00 00 00 00 00 00 00 00
+Jun 27 09:08:50 i915 0000:00:02.0: [drm:drm_dp_dpcd_read [drm_display_helper]] AUX B/DDI B/PHY B: 0x00500 AUX -> (ret= -6)
+Jun 27 09:08:50 i915 0000:00:02.0: [drm:drm_dp_dpcd_read [drm_display_helper]] AUX USBC1/DDI TC1/PHY TC1: 0x00500 AUX -> (ret= -6)
+Jun 27 09:08:50 i915 0000:00:02.0: [drm:drm_dp_dpcd_read [drm_display_helper]] AUX USBC2/DDI TC2/PHY TC2: 0x00500 AUX -> (ret= -6)
+Jun 27 09:08:50 i915 0000:00:02.0: [drm:drm_dp_dpcd_read [drm_display_helper]] AUX USBC3/DDI TC3/PHY TC3: 0x00500 AUX -> (ret= -6)
+Jun 27 09:08:50 i915 0000:00:02.0: [drm:drm_dp_dpcd_read [drm_display_helper]] AUX USBC4/DDI TC4/PHY TC4: 0x00500 AUX -> (ret= -6)
+Jun 27 09:08:51 i915 0000:00:02.0: [drm:drm_dp_dpcd_read [drm_display_helper]] AUX A/DDI A/PHY A: 0x00060 AUX -> (ret= 16) 00 11 00 76 0b 01 01 80 00 01 06 66 08 00 00 00
+Jun 27 09:08:51 i915 0000:00:02.0: [drm:drm_dp_dpcd_read [drm_display_helper]] AUX A/DDI A/PHY A: 0x02214 AUX -> (ret=  1) 00
+Jun 27 09:08:51 i915 0000:00:02.0: [drm:drm_dp_dpcd_read [drm_display_helper]] AUX A/DDI A/PHY A: 0x03000 AUX -> (ret=  1) 00
+Jun 27 09:08:51 i915 0000:00:02.0: [drm:drm_dp_dpcd_read [drm_display_helper]] AUX A/DDI A/PHY A: 0x00201 AUX -> (ret=  1) 00
+Jun 27 09:08:52 i915 0000:00:02.0: [drm:drm_dp_dpcd_read [drm_display_helper]] AUX A/DDI A/PHY A: 0x00202 AUX -> (ret=  6) 77 77 01 01 11 11
+Jun 27 09:08:56 i915 0000:00:02.0: [drm:drm_dp_dpcd_read [drm_display_helper]] AUX A/DDI A/PHY A: 0x00500 AUX -> (ret= 13) 00 00 00 00 00 00 00 00 00 00 00 00 00
+Jun 27 09:08:56 i915 0000:00:02.0: [drm:drm_dp_dpcd_read [drm_display_helper]] AUX B/DDI B/PHY B: 0x00500 AUX -> (ret= -6)
+Jun 27 09:08:56 i915 0000:00:02.0: [drm:drm_dp_dpcd_read [drm_display_helper]] AUX USBC1/DDI TC1/PHY TC1: 0x00500 AUX -> (ret= -6)
+Jun 27 09:08:56 i915 0000:00:02.0: [drm:drm_dp_dpcd_read [drm_display_helper]] AUX USBC2/DDI TC2/PHY TC2: 0x00500 AUX -> (ret= -6)
+Jun 27 09:08:56 i915 0000:00:02.0: [drm:drm_dp_dpcd_read [drm_display_helper]] AUX USBC3/DDI TC3/PHY TC3: 0x00500 AUX -> (ret= -6)
+Jun 27 09:08:56 i915 0000:00:02.0: [drm:drm_dp_dpcd_read [drm_display_helper]] AUX USBC4/DDI TC4/PHY TC4: 0x00500 AUX -> (ret= -6)

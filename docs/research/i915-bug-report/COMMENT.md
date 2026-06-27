@@ -58,7 +58,8 @@ Nothing else changed: same laptop, same Fedora 44 / Bazzite userspace + KWin/Way
 **Good-state captured on 6.19 (attached).** Same machine, now on `6.19.11-ogc1`, the identical eDP-1 / pipe A / DDI A / **PHY A (C10)** path runs healthy — `i915_display_info` shows **`port_clock=810000, lane_count=4`**, `adjusted_mode` dotclock **777410**, 2560x1600@165 — i.e. live-healthy at exactly the values your report shows collapsing on 7.0 resume (`port_clock` → 61440, dotclock → ~58968, C10 `pll[0..19]` zeroed). The clean s2idle resume itself logs **none** of the cascade: no `verify_single_dpll_state` warning, no `mismatch in dpll_hw_state`, no `flip_done timed out`. (On a *clean* pass the verbose cx0 register dump never prints — it's emitted only by the verify-mismatch path — so the good-vs-bad signal here is the `port_clock`/dotclock above plus the absent warning. `i915_shared_dplls_info` shows only the refclk header, expected since MTL's per-port C10 isn't a legacy shared DPLL.) Attached: clean `drm.debug=0x100` s2idle-resume log + `i915_display_info`.
 
 **Still on offer (repro hardware in hand):**
-1. The 2-boot boundary test (`1a7fad2aea74~1` vs series tip), then a full bisect to first-bad-commit (your Ask #1).
-2. Fast-turnaround testing of any candidate patch on real MTL-P `8086:7d55`.
+1. **Tested-by on MTL-P `8086:7d55` for `0001-drm-i915-mtl-Enable-PPS-before-PLL.patch`** (re @mnencia's note). My failing path is eDP-1 / PHY A s2idle and this box drives the **internal panel only** (every external connector reads disconnected in `i915_display_info`), so the eDP-only scope of the PPS-before-PLL reorder is sufficient here — happy to build it out-of-tree and run a batch of s2idle cycles to add a second-platform confirmation alongside the ARL-H `7d51` result.
+2. The 2-boot boundary test (`1a7fad2aea74~1` vs series tip), then a full bisect to first-bad-commit (your Ask #1).
+3. Fast-turnaround testing of any other candidate on real MTL-P (e.g. an MSGBUS-level bring-up fix, if that's the direction over the eDP workaround).
 
 Happy to run whichever is most useful.

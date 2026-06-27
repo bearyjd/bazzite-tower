@@ -1,0 +1,142 @@
+# i915 MTL cx0/C10 PLL — GOOD-STATE reference (kernel 6.19.11-ogc1, healthy)
+# Captured 2026-06-27 from debugfs on the confirmed-good downgrade kernel, as the live
+# "expected" mirror of the 7.0 s2idle-resume collapse in REPORT.md / freedesktop #16042.
+#
+# Hardware: Lenovo ThinkPad P1 Gen 7, MTL-P iGPU 8086:7d55, internal eDP-1 on
+#           pipe A / DDI A / PHY A (C10), 2560x1600@165 HBR3.
+# Kernel:   6.19.11-ogc1.1.fc44.x86_64  (Bazzite ghcr.io/ublue-os/bazzite-nvidia:44.20260429)
+#
+# KEY NUMBERS (live, healthy):
+#   pipe A active, eDP-1 connected, port_clock=810000, lane_count=4,
+#   adjusted_mode dotclock=777410 (mode "2560x1600": 165 777410 ...)
+# vs the 7.0 resume collapse (REPORT.md / #16042):
+#   port_clock found 61440 (expected 810000), crtc/dotclock found ~58968 (expected 777410),
+#   C10 pll[0..19] zeroed, verify_single_dpll_state WARNING at intel_dpll_mgr.c:4945.
+#
+# NOTE on i915_shared_dplls_info: it prints only the refclk header with no per-PLL
+# entries. That is EXPECTED on MTL+ — the per-port C10/C20 (cx0) PLLs are not part of
+# the legacy shared-DPLL pool, so cx0 state is not exposed via this node. The
+# authoritative good-vs-bad signal is the port_clock/dotclock in i915_display_info
+# (live-healthy here) plus the absence of the verify WARNING on the clean resume
+# (see companion i915-drmdebug-20260627-090910.log). On a clean pass the verbose cx0
+# register dump never prints; it is emitted only by the verify-mismatch path.
+#
+# ---- raw debugfs dump ----
+### i915_shared_dplls_info ###
+PLL refclks: non-SSC: 0 kHz, SSC: 0 kHz
+
+### i915_display_info ###
+CRTC info
+---------
+[CRTC:148:pipe A]:
+        uapi: enable=yes, active=yes, mode="2560x1600": 165 777410 2560 2608 2640 2720 1600 1603 1609 1732 0x48 0xa
+        hw: enable=yes, active=yes
+        adjusted_mode="2560x1600": 165 777410 2560 2608 2640 2720 1600 1603 1609 1732 0x48 0xa
+        pipe__mode="2560x1600": 165 777410 2560 2608 2640 2720 1600 1603 1609 1732 0x40 0xa
+        pipe src=2560x1600+0+0, dither=no, bpp=30
+        port_clock=810000, lane_count=4
+        num_scalers=2, scaler_users=0 scaler_id=-1 scaling_filter=0, scalers[0]: use=no, mode=0, scalers[1]: use=no, mode=0
+        [ENCODER:501:DDI A/PHY A]: connectors:
+                [CONNECTOR:502:eDP-1]
+        [PLANE:33:plane 1A]: type=PRI
+                uapi: [FB:574] AB30 little-endian (0x30334241),0x10000000000000f,2560x1600, visible=visible, src=2560.000000x1600.000000+0.000000+0.000000, dst=2560x1600+0+0, rotation=0 (0x00000001)
+                hw: [FB:574] AB30 little-endian (0x30334241),0x10000000000000f,2560x1600, visible=yes, src=2560.000000x1600.000000+0.000000+0.000000, dst=2560x1600+0+0, rotation=0 (0x00000001)
+        [PLANE:63:plane 2A]: type=OVL
+                uapi: [FB:0] n/a,0x0,0x0,, visible=hidden, src=0.000000x0.000000+0.000000+0.000000, dst=0x0+0+0, rotation=0 (0x00000001)
+        [PLANE:93:plane 3A]: type=OVL
+                uapi: [FB:0] n/a,0x0,0x0,, visible=hidden, src=0.000000x0.000000+0.000000+0.000000, dst=0x0+0+0, rotation=0 (0x00000001)
+        [PLANE:123:plane 4A]: type=OVL
+                uapi: [FB:0] n/a,0x0,0x0,, visible=hidden, src=0.000000x0.000000+0.000000+0.000000, dst=0x0+0+0, rotation=0 (0x00000001)
+        [PLANE:133:plane 5A]: type=OVL
+                uapi: [FB:0] n/a,0x0,0x0,, visible=hidden, src=0.000000x0.000000+0.000000+0.000000, dst=0x0+0+0, rotation=0 (0x00000001)
+        [PLANE:143:cursor A]: type=CUR
+                uapi: [FB:566] AR24 little-endian (0x34325241),0x0,64x64, visible=visible, src=64.000000x64.000000+0.000000+0.000000, dst=64x64+1192+449, rotation=0 (0x00000001)
+                hw: [FB:566] AR24 little-endian (0x34325241),0x0,64x64, visible=yes, src=64.000000x64.000000+0.000000+0.000000, dst=64x64+1192+449, rotation=0 (0x00000001)
+        underrun reporting: cpu=yes pch=yes
+[CRTC:265:pipe B]:
+        uapi: enable=no, active=no, mode="": 0 0 0 0 0 0 0 0 0 0 0x0 0x0
+        hw: enable=no, active=no
+        adjusted_mode="": 0 0 0 0 0 0 0 0 0 0 0x0 0x0
+        pipe__mode="": 0 0 0 0 0 0 0 0 0 0 0x0 0x0
+        pipe src=0x0+0+0, dither=no, bpp=0
+        port_clock=0, lane_count=0
+        num_scalers=2, scaler_users=0 scaler_id=-1 scaling_filter=0, scalers[0]: use=no, mode=0, scalers[1]: use=no, mode=0
+        [PLANE:150:plane 1B]: type=PRI
+                uapi: [FB:0] n/a,0x0,0x0,, visible=hidden, src=0.000000x0.000000+0.000000+0.000000, dst=0x0+0+0, rotation=0 (0x00000001)
+        [PLANE:180:plane 2B]: type=OVL
+                uapi: [FB:0] n/a,0x0,0x0,, visible=hidden, src=0.000000x0.000000+0.000000+0.000000, dst=0x0+0+0, rotation=0 (0x00000001)
+        [PLANE:210:plane 3B]: type=OVL
+                uapi: [FB:0] n/a,0x0,0x0,, visible=hidden, src=0.000000x0.000000+0.000000+0.000000, dst=0x0+0+0, rotation=0 (0x00000001)
+        [PLANE:240:plane 4B]: type=OVL
+                uapi: [FB:0] n/a,0x0,0x0,, visible=hidden, src=0.000000x0.000000+0.000000+0.000000, dst=0x0+0+0, rotation=0 (0x00000001)
+        [PLANE:250:plane 5B]: type=OVL
+                uapi: [FB:0] n/a,0x0,0x0,, visible=hidden, src=0.000000x0.000000+0.000000+0.000000, dst=0x0+0+0, rotation=0 (0x00000001)
+        [PLANE:260:cursor B]: type=CUR
+                uapi: [FB:0] n/a,0x0,0x0,, visible=hidden, src=0.000000x0.000000+0.000000+0.000000, dst=0x0+0+0, rotation=0 (0x00000001)
+        underrun reporting: cpu=yes pch=yes
+[CRTC:382:pipe C]:
+        uapi: enable=no, active=no, mode="": 0 0 0 0 0 0 0 0 0 0 0x0 0x0
+        hw: enable=no, active=no
+        adjusted_mode="": 0 0 0 0 0 0 0 0 0 0 0x0 0x0
+        pipe__mode="": 0 0 0 0 0 0 0 0 0 0 0x0 0x0
+        pipe src=0x0+0+0, dither=no, bpp=0
+        port_clock=0, lane_count=0
+        num_scalers=2, scaler_users=0 scaler_id=-1 scaling_filter=0, scalers[0]: use=no, mode=0, scalers[1]: use=no, mode=0
+        [PLANE:267:plane 1C]: type=PRI
+                uapi: [FB:0] n/a,0x0,0x0,, visible=hidden, src=0.000000x0.000000+0.000000+0.000000, dst=0x0+0+0, rotation=0 (0x00000001)
+        [PLANE:297:plane 2C]: type=OVL
+                uapi: [FB:0] n/a,0x0,0x0,, visible=hidden, src=0.000000x0.000000+0.000000+0.000000, dst=0x0+0+0, rotation=0 (0x00000001)
+        [PLANE:327:plane 3C]: type=OVL
+                uapi: [FB:0] n/a,0x0,0x0,, visible=hidden, src=0.000000x0.000000+0.000000+0.000000, dst=0x0+0+0, rotation=0 (0x00000001)
+        [PLANE:357:plane 4C]: type=OVL
+                uapi: [FB:0] n/a,0x0,0x0,, visible=hidden, src=0.000000x0.000000+0.000000+0.000000, dst=0x0+0+0, rotation=0 (0x00000001)
+        [PLANE:367:plane 5C]: type=OVL
+                uapi: [FB:0] n/a,0x0,0x0,, visible=hidden, src=0.000000x0.000000+0.000000+0.000000, dst=0x0+0+0, rotation=0 (0x00000001)
+        [PLANE:377:cursor C]: type=CUR
+                uapi: [FB:0] n/a,0x0,0x0,, visible=hidden, src=0.000000x0.000000+0.000000+0.000000, dst=0x0+0+0, rotation=0 (0x00000001)
+        underrun reporting: cpu=yes pch=yes
+[CRTC:499:pipe D]:
+        uapi: enable=no, active=no, mode="": 0 0 0 0 0 0 0 0 0 0 0x0 0x0
+        hw: enable=no, active=no
+        adjusted_mode="": 0 0 0 0 0 0 0 0 0 0 0x0 0x0
+        pipe__mode="": 0 0 0 0 0 0 0 0 0 0 0x0 0x0
+        pipe src=0x0+0+0, dither=no, bpp=0
+        port_clock=0, lane_count=0
+        num_scalers=2, scaler_users=0 scaler_id=-1 scaling_filter=0, scalers[0]: use=no, mode=0, scalers[1]: use=no, mode=0
+        [PLANE:384:plane 1D]: type=PRI
+                uapi: [FB:0] n/a,0x0,0x0,, visible=hidden, src=0.000000x0.000000+0.000000+0.000000, dst=0x0+0+0, rotation=0 (0x00000001)
+        [PLANE:414:plane 2D]: type=OVL
+                uapi: [FB:0] n/a,0x0,0x0,, visible=hidden, src=0.000000x0.000000+0.000000+0.000000, dst=0x0+0+0, rotation=0 (0x00000001)
+        [PLANE:444:plane 3D]: type=OVL
+                uapi: [FB:0] n/a,0x0,0x0,, visible=hidden, src=0.000000x0.000000+0.000000+0.000000, dst=0x0+0+0, rotation=0 (0x00000001)
+        [PLANE:474:plane 4D]: type=OVL
+                uapi: [FB:0] n/a,0x0,0x0,, visible=hidden, src=0.000000x0.000000+0.000000+0.000000, dst=0x0+0+0, rotation=0 (0x00000001)
+        [PLANE:484:plane 5D]: type=OVL
+                uapi: [FB:0] n/a,0x0,0x0,, visible=hidden, src=0.000000x0.000000+0.000000+0.000000, dst=0x0+0+0, rotation=0 (0x00000001)
+        [PLANE:494:cursor D]: type=CUR
+                uapi: [FB:0] n/a,0x0,0x0,, visible=hidden, src=0.000000x0.000000+0.000000+0.000000, dst=0x0+0+0, rotation=0 (0x00000001)
+        underrun reporting: cpu=yes pch=yes
+
+Connector info
+--------------
+[CONNECTOR:502:eDP-1]: status: connected
+        physical dimensions: 340x220mm
+        subpixel order: Unknown
+        CEA rev: 3
+        DPCD rev: 14
+        audio support: no
+        DP branch device present: no
+        HDCP version: No Connector Support
+        max bpc: 10
+        fixed modes:
+                "2560x1600": 60 282700 2560 2608 2640 2720 1600 1603 1609 1732 0x48 0xa
+                "2560x1600": 165 777410 2560 2608 2640 2720 1600 1603 1609 1732 0x48 0xa
+        modes:
+                "2560x1600": 165 777410 2560 2608 2640 2720 1600 1603 1609 1732 0x48 0xa
+                "2560x1600": 60 282700 2560 2608 2640 2720 1600 1603 1609 1732 0x48 0xa
+[CONNECTOR:511:DP-1]: status: disconnected
+[CONNECTOR:523:HDMI-A-1]: status: disconnected
+[CONNECTOR:529:DP-2]: status: disconnected
+[CONNECTOR:538:DP-3]: status: disconnected
+[CONNECTOR:547:DP-4]: status: disconnected
+[CONNECTOR:556:DP-5]: status: disconnected

@@ -32,3 +32,34 @@ WARNING: drivers/gpu/drm/i915/display/intel_dpll_mgr.c:4945 at verify_single_dpl
 **Independent code-read agrees with your suspect.** Routing MTL+ through the generic DPLL manager (`1a7fad2aea74`) together with removal of the cx0-specific state verify (`ac3423721117`) leaves the resume path: `readout_dpll_hw_state()` adopting the powered-down PLL as current → `sanitize_dpll_state()` not force-disabling (the eDP PLL still claims `active_mask`) → `verify_single_dpll_state()` warn-only `memcmp` → the full cx0 reprogram never re-runs.
 
 **Offer — re: your Ask #1 (confirm the regressing commit).** I have this exact repro hardware and can run the v6.19→v7.0 bisect you call for, and test candidate patches with fast turnaround. Plan: build/boot `1a7fad2aea74~1` (expect good) vs the series tip (expect bad) to confirm/exclude the framework commit in two boots, then narrow over `intel_cx0_phy.c` / `intel_dpll_mgr.c` if needed. Can also provide a `drm.debug=0xe` full capture and `i915_display_info` / `i915_vbt`.
+
+---
+
+## FOLLOW-UP comment (post after the downgrade, 2026-06-27)
+
+> Paste as a **new** comment on #16042 — don't edit the first note; a new note timestamps the
+> data point and notifies subscribers. **Verify-before-post:** on the current 6.19 boot, after a
+> wake or two, run the one-liner below and post only if it's empty (it should be). The pattern is
+> deliberately tightened to the real bug signatures — a broad `PHY A failed` would falsely match the
+> benign boot line `PHY A failed to request refclk`:
+> ```
+> journalctl -k -b 0 | grep -iE 'Failed to bring PHY A to idle|PHY A failed to change powerdown state|mismatch in dpll_hw_state|pll hw state mismatch|flip_done timed out|port_clock \(expected|verify_single_dpll_state'
+> ```
+
+**Update — confirmed-clean downgrade on the same machine; the kernel is the only changed variable.**
+
+Following up my MTL-P confirmation above. I've now run a direct A/B on this exact box:
+
+- **Bad:** `7.0.9-ogc3.2.fc44` — the C10 collapse / DPLL-mismatch fires on essentially every warm display restore and s2idle resume (~30 s `flip_done` storm + sluggish wake).
+- **Good:** downgraded to **`6.19.11-ogc1.1.fc44`** (Bazzite `44.20260429` base). Resume is clean across reboots — normal instant wake, and the journal shows **none** of the `verify_single_dpll_state` / `mismatch in dpll_hw_state` / `flip_done timed out` lines that fired on every 7.0 wake.
+
+Nothing else changed: same laptop, same Fedora 44 / Bazzite userspace + KWin/Wayland compositor, same panel (eDP-1, pipe A, C10 PHY, HBR3 `port_clock 810000`). The **only** variable is the kernel, which isolates the regression to the **v6.19 → v7.0 window** and rules out firmware / userspace / distro factors. It matches the report's v6.19.13 → v7.0.3 boundary, now bracketed at **6.19.11 good / 7.0.9 bad** — a coarse bisect-of-one straddling the DPLL-framework series (`1a7fad2aea74` "Enable dpll framework for MTL+", present in 7.0, absent in 6.19).
+
+**Good-state captured on 6.19 (attached).** Same machine, now on `6.19.11-ogc1`, the identical eDP-1 / pipe A / DDI A / **PHY A (C10)** path runs healthy — `i915_display_info` shows **`port_clock=810000, lane_count=4`**, `adjusted_mode` dotclock **777410**, 2560x1600@165 — i.e. live-healthy at exactly the values your report shows collapsing on 7.0 resume (`port_clock` → 61440, dotclock → ~58968, C10 `pll[0..19]` zeroed). The clean s2idle resume itself logs **none** of the cascade: no `verify_single_dpll_state` warning, no `mismatch in dpll_hw_state`, no `flip_done timed out`. (On a *clean* pass the verbose cx0 register dump never prints — it's emitted only by the verify-mismatch path — so the good-vs-bad signal here is the `port_clock`/dotclock above plus the absent warning. `i915_shared_dplls_info` shows only the refclk header, expected since MTL's per-port C10 isn't a legacy shared DPLL.) Attached: clean `drm.debug=0x100` s2idle-resume log + `i915_display_info`.
+
+**Still on offer (repro hardware in hand):**
+1. **Tested-by on MTL-P `8086:7d55` for `0001-drm-i915-mtl-Enable-PPS-before-PLL.patch`** (re @mnencia's note). My failing path is eDP-1 / PHY A s2idle and this box drives the **internal panel only** (every external connector reads disconnected in `i915_display_info`), so the eDP-only scope of the PPS-before-PLL reorder is sufficient here — happy to build it out-of-tree and run a batch of s2idle cycles to add a second-platform confirmation alongside the ARL-H `7d51` result.
+2. The 2-boot boundary test (`1a7fad2aea74~1` vs series tip), then a full bisect to first-bad-commit (your Ask #1).
+3. Fast-turnaround testing of any other candidate on real MTL-P (e.g. an MSGBUS-level bring-up fix, if that's the direction over the eDP workaround).
+
+Happy to run whichever is most useful.

@@ -21,6 +21,12 @@ COPY build_files /
 # Re-evaluate when upstream fixes the framework path — the host watcher
 # i915-resume-fix-check.timer flags it. Full analysis + sources:
 # docs/research/i915-mtl-resume-2026-06-20.md
+#
+# 2026-07-04: fix landed in torvalds/linux master (commit 062499cc4813b5a3,
+# "drm/i915/mtl+: Enable PPS before PLL", Closes: #16042) but is NOT YET in
+# any released 7.0.y/7.1.y stable kernel or in bazzite-nvidia:stable
+# (still 7.0.9-ogc3.2). Stay pinned. See
+# docs/research/i915-bug-report/UPSTREAM-FIX-STATUS-2026-07-04.md
 FROM ghcr.io/ublue-os/bazzite-nvidia:44.20260429
 
 # OCI image labels. These are baked into the image for local `podman build`;

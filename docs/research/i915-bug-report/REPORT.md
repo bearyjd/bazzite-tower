@@ -3,6 +3,12 @@
 > **Status (2026-06-20):** the upstream issue is **confirmed** — [drm/i915/kernel #16042](https://gitlab.freedesktop.org/drm/i915/kernel/-/issues/16042) ("Arrow Lake-P (P1 Gen 8) C10 PLL collapses to default state on s2idle resume — regression v6.19.13 → v7.0.3", Patrick Rodrigues, OPEN). It independently reaches this report's root cause. **Do NOT open a new issue** — post the additive comment in `COMMENT.md` there and attach `i915-warn-event-20260620.log`. This file is kept as the full standalone analysis. Still TODO before asserting hashes upstream: re-confirm `1a7fad2aea74` / `ac3423721117` against a local tree.
 >
 > **POSTED 2026-06-20** → [#16042 note_3529119](https://gitlab.freedesktop.org/drm/i915/kernel/-/work_items/16042#note_3529119) (with `i915-warn-event-20260620.log` attached; bisect offered).
+>
+> **UPDATE 2026-07-04:** upstream fix merged — commit `062499cc4813b5a3cbed5dd4fbe0177265858450`
+> ("drm/i915/mtl+: Enable PPS before PLL", `Fixes: 1a7fad2aea74`, `Closes: #16042`) is in
+> `torvalds/linux` master as of ~2026-07-04, but **not yet** in any released 7.0.y/7.1.y stable
+> kernel or in Bazzite's `:stable` build. Still pinned to 6.19.x. See
+> `UPSTREAM-FIX-STATUS-2026-07-04.md` for the full verification and the re-check trigger.
 
 ## Summary
 

@@ -29,6 +29,7 @@ pieces fit together read [docs/CODEMAPS/](./CODEMAPS/architecture.md).
 | `just lint` | `shellcheck` every `*.sh` |
 | `just format` | `shfmt --write` every `*.sh` |
 | `just check` / `just fix` | Check / auto-format Just syntax |
+| `just test-ci` | Fixture-based tests for `ci/base-diff.py` (offline, no live upstream manifests needed) |
 | `just clean` | Remove build artifacts (`output/`, manifests, `*_build*`) |
 <!-- END AUTO-GENERATED:commands -->
 

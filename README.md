@@ -354,6 +354,10 @@ Runs shellcheck on all Bash scripts.
 
 Runs shfmt on all Bash scripts.
 
+### `just test-ci`
+
+Runs fixture-based tests for `ci/base-diff.py` against committed manifest pairs under `tests/fixtures/base-diff/` — offline, no live upstream manifests needed.
+
 ## Additional resources
 
 For additional driver support, ublue maintains a set of scripts and container images at [ublue-akmods](https://github.com/ublue-os/akmods). These images include scripts to install multiple kernel drivers within the container (Nvidia, OpenRazer, Framework, etc.) — useful if you need to extend `bazzite-tower` with additional hardware support.

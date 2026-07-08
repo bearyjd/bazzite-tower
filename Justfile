@@ -364,3 +364,9 @@ format:
     fi
     # Run shfmt on all Bash scripts
     /usr/bin/find . -iname "*.sh" -type f -exec shfmt --write "{}" ';'
+
+# Fixture-based tests for ci/base-diff.py (offline, no live upstream manifests needed)
+test-ci:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    bash tests/test-base-diff.sh

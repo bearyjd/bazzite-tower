@@ -1,0 +1,10 @@
+[Unit]
+Description=Check this boot's kernel log for the Meteor Lake i915 cx0 DPLL s2idle-resume regression signature
+Documentation=https://github.com/bearyjd/bazzite-tower
+# Reads the journal, so wait for it to be up. Not boot-critical: triggered by
+# i915-resume-fix-check.timer, not run directly at boot.
+After=systemd-journald.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/libexec/i915-resume-fix-check

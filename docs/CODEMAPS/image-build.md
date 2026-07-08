@@ -11,7 +11,7 @@
 4. `RUN --mount=bind,from=ctx … /ctx/build.sh` — modifications (caches: /var/cache, /var/log; tmpfs /tmp)
 5. `RUN bootc container lint`
 
-## build.sh sections (in order, 265 lines)
+## build.sh sections (in order, 276 lines)
 
 | Lines | Section | Effect |
 |---|---|---|
@@ -28,8 +28,9 @@
 | 210–215| **Storage SMART** | dnf: smartmontools; enable `smartd.service` (config in `system_files/`) |
 | 217–225| **Cockpit** | dnf: cockpit, cockpit-machines; enable `cockpit.socket` (web mgmt :9090; rest of Cockpit is base-provided) |
 | 227–245| **RAS / MCE** | dnf: rasdaemon (enable) ; **mask `mcelog.service`** ; dnf: microcode_ctl (latest) |
-| 247–262| **CPU power/thermal** | dnf: thermald (enable) ; enable `bazzite-tower-power-tuning.service` (balanced EPP + platform-profile). SOF audio: **no install** — bypassed via the `dsp_driver=1` karg (see system-files) |
-| 264    | `dnf clean all` | |
+| 247–255| **i915 resume-regression watcher** | enable `i915-resume-fix-check.timer` — periodic, kernel-version-gated check for the cx0 DPLL s2idle-resume regression signature (see system-files); the machine-checkable signal the Containerfile kernel-pin comment points at |
+| 258–273| **CPU power/thermal** | dnf: thermald (enable) ; enable `bazzite-tower-power-tuning.service` (balanced EPP + platform-profile). SOF audio: **no install** — bypassed via the `dsp_driver=1` karg (see system-files) |
+| 275–276| `dnf clean all` | |
 
 ## Verified by
 

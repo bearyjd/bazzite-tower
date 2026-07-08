@@ -1,0 +1,14 @@
+[Unit]
+Description=Periodically check for the Meteor Lake i915 cx0 DPLL s2idle-resume regression signature
+Documentation=https://github.com/bearyjd/bazzite-tower
+
+[Timer]
+# First run shortly after boot (catches a resume-from-suspend that already
+# happened this boot), then re-check daily in case a long-uptime session hits
+# the regression on a later resume.
+OnBootSec=5min
+OnUnitActiveSec=1d
+Persistent=true
+
+[Install]
+WantedBy=timers.target

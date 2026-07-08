@@ -10,8 +10,17 @@
 | `bazzite-tower-firstboot.service` | oneshot, RemainAfterExit | `After=systemd-user-sessions`; `ConditionPathExists=!/var/lib/.bazzite-tower-groups-done` | `…/firstboot` | add first uid≥1000 user to kvm,libvirt,docker; retries each boot until a user exists, then drops the marker |
 | `bazzite-tower-wifi-backend-guard.service` | oneshot, RemainAfterExit | `After=local-fs`; `Before=NetworkManager` | `…/wifi-backend-guard` | force wpa_supplicant if `wifi.backend=iwd` is selected but iwd isn't enabled |
 | `bazzite-tower-power-tuning.service` | oneshot, RemainAfterExit | `After=basic.target` | `…/power-tuning` | set `platform_profile=balanced` + EPP=`balance_performance` on every core (was firmware low-power) |
+| `i915-resume-fix-check.service` | oneshot | `After=systemd-journald.service`; triggered by its `.timer` | `…/i915-resume-fix-check` | pre-7.0 kernel: no-op; 7.0+: grep this boot's journal for the cx0 DPLL s2idle-resume regression signature, warn if found |
 
-All `WantedBy=multi-user.target`, enabled in build.sh.
+All `.service` units `WantedBy=multi-user.target`, enabled in build.sh.
+
+## systemd timers (`/usr/lib/systemd/system/`)
+
+| Timer | Schedule | Purpose |
+|---|---|---|
+| `i915-resume-fix-check.timer` | `OnBootSec=5min`, `OnUnitActiveSec=1d`, `Persistent=true` | periodic trigger for `i915-resume-fix-check.service` — the machine-checkable signal Containerfile's kernel-pin comment points at |
+
+`WantedBy=timers.target`, enabled in build.sh (`systemctl enable i915-resume-fix-check.timer`).
 
 ## libexec helpers (`/usr/libexec/`)
 
@@ -19,6 +28,7 @@ All `WantedBy=multi-user.target`, enabled in build.sh.
 - `bazzite-tower-wifi-backend-guard` — NM iwd-backend guard, idempotent
 - `bazzite-tower-wifi-debug` — read-only Wi-Fi diagnostics (offline)
 - `bazzite-tower-power-tuning` — write platform_profile + per-CPU EPP; skips absent/read-only knobs
+- `i915-resume-fix-check` — kernel-version-gated check for the Meteor Lake cx0 DPLL s2idle-resume regression signature in the current boot's journal
 
 ## ujust recipes (`/usr/share/ublue-os/just/60-custom.just`)
 

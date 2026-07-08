@@ -30,7 +30,7 @@ build_files/build.sh ──RUN───┘        │
 ## Entry points
 
 - `Containerfile` — build entry: FROM base → COPY system_files → RUN build.sh → lint
-- `build_files/build.sh` — all image customization (265 lines)
+- `build_files/build.sh` — all image customization (276 lines)
 - `system_files/` — static content baked verbatim into the image (units, recipes, kargs, helpers)
 - `installer/` — separate payload builder for the live/installer ISO (titanoboa input)
 - `Justfile` — local build / VM / test recipes

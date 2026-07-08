@@ -1,0 +1,41 @@
+#!/usr/bin/env bash
+# i915-resume-fix-check — flag the Meteor Lake cx0 DPLL s2idle-resume regression
+# (docs/research/i915-mtl-resume-2026-06-20.md) if the running kernel has moved
+# past the 6.19.x-ogc pin this image currently ships in Containerfile to dodge it.
+#
+# Kernel < 7.0: still on the known-good pin. Nothing to check; log and exit.
+# Kernel >= 7.0: the regression's root cause (the DPLL-framework series, lead
+# commit 1a7fad2aea74) had no confirmed upstream fix as of the research date.
+# Grep this boot's kernel log for the known-bad signature — the cx0 PLL
+# collapsing to its parked clock (port_clock 61440 instead of 810000),
+# dpll_hw_state/verify_single_dpll_state mismatches, and PHY A flip_done
+# timeouts — and log a warning if it fired, so a human notices before assuming
+# 7.0+ is safe to run. A clean grep here does NOT by itself mean the upstream
+# bug is fixed; it only means this particular boot didn't trip it.
+set -uo pipefail
+
+kver="$(uname -r)"
+kmajor="${kver%%.*}"
+
+if [[ ! "${kmajor}" =~ ^[0-9]+$ ]]; then
+    echo "i915-resume-fix-check: could not parse kernel major version from '${kver}'; skipping."
+    exit 0
+fi
+
+if ((kmajor < 7)); then
+    echo "i915-resume-fix-check: kernel ${kver} is pre-7.0 (still on the pinned known-good base) — nothing to check."
+    exit 0
+fi
+
+echo "i915-resume-fix-check: kernel ${kver} is 7.0+; checking this boot's kernel log for the known-bad cx0 DPLL resume signature..."
+
+# Signature per docs/research/i915-bug-report/COMMENT.md and BISECT-RUNBOOK.md.
+pattern='Failed to bring PHY A to idle|PHY A failed to change powerdown state|mismatch in dpll_hw_state|pll hw state mismatch|flip_done timed out|port_clock \(expected|verify_single_dpll_state'
+
+if journalctl -k -b 0 --no-pager 2>/dev/null | grep -qiE "${pattern}"; then
+    echo "i915-resume-fix-check: WARNING - known-bad cx0 DPLL resume signature found in this boot's kernel log on kernel ${kver}. The Meteor Lake s2idle-resume regression may still be present on this kernel. Do NOT move the Containerfile base image pin forward without re-reading docs/research/i915-mtl-resume-2026-06-20.md and confirming an upstream fix commit exists."
+else
+    echo "i915-resume-fix-check: no known-bad signature found in this boot's kernel log (kernel ${kver}). Not sufficient alone to declare the regression fixed upstream — re-read docs/research/i915-mtl-resume-2026-06-20.md before unpinning the base image in Containerfile."
+fi
+
+exit 0

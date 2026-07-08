@@ -107,6 +107,13 @@ check_enabled "rasdaemon.service"
 check_masked  "mcelog.service"
 check "microcode_ctl present" rpm -q microcode_ctl
 
+echo "== i915 resume-regression watcher =="
+# Machine-checkable signal for the comment in Containerfile pinning the base to
+# 6.19.x-ogc: the watcher must exist and be enabled so a future kernel bump
+# past 7.0 gets flagged instead of silently trusted.
+check_enabled "i915-resume-fix-check.timer"
+check "i915-resume-fix-check helper is executable" test -x /usr/libexec/i915-resume-fix-check
+
 echo "== Audio (SOF bypass) =="
 # SOF/DSP is bypassed via snd_intel_dspcfg.dsp_driver=1 (legacy HDA): the kernel's
 # SOF ABI (3.23) can't load stock firmware's ABI-3.29 topology, and no ABI-≤3.23

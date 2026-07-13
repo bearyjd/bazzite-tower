@@ -9,6 +9,11 @@
 > `torvalds/linux` master as of ~2026-07-04, but **not yet** in any released 7.0.y/7.1.y stable
 > kernel or in Bazzite's `:stable` build. Still pinned to 6.19.x. See
 > `UPSTREAM-FIX-STATUS-2026-07-04.md` for the full verification and the re-check trigger.
+>
+> **UPDATE 2026-07-13:** Bazzite `:stable` moved onto the `7.1.y` line (`44.20260713`, kernel
+> `7.1.3-ogc3.4`), but the fix is still absent from `linux-7.1.y` at that point release
+> (`git merge-base --is-ancestor` confirms it). Still pinned to 6.19.x. See
+> `UPSTREAM-FIX-STATUS-2026-07-13.md` for the full verification and the re-check trigger.
 
 ## Summary
 

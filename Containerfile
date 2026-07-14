@@ -27,6 +27,11 @@ COPY build_files /
 # any released 7.0.y/7.1.y stable kernel or in bazzite-nvidia:stable
 # (still 7.0.9-ogc3.2). Stay pinned. See
 # docs/research/i915-bug-report/UPSTREAM-FIX-STATUS-2026-07-04.md
+#
+# 2026-07-13: bazzite-nvidia:stable jumped to 44.20260713 (kernel 7.1.3-ogc3.4,
+# the 7.1.y line) but the fix is confirmed absent from linux-7.1.y at 7.1.3
+# (git merge-base --is-ancestor check). Still pinned. See
+# docs/research/i915-bug-report/UPSTREAM-FIX-STATUS-2026-07-13.md
 FROM ghcr.io/ublue-os/bazzite-nvidia:44.20260429
 
 # OCI image labels. These are baked into the image for local `podman build`;

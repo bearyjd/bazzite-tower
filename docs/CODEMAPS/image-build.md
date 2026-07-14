@@ -11,7 +11,7 @@
 4. `RUN --mount=bind,from=ctx … /ctx/build.sh` — modifications (caches: /var/cache, /var/log; tmpfs /tmp)
 5. `RUN bootc container lint`
 
-## build.sh sections (in order, 276 lines)
+## build.sh sections (in order, 294 lines)
 
 | Lines | Section | Effect |
 |---|---|---|
@@ -30,7 +30,8 @@
 | 227–245| **RAS / MCE** | dnf: rasdaemon (enable) ; **mask `mcelog.service`** ; dnf: microcode_ctl (latest) |
 | 247–255| **i915 resume-regression watcher** | enable `i915-resume-fix-check.timer` — periodic, kernel-version-gated check for the cx0 DPLL s2idle-resume regression signature (see system-files); the machine-checkable signal the Containerfile kernel-pin comment points at |
 | 258–273| **CPU power/thermal** | dnf: thermald (enable) ; enable `bazzite-tower-power-tuning.service` (balanced EPP + platform-profile). SOF audio: **no install** — bypassed via the `dsp_driver=1` karg (see system-files) |
-| 275–276| `dnf clean all` | |
+| 275–291| **OpenSnitch** | not in Fedora/RPM Fusion — `curl` the pinned v1.8.0 upstream release RPM, verify sha256 (no published GPG key to trust instead), `dnf install` it, enable `opensnitch.service`. Daemon only, no GUI package; `DefaultAction: allow` in its shipped config means unruled connections fail open without a UI |
+| 293–294| `dnf clean all` | |
 
 ## Verified by
 

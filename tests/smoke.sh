@@ -147,6 +147,15 @@ check_enabled "docker.service"
 # iptable_nat is loaded at boot for docker-in-docker.
 check "iptable_nat modules-load.d present" test -f /etc/modules-load.d/iptable_nat.conf
 
+echo "== OpenSnitch (application firewall) =="
+# Installed from a pinned, sha256-verified upstream release RPM (not Fedora/RPM
+# Fusion — see build.sh). Daemon only; default policy fails open without a GUI.
+check "opensnitch present (rpm -q)" rpm -q opensnitch
+check_enabled "opensnitch.service"
+check "opensnitch default-config present" test -f /etc/opensnitchd/default-config.json
+check "opensnitch DefaultAction is allow (fail-open headless)" \
+    grep -q '"DefaultAction": *"allow"' /etc/opensnitchd/default-config.json
+
 echo "== Cockpit (web management) =="
 # cockpit-machines (VM management) is the only piece missing from the base; the
 # socket is enabled so the UI is reachable on :9090.

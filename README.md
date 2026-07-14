@@ -61,6 +61,12 @@ The Docker repo file ships with **every section disabled**. Packages are pulled 
 
 `iptable_nat` is registered in `/etc/modules-load.d/iptable_nat.conf` for docker-in-docker workloads.
 
+### OpenSnitch (application firewall)
+
+[OpenSnitch](https://github.com/evilsocket/opensnitch) is baked in daemon-only (no GUI package): `opensnitch.service` is enabled at boot, and its shipped default config has `DefaultAction: allow`, so unruled outbound connections fail open rather than block — safe to run headless without a UI to answer prompts, and it won't silently break libvirt/Docker/Cockpit traffic. Install a GUI (`opensnitch-ui`) separately (Flatpak or `rpm-ostree install`) if you want the interactive per-connection prompt.
+
+Not available in Fedora or RPM Fusion (the one Fedora-44 COPR has zero builds), so it's installed from the pinned upstream release RPM (`v1.8.0`), verified by a hardcoded sha256 before install — see [Disabled-by-default external repos](#disabled-by-default-external-repos) for why this repo prefers pin-and-verify over trusting an unverifiable third-party GPG key.
+
 ### VM management recipes (`ujust`)
 
 `bazzite-tower` ships extra `ujust` recipes (in `/usr/share/ublue-os/just/60-custom.just`) for driving the modular libvirt stack:

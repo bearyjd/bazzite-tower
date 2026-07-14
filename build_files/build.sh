@@ -272,5 +272,28 @@ systemctl enable bazzite-tower-power-tuning.service
 # ABI-≤3.23 build to downgrade to — so the firmware can't be pinned. Forcing the
 # legacy HDA path sidesteps SOF entirely. See docs/RUNBOOK.md "Audio".
 
+# ── OpenSnitch: interactive application firewall ──────────────────────────────
+# Not in Fedora/RPM Fusion, and the one Fedora-44 COPR (androfuchs/opensnitch) has
+# zero builds — install the upstream-signed release RPM directly, pinned by
+# sha256 (no published GPG key to check against, so hash-pin is the trust anchor,
+# same reproducibility bar as the Containerfile's digest-pinned base image).
+# Daemon only (no GUI package): default-config.json ships DefaultAction "allow",
+# so unruled connections fail open without a UI to answer prompts — safe to run
+# headless without silently blocking libvirt/Docker/Cockpit traffic.
+opensnitch_version="1.8.0"
+opensnitch_rpm="opensnitch-${opensnitch_version}-1.x86_64.rpm"
+opensnitch_sha256="e06e9119daf764e56455b61c319e496274c0274bb53bb94a0ff1ab72967fea7d"
+curl -fsSL -o "/tmp/${opensnitch_rpm}" \
+    "https://github.com/evilsocket/opensnitch/releases/download/v${opensnitch_version}/${opensnitch_rpm}"
+echo "${opensnitch_sha256}  /tmp/${opensnitch_rpm}" | sha256sum -c -
+# --setopt=tsflags=noscripts: the RPM's %post calls systemctl in a way that
+# expects a live systemd bus (not just the enable-by-symlink our other dnf
+# installs above rely on), which aborts the whole transaction under a plain
+# `podman build` with no running PID 1. Skip its scriptlets and do the one
+# thing we actually need — enabling the unit — ourselves, below.
+dnf install -y --setopt=tsflags=noscripts "/tmp/${opensnitch_rpm}"
+rm -f "/tmp/${opensnitch_rpm}"
+systemctl enable opensnitch.service
+
 # ── Cleanup ───────────────────────────────────────────────────────────────────
 dnf clean all

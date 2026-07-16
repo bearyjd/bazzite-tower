@@ -43,7 +43,11 @@ sudo bootc switch ghcr.io/bearyjd/bazzite-tower:latest.YYYYMMDD
 ```
 
 Tag scheme (`latest`, `latest.YYYYMMDD`, `YYYYMMDD`, `<short-sha>`):
-[README "Tags"](../README.md#tags).
+[README "Tags"](../README.md#tags). A second, opt-in `:latest-kernel` variant
+also exists, tracking upstream `bazzite-nvidia:stable`'s current kernel — do
+**not** `bootc switch` to it on this hardware without first checking
+`docs/research/i915-bug-report/` for whether the s2idle-resume regression is
+actually fixed yet.
 
 ## Health checks
 

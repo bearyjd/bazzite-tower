@@ -65,7 +65,7 @@ The Docker repo file ships with **every section disabled**. Packages are pulled 
 
 [OpenSnitch](https://github.com/evilsocket/opensnitch) is baked in daemon-only (no GUI package): `opensnitch.service` is enabled at boot, and its shipped default config has `DefaultAction: allow`, so unruled outbound connections fail open rather than block — safe to run headless without a UI to answer prompts, and it won't silently break libvirt/Docker/Cockpit traffic. Install a GUI (`opensnitch-ui`) separately (Flatpak or `rpm-ostree install`) if you want the interactive per-connection prompt.
 
-Not available in Fedora or RPM Fusion (the one Fedora-44 COPR has zero builds), so it's installed from the pinned upstream release RPM (`v1.8.0`), verified by a hardcoded sha256 before install — see [Disabled-by-default external repos](#disabled-by-default-external-repos) for why this repo prefers pin-and-verify over trusting an unverifiable third-party GPG key.
+Not available in Fedora or RPM Fusion (the one Fedora-44 COPR has zero builds), so it's extracted directly from the pinned upstream release RPM (`v1.8.0`, verified by a hardcoded sha256 before extraction) rather than `dnf`/`rpm install`ed — see [Disabled-by-default external repos](#disabled-by-default-external-repos) for why this repo prefers pin-and-verify over trusting an unverifiable third-party GPG key. It's therefore not registered in the rpm database (`rpm -q opensnitch` won't find it); check for `/usr/bin/opensnitchd` instead.
 
 ### VM management recipes (`ujust`)
 
@@ -177,12 +177,28 @@ The image is signed with cosign — the public key lives at `cosign.pub` in this
 
 ## Tags
 
+Two variants are built from the same `Containerfile` (base image selected via
+the `BASE_IMAGE` build-arg — see the comment above `FROM` in `Containerfile`):
+
+**`latest` — default/primary, pinned base (what `bootc upgrade` pulls with no explicit tag)**
 - `latest` — current build of `main`
 - `latest.YYYYMMDD` — same image, date-stamped
 - `YYYYMMDD` — date-only tag
 - `<short-sha>` — the 7-character git SHA of the build commit
 
-CI rebuilds weekly (Sunday 06:00 UTC) and on every push to `main`.
+**`latest-kernel` — opt-in, tracks upstream `bazzite-nvidia:stable`'s current kernel**
+- `latest-kernel` / `latest-kernel.YYYYMMDD` / `latest-kernel-YYYYMMDD` / `latest-kernel-<short-sha>`
+- **Never boot this on the ThinkPad P1 this repo targets without checking
+  `docs/research/i915-bug-report/` first.** It exists to make it easy to test
+  when upstream's kernel actually fixes the Meteor Lake s2idle-resume
+  regression (see [Intel display & suspend stability](#intel-display--suspend-stability));
+  until then it carries the same known black-screen/flip_done bug the `latest`
+  pin exists to avoid. Never the default — `bootc switch` to it explicitly if
+  you want to track it.
+
+CI rebuilds weekly (Sunday 06:00 UTC) and on every push to `main`, building
+and smoke-testing both variants independently (a break in one never blocks
+or affects the other's publish).
 
 ## Hardware target
 

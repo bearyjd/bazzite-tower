@@ -8,7 +8,7 @@
 
 | Workflow | Triggers | Flow | Issue label |
 |---|---|---|---|
-| `build.yml` | push main (ignores README/docs/**), PR, Sun 06:00 UTC, dispatch | build → **smoke gate** (`tests/smoke.sh`, pre-push) → login → push GHCR → cosign sign by digest (if `SIGNING_SECRET`) | `ci-failure` |
+| `build.yml` | push main (ignores README/docs/**), PR, Sun 06:00 UTC, dispatch | **matrix** (`safe-pin` tag `latest`, pinned base; `latest-kernel`, tracks upstream `:stable`) — each: build (own `BASE_IMAGE` build-arg) → **smoke gate** (`tests/smoke.sh`, pre-push) → login → push GHCR → cosign sign by digest (if `SIGNING_SECRET`). `fail-fast: false` — one leg failing never blocks/cancels the other | `ci-failure-<variant>` (per-leg label, so one leg's success never auto-closes the other's issue) |
 | `boot-test.yml` | PR (build paths), Sun 07:00 UTC, dispatch | build → `podman run --systemd=always /sbin/init` → wait running/degraded → exec `tests/boot-check.sh` | `boot-test-failure` |
 | `base-watch.yml` | daily 05:00 UTC, dispatch | pull base → `rpm -qa` manifest → `ci/base-diff.py` vs last-seen baseline in `docs/manifests/` (written on first run) → commit refreshed manifest | `base-bump` |
 | `build-disk.yml` | dispatch (platform amd64/arm64), PR (disk.toml path) | bootc-image-builder → qcow2 disk image (rootfs=btrfs) → artifact or S3. anaconda-iso disabled: upstream BIB#1188 + bazzite#3418 | — |
@@ -19,8 +19,9 @@ The `installer/` payload + titanoboa contract is documented in
 before failing (transient GHCR 502s).
 
 **Gate ordering** in `build.yml`: the smoke test runs *before* login/push, so a
-broken image is never published (`:latest` stays last-good). Each gated workflow
-opens — and later auto-closes — its labelled tracking issue.
+broken image is never published (each variant's tag stays last-good
+independently). Each gated workflow opens — and later auto-closes — its
+labelled tracking issue.
 
 ## Test scripts (`tests/`)
 

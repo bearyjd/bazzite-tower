@@ -28,7 +28,7 @@ concurrency:
 
 jobs:
   build_push:
-    name: Build and push image
+    name: Build and push image (${{ matrix.variant }})
     runs-on: ubuntu-24.04
 
     permissions:
@@ -41,6 +41,30 @@ jobs:
     # `secrets` context is not available directly inside `if:` expressions.
     env:
       SIGNING_SECRET: ${{ secrets.SIGNING_SECRET }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Default/primary — what `bootc upgrade` pulls with no explicit tag.
+          # Pinned base; keep in sync with the Containerfile's BASE_IMAGE ARG
+          # default. tag_prefix empty => tag strings below are byte-identical
+          # to this workflow's pre-matrix behavior (no disruption to existing
+          # installs or anyone pinned to a `:<date>`/`:<sha>` tag).
+          - variant: safe-pin
+            base_image: ghcr.io/ublue-os/bazzite-nvidia:44.20260429
+            tag_base: latest
+            tag_prefix: ""
+          # Opt-in — tracks upstream bazzite-nvidia:stable's current kernel.
+          # As of 2026-07-13 that kernel (7.1.3-ogc3.4) still carries the
+          # unfixed cx0 DPLL s2idle-resume regression (see Containerfile and
+          # docs/research/i915-bug-report/). Never the default tag; every
+          # tag this leg produces is namespaced under tag_prefix so it can
+          # never collide with the safe-pin leg's pushed tags.
+          - variant: latest-kernel
+            base_image: ghcr.io/ublue-os/bazzite-nvidia:stable
+            tag_base: latest-kernel
+            tag_prefix: "latest-kernel-"
 
     steps:
       - name: Prepare environment
@@ -72,14 +96,17 @@ jobs:
         uses: docker/metadata-action@80c7e94dd9b9319bd5eb7a0e0fe9291e23a2a2e9 # v6.1.0
         id: metadata
         with:
-          # This generates all the tags for your image, you can add custom tags here too!
-          # Default tags are "$DEFAULT_TAG" and "$DEFAULT_TAG.$date".
+          # tag_prefix is "" for the safe-pin leg, so these four lines produce
+          # exactly the pre-matrix tag strings for that leg (latest,
+          # latest.$date, $date, $sha). The latest-kernel leg gets everything
+          # namespaced under "latest-kernel-" so it can never collide with a
+          # safe-pin tag in the registry.
           tags: |
-            type=raw,value=${{ env.DEFAULT_TAG }}
-            type=raw,value=${{ env.DEFAULT_TAG }}.{{date 'YYYYMMDD'}}
-            type=raw,value={{date 'YYYYMMDD'}}
-            type=sha,prefix=,format=short
-            type=ref,event=pr
+            type=raw,value=${{ matrix.tag_base }}
+            type=raw,value=${{ matrix.tag_base }}.{{date 'YYYYMMDD'}}
+            type=raw,value=${{ matrix.tag_prefix }}{{date 'YYYYMMDD'}}
+            type=sha,prefix=${{ matrix.tag_prefix }},format=short
+            type=ref,event=pr,prefix=${{ matrix.tag_prefix }}pr-
           labels: |
             io.artifacthub.package.readme-url=https://raw.githubusercontent.com/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}/${{ github.sha }}/README.md
             org.opencontainers.image.created=${{ steps.date.outputs.date }}
@@ -89,7 +116,7 @@ jobs:
             org.opencontainers.image.title=${{ env.IMAGE_NAME }}
             org.opencontainers.image.url=https://github.com/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}/tree/${{ github.sha }}
             org.opencontainers.image.vendor=${{ github.repository_owner }}
-            org.opencontainers.image.version=${{ env.DEFAULT_TAG }}.{{date 'YYYYMMDD'}}
+            org.opencontainers.image.version=${{ matrix.tag_base }}.{{date 'YYYYMMDD'}}
             io.artifacthub.package.deprecated=false
             io.artifacthub.package.keywords=${{ env.IMAGE_KEYWORDS }}
             io.artifacthub.package.license=Apache-2.0
@@ -110,6 +137,8 @@ jobs:
           image: ${{ env.IMAGE_NAME }}
           tags: ${{ steps.metadata.outputs.tags }}
           labels: ${{ steps.metadata.outputs.labels }}
+          build-args: |
+            BASE_IMAGE=${{ matrix.base_image }}
           oci: false
 
       # ── Promotion gate ──────────────────────────────────────────────────────
@@ -120,7 +149,9 @@ jobs:
       # Runs on PRs too (red check, no issue) so regressions surface pre-merge.
       - name: Smoke test built image
         run: |
-          podman run --rm -i "${IMAGE_NAME}:${DEFAULT_TAG}" bash -s < tests/smoke.sh
+          podman run --rm -i "${IMAGE_NAME}:${TAG_BASE}" bash -s < tests/smoke.sh
+        env:
+          TAG_BASE: ${{ matrix.tag_base }}
 
       # Rechunk is a script that we use on Universal Blue to make sure there isnt a single huge layer when your image gets published.
       # This does not make your image faster to download, just provides better resumability and fixes a few errors.
@@ -207,15 +238,19 @@ jobs:
         if: failure() && github.event_name != 'pull_request'
         uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
         with:
+          # Labelled per matrix leg: with two independent legs (fail-fast:
+          # false), one leg's success must never auto-close an issue the
+          # OTHER leg opened — a shared label would do exactly that.
           script: |
-            const label = 'ci-failure';
+            const label = 'ci-failure-${{ matrix.variant }}';
             const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const tagBase = '${{ matrix.tag_base }}';
             const body = [
-              `The **${context.workflow}** workflow failed on \`${context.ref}\` (commit \`${context.sha.slice(0,7)}\`, event \`${context.eventName}\`).`,
+              `The **${context.workflow}** workflow failed on \`${context.ref}\` (commit \`${context.sha.slice(0,7)}\`, event \`${context.eventName}\`, matrix leg \`${{ matrix.variant }}\`).`,
               ``,
               `Run: ${runUrl}`,
               ``,
-              `This usually means an upstream Bazzite change broke the build or tripped a smoke-test assertion (qemu user, modular \`virt*.socket\`s, the Wi-Fi backend guard, IOMMU kargs, Docker CE). Because the gate runs before push, \`:latest\` was **not** updated and the laptop is still on the last-good image.`,
+              `This usually means an upstream Bazzite change broke the build or tripped a smoke-test assertion (qemu user, modular \`virt*.socket\`s, the Wi-Fi backend guard, IOMMU kargs, Docker CE). Because the gate runs before push, \`:${tagBase}\` was **not** updated and stays on the last-good image.`,
               ``,
               `See \`docs/downstream-change-tracking.md\` for the failure model and which area each check maps to.`,
             ].join('\n');
@@ -224,17 +259,19 @@ jobs:
             if (existing.data.length > 0) {
               await github.rest.issues.createComment({ owner, repo, issue_number: existing.data[0].number, body });
             } else {
-              await github.rest.issues.create({ owner, repo, title: '🚨 Image build/smoke gate failing', labels: [label], body });
+              await github.rest.issues.create({ owner, repo, title: `🚨 Image build/smoke gate failing (${tagBase})`, labels: [label], body });
             }
 
       # Close the tracking issue once the gate is green again on the default
-      # branch, so an open `ci-failure` issue always means "currently broken".
+      # branch, so an open `ci-failure-<variant>` issue always means "that
+      # variant is currently broken" — scoped per leg for the same reason
+      # the open step above is.
       - name: Close tracking issue on success
         if: success() && github.event_name != 'pull_request' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
         uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
         with:
           script: |
-            const label = 'ci-failure';
+            const label = 'ci-failure-${{ matrix.variant }}';
             const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
             const { owner, repo } = context.repo;
             const open = await github.rest.issues.listForRepo({ owner, repo, state: 'open', labels: label });

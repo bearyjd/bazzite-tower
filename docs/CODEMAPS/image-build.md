@@ -5,13 +5,14 @@
 
 ## Containerfile stages
 
-1. `FROM scratch AS ctx` + `COPY build_files /` — scripts reachable via bind mount, not baked in
-2. `FROM ghcr.io/ublue-os/bazzite-nvidia:stable` + OCI labels
-3. `COPY system_files/ /` — static content, copied **before** build.sh so it can enable those units
-4. `RUN --mount=bind,from=ctx … /ctx/build.sh` — modifications (caches: /var/cache, /var/log; tmpfs /tmp)
-5. `RUN bootc container lint`
+1. `ARG BASE_IMAGE=ghcr.io/ublue-os/bazzite-nvidia:44.20260429` (pinned default — see `:latest`/`:latest-kernel` in README's Tags section for how CI overrides this per matrix leg)
+2. `FROM scratch AS ctx` + `COPY build_files /` — scripts reachable via bind mount, not baked in
+3. `FROM ${BASE_IMAGE}` + OCI labels
+4. `COPY system_files/ /` — static content, copied **before** build.sh so it can enable those units
+5. `RUN --mount=bind,from=ctx … /ctx/build.sh` — modifications (caches: /var/cache, /var/log; tmpfs /tmp)
+6. `RUN bootc container lint`
 
-## build.sh sections (in order, 294 lines)
+## build.sh sections (in order, 309 lines)
 
 | Lines | Section | Effect |
 |---|---|---|
@@ -30,8 +31,8 @@
 | 227–245| **RAS / MCE** | dnf: rasdaemon (enable) ; **mask `mcelog.service`** ; dnf: microcode_ctl (latest) |
 | 247–255| **i915 resume-regression watcher** | enable `i915-resume-fix-check.timer` — periodic, kernel-version-gated check for the cx0 DPLL s2idle-resume regression signature (see system-files); the machine-checkable signal the Containerfile kernel-pin comment points at |
 | 258–273| **CPU power/thermal** | dnf: thermald (enable) ; enable `bazzite-tower-power-tuning.service` (balanced EPP + platform-profile). SOF audio: **no install** — bypassed via the `dsp_driver=1` karg (see system-files) |
-| 275–291| **OpenSnitch** | not in Fedora/RPM Fusion — `curl` the pinned v1.8.0 upstream release RPM, verify sha256 (no published GPG key to trust instead), `dnf install` it, enable `opensnitch.service`. Daemon only, no GUI package; `DefaultAction: allow` in its shipped config means unruled connections fail open without a UI |
-| 293–294| `dnf clean all` | |
+| 275–306| **OpenSnitch** | not in Fedora/RPM Fusion — `curl` the pinned v1.8.0 upstream release RPM, verify sha256 (no published GPG key to trust instead), extract with `rpm2cpio \| cpio` (not `dnf`/`rpm install` — RPM's %post needs a live systemd bus, and on an RPM-6/SQLite-rpmdb base the transaction's db writes were found to not survive the buildah layer commit), enable `opensnitch.service` ourselves. Daemon only, no GUI package; `DefaultAction: allow` in its shipped config means unruled connections fail open without a UI |
+| 308–309| `dnf clean all` | |
 
 ## Verified by
 

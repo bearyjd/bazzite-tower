@@ -286,12 +286,22 @@ opensnitch_sha256="e06e9119daf764e56455b61c319e496274c0274bb53bb94a0ff1ab72967fe
 curl -fsSL -o "/tmp/${opensnitch_rpm}" \
     "https://github.com/evilsocket/opensnitch/releases/download/v${opensnitch_version}/${opensnitch_rpm}"
 echo "${opensnitch_sha256}  /tmp/${opensnitch_rpm}" | sha256sum -c -
-# --setopt=tsflags=noscripts: the RPM's %post calls systemctl in a way that
-# expects a live systemd bus (not just the enable-by-symlink our other dnf
-# installs above rely on), which aborts the whole transaction under a plain
-# `podman build` with no running PID 1. Skip its scriptlets and do the one
-# thing we actually need — enabling the unit — ourselves, below.
-dnf install -y --setopt=tsflags=noscripts "/tmp/${opensnitch_rpm}"
+# Extract with rpm2cpio|cpio instead of `dnf install`/`rpm -i`, for two
+# reasons found the hard way:
+#   1. The RPM's %post calls systemctl in a way that expects a live systemd
+#      bus (not just the enable-by-symlink our other dnf installs above rely
+#      on), which aborts the whole transaction under a plain `podman build`
+#      with no running PID 1.
+#   2. On a base shipped with RPM 6's SQLite rpmdb backend (e.g. upstream
+#      bazzite-nvidia:stable as of 2026-07), a `dnf`/`rpm` transaction's
+#      database writes were silently lost across the buildah layer commit —
+#      the installed *files* persisted but the rpmdb entries reverted, and
+#      `rpm --rebuilddb` as a fixup failed outright ("failed to replace old
+#      database with new database"). Extracting the files directly sidesteps
+#      rpmdb entirely, so it's immune to this regardless of which rpmdb
+#      backend a future base ships. Trade-off: `rpm -q opensnitch` won't
+#      find it — smoke.sh checks for the binary instead.
+( cd / && rpm2cpio "/tmp/${opensnitch_rpm}" | cpio -idm )
 rm -f "/tmp/${opensnitch_rpm}"
 systemctl enable opensnitch.service
 

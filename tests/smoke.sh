@@ -148,9 +148,11 @@ check_enabled "docker.service"
 check "iptable_nat modules-load.d present" test -f /etc/modules-load.d/iptable_nat.conf
 
 echo "== OpenSnitch (application firewall) =="
-# Installed from a pinned, sha256-verified upstream release RPM (not Fedora/RPM
-# Fusion — see build.sh). Daemon only; default policy fails open without a GUI.
-check "opensnitch present (rpm -q)" rpm -q opensnitch
+# Extracted (not rpm/dnf-installed — see build.sh) from a pinned, sha256-verified
+# upstream release RPM (not Fedora/RPM Fusion). Not in the rpm database by design,
+# so check the binary directly rather than `rpm -q`. Daemon only; default policy
+# fails open without a GUI.
+check "opensnitch binary present" test -x /usr/bin/opensnitchd
 check_enabled "opensnitch.service"
 check "opensnitch default-config present" test -f /etc/opensnitchd/default-config.json
 check "opensnitch DefaultAction is allow (fail-open headless)" \

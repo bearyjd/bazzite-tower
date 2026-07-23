@@ -14,6 +14,13 @@
 > `7.1.3-ogc3.4`), but the fix is still absent from `linux-7.1.y` at that point release
 > (`git merge-base --is-ancestor` confirms it). Still pinned to 6.19.x. See
 > `UPSTREAM-FIX-STATUS-2026-07-13.md` for the full verification and the re-check trigger.
+>
+> **UPDATE 2026-07-23:** the fix is confirmed present in mainline `v7.2-rc1` through `v7.2-rc4`
+> (git ancestry check), matching a user report that "7.2 fixes it." But kernel 7.2 has not
+> reached a final release, no `linux-7.2.y` stable branch exists, and Bazzite `:stable` is still
+> `7.1.3-ogc5.1` (`44.20260721`) — pre-fix. Nothing shippable contains the fix yet; still pinned
+> to 6.19.x. See `UPSTREAM-FIX-STATUS-2026-07-23.md` for the full verification and the re-check
+> trigger.
 
 ## Summary
 

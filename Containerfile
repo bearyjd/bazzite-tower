@@ -45,6 +45,12 @@ COPY build_files /
 # docs/research/i915-bug-report/UPSTREAM-FIX-STATUS-2026-07-13.md. This is
 # exactly what `:latest-kernel` (BASE_IMAGE=...:stable) currently ships — do
 # not boot that tag on this ThinkPad expecting working s2idle resume yet.
+#
+# 2026-07-23: fix confirmed present in mainline v7.2-rc1+ (git ancestry check),
+# but kernel 7.2 has not released, no linux-7.2.y stable branch exists, and
+# bazzite-nvidia:stable is still 7.1.3-ogc5.1 (pre-fix) as of 44.20260721.
+# Nothing shippable contains the fix yet — default pin unchanged. See
+# docs/research/i915-bug-report/UPSTREAM-FIX-STATUS-2026-07-23.md
 FROM ${BASE_IMAGE}
 
 # OCI image labels. These are baked into the image for local `podman build`;

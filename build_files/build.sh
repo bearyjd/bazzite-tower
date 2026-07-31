@@ -280,6 +280,19 @@ systemctl enable bazzite-tower-power-tuning.service
 # Daemon only (no GUI package): default-config.json ships DefaultAction "allow",
 # so unruled connections fail open without a UI to answer prompts — safe to run
 # headless without silently blocking libvirt/Docker/Cockpit traffic.
+#
+# Runtime deps must be installed explicitly: the rpm2cpio extraction below
+# bypasses RPM dependency resolution entirely, so nothing pulls in what
+# opensnitchd's ELF headers ask for. `libnetfilter_queue.so.1` is a hard
+# DT_NEEDED of /usr/bin/opensnitchd and is NOT in the bazzite-nvidia base
+# (verified against the pinned base's /usr/lib64) — without it the daemon
+# cannot exec at all and opensnitch.service fails every boot. nftables (the
+# configured Firewall backend) and libnfnetlink.so.0 are already in the base;
+# naming nftables here is idempotent and pins the dependency against base drift.
+# NOT installed: `info`, which the RPM requires only for its %post install-info
+# scriptlet — the extraction path never runs scriptlets.
+dnf install -y libnetfilter_queue nftables
+
 opensnitch_version="1.8.0"
 opensnitch_rpm="opensnitch-${opensnitch_version}-1.x86_64.rpm"
 opensnitch_sha256="e06e9119daf764e56455b61c319e496274c0274bb53bb94a0ff1ab72967fea7d"

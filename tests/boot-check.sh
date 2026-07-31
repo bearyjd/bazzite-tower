@@ -59,6 +59,17 @@ hard "no SOF 'FW reported error: 9'" \
 hard "no SOF 'failed widget list set up'" \
     bash -c '! journalctl -b 0 --no-pager 2>/dev/null | grep -q "failed widget list set up"'
 
+say "== OpenSnitch (application firewall) =="
+# opensnitchd is extracted from an upstream RPM with rpm2cpio, which resolves no
+# dependencies — so a missing shared library ships green and only surfaces as an
+# exec failure at boot. This is the runtime half of smoke.sh's ldd check; it is
+# HARD because it needs nothing a container lacks.
+hard "opensnitchd shared libs all resolve" \
+    bash -c '! ldd /usr/bin/opensnitchd 2>&1 | grep -q "not found"'
+# Interception needs NFQUEUE + NET_ADMIN, which a container does not have — the
+# daemon legitimately fails to come up here, so activeness is informational only.
+soft "opensnitch.service active" systemctl is-active --quiet opensnitch.service
+
 say "== first-boot oneshot =="
 soft "firstboot service not failed" not_failed bazzite-tower-firstboot.service
 

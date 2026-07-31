@@ -154,6 +154,12 @@ echo "== OpenSnitch (application firewall) =="
 # fails open without a GUI.
 check "opensnitch binary present" test -x /usr/bin/opensnitchd
 check_enabled "opensnitch.service"
+# `test -x` only proves the file exists — it cannot catch a missing shared
+# library, and libnetfilter_queue.so.1 (a hard DT_NEEDED of opensnitchd) is NOT
+# in the base image, so the extraction must install it explicitly. Without this
+# check a missing lib ships green and the daemon fails to exec on every boot.
+check "opensnitch dynamic libs all resolve" \
+    bash -c '! ldd /usr/bin/opensnitchd 2>&1 | grep -q "not found"'
 check "opensnitch default-config present" test -f /etc/opensnitchd/default-config.json
 check "opensnitch DefaultAction is allow (fail-open headless)" \
     grep -q '"DefaultAction": *"allow"' /etc/opensnitchd/default-config.json

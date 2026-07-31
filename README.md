@@ -73,7 +73,14 @@ The image ships a Snitchwatch-tuned `/etc/opensnitchd/default-config.json` with 
 | `ProcMonitorMethod` | `proc` | **Not `ebpf`.** The v1.8.0 RPM's bundled eBPF module fails to load on this image's 6.19/7.x kernels (`unable to load eBPF module (opensnitch.o)`, [snitchwatch#6](https://github.com/bearyjd/snitchwatch/issues/6)) and the daemon degrades badly. Revisit only when an opensnitch release ships an eBPF module built for this kernel. |
 | `DefaultAction` | `allow` | Fail open. See below. |
 
-`DefaultAction: deny` is the designed end state, but it denies **every new outbound connection on any boot where no UI or bridge is answering prompts** — and the Snitchwatch bridge is a per-user systemd service (`snitchwatch-bridge.service`), installed by hand, not baked into this image. So the image ships `allow` during rollout: unruled connections fail open rather than block, and libvirt/Docker/Cockpit traffic keeps working headless. Flip to `deny` once the bridge user-service is installed and running — change the value in both `system_files/usr/share/bazzite-tower/opensnitchd-default-config.json` and the matching assertion in `tests/smoke.sh`.
+`DefaultAction: deny` is the designed end state, but it denies **every new outbound connection on any boot where no UI or bridge is answering prompts** — and the Snitchwatch bridge is a per-user systemd service (`snitchwatch-bridge.service`), installed by hand, not baked into this image. So the image ships `allow` during rollout: unruled connections fail open rather than block, and libvirt/Docker/Cockpit traffic keeps working headless.
+
+**Flipping to `deny` is order-sensitive.** The config change and the bridge install are two separate manual steps, and doing them in the wrong order costs you the network:
+
+1. Install and enable `snitchwatch-bridge.service`, then confirm it is actually listening: `ss -ltn 'sport = :50051'` must show a socket.
+2. Only then change `DefaultAction` to `deny` — in **both** `system_files/usr/share/bazzite-tower/opensnitchd-default-config.json` and the matching assertion in `tests/smoke.sh` — and rebuild.
+
+Flip first and the next boot denies every new outbound connection with nothing listening to approve them. Recovery is `rpm-ostree rollback`, or from a TTY set `DefaultAction` back to `allow` in `/etc/opensnitchd/default-config.json` and `systemctl restart opensnitch.service`.
 
 The pristine image-intent copy lives at `/usr/share/bazzite-tower/opensnitchd-default-config.json`. Because `/etc` is 3-way merged across bootc upgrades, a locally edited `/etc/opensnitchd/default-config.json` stops tracking the image — `diff` the two to see exactly what drifted.
 

@@ -325,6 +325,13 @@ rm -f "/tmp/${opensnitch_rpm}"
 # file is edited locally it stops tracking the image, and `diff`ing the two shows
 # exactly what drifted.
 #
+# Rejected alternative: opensnitchd takes `-config-file`, so a systemd drop-in
+# could point it straight at the read-only /usr copy and sidestep the /etc
+# 3-way merge entirely. Don't — Snitchwatch writes the daemon config back when
+# settings change (that is how DefaultAction gets toggled from the GUI), and a
+# config under /usr is immutable on an ostree system. /etc is the correct live
+# path precisely because it is writable.
+#
 # Three deliberate deltas from the RPM's shipped default:
 #   Server.Address 127.0.0.1:50051 — the Snitchwatch bridge's gRPC listener
 #     (a per-user service that is NOT part of this image) rather than upstream

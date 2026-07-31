@@ -62,10 +62,12 @@ hard "no SOF 'failed widget list set up'" \
 say "== OpenSnitch (application firewall) =="
 # opensnitchd is extracted from an upstream RPM with rpm2cpio, which resolves no
 # dependencies — so a missing shared library ships green and only surfaces as an
-# exec failure at boot. This is the runtime half of smoke.sh's ldd check; it is
-# HARD because it needs nothing a container lacks.
-hard "opensnitchd shared libs all resolve" \
-    bash -c '! ldd /usr/bin/opensnitchd 2>&1 | grep -q "not found"'
+# exec failure at boot. Actually executing the binary is the strongest available
+# proof (it exercises the real loader, not ldd's report of it), and `-version`
+# exits 0 without touching the network or netfilter — so unlike the activeness
+# check below this needs nothing a container lacks, and is HARD.
+hard "opensnitchd execs at runtime" \
+    bash -c '/usr/bin/opensnitchd -version >/dev/null 2>&1'
 # ProcMonitorMethod is pinned to "proc" because the v1.8.0 RPM's bundled eBPF
 # module does not load on this image's kernel (snitchwatch#6). If a future config
 # or release flips back to ebpf on an unsupported kernel, the daemon degrades and

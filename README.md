@@ -63,7 +63,21 @@ The Docker repo file ships with **every section disabled**. Packages are pulled 
 
 ### OpenSnitch (application firewall)
 
-[OpenSnitch](https://github.com/evilsocket/opensnitch) is baked in daemon-only (no GUI package): `opensnitch.service` is enabled at boot, and its shipped default config has `DefaultAction: allow`, so unruled outbound connections fail open rather than block — safe to run headless without a UI to answer prompts, and it won't silently break libvirt/Docker/Cockpit traffic. Install a GUI (`opensnitch-ui`) separately (Flatpak or `rpm-ostree install`) if you want the interactive per-connection prompt.
+[OpenSnitch](https://github.com/evilsocket/opensnitch) is baked in daemon-only (no GUI package): `opensnitch.service` is enabled at boot. It is the interception engine for [Snitchwatch](https://github.com/bearyjd/snitchwatch), which replaces upstream's `opensnitch-ui` — **do not install `opensnitch-ui`**, the two conflict and Snitchwatch has an explicit coexistence check.
+
+The image ships a Snitchwatch-tuned `/etc/opensnitchd/default-config.json` with three deliberate changes from the RPM's shipped default:
+
+| Key | Value | Why |
+|---|---|---|
+| `Server.Address` | `127.0.0.1:50051` | The Snitchwatch bridge's gRPC listener, instead of `opensnitch-ui`'s `unix:///tmp/osui.sock`. |
+| `ProcMonitorMethod` | `proc` | **Not `ebpf`.** The v1.8.0 RPM's bundled eBPF module fails to load on this image's 6.19/7.x kernels (`unable to load eBPF module (opensnitch.o)`, [snitchwatch#6](https://github.com/bearyjd/snitchwatch/issues/6)) and the daemon degrades badly. Revisit only when an opensnitch release ships an eBPF module built for this kernel. |
+| `DefaultAction` | `allow` | Fail open. See below. |
+
+`DefaultAction: deny` is the designed end state, but it denies **every new outbound connection on any boot where no UI or bridge is answering prompts** — and the Snitchwatch bridge is a per-user systemd service (`snitchwatch-bridge.service`), installed by hand, not baked into this image. So the image ships `allow` during rollout: unruled connections fail open rather than block, and libvirt/Docker/Cockpit traffic keeps working headless. Flip to `deny` once the bridge user-service is installed and running — change the value in both `system_files/usr/share/bazzite-tower/opensnitchd-default-config.json` and the matching assertion in `tests/smoke.sh`.
+
+The pristine image-intent copy lives at `/usr/share/bazzite-tower/opensnitchd-default-config.json`. Because `/etc` is 3-way merged across bootc upgrades, a locally edited `/etc/opensnitchd/default-config.json` stops tracking the image — `diff` the two to see exactly what drifted.
+
+Runtime dependencies are installed explicitly (`libnetfilter_queue`, `nftables`) because the extraction below resolves none: `libnetfilter_queue.so.1` is a hard `DT_NEEDED` of `opensnitchd` and is absent from the bazzite-nvidia base, so without it the daemon cannot exec at all.
 
 Not available in Fedora or RPM Fusion (the one Fedora-44 COPR has zero builds), so it's extracted directly from the pinned upstream release RPM (`v1.8.0`, verified by a hardcoded sha256 before extraction) rather than `dnf`/`rpm install`ed — see [Disabled-by-default external repos](#disabled-by-default-external-repos) for why this repo prefers pin-and-verify over trusting an unverifiable third-party GPG key. It's therefore not registered in the rpm database (`rpm -q opensnitch` won't find it); check for `/usr/bin/opensnitchd` instead.
 

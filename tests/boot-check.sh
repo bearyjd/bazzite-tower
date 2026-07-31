@@ -66,6 +66,13 @@ say "== OpenSnitch (application firewall) =="
 # HARD because it needs nothing a container lacks.
 hard "opensnitchd shared libs all resolve" \
     bash -c '! ldd /usr/bin/opensnitchd 2>&1 | grep -q "not found"'
+# ProcMonitorMethod is pinned to "proc" because the v1.8.0 RPM's bundled eBPF
+# module does not load on this image's kernel (snitchwatch#6). If a future config
+# or release flips back to ebpf on an unsupported kernel, the daemon degrades and
+# logs this. HARD: passes vacuously if the daemon never started in the container,
+# but catches the regression on a real boot journal (same bargain as SOF above).
+hard "no eBPF module load failure" \
+    bash -c '! journalctl -b 0 --no-pager 2>/dev/null | grep -q "unable to load eBPF module"'
 # Interception needs NFQUEUE + NET_ADMIN, which a container does not have — the
 # daemon legitimately fails to come up here, so activeness is informational only.
 soft "opensnitch.service active" systemctl is-active --quiet opensnitch.service

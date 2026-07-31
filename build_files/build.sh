@@ -277,9 +277,8 @@ systemctl enable bazzite-tower-power-tuning.service
 # zero builds — install the upstream-signed release RPM directly, pinned by
 # sha256 (no published GPG key to check against, so hash-pin is the trust anchor,
 # same reproducibility bar as the Containerfile's digest-pinned base image).
-# Daemon only (no GUI package): default-config.json ships DefaultAction "allow",
-# so unruled connections fail open without a UI to answer prompts — safe to run
-# headless without silently blocking libvirt/Docker/Cockpit traffic.
+# Daemon only (no GUI package) — the GUI is Snitchwatch (github.com/bearyjd/
+# snitchwatch), installed per-user, and it conflicts with upstream opensnitch-ui.
 #
 # Runtime deps must be installed explicitly: the rpm2cpio extraction below
 # bypasses RPM dependency resolution entirely, so nothing pulls in what
@@ -316,6 +315,34 @@ echo "${opensnitch_sha256}  /tmp/${opensnitch_rpm}" | sha256sum -c -
 #      find it — smoke.sh checks for the binary instead.
 ( cd / && rpm2cpio "/tmp/${opensnitch_rpm}" | cpio -idm )
 rm -f "/tmp/${opensnitch_rpm}"
+
+# Overwrite the RPM's default-config.json with the Snitchwatch-tuned one. This
+# runs *after* the extraction on purpose: `COPY system_files/` happens earlier in
+# the Containerfile, and cpio's overwrite behaviour for an already-present file
+# is mtime-dependent, so staging the file under /usr/share and installing it here
+# is the only deterministic order. The /usr/share copy is also the pristine
+# image-intent reference — /etc is 3-way merged on bootc upgrades, so once this
+# file is edited locally it stops tracking the image, and `diff`ing the two shows
+# exactly what drifted.
+#
+# Three deliberate deltas from the RPM's shipped default:
+#   Server.Address 127.0.0.1:50051 — the Snitchwatch bridge's gRPC listener
+#     (a per-user service that is NOT part of this image) rather than upstream
+#     opensnitch-ui's unix:///tmp/osui.sock.
+#   ProcMonitorMethod "proc"       — NOT "ebpf". The v1.8.0 RPM's bundled eBPF
+#     module fails to load on this image's 6.19/7.x kernels ("unable to load
+#     eBPF module (opensnitch.o)", snitchwatch#6) and the daemon degrades badly.
+#     Revisit only when an opensnitch release ships an eBPF module built for
+#     this kernel.
+#   DefaultAction "allow"          — fail open. "deny" is the designed end state
+#     but denies every new outbound connection on any boot where no UI/bridge is
+#     answering prompts, and the bridge is still installed by hand. To flip it
+#     to "deny" once the bridge user-service is in place, edit the value in
+#     system_files/usr/share/bazzite-tower/opensnitchd-default-config.json and
+#     the matching assertion in tests/smoke.sh. See README "OpenSnitch".
+install -D -m 0644 /usr/share/bazzite-tower/opensnitchd-default-config.json \
+    /etc/opensnitchd/default-config.json
+
 systemctl enable opensnitch.service
 
 # ── Cleanup ───────────────────────────────────────────────────────────────────

@@ -161,8 +161,24 @@ check_enabled "opensnitch.service"
 check "opensnitch dynamic libs all resolve" \
     bash -c '! ldd /usr/bin/opensnitchd 2>&1 | grep -q "not found"'
 check "opensnitch default-config present" test -f /etc/opensnitchd/default-config.json
+# The image's config must be the staged Snitchwatch-tuned one, not the RPM's
+# shipped default — proven by all three deltas below, since the extraction
+# writes the RPM copy to this same path just before we overwrite it.
 check "opensnitch DefaultAction is allow (fail-open headless)" \
     grep -q '"DefaultAction": *"allow"' /etc/opensnitchd/default-config.json
+# eBPF module fails to load on this image's kernel (snitchwatch#6) — "proc" is
+# mandatory here. Flipping this back to "ebpf" needs a newer opensnitch release.
+check "opensnitch ProcMonitorMethod is proc (eBPF broken on this kernel)" \
+    grep -q '"ProcMonitorMethod": *"proc"' /etc/opensnitchd/default-config.json
+# Points at the Snitchwatch bridge's gRPC listener, not opensnitch-ui's socket.
+check "opensnitch Server.Address is the Snitchwatch bridge" \
+    grep -q '"Address": *"127\.0\.0\.1:50051"' /etc/opensnitchd/default-config.json
+# The GUI is Snitchwatch; upstream's opensnitch-ui conflicts with it.
+check "opensnitch-ui NOT installed (conflicts with Snitchwatch)" \
+    bash -c '! test -e /usr/bin/opensnitch-ui'
+# Pristine image-intent copy, for diffing against a locally-edited /etc.
+check "opensnitch staged config present" \
+    test -f /usr/share/bazzite-tower/opensnitchd-default-config.json
 
 echo "== Cockpit (web management) =="
 # cockpit-machines (VM management) is the only piece missing from the base; the

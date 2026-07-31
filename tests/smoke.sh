@@ -154,9 +154,53 @@ echo "== OpenSnitch (application firewall) =="
 # fails open without a GUI.
 check "opensnitch binary present" test -x /usr/bin/opensnitchd
 check_enabled "opensnitch.service"
+# `test -x` only proves the file exists — it cannot catch a missing shared
+# library, and libnetfilter_queue.so.1 (a hard DT_NEEDED of opensnitchd) is NOT
+# in the base image, so the extraction must install it explicitly. Without this
+# check a missing lib ships green and the daemon fails to exec on every boot.
+# ldd must BOTH exit 0 (a missing binary makes it fail, and its "No such file"
+# message contains no "not found" for the grep to catch) AND report no
+# unresolved library — checking only the grep passes when the binary is absent.
+check "opensnitch dynamic libs all resolve" \
+    bash -c 'ldd /usr/bin/opensnitchd >/dev/null 2>&1 && ! ldd /usr/bin/opensnitchd 2>&1 | grep -q "not found"'
+# The real proof: the binary execs (every library resolved, loader satisfied) and
+# is the version build.sh pinned. Replacing `rpm -q opensnitch` with `test -x`
+# for the rpm2cpio extraction dropped the only assertion on the installed
+# version; this restores it. Deliberately duplicates the pin in build.sh — a
+# version bump must update both, and smoke.sh exists to encode that intent.
+check "opensnitchd execs and reports pinned version 1.8.0" \
+    bash -c '/usr/bin/opensnitchd -version 2>/dev/null | grep -qx "1.8.0"'
 check "opensnitch default-config present" test -f /etc/opensnitchd/default-config.json
+# Pristine image-intent copy, for diffing against a locally-edited /etc.
+check "opensnitch staged config present" \
+    test -f /usr/share/bazzite-tower/opensnitchd-default-config.json
+# The one assertion that cannot pass by coincidence. The RPM extraction writes
+# its own default-config.json to this path and build.sh installs ours over it —
+# but DefaultAction=allow below matches the RPM's shipped default, so a silently
+# skipped install would still satisfy that value check. Only a byte comparison
+# proves the overwrite actually happened.
+check "staged config actually overwrote the RPM's" \
+    cmp -s /usr/share/bazzite-tower/opensnitchd-default-config.json \
+        /etc/opensnitchd/default-config.json
+# Structural validity: the value checks below read individual keys, so a trailing
+# comma or unbalanced brace would leave them passing while opensnitchd fails to
+# parse the file at startup.
+check "opensnitch config is valid JSON" \
+    jq -e . /etc/opensnitchd/default-config.json
+# Values parsed, not grepped — string matching couples these to the file's
+# whitespace and cannot distinguish a key from a substring elsewhere.
 check "opensnitch DefaultAction is allow (fail-open headless)" \
-    grep -q '"DefaultAction": *"allow"' /etc/opensnitchd/default-config.json
+    jq -e '.DefaultAction == "allow"' /etc/opensnitchd/default-config.json
+# eBPF module fails to load on this image's kernel (snitchwatch#6) — "proc" is
+# mandatory here. Flipping this back to "ebpf" needs a newer opensnitch release.
+check "opensnitch ProcMonitorMethod is proc (eBPF broken on this kernel)" \
+    jq -e '.ProcMonitorMethod == "proc"' /etc/opensnitchd/default-config.json
+# Points at the Snitchwatch bridge's gRPC listener, not opensnitch-ui's socket.
+check "opensnitch Server.Address is the Snitchwatch bridge" \
+    jq -e '.Server.Address == "127.0.0.1:50051"' /etc/opensnitchd/default-config.json
+# The GUI is Snitchwatch; upstream's opensnitch-ui conflicts with it.
+check "opensnitch-ui NOT installed (conflicts with Snitchwatch)" \
+    bash -c '! test -e /usr/bin/opensnitch-ui'
 
 echo "== Cockpit (web management) =="
 # cockpit-machines (VM management) is the only piece missing from the base; the

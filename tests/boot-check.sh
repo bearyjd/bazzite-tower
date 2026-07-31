@@ -59,6 +59,26 @@ hard "no SOF 'FW reported error: 9'" \
 hard "no SOF 'failed widget list set up'" \
     bash -c '! journalctl -b 0 --no-pager 2>/dev/null | grep -q "failed widget list set up"'
 
+say "== OpenSnitch (application firewall) =="
+# opensnitchd is extracted from an upstream RPM with rpm2cpio, which resolves no
+# dependencies — so a missing shared library ships green and only surfaces as an
+# exec failure at boot. Actually executing the binary is the strongest available
+# proof (it exercises the real loader, not ldd's report of it), and `-version`
+# exits 0 without touching the network or netfilter — so unlike the activeness
+# check below this needs nothing a container lacks, and is HARD.
+hard "opensnitchd execs at runtime" \
+    bash -c '/usr/bin/opensnitchd -version >/dev/null 2>&1'
+# ProcMonitorMethod is pinned to "proc" because the v1.8.0 RPM's bundled eBPF
+# module does not load on this image's kernel (snitchwatch#6). If a future config
+# or release flips back to ebpf on an unsupported kernel, the daemon degrades and
+# logs this. HARD: passes vacuously if the daemon never started in the container,
+# but catches the regression on a real boot journal (same bargain as SOF above).
+hard "no eBPF module load failure" \
+    bash -c '! journalctl -b 0 --no-pager 2>/dev/null | grep -q "unable to load eBPF module"'
+# Interception needs NFQUEUE + NET_ADMIN, which a container does not have — the
+# daemon legitimately fails to come up here, so activeness is informational only.
+soft "opensnitch.service active" systemctl is-active --quiet opensnitch.service
+
 say "== first-boot oneshot =="
 soft "firstboot service not failed" not_failed bazzite-tower-firstboot.service
 

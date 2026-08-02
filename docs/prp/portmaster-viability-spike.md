@@ -51,6 +51,41 @@ Note the `buildTime` makes this non-reproducible byte-for-byte. If the variant
 proceeds, pin `buildTime` to a fixed value so the image is reproducible — the
 version string is what matters, not the timestamp.
 
+### RESULT (2026-08-01): PASS
+
+Built in a `docker.io/library/golang:1.24` container against the clone at tag
+`v2.2.1`, with `buildTime` pinned to `2026-08-01T00:00:00Z`:
+
+```
+Portmaster 2.2.1
+built with go1.24.13 (gc -cgo) for linux/amd64
+  at 2026-08-01T00:00:00Z
+commit af0c60140ec4a5d7239aaf61bb3d81ac3c56e51b (clean)
+  from bazzite-tower-spike
+```
+
+- 45,604,649 bytes, `sha256:5f93e309cfbb56a05dcdc8c1bc7825de15cded8abcc3127233936bff3778d0be`
+- **Statically linked** (`CGO_ENABLED=0` → `not a dynamic executable`). This
+  matters: the failure that broke OpenSnitch — an unresolved `DT_NEEDED`
+  library the extraction never installed — is structurally impossible here.
+- The binary self-reports its source commit and clean-tree status, which is
+  stronger provenance than the OpenSnitch RPM offers.
+
+Two static findings that de-risked this before the build ran:
+
+- The embedded eBPF objects (`bpf_bpfel.o`, `bpf_bpfeb.o`) are **committed to
+  git**, not generated — so no clang or bpf2go is needed. This was the most
+  plausible way the "plain `go build`" conclusion could have been wrong.
+- No Angular/Tauri assets are embedded anywhere in the daemon tree; the only
+  other `go:embed` is `base/database/storage/sqlite/migrations/*`.
+
+**Conclusion: sourcing is fully solved and is not a reason to defer the
+variant.** The deferral rests entirely on Q1–Q3 below.
+
+The built artifact is not committed — it lives outside the repo by design.
+Reproduce it with the command above; the hash should match given the same tag
+and pinned `buildTime`.
+
 ## Question 1 — DNS coexistence (highest risk, run first)
 
 **Why it decides everything:** Portmaster binds `localhost:53`
@@ -145,6 +180,11 @@ is dotted/nested (`core.releaseChannel`). If the seed above has no effect, try
 the flat `"core/automaticUpdates": false` form before calling it a fail.
 
 ## Verdict
+
+**Progress: Step 0 PASS (2026-08-01). Q1–Q3 not run.** Q1 requires a VM
+carrying this operator's real Tailscale/NextDNS/TorGuard identity and cannot
+be delegated; Q2 and Q3 are gated behind it by design, since a Q1 failure ends
+the spike outright.
 
 | Q1 DNS | Q2 `/usr` | Q3 pin | Verdict |
 |---|---|---|---|

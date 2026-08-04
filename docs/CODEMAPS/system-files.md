@@ -11,8 +11,10 @@
 | `bazzite-tower-wifi-backend-guard.service` | oneshot, RemainAfterExit | `After=local-fs`; `Before=NetworkManager` | `…/wifi-backend-guard` | force wpa_supplicant if `wifi.backend=iwd` is selected but iwd isn't enabled |
 | `bazzite-tower-power-tuning.service` | oneshot, RemainAfterExit | `After=basic.target` | `…/power-tuning` | set `platform_profile=balanced` + EPP=`balance_performance` on every core (was firmware low-power) |
 | `i915-resume-fix-check.service` | oneshot | `After=systemd-journald.service`; triggered by its `.timer` | `…/i915-resume-fix-check` | pre-7.0 kernel: no-op; 7.0+: grep this boot's journal for the cx0 DPLL s2idle-resume regression signature, warn if found |
+| `portmaster.service` | simple, disabled VM spike | `After=network-online`; conflicts with OpenSnitch/firewalld; `StateDirectory=portmaster` | `…/portmaster/portmaster-core` | direct, pinned Portmaster core test; never enabled in an image |
 
-All `.service` units `WantedBy=multi-user.target`, enabled in build.sh.
+All `.service` units except the disabled `portmaster.service` VM spike are
+enabled in build.sh.
 
 ## systemd timers (`/usr/lib/systemd/system/`)
 
@@ -29,6 +31,7 @@ All `.service` units `WantedBy=multi-user.target`, enabled in build.sh.
 - `bazzite-tower-wifi-debug` — read-only Wi-Fi diagnostics (offline)
 - `bazzite-tower-power-tuning` — write platform_profile + per-CPU EPP; skips absent/read-only knobs
 - `i915-resume-fix-check` — kernel-version-gated check for the Meteor Lake cx0 DPLL s2idle-resume regression signature in the current boot's journal
+- `bazzite-tower-portmaster-seed` — copy the immutable Portmaster defaults into `/var/lib/portmaster` exactly once, before a manually started spike daemon
 
 ## ujust recipes (`/usr/share/ublue-os/just/60-custom.just`)
 

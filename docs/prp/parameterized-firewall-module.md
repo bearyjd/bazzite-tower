@@ -1,7 +1,9 @@
 # PRP — Parameterized application-firewall module
 
-> **Status:** proposed, not implemented. Scoped deliberately narrower than the
-> original request — see [Scope decision](#scope-decision).
+> **Status:** OpenSnitch parameterization remains proposed. A disabled,
+> Portmaster-only VM spike implementation now exists; see
+> [the runtime runbook](../research/portmaster-bootc-spike.md). Scoped
+> deliberately narrower than the original request — see [Scope decision](#scope-decision).
 >
 > **Phase 1 investigation this rests on:** OpenSnitch surface audit + a source
 > read of `safing/portmaster` at `v2.2.1` (`af0c601`). Every upstream claim
@@ -320,12 +322,13 @@ every directive must be checked against what interception needs:
 `CAP_NET_ADMIN`, `CAP_BPF` (if eBPF is ever re-enabled), host PID namespace
 (process attribution reads `/proc`), and host mount namespace.
 
-Portmaster's unit is already heavily hardened (`LockPersonality`,
+Portmaster's current packaging unit is already heavily hardened (`LockPersonality`,
 `MemoryDenyWriteExecute`, `ProtectSystem=true`, `RestrictNamespaces`,
 `ProtectKernelTunables`, explicit `CapabilityBoundingSet`) and is the better
-starting template. Two of its lines are load-bearing and must not be copied
-blindly: `ReadWritePaths=/usr/lib/portmaster` assumes a writable `/usr`, which
-does not exist here, and `Conflicts=firewalld.service`.
+starting template. Its writable-path directives are currently commented and
+refer to `/var/lib/portmaster`; the image spike therefore uses an explicit
+`StateDirectory=portmaster`. `Conflicts=firewalld.service` remains
+load-bearing and must not be copied blindly.
 
 Candidate drop-in for OpenSnitch, each line justified against `proc`-mode
 process monitoring — **all of it unverified until tested**, since over-tight

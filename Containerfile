@@ -7,6 +7,7 @@
 #                           regression notes below before ever booting it on
 #                           this hardware)
 ARG BASE_IMAGE=ghcr.io/ublue-os/bazzite-nvidia:44.20260429
+ARG FIREWALL_DAEMON=opensnitch
 
 # Allow build scripts to be referenced without being copied into the final image
 FROM scratch AS ctx
@@ -53,6 +54,12 @@ COPY build_files /
 # docs/research/i915-bug-report/UPSTREAM-FIX-STATUS-2026-07-23.md
 FROM ${BASE_IMAGE}
 
+# The production image remains on OpenSnitch.  `portmaster` is a deliberately
+# disabled test variant: build it explicitly with --build-arg
+# FIREWALL_DAEMON=portmaster and validate it in a VM before considering it for
+# a published/default tag.  See docs/research/portmaster-bootc-spike.md.
+ARG FIREWALL_DAEMON
+
 # OCI image labels. These are baked into the image for local `podman build`;
 # CI additionally layers ArtifactHub/metadata labels via docker/metadata-action.
 LABEL org.opencontainers.image.title="bazzite-tower"
@@ -70,7 +77,7 @@ RUN --mount=type=bind,from=ctx,source=/,target=/ctx \
     --mount=type=cache,dst=/var/cache \
     --mount=type=cache,dst=/var/log \
     --mount=type=tmpfs,dst=/tmp \
-    /ctx/build.sh
+    FIREWALL_DAEMON="${FIREWALL_DAEMON}" /ctx/build.sh
 
 ### LINTING
 RUN bootc container lint

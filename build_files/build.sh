@@ -272,7 +272,26 @@ systemctl enable bazzite-tower-power-tuning.service
 # ABI-≤3.23 build to downgrade to — so the firmware can't be pinned. Forcing the
 # legacy HDA path sidesteps SOF entirely. See docs/RUNBOOK.md "Audio".
 
+# ── Application firewall ─────────────────────────────────────────────────────
+# The selector defaults to the proven OpenSnitch setup.  Portmaster is an
+# explicitly-built, disabled-by-default VM spike; its script must never make it
+# into a normal :latest build unless FIREWALL_DAEMON=portmaster was supplied.
+# `portmaster` is intentionally a VM-only spike.  Its build is opt-in and the
+# production OpenSnitch block below remains the default path.
+case "${FIREWALL_DAEMON:-opensnitch}" in
+    opensnitch) ;;
+    portmaster)
+        # shellcheck disable=SC1091 # Build-time path is relative to this file.
+        source "$(dirname "${BASH_SOURCE[0]}")/firewall/portmaster.sh"
+        ;;
+    *)
+        echo "Unknown FIREWALL_DAEMON='${FIREWALL_DAEMON:-}'." >&2
+        exit 1
+        ;;
+esac
+
 # ── OpenSnitch: interactive application firewall ──────────────────────────────
+if [[ "${FIREWALL_DAEMON:-opensnitch}" == "opensnitch" ]]; then
 # Not in Fedora/RPM Fusion, and the one Fedora-44 COPR (androfuchs/opensnitch) has
 # zero builds — install the upstream-signed release RPM directly, pinned by
 # sha256 (no published GPG key to check against, so hash-pin is the trust anchor,
@@ -351,6 +370,11 @@ install -D -m 0644 /usr/share/bazzite-tower/opensnitchd-default-config.json \
     /etc/opensnitchd/default-config.json
 
 systemctl enable opensnitch.service
+printf '%s\n' opensnitch > /usr/share/bazzite-tower/firewall-daemon
+# Keep the unavailable alternative impossible to start without leaving a
+# rollback-persistent /etc mask behind.
+ln -sf /dev/null /usr/lib/systemd/system/portmaster.service
+fi
 
 # ── Cleanup ───────────────────────────────────────────────────────────────────
 dnf clean all

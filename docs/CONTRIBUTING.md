@@ -21,6 +21,7 @@ pieces fit together read [docs/CODEMAPS/](./CODEMAPS/architecture.md).
 | Command | Purpose |
 |---|---|
 | `just build` | Build the container image locally (adds `SHA_HEAD_SHORT` when the tree is clean) |
+| `just build-portmaster-spike` | Build the disabled Portmaster VM-spike image; never a default/host image |
 | `just smoke` | Offline-assert the built image — **the exact CI gate** (`tests/smoke.sh`) |
 | `just build-qcow2` | Turn the image into a bootable qcow2 via bootc-image-builder |
 | `just run-vm-qcow2` | Boot the qcow2 in qemu; browser console at `localhost:8006` |

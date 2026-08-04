@@ -148,6 +148,9 @@ check_enabled "docker.service"
 check "iptable_nat modules-load.d present" test -f /etc/modules-load.d/iptable_nat.conf
 
 echo "== OpenSnitch (application firewall) =="
+firewall_daemon="$(cat /usr/share/bazzite-tower/firewall-daemon 2>/dev/null || true)"
+case "${firewall_daemon}" in
+opensnitch)
 # Extracted (not rpm/dnf-installed — see build.sh) from a pinned, sha256-verified
 # upstream release RPM (not Fedora/RPM Fusion). Not in the rpm database by design,
 # so check the binary directly rather than `rpm -q`. Daemon only; default policy
@@ -201,11 +204,34 @@ check "opensnitch Server.Address is the Snitchwatch bridge" \
 # The GUI is Snitchwatch; upstream's opensnitch-ui conflicts with it.
 check "opensnitch-ui NOT installed (conflicts with Snitchwatch)" \
     bash -c '! test -e /usr/bin/opensnitch-ui'
+check_masked "portmaster.service"
+;;
+portmaster)
+echo "== Portmaster (disabled VM spike) =="
+check "portmaster binary present" test -x /usr/libexec/portmaster/portmaster-core
+check "portmaster reports pinned version 2.2.1" \
+    bash -c '/usr/libexec/portmaster/portmaster-core version 2>/dev/null | grep -q "Portmaster 2.2.1"'
+check "portmaster seed helper executable" test -x /usr/libexec/bazzite-tower-portmaster-seed
+check "portmaster seed defaults valid JSON" jq -e . /usr/share/bazzite-tower/portmaster-config.default.json
+check "portmaster automatic binary updates disabled in image defaults" \
+    jq -e '.core.automaticUpdates == false' /usr/share/bazzite-tower/portmaster-config.default.json
+check "portmaster automatic intel updates disabled in image defaults" \
+    jq -e '.core.automaticIntelUpdates == false' /usr/share/bazzite-tower/portmaster-config.default.json
+# shellcheck disable=SC2016 # The inner shell, not this script, expands $().
+check "portmaster is disabled by default" \
+    bash -c '[[ "$(systemctl is-enabled portmaster.service 2>/dev/null)" == "disabled" ]]'
+check_masked "opensnitch.service"
+check "opensnitch binary absent from portmaster spike" bash -c '! test -e /usr/bin/opensnitchd'
+;;
+*)
+bad "known firewall selector (got '${firewall_daemon:-missing}')"
+;;
+esac
 
 echo "== Cockpit (web management) =="
-# cockpit-machines (VM management) is the only piece missing from the base; the
-# socket is enabled so the UI is reachable on :9090.
-check "cockpit-machines present" rpm -q cockpit-machines
+# The compose can retain Cockpit Machines' files while omitting its RPM database
+# record, so test the UI manifest the image actually serves rather than rpm -q.
+check "Cockpit Machines UI assets present" test -f /usr/share/cockpit/machines/manifest.json
 check_enabled "cockpit.socket"
 
 echo

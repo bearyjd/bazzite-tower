@@ -100,6 +100,24 @@ build $target_image=image_name $tag=default_tag:
         --tag "${target_image}:${tag}" \
         .
 
+# Build the Portmaster VM spike. It is deliberately not the default image and
+# its service stays disabled: boot only its qcow2 in a disposable VM first.
+[group('Build')]
+build-portmaster-spike $target_image=image_name $tag="portmaster-spike":
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    BUILD_ARGS=("--build-arg" "FIREWALL_DAEMON=portmaster")
+    if [[ -z "$(git status -s)" ]]; then
+        BUILD_ARGS+=("--build-arg" "SHA_HEAD_SHORT=$(git rev-parse --short HEAD)")
+    fi
+
+    podman build \
+        "${BUILD_ARGS[@]}" \
+        --pull=newer \
+        --tag "${target_image}:${tag}" \
+        .
+
 # Smoke-test a built image offline (no VM) — same assertions as the CI gate
 [group('Build')]
 smoke $target_image=image_name $tag=default_tag:
@@ -148,7 +166,13 @@ _rootful_load_image $target_image=image_name $tag=default_tag:
         if [[ "$ID" != "$USER_IMG_ID" ]]; then
             # If the image ID is not found or different from user, copy the image from user podman to root podman
             COPYTMP=$(mktemp -p "${PWD}" -d -t _build_podman_scp.XXXXXXXXXX)
-            just sudoif TMPDIR=${COPYTMP} podman image scp ${UID}@localhost::"${target_image}:${tag}" root@localhost::"${target_image}:${tag}"
+            # Some sudo policies reject command-line environment assignments.
+            # Set TMPDIR inside the root shell instead, using positional
+            # arguments so image/tag values are never shell-interpolated.
+            just sudoif bash -c 'TMPDIR="$1" podman image scp "$2" "$3"' bash \
+                "${COPYTMP}" \
+                "${UID}@localhost::${target_image}:${tag}" \
+                "root@localhost::${target_image}:${tag}"
             rm -rf "${COPYTMP}"
         fi
     else
@@ -339,7 +363,6 @@ spawn-vm rebuild="0" type="qcow2" ram="6G":
       --network-user-mode \
       --vsock=false --pass-ssh-key=false \
       -i ./output/**/*.{{ type }}
-
 
 # Runs shell check on all Bash scripts
 lint:

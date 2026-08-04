@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+# Seed image defaults once.  /var survives bootc rollback and upgrades, so never
+# overwrite a config the daemon or operator has already created.
+set -euo pipefail
+
+state_dir=/var/lib/portmaster
+config_path="${state_dir}/config.json"
+
+install -d -m 0750 "${state_dir}"
+# Portmaster initializes its update module even when automatic updates are
+# disabled.  Pre-create its writable target so systemd's immutable-root
+# hardening cannot make the first daemon start fail.
+install -d -m 0750 "${state_dir}/download_binaries"
+if [[ ! -e "${config_path}" ]]; then
+    install -m 0600 /usr/share/bazzite-tower/portmaster-config.default.json \
+        "${config_path}"
+fi

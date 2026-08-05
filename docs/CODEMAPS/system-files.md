@@ -11,7 +11,7 @@
 | `bazzite-tower-wifi-backend-guard.service` | oneshot, RemainAfterExit | `After=local-fs`; `Before=NetworkManager` | `…/wifi-backend-guard` | force wpa_supplicant if `wifi.backend=iwd` is selected but iwd isn't enabled |
 | `bazzite-tower-power-tuning.service` | oneshot, RemainAfterExit | `After=basic.target` | `…/power-tuning` | set `platform_profile=balanced` + EPP=`balance_performance` on every core (was firmware low-power) |
 | `i915-resume-fix-check.service` | oneshot | `After=systemd-journald.service`; triggered by its `.timer` | `…/i915-resume-fix-check` | pre-7.0 kernel: no-op; 7.0+: grep this boot's journal for the cx0 DPLL s2idle-resume regression signature, warn if found |
-| `portmaster.service` | simple, disabled VM spike | `After=network-online`; conflicts with OpenSnitch/firewalld; `StateDirectory=portmaster` | `…/portmaster/portmaster-core` | direct, pinned Portmaster core test; never enabled in an image |
+| `portmaster.service` | simple, disabled VM spike | `After=network-online`; conflicts with OpenSnitch/firewalld; `StateDirectory=portmaster`; `BindReadOnlyPaths=` pins config from `/usr`; `StartLimitBurst=3`; `ExecStopPost=` recovers netfilter rules | `…/portmaster/portmaster-core --bin-dir … --data-dir … --log-stdout` | direct, pinned Portmaster core test; never enabled in an image. Both dir flags are load-bearing: without `--bin-dir` the daemon falls back to a hardcoded `/usr/lib/portmaster` and its updater exits 2 mkdir'ing it on read-only `/usr` |
 
 All `.service` units except the disabled `portmaster.service` VM spike are
 enabled in build.sh.
@@ -31,7 +31,7 @@ enabled in build.sh.
 - `bazzite-tower-wifi-debug` — read-only Wi-Fi diagnostics (offline)
 - `bazzite-tower-power-tuning` — write platform_profile + per-CPU EPP; skips absent/read-only knobs
 - `i915-resume-fix-check` — kernel-version-gated check for the Meteor Lake cx0 DPLL s2idle-resume regression signature in the current boot's journal
-- `bazzite-tower-portmaster-seed` — copy the immutable Portmaster defaults into `/var/lib/portmaster` exactly once, before a manually started spike daemon
+(The former `bazzite-tower-portmaster-seed` helper is gone. Portmaster's config is no longer copied into `/var`: the unit `BindReadOnlyPaths=`-mounts `/usr/share/bazzite-tower/portmaster-config.default.json` over `/var/lib/portmaster/config.json`, so the update pin is image-managed and reverts with a rollback. systemd creates the mount destination itself, and a missing source fails the unit before `ExecStart` — fail closed.)
 
 ## ujust recipes (`/usr/share/ublue-os/just/60-custom.just`)
 

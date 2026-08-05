@@ -73,7 +73,96 @@ before the daemon exited.
 `portmaster.service` repeatedly exited with `status=2/INVALIDARGUMENT` while
 its update module attempted to create
 `/var/lib/portmaster/download_binaries`. This happened even though automatic
-updates are disabled and the seed helper pre-created that directory. The
-directory/configuration contract for the update module under the hardened
-systemd unit must be established before another VM run. Do not merge or enable
-this variant on the host until it is stable across a full boot.
+updates are disabled and the seed helper pre-created that directory.
+
+## Root cause — established from source 2026-08-05
+
+The `download_binaries` path in that journal line is a **red herring emitted by
+an upstream message bug**, which is why pre-creating the directory never helped.
+Traced against the pinned commit `af0c6014`:
+
+1. The unit passed no `--bin-dir`, so `ServiceConfig.Init()` applied its Linux
+   default (`service/config.go`): `BinDir` is the **hardcoded literal
+   `/usr/lib/portmaster`**. The install-location-relative derivation
+   (`getCurrentBinaryFolder`) is Windows-only, so our real install path
+   `/usr/libexec/portmaster` was never consulted.
+2. `MakeUpdateConfigs` set the binary updater's `Directory` to that
+   nonexistent `/usr/lib/portmaster` (`service/config.go:159`).
+3. `updates.New` called `utils.EnsureDirectory(cfg.Directory, 0755)`
+   (`service/updates/module.go:196`), which fell through to `os.MkdirAll` and
+   hit **EROFS** on the image's read-only `/usr`.
+4. The error return one line later prints `cfg.DownloadDirectory` while the
+   failure was on `cfg.Directory` (`service/updates/module.go:198`) — hence the
+   misleading `download_binaries` text.
+5. `service.New` propagated it to `cmds/cmdbase/service.go:81`, whose
+   `os.Exit(2)` systemd renders as `status=2/INVALIDARGUMENT`. It is an ordinary
+   instance-construction failure, not a panic or an argument-parsing error.
+
+Two further facts fell out of the same trace:
+
+- `Environment=PORTMASTER_DATA=` was **inert** — the daemon reads no
+  `PORTMASTER_*` variables. Directories can only be set by flag.
+- A missing `index.json` is **not** fatal: `updates.New` falls back to scanning
+  the directory and then to an empty index (`module.go:206-233`). The spike does
+  not need upstream's artifact bundle.
+
+**Fix applied:** `ExecStart` now pins `--bin-dir /usr/libexec/portmaster
+--data-dir /var/lib/portmaster`. `EnsureDirectory` short-circuits on an existing
+directory only when its mode already equals `0755`, otherwise it attempts a
+chmod that would fail on read-only `/usr` for the same reason — so the build's
+`install -d -m 0755` is load-bearing and `tests/smoke.sh` asserts that mode.
+The `download_binaries` seeding, which was based on the wrong diagnosis, was
+removed.
+
+## The update pin could not have worked either
+
+Reviewing the fix surfaced a second, independent defect. The pin lived in
+`/var/lib/portmaster/config.json`, seeded once by a helper that only wrote when
+the file was absent. Three facts compound:
+
+- `rpm-ostree rollback` reverts `/usr`, never `/var`. A bad config outlives the
+  rollback that was supposed to escape it.
+- The seed refused to overwrite an existing file, including an empty one.
+- `core/automaticUpdates` **defaults to `true`**
+  (`service/core/update_config.go:119`), so an absent, empty, or edited config
+  means automatic updates are *on*.
+
+The image therefore had no enforceable pin, only the appearance of one.
+
+**Fix:** the unit now shadows the path with the image's own copy:
+
+```
+BindReadOnlyPaths=/usr/share/bazzite-tower/portmaster-config.default.json:/var/lib/portmaster/config.json
+```
+
+The pin becomes image content, so it reverts with a rollback like every other
+setting. systemd creates the mount destination itself (`systemd.exec`: "the
+destination directory must exist or systemd must be able to create it"), so
+nothing seeds `/var` and the seed helper is deleted. A missing source fails the
+unit **before** `ExecStart` — fail closed, which is the right posture for a
+daemon whose filter chain ends in `--mark 0 -j DROP`. Note that this also means
+the on-disk `/var` copy can never act as a fallback: a bind-mount setup failure
+stops the daemon from running at all, so there is nothing left to read it.
+
+## Running the gate
+
+The four verdicts above are now encoded as assertions in
+`tests/portmaster-vm-gate.sh`. Run it **inside the disposable VM only**:
+
+```bash
+sudo tests/portmaster-vm-gate.sh; echo "exit=$?"
+```
+
+It exits 0 only if every hard check passes. It samples `is-active` continuously
+across a 30-second dwell and requires `NRestarts=0` and `Result=success`,
+because the 2026-08-05 run recorded a pass from a single reading taken before
+the daemon exited. It also proves the config bind mount actually applied by
+matching the mountpoint, source, and `ro` flag in the daemon's own
+`/proc/PID/mountinfo` — checking the pinned *value* would pass whether or not
+the mount worked.
+
+**Still unverified:** every fix here is source-derived. The gate has not been
+run. Do not merge or enable this variant on the host until it exits 0, and note
+that a pass still says nothing about Docker, libvirt, VPN transitions,
+suspend/resume, or NetworkManager resolver rewrites — none of which the VM
+models.

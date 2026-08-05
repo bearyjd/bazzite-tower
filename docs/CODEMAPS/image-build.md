@@ -31,7 +31,7 @@
 | 227–245| **RAS / MCE** | dnf: rasdaemon (enable) ; **mask `mcelog.service`** ; dnf: microcode_ctl (latest) |
 | 247–255| **i915 resume-regression watcher** | enable `i915-resume-fix-check.timer` — periodic, kernel-version-gated check for the cx0 DPLL s2idle-resume regression signature (see system-files); the machine-checkable signal the Containerfile kernel-pin comment points at |
 | 258–273| **CPU power/thermal** | dnf: thermald (enable) ; enable `bazzite-tower-power-tuning.service` (balanced EPP + platform-profile). SOF audio: **no install** — bypassed via the `dsp_driver=1` karg (see system-files) |
-| 275–end| **Firewall selector** | default `opensnitch`: pinned v1.8.0 RPM extraction, Snitchwatch config and enablement as before. Explicit `FIREWALL_DAEMON=portmaster` is a disabled VM spike: source-build exact Portmaster v2.2.1 commit, direct core (no updater/bootstrapper), persistent config seed, OpenSnitch masked. Build with `just build-portmaster-spike`; never a default image. |
+| 275–end| **Firewall selector** | default `opensnitch`: pinned v1.8.0 RPM extraction, Snitchwatch config and enablement as before. Explicit `FIREWALL_DAEMON=portmaster` is a disabled VM spike: source-build exact Portmaster v2.2.1 commit, direct core (no updater/bootstrapper), config pinned from `/usr` via the unit's `BindReadOnlyPaths=` (never seeded into `/var`, which rollback cannot revert), Go toolchain removed after the build, OpenSnitch masked. Build with `just build-portmaster-spike`; never a default image. |
 | 348–349| `dnf clean all` | |
 
 ## Verified by

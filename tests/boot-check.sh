@@ -90,6 +90,21 @@ portmaster)
 say "== Portmaster (disabled VM spike) =="
 hard "portmaster binary execs" \
     bash -c '/usr/libexec/portmaster/portmaster-core version >/dev/null 2>&1'
+# Assert the *resolved* ExecStart, not the unit file's text: systemctl sees
+# parsed drop-ins and is immune to comments, line continuations, and variable
+# expansion. Without --bin-dir, portmaster-core falls back to a hardcoded
+# /usr/lib/portmaster whose updater mkdirs it on read-only /usr and exits 2.
+# shellcheck disable=SC2016 # The inner shell, not this script, expands $().
+hard "portmaster ExecStart pins --bin-dir at the real install dir" \
+    bash -c 'systemctl show -p ExecStart --value portmaster.service | grep -q -- "--bin-dir /usr/libexec/portmaster"'
+# shellcheck disable=SC2016 # The inner shell, not this script, expands $().
+hard "portmaster ExecStart pins --data-dir at writable state" \
+    bash -c 'systemctl show -p ExecStart --value portmaster.service | grep -q -- "--data-dir /var/lib/portmaster"'
+# Without this the daemon logs to /var/log/portmaster and journalctl shows only
+# systemd's own messages, so a VM run reads the wrong place for evidence.
+# shellcheck disable=SC2016 # The inner shell, not this script, expands $().
+hard "portmaster ExecStart sends logs to the journal" \
+    bash -c 'systemctl show -p ExecStart --value portmaster.service | grep -q -- "--log-stdout"'
 # shellcheck disable=SC2016 # The inner shell, not this script, expands $().
 hard "portmaster remains disabled" \
     bash -c '[[ "$(systemctl is-enabled portmaster.service 2>/dev/null)" == "disabled" ]]'

@@ -211,11 +211,48 @@ echo "== Portmaster (disabled VM spike) =="
 check "portmaster binary present" test -x /usr/libexec/portmaster/portmaster-core
 check "portmaster reports pinned version 2.2.1" \
     bash -c '/usr/libexec/portmaster/portmaster-core version 2>/dev/null | grep -q "Portmaster 2.2.1"'
-check "portmaster seed helper executable" test -x /usr/libexec/bazzite-tower-portmaster-seed
-check "portmaster seed defaults valid JSON" jq -e . /usr/share/bazzite-tower/portmaster-config.default.json
-check "portmaster automatic binary updates disabled in image defaults" \
+# Static validation of the whole unit. The ExecStart *flag* contract is asserted
+# in tests/boot-check.sh against systemd's resolved value instead of this file's
+# text, because a text grep matches comments and breaks on reformatting. This
+# keeps the offline gate from losing unit validation entirely.
+check "portmaster unit parses" \
+    systemd-analyze verify --man=no --recursive-errors=no \
+    /usr/lib/systemd/system/portmaster.service
+# The pin cannot live in /var: that survives rpm-ostree rollback, and
+# core/automaticUpdates defaults to *true*, so an absent or edited config there
+# means updates are ON with no way for the image to say otherwise.
+check "portmaster config is bind-mounted from /usr" \
+    grep -q '^BindReadOnlyPaths=/usr/share/bazzite-tower/portmaster-config.default.json:/var/lib/portmaster/config.json$' \
+    /usr/lib/systemd/system/portmaster.service
+# RestartSec=10 never trips systemd's default 5-starts-in-10s limit, so without
+# an explicit limit a daemon failing at construction restarts forever, and each
+# attempt can install netfilter rules before dying.
+check "portmaster restarts are rate-limited" \
+    grep -q '^StartLimitBurst=' /usr/lib/systemd/system/portmaster.service
+check "portmaster stop path is time-bounded" \
+    grep -q '^TimeoutStopSec=' /usr/lib/systemd/system/portmaster.service
+# Without this a crashed daemon leaves netfilter rules behind and networking
+# stays broken.  Upstream's own unit carries the equivalent hook.
+check "portmaster unit recovers netfilter rules on stop" \
+    grep -q 'ExecStopPost=.*recover-iptables' /usr/lib/systemd/system/portmaster.service
+# recover-iptables shells out to this binary via coreos/go-iptables.
+check "iptables present for portmaster rule recovery" \
+    bash -c 'command -v iptables >/dev/null'
+# The updater chmods this directory unless it already matches 0755 exactly --
+# and that chmod would fail on read-only /usr just as the mkdir does.
+# shellcheck disable=SC2016 # The inner shell, not this script, expands $().
+check "portmaster install dir is exactly 0755" \
+    bash -c '[[ "$(stat -c %a /usr/libexec/portmaster)" == "755" ]]'
+# A compiler on a firewall image is avoidable attack surface. rpm -q, not
+# `command -v`: the latter passes as "absent" whenever PATH merely misses it.
+check "go toolchain removed after the source build" \
+    bash -c '! rpm -q golang > /dev/null 2>&1'
+# This file IS the live config the daemon reads, via the bind mount above --
+# not a template that gets copied somewhere else first.
+check "portmaster config valid JSON" jq -e . /usr/share/bazzite-tower/portmaster-config.default.json
+check "portmaster automatic binary updates disabled" \
     jq -e '.core.automaticUpdates == false' /usr/share/bazzite-tower/portmaster-config.default.json
-check "portmaster automatic intel updates disabled in image defaults" \
+check "portmaster automatic intel updates disabled" \
     jq -e '.core.automaticIntelUpdates == false' /usr/share/bazzite-tower/portmaster-config.default.json
 # shellcheck disable=SC2016 # The inner shell, not this script, expands $().
 check "portmaster is disabled by default" \

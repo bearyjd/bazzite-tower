@@ -1,0 +1,32 @@
+# VM-GATE ONLY. Never used for a published image or for the ThinkPad.
+#
+# disk_config/disk.toml defines no user and Bazzite does not enable sshd, so a
+# VM built from it cannot be logged into at all -- which is why the 2026-08-04
+# spike run resorted to baking a one-shot unit into the image, and why its
+# result could not be interrogated.
+#
+# bootc-image-builder applies all of this at DISK build time, so the container
+# image under test stays byte-identical; only the disk gains a login.
+#
+# The credentials below are deliberate and deliberately weak. The guest is
+# disposable, reachable only over QEMU user-mode NAT on 127.0.0.1, and destroyed
+# after each run. Nothing built with this config is ever published or switched
+# onto the ThinkPad -- `just build-qcow2` uses disk.toml, not this file.
+#
+# The pubkey is a throwaway from the machine that last ran the gate, so it will
+# not match your private key. Either replace it with your own, or drop the `key`
+# line and log in over the serial console with the password.
+#
+#     ssh-keygen -t ed25519 -N '' -f /tmp/vmgate_key
+[[customizations.filesystem]]
+mountpoint = "/"
+minsize = "20 GiB"
+
+[[customizations.user]]
+name = "gate"
+groups = ["wheel"]
+password = "gate"
+key = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIM303ctXRgePs9Y0A7emEdkHNbz2ProqyPDCts3lcY20 portmaster-vm-gate-throwaway"
+
+[customizations.services]
+enabled = ["sshd"]

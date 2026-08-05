@@ -1,6 +1,6 @@
 # Portmaster bootc VM spike
 
-> **Status:** implementation ready for VM testing; not approved for the host.
+> **Status:** VM gate failed; not approved for the host or merge.
 
 This repository has a deliberately opt-in `portmaster` firewall build variant.
 It exists to answer runtime questions that source review cannot settle. It is
@@ -62,3 +62,18 @@ try to repair chains on the host while the failure mode is still unknown.
 Any failure stops the spike. Record raw `ss`, `resolvectl`, journal, and
 netfilter captures alongside the verdict rather than attempting a host
 workaround.
+
+## VM validation record — 2026-08-05
+
+The final QCOW2 booted successfully and the temporary test unit confirmed that
+the Portmaster binary reports `v2.2.1` and guest DNS can resolve `example.com`.
+Those observations are **not a service pass**: `systemctl is-active` was read
+before the daemon exited.
+
+`portmaster.service` repeatedly exited with `status=2/INVALIDARGUMENT` while
+its update module attempted to create
+`/var/lib/portmaster/download_binaries`. This happened even though automatic
+updates are disabled and the seed helper pre-created that directory. The
+directory/configuration contract for the update module under the hardened
+systemd unit must be established before another VM run. Do not merge or enable
+this variant on the host until it is stable across a full boot.

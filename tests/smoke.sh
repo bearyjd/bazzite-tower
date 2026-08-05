@@ -240,3 +240,9 @@ if [[ "${fail}" -ne 0 ]]; then
     exit 1
 fi
 echo "All smoke checks passed."
+# Explicit, mirroring the failure path above. Falling off the end means the same
+# 0 to CI, but `just smoke` is invoked here through `distrobox-host-exec podman`,
+# and that wrapper does not return when bash reaches EOF without an explicit
+# exit -- so the *passing* run appears to hang while every failing run returns
+# instantly. tests/boot-check.sh already ends this way.
+exit 0

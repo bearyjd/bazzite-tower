@@ -11,6 +11,12 @@ prior worked example of an agent-driven hardware-bug investigation
 
 Ranked by **Human-Attention-Saved per Unit of Effort** (highest first).
 
+**Status (2026-08-06): 4 of 6 resolved.** Items 1, 2, 3 and 6 are done — see each
+heading. Still open: **item 4** (split `build_files/build.sh` into per-concern
+scripts) and **item 5** (fast, buildless Containerfile lint). Item 5 is worth
+doing first: it is the missing rung between `just lint` (seconds) and
+`just build` (minutes), and it makes item 4's rebuild-heavy verification cheaper.
+
 ---
 
 ## 1. Reconcile the dangling `i915-resume-fix-check.timer` reference (tiny effort, real correctness bug) — DONE (2026-07-07)
@@ -95,7 +101,32 @@ optionally new `system_files/usr/lib/systemd/system/i915-resume-fix-check.*`.
 
 ---
 
-## 2. Write a bug-report triage protocol into `CLAUDE.md` (small effort, largest attention savings)
+## 2. Write a bug-report triage protocol into `CLAUDE.md` — DONE (shipped earlier; verified 2026-08-06)
+
+**Resolution: the deliverable already exists.** `CLAUDE.md` grew both required
+sections at some point after this item was written, and the item was never
+marked. Audited 2026-08-06 against the acceptance criteria below:
+
+| Criterion | Where | Status |
+|---|---|---|
+| "Triaging a bug report" section, two-path classification | `CLAUDE.md` §"Triaging a bug report" | **Met** — Build/CI-reproducible vs Hardware-log-dependent, with the "not reproducible without physical access or the reporter's logs" caveat stated explicitly |
+| The never-change-hardware-values-without-evidence rule | `CLAUDE.md` §"Hardware-specific tuning" | **Met** — names `kargs.d/*.toml`, build.sh's RAS/thermal/audio sections and RUNBOOK "verified" facts, and requires either an explicit user instruction or a `journalctl`/`smartctl`/`ras-mc-ctl`/`/proc/cmdline` excerpt |
+| Cross-link `i915-bug-report/` as the write-up template | `CLAUDE.md` §"Repository layout" and §"Triaging a bug report" | **Met** — cited in both, as "a real worked example of the second category done right" |
+| The exact per-subsystem commands to request | `CLAUDE.md` §"Triaging a bug report" | **Met by reference, not by inlining** — it points at `docs/RUNBOOK.md`'s health-check table and `scripts/tower-diagnostic.sh` rather than copying them |
+
+That last row is a deliberate deviation, not a gap. This repo treats the RUNBOOK
+table as the single source of truth and elsewhere forbids duplicating it (see
+`docs/CONTRIBUTING.md` on the README Justfile table). Inlining the commands into
+`CLAUDE.md` would create a second copy to drift — which is the failure mode item
+6 had to correct. A pointer satisfies the intent: a fresh agent is told exactly
+where to look and that it must ask before guessing.
+
+**Nothing to build.** This entry is bookkeeping only.
+
+---
+
+<details>
+<summary>Original problem statement, kept for context</summary>
 
 **Problem:** the RUNBOOK's "Common issues" table and the `i915-bug-report/`
 folder show the *right instincts already exist* (classify the symptom,
@@ -137,6 +168,8 @@ agent to ask for `journalctl`/`dmesg` output first.
 
 **Files:** `CLAUDE.md` (new), cross-reference `docs/RUNBOOK.md`,
 `scripts/tower-diagnostic.sh`, `docs/research/i915-bug-report/`.
+
+</details>
 
 ---
 

@@ -293,6 +293,109 @@ literal build entry point) before spending the time/resources of a full
 
 ---
 
+## 6. Reconcile `just format` with the repo's actual style — RESOLVED (2026-08-06)
+
+**Resolution: the convention moved, not the code.** Investigating the reformat
+showed `shfmt`'s defaults disagree with this repo on *taste*, not correctness,
+so reformatting would have been a regression rather than a cleanup.
+
+Measured 2026-08-06 with `shfmt` 3.7.0:
+
+```
+shfmt defaults (tabs):                1325 diff lines
+with .editorconfig pinning 4-space:    954 diff lines
+  -> indentation accounted for:         371 lines (28%)
+  -> genuine restructuring:             954 lines (72%)
+```
+
+Two distinct disagreements, only one of which was drift:
+
+1. **Indentation.** `shfmt` defaults to tabs; every script here uses 4 spaces
+   (0 tab-indented lines across the tree). This *was* worth pinning, and now is,
+   in `.editorconfig` — so the style is a property of the repo rather than of
+   whichever `shfmt` version happens to be installed.
+2. **One-line functions.** The remaining 954 lines are `shfmt` expanding
+   multi-statement one-liners: `bad()`, `hard()`, `soft()`, `skip()`, `note()`,
+   and every `local x="$1"; shift`. That idiom is deliberate — a one-line
+   `hard()` is what lets a long run of assertions in `tests/*.sh` read as a
+   scannable list. Expanding ~950 lines of working, shellcheck-clean shell to
+   satisfy a formatter's opinion buys nothing.
+
+**What changed:** `.editorconfig` added (pins 4-space, plus `end_of_line`,
+`insert_final_newline`, `charset`). `docs/CONTRIBUTING.md` and `CLAUDE.md` no
+longer claim shell must be `just format`-clean and now say plainly not to run
+`just format` over existing files. The `format` recipe carries the same warning
+at its definition, so it is visible at the point of use. `just lint`
+(shellcheck) is and remains the enforced gate.
+
+**Deliberately not done:** no repo-wide reformat, no `.git-blame-ignore-revs`,
+no `shfmt --diff` CI gate. Those all presuppose that shfmt's output is the
+target, which this resolution rejects. If a future contributor wants
+shfmt-clean as a hard standard, that is a real choice — but it costs a 954-line
+mechanical diff and the loss of the compact-helper idiom, and should be decided
+deliberately rather than by running `just format` once and committing it.
+
+---
+
+<details>
+<summary>Original problem statement (2026-08-05), kept for context</summary>
+
+**Problem:** `docs/CONTRIBUTING.md` says shell must be `just format`-clean.
+It never has been. Measured 2026-08-05 with `shfmt` 3.7.0, **every** `*.sh`
+file in the repo is unformatted, totalling ~1265 diff lines:
+
+```
+build_files/build.sh                            294
+tests/smoke.sh                                  377
+installer/src/build.sh                           24
+tests/boot-check.sh                             174
+tests/portmaster-vm-gate.sh                     175
+scripts/tower-diagnostic.sh                      93
+build_files/firewall/portmaster.sh               62
+tests/test-base-diff.sh                          53
+installer/src/titanoboa_hook_preinitramfs.sh     13
+```
+
+The drift is not recent: `git show HEAD:tests/smoke.sh | shfmt -d -` returns
+303 lines on its own. Nothing enforces it — `just lint` runs only
+`shellcheck`, `just format` *writes* rather than checks, and no CI job runs
+either. So the stated convention and the actual tree have never agreed.
+
+**Why it's worth doing:** the current state actively penalises whoever fixes
+it. Any feature branch that runs `just format` folds ~1265 lines of mechanical
+reformatting into its diff and buries the real change, so the rational move on
+every individual branch is to skip it — which is exactly why it has never been
+done. It also makes "is this branch format-clean?" unanswerable as a review
+question, which an agent cannot resolve on its own without silently
+reformatting files outside its change.
+
+Ranked last deliberately: this is a convention-vs-reality mismatch, not a bug
+(item 1), a missing guardrail (item 2), a missing test (item 3), or a
+structural entanglement (item 4).
+
+**Acceptance criteria:**
+- Do the reformat as its **own commit touching nothing else**, so it can be
+  reviewed as "mechanical, no behaviour change" and skipped with
+  `git blame --ignore-rev`. Add its SHA to a `.git-blame-ignore-revs` file.
+- Add a **non-writing** check so it cannot drift again — either a
+  `just format-check` recipe running `shfmt --diff`, or fold `shfmt --diff`
+  into `just lint` beside `shellcheck`. Update the AUTO-GENERATED commands
+  block in `docs/CONTRIBUTING.md` if a recipe is added.
+- Wire that check into `build.yml` (or a lightweight lint workflow) so CI
+  catches drift. It is offline and fast, unlike the smoke gate.
+- Add an `.editorconfig` pinning indent width and related settings. Today the
+  style is whatever `shfmt`'s defaults happen to be for the installed version,
+  which makes the convention silently version-dependent.
+- Do **not** bundle this with a functional change.
+
+**Files:** all nine `*.sh` files (reformat commit), `Justfile` (check recipe),
+`docs/CONTRIBUTING.md`, `.github/workflows/`, `.editorconfig` (new),
+`.git-blame-ignore-revs` (new).
+
+</details>
+
+---
+
 ## Items considered and deliberately not ranked above
 
 - **Base-image digest pinning (Section 4 of `downstream-change-tracking.md`):**

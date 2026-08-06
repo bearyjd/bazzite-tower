@@ -100,6 +100,24 @@ build $target_image=image_name $tag=default_tag:
         --tag "${target_image}:${tag}" \
         .
 
+# Build the Portmaster VM spike. It is deliberately not the default image and
+# its service stays disabled: boot only its qcow2 in a disposable VM first.
+[group('Build')]
+build-portmaster-spike $target_image=image_name $tag="portmaster-spike":
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    BUILD_ARGS=("--build-arg" "FIREWALL_DAEMON=portmaster")
+    if [[ -z "$(git status -s)" ]]; then
+        BUILD_ARGS+=("--build-arg" "SHA_HEAD_SHORT=$(git rev-parse --short HEAD)")
+    fi
+
+    podman build \
+        "${BUILD_ARGS[@]}" \
+        --pull=newer \
+        --tag "${target_image}:${tag}" \
+        .
+
 # Smoke-test a built image offline (no VM) — same assertions as the CI gate
 [group('Build')]
 smoke $target_image=image_name $tag=default_tag:
@@ -140,16 +158,54 @@ _rootful_load_image $target_image=image_name $tag=default_tag:
     return_code=$?
     set -e
 
-    USER_IMG_ID=$(podman images --filter reference="${target_image}:${tag}" --format "'{{ '{{.ID}}' }}'")
+    # Normalise both IDs. `just sudoif` re-parses its arguments, which strips the
+    # quotes a "'{{ '{{.ID}}' }}'" format embeds, so the rootful ID came back bare
+    # while the rootless one kept its quotes. The two therefore never compared
+    # equal and the copy below ran on *every* invocation.
+    USER_IMG_ID=$(podman images --filter reference="${target_image}:${tag}" --format "{{ '{{.ID}}' }}" | tr -d "'")
 
     if [[ $return_code -eq 0 ]]; then
         # If the image is found, load it into rootful podman
-        ID=$(just sudoif podman images --filter reference="${target_image}:${tag}" --format "'{{ '{{.ID}}' }}'")
+        ID=$(just sudoif podman images --filter reference="${target_image}:${tag}" --format "{{ '{{.ID}}' }}" | tr -d "'")
         if [[ "$ID" != "$USER_IMG_ID" ]]; then
             # If the image ID is not found or different from user, copy the image from user podman to root podman
             COPYTMP=$(mktemp -p "${PWD}" -d -t _build_podman_scp.XXXXXXXXXX)
-            just sudoif TMPDIR=${COPYTMP} podman image scp ${UID}@localhost::"${target_image}:${tag}" root@localhost::"${target_image}:${tag}"
+            # `podman image scp` silently declines to move a destination tag that
+            # already exists, and still exits 0. Untag first so there is nothing
+            # to collide with.
+            just sudoif podman untag "${target_image}:${tag}" || true
+            # Call sudo directly, NOT through `just sudoif`. That recipe splats
+            # its command and args into the shell *unquoted*, so any multi-word
+            # quoted argument is word-split before it runs. The previous form
+            # here was:
+            #
+            #   just sudoif bash -c 'TMPDIR="$1" podman image scp "$2" "$3"' ...
+            #
+            # which reached bash as separate words, so bash executed only
+            # `TMPDIR="$1"` -- a no-op assignment -- and exited 0. podman was
+            # never invoked. The copy produced no output, changed nothing, and
+            # reported success, which is how a stale image reached BIB on
+            # 2026-08-05 and was built, booted and graded before anyone noticed.
+            #
+            # `sudo env VAR=x cmd` rather than `sudo VAR=x cmd` because some
+            # sudo policies reject command-line environment assignments; env is
+            # an ordinary binary. _build-bib already calls `sudo podman run`
+            # directly, so this matches the file's existing pattern.
+            sudo env TMPDIR="${COPYTMP}" podman image scp \
+                "${UID}@localhost::${target_image}:${tag}" \
+                "root@localhost::${target_image}:${tag}"
             rm -rf "${COPYTMP}"
+            # Verify. A silent no-op here hands bootc-image-builder a stale image
+            # and every downstream artifact then describes the wrong code, with
+            # nothing in the log to say so. This happened on 2026-08-05: a
+            # three-day-old image was built, booted and graded before anyone
+            # noticed. Fail loudly instead.
+            NEW_ID=$(just sudoif podman images --filter reference="${target_image}:${tag}" --format "{{ '{{.ID}}' }}" | tr -d "'")
+            if [[ "$NEW_ID" != "$USER_IMG_ID" ]]; then
+                echo "ERROR: rootful ${target_image}:${tag} is ${NEW_ID:-<missing>}, expected ${USER_IMG_ID}." >&2
+                echo "       The copy into rootful storage did not take. Refusing to build a stale image." >&2
+                exit 1
+            fi
         fi
     else
         # If the image is not found, pull it from the repository
@@ -190,8 +246,18 @@ _build-bib $target_image $tag $type $config: (_rootful_load_image target_image t
       "${target_image}:${tag}"
 
     mkdir -p output
-    sudo mv -f $BUILDTMP/* output/
-    sudo rmdir $BUILDTMP
+    # `mv -f` will not merge into an existing non-empty directory, so a second
+    # build of the same type failed here with "cannot overwrite 'output/qcow2':
+    # Directory not empty" -- *after* BIB had already printed "Build complete!".
+    # The new artifact stayed stranded in the temp dir while the stale one
+    # remained in output/, where `just run-vm-*` would happily boot it. Replace
+    # each artifact directory explicitly instead.
+    for artifact in "${BUILDTMP}"/*; do
+        [[ -e "${artifact}" ]] || continue
+        sudo rm -rf "output/$(basename "${artifact}")"
+        sudo mv -f "${artifact}" output/
+    done
+    sudo rmdir "${BUILDTMP}"
     sudo chown -R $USER:$USER output/
 
 # Podman builds the image from the Containerfile and creates a bootable image
@@ -340,7 +406,6 @@ spawn-vm rebuild="0" type="qcow2" ram="6G":
       --vsock=false --pass-ssh-key=false \
       -i ./output/**/*.{{ type }}
 
-
 # Runs shell check on all Bash scripts
 lint:
     #!/usr/bin/env bash
@@ -353,7 +418,16 @@ lint:
     # Run shellcheck on all Bash scripts
     /usr/bin/find . -iname "*.sh" -type f -exec shellcheck "{}" ';'
 
-# Runs shfmt on all Bash scripts
+# Runs shfmt on all Bash scripts.
+#
+# NOT a required gate, and running this over existing files is discouraged.
+# shfmt expands multi-statement one-line functions, and this repo deliberately
+# keeps helpers like bad()/hard()/soft()/skip() on one line so long runs of
+# assertions in tests/*.sh read as a scannable list. Running this would
+# restructure ~950 lines of working, shellcheck-clean shell to no benefit.
+# `just lint` (shellcheck) is the enforced gate. Indentation is pinned in
+# .editorconfig so shfmt at least agrees on whitespace. See docs/CONTRIBUTING.md
+# "Code style".
 format:
     #!/usr/bin/env bash
     set -eoux pipefail

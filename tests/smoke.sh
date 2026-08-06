@@ -148,6 +148,9 @@ check_enabled "docker.service"
 check "iptable_nat modules-load.d present" test -f /etc/modules-load.d/iptable_nat.conf
 
 echo "== OpenSnitch (application firewall) =="
+firewall_daemon="$(cat /usr/share/bazzite-tower/firewall-daemon 2>/dev/null || true)"
+case "${firewall_daemon}" in
+opensnitch)
 # Extracted (not rpm/dnf-installed — see build.sh) from a pinned, sha256-verified
 # upstream release RPM (not Fedora/RPM Fusion). Not in the rpm database by design,
 # so check the binary directly rather than `rpm -q`. Daemon only; default policy
@@ -201,11 +204,71 @@ check "opensnitch Server.Address is the Snitchwatch bridge" \
 # The GUI is Snitchwatch; upstream's opensnitch-ui conflicts with it.
 check "opensnitch-ui NOT installed (conflicts with Snitchwatch)" \
     bash -c '! test -e /usr/bin/opensnitch-ui'
+check_masked "portmaster.service"
+;;
+portmaster)
+echo "== Portmaster (disabled VM spike) =="
+check "portmaster binary present" test -x /usr/libexec/portmaster/portmaster-core
+check "portmaster reports pinned version 2.2.1" \
+    bash -c '/usr/libexec/portmaster/portmaster-core version 2>/dev/null | grep -q "Portmaster 2.2.1"'
+# Static validation of the whole unit. The ExecStart *flag* contract is asserted
+# in tests/boot-check.sh against systemd's resolved value instead of this file's
+# text, because a text grep matches comments and breaks on reformatting. This
+# keeps the offline gate from losing unit validation entirely.
+check "portmaster unit parses" \
+    systemd-analyze verify --man=no --recursive-errors=no \
+    /usr/lib/systemd/system/portmaster.service
+# The pin cannot live in /var: that survives rpm-ostree rollback, and
+# core/automaticUpdates defaults to *true*, so an absent or edited config there
+# means updates are ON with no way for the image to say otherwise.
+check "portmaster config is bind-mounted from /usr" \
+    grep -q '^BindReadOnlyPaths=/usr/share/bazzite-tower/portmaster-config.default.json:/var/lib/portmaster/config.json$' \
+    /usr/lib/systemd/system/portmaster.service
+# RestartSec=10 never trips systemd's default 5-starts-in-10s limit, so without
+# an explicit limit a daemon failing at construction restarts forever, and each
+# attempt can install netfilter rules before dying.
+check "portmaster restarts are rate-limited" \
+    grep -q '^StartLimitBurst=' /usr/lib/systemd/system/portmaster.service
+check "portmaster stop path is time-bounded" \
+    grep -q '^TimeoutStopSec=' /usr/lib/systemd/system/portmaster.service
+# Without this a crashed daemon leaves netfilter rules behind and networking
+# stays broken.  Upstream's own unit carries the equivalent hook.
+check "portmaster unit recovers netfilter rules on stop" \
+    grep -q 'ExecStopPost=.*recover-iptables' /usr/lib/systemd/system/portmaster.service
+# recover-iptables shells out to this binary via coreos/go-iptables.
+check "iptables present for portmaster rule recovery" \
+    bash -c 'command -v iptables >/dev/null'
+# The updater chmods this directory unless it already matches 0755 exactly --
+# and that chmod would fail on read-only /usr just as the mkdir does.
+# shellcheck disable=SC2016 # The inner shell, not this script, expands $().
+check "portmaster install dir is exactly 0755" \
+    bash -c '[[ "$(stat -c %a /usr/libexec/portmaster)" == "755" ]]'
+# A compiler on a firewall image is avoidable attack surface. rpm -q, not
+# `command -v`: the latter passes as "absent" whenever PATH merely misses it.
+check "go toolchain removed after the source build" \
+    bash -c '! rpm -q golang > /dev/null 2>&1'
+# This file IS the live config the daemon reads, via the bind mount above --
+# not a template that gets copied somewhere else first.
+check "portmaster config valid JSON" jq -e . /usr/share/bazzite-tower/portmaster-config.default.json
+check "portmaster automatic binary updates disabled" \
+    jq -e '.core.automaticUpdates == false' /usr/share/bazzite-tower/portmaster-config.default.json
+check "portmaster automatic intel updates disabled" \
+    jq -e '.core.automaticIntelUpdates == false' /usr/share/bazzite-tower/portmaster-config.default.json
+# shellcheck disable=SC2016 # The inner shell, not this script, expands $().
+check "portmaster is disabled by default" \
+    bash -c '[[ "$(systemctl is-enabled portmaster.service 2>/dev/null)" == "disabled" ]]'
+check_masked "opensnitch.service"
+check "opensnitch binary absent from portmaster spike" bash -c '! test -e /usr/bin/opensnitchd'
+;;
+*)
+bad "known firewall selector (got '${firewall_daemon:-missing}')"
+;;
+esac
 
 echo "== Cockpit (web management) =="
-# cockpit-machines (VM management) is the only piece missing from the base; the
-# socket is enabled so the UI is reachable on :9090.
-check "cockpit-machines present" rpm -q cockpit-machines
+# The compose can retain Cockpit Machines' files while omitting its RPM database
+# record, so test the UI manifest the image actually serves rather than rpm -q.
+check "Cockpit Machines UI assets present" test -f /usr/share/cockpit/machines/manifest.json
 check_enabled "cockpit.socket"
 
 echo
@@ -214,3 +277,9 @@ if [[ "${fail}" -ne 0 ]]; then
     exit 1
 fi
 echo "All smoke checks passed."
+# Explicit, mirroring the failure path above. Falling off the end means the same
+# 0 to CI, but `just smoke` is invoked here through `distrobox-host-exec podman`,
+# and that wrapper does not return when bash reaches EOF without an explicit
+# exit -- so the *passing* run appears to hang while every failing run returns
+# instantly. tests/boot-check.sh already ends this way.
+exit 0

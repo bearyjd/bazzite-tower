@@ -329,6 +329,30 @@ Arguments:
 - `$target_image` — the tag to apply to the image (default: `$image_name`)
 - `$tag` — the tag for the image (default: `$default_tag`)
 
+### `just build-portmaster-spike`
+
+Builds the opt-in Portmaster experiment with its service disabled. It is for a
+disposable VM only: it does not alter `:latest` and must not be switched onto
+the laptop. Follow [the VM spike runbook](docs/research/portmaster-bootc-spike.md)
+after building it.
+
+```bash
+just build-portmaster-spike
+just smoke image_name portmaster-spike
+```
+
+Inside the VM, the verdict comes from `sudo tests/portmaster-vm-gate.sh`, which
+exits 0 only if every check passes. Do not judge the spike by watching
+`systemctl status`: the 2026-08-05 run was recorded as a pass because
+`is-active` was read before the daemon exited.
+
+Its config is deliberately not writable at runtime. The unit `BindReadOnlyPaths=`-mounts
+`/usr/share/bazzite-tower/portmaster-config.default.json` over
+`/var/lib/portmaster/config.json`, so the update pin lives in the image and
+reverts with a rollback. **Editing the file under `/var` has no effect** —
+change the `/usr` copy and rebuild. `core/automaticUpdates` defaults to `true`
+upstream, so a config the image cannot control means automatic updates are on.
+
 ### `just smoke`
 
 Runs the offline smoke test (`tests/smoke.sh`) against a built image — the same assertions as the CI promotion gate, with no VM required.

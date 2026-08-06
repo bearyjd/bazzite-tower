@@ -1,0 +1,69 @@
+[Unit]
+Description=Portmaster application-firewall VM spike
+Documentation=https://github.com/safing/portmaster
+After=network-online.target
+Wants=network-online.target
+Conflicts=opensnitch.service firewalld.service
+# A daemon that fails during construction would otherwise restart forever:
+# RestartSec=10 never trips systemd's default 5-starts-in-10s limit, and every
+# attempt is a fresh chance to install netfilter rules before dying.
+StartLimitIntervalSec=120
+StartLimitBurst=3
+
+[Service]
+Type=simple
+StateDirectory=portmaster
+WorkingDirectory=/var/lib/portmaster
+# The update pin has to be image-managed, not /var state.  Portmaster reads its
+# config from DataDir, /var survives `rpm-ostree rollback`, and
+# core/automaticUpdates defaults to *true* — so an absent, empty, or edited
+# config in /var means automatic updates are ON, and rollback cannot undo it.
+# Shadowing the path with the image's own copy makes the pin revert with the
+# image like every other setting here.  systemd creates the destination itself
+# (systemd.exec: "the destination directory must exist or systemd must be able
+# to create it"), so nothing needs to seed /var first.  If the source is ever
+# missing the unit fails before ExecStart — fail closed, which is the right
+# posture for a daemon whose filter chain ends in `--mark 0 -j DROP`.
+BindReadOnlyPaths=/usr/share/bazzite-tower/portmaster-config.default.json:/var/lib/portmaster/config.json
+# Both directories must be passed explicitly.  On Linux portmaster-core ignores
+# its own install location and falls back to a hardcoded /usr/lib/portmaster,
+# which its updater then tries to mkdir at startup — fatal on this image's
+# read-only /usr.  The daemon reads no PORTMASTER_* environment variables, so
+# flags are the only way to set these.  --log-stdout puts the daemon's own log
+# in the journal; without it logging goes to /var/log/portmaster and
+# `journalctl -u portmaster.service` shows only systemd's own messages.
+ExecStart=/usr/libexec/portmaster/portmaster-core \
+    --bin-dir /usr/libexec/portmaster \
+    --data-dir /var/lib/portmaster \
+    --log-stdout
+# A daemon that dies mid-session otherwise leaves its netfilter rules installed,
+# which is how a VM ends up with unusable networking.  Upstream's own unit does
+# the same via portmaster-start; in v2 it is a portmaster-core subcommand.  It
+# shells out to /sbin/iptables, so the iptables package is a runtime dependency.
+# No directory flags: this subcommand calls DeactivateNfqueueFirewall() directly
+# and never builds the service instance, so --bin-dir/--data-dir are inert here.
+# It also runs after a *failed* start and on every automatic restart, so it must
+# stay a no-op when no rules were ever installed.
+ExecStopPost=-/usr/libexec/portmaster/portmaster-core recover-iptables
+Restart=on-failure
+RestartSec=10
+# Bounds the stop path.  Three restart attempts against systemd's 90s default
+# would let a failure storm hang the machine for several minutes.
+TimeoutStopSec=15
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=full
+ProtectHome=read-only
+ProtectKernelTunables=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+PrivateDevices=yes
+RestrictAddressFamilies=AF_UNIX AF_NETLINK AF_INET AF_INET6
+RestrictNamespaces=yes
+AmbientCapabilities=CAP_CHOWN CAP_KILL CAP_NET_ADMIN CAP_NET_BIND_SERVICE CAP_NET_BROADCAST CAP_NET_RAW CAP_SYS_MODULE CAP_SYS_PTRACE CAP_DAC_OVERRIDE CAP_FOWNER CAP_FSETID CAP_SYS_RESOURCE CAP_BPF CAP_PERFMON
+CapabilityBoundingSet=CAP_CHOWN CAP_KILL CAP_NET_ADMIN CAP_NET_BIND_SERVICE CAP_NET_BROADCAST CAP_NET_RAW CAP_SYS_MODULE CAP_SYS_PTRACE CAP_DAC_OVERRIDE CAP_FOWNER CAP_FSETID CAP_SYS_RESOURCE CAP_BPF CAP_PERFMON
+
+[Install]
+WantedBy=multi-user.target

@@ -21,13 +21,14 @@ pieces fit together read [docs/CODEMAPS/](./CODEMAPS/architecture.md).
 | Command | Purpose |
 |---|---|
 | `just build` | Build the container image locally (adds `SHA_HEAD_SHORT` when the tree is clean) |
+| `just build-portmaster-spike` | Build the disabled Portmaster VM-spike image; never a default/host image |
 | `just smoke` | Offline-assert the built image — **the exact CI gate** (`tests/smoke.sh`) |
 | `just build-qcow2` | Turn the image into a bootable qcow2 via bootc-image-builder |
 | `just run-vm-qcow2` | Boot the qcow2 in qemu; browser console at `localhost:8006` |
 | `just spawn-vm` | Boot via `systemd-vmspawn` instead (no browser console) |
 | `just build-iso-live` | Build the `installer/` payload + titanoboa live/installer ISO → `./output/` |
 | `just lint` | `shellcheck` every `*.sh` |
-| `just format` | `shfmt --write` every `*.sh` |
+| `just format` | `shfmt --write` every `*.sh` — **not** a required gate, see "Code style" |
 | `just check` / `just fix` | Check / auto-format Just syntax |
 | `just test-ci` | Fixture-based tests for `ci/base-diff.py` (offline, no live upstream manifests needed) |
 | `just clean` | Remove build artifacts (`output/`, manifests, `*_build*`) |
@@ -40,8 +41,16 @@ table is the single source of truth; don't duplicate it here.
 
 ## Code style
 
-- **Bash** — must pass `just lint` (shellcheck) and be `just format`-clean (shfmt).
-  Scripts use `set -euo pipefail`.
+- **Bash** — must pass `just lint` (shellcheck). Scripts use `set -euo pipefail`.
+  Indentation is 4 spaces, pinned in `.editorconfig`.
+  **`just format`-clean is *not* a requirement**, and running `just format` on
+  existing files is discouraged. `shfmt` expands multi-statement one-line
+  functions, and this repo deliberately keeps helpers like `bad()`, `hard()`,
+  `soft()` and `skip()` on one line so that long runs of assertions in
+  `tests/*.sh` read as a scannable list. Reformatting the tree to match would
+  restructure ~950 lines of working, shellcheck-clean shell to no benefit.
+  `just format` remains available for new files where you want a starting
+  point.
 - **Just** — `just check` must pass; `just fix` formats.
 - **kargs / units / TOML** — one concern per file (e.g. i915 display and suspend
   are separate `kargs.d/*.toml` fragments) so each can change or be reverted alone.

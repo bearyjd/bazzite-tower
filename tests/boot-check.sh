@@ -24,6 +24,7 @@ hard() { local d="$1"; shift; if "$@" >/dev/null 2>&1; then say "  ok   ${d}"; e
 # soft <desc> <cmd...> — reported, but never fails the boot test (container limits).
 soft() { local d="$1"; shift; if "$@" >/dev/null 2>&1; then say "  ok   ${d}"; else say "  warn ${d} (non-fatal in a container)"; fi; }
 
+# shellcheck disable=SC2329 # Invoked indirectly through `soft` below.
 not_failed() { [[ "$(systemctl is-failed "$1" 2>/dev/null)" != "failed" ]]; }
 
 # Give the Before=NetworkManager guard oneshot a moment in case exec raced it.
@@ -60,6 +61,9 @@ hard "no SOF 'failed widget list set up'" \
     bash -c '! journalctl -b 0 --no-pager 2>/dev/null | grep -q "failed widget list set up"'
 
 say "== OpenSnitch (application firewall) =="
+firewall_daemon="$(cat /usr/share/bazzite-tower/firewall-daemon 2>/dev/null || true)"
+case "${firewall_daemon}" in
+opensnitch)
 # opensnitchd is extracted from an upstream RPM with rpm2cpio, which resolves no
 # dependencies — so a missing shared library ships green and only surfaces as an
 # exec failure at boot. Actually executing the binary is the strongest available
@@ -78,6 +82,40 @@ hard "no eBPF module load failure" \
 # Interception needs NFQUEUE + NET_ADMIN, which a container does not have — the
 # daemon legitimately fails to come up here, so activeness is informational only.
 soft "opensnitch.service active" systemctl is-active --quiet opensnitch.service
+# shellcheck disable=SC2016 # The inner shell, not this script, expands $().
+hard "portmaster is masked" \
+    bash -c '[[ "$(systemctl is-enabled portmaster.service 2>/dev/null)" == "masked" ]]'
+;;
+portmaster)
+say "== Portmaster (disabled VM spike) =="
+hard "portmaster binary execs" \
+    bash -c '/usr/libexec/portmaster/portmaster-core version >/dev/null 2>&1'
+# Assert the *resolved* ExecStart, not the unit file's text: systemctl sees
+# parsed drop-ins and is immune to comments, line continuations, and variable
+# expansion. Without --bin-dir, portmaster-core falls back to a hardcoded
+# /usr/lib/portmaster whose updater mkdirs it on read-only /usr and exits 2.
+# shellcheck disable=SC2016 # The inner shell, not this script, expands $().
+hard "portmaster ExecStart pins --bin-dir at the real install dir" \
+    bash -c 'systemctl show -p ExecStart --value portmaster.service | grep -q -- "--bin-dir /usr/libexec/portmaster"'
+# shellcheck disable=SC2016 # The inner shell, not this script, expands $().
+hard "portmaster ExecStart pins --data-dir at writable state" \
+    bash -c 'systemctl show -p ExecStart --value portmaster.service | grep -q -- "--data-dir /var/lib/portmaster"'
+# Without this the daemon logs to /var/log/portmaster and journalctl shows only
+# systemd's own messages, so a VM run reads the wrong place for evidence.
+# shellcheck disable=SC2016 # The inner shell, not this script, expands $().
+hard "portmaster ExecStart sends logs to the journal" \
+    bash -c 'systemctl show -p ExecStart --value portmaster.service | grep -q -- "--log-stdout"'
+# shellcheck disable=SC2016 # The inner shell, not this script, expands $().
+hard "portmaster remains disabled" \
+    bash -c '[[ "$(systemctl is-enabled portmaster.service 2>/dev/null)" == "disabled" ]]'
+# shellcheck disable=SC2016 # The inner shell, not this script, expands $().
+hard "opensnitch is masked" \
+    bash -c '[[ "$(systemctl is-enabled opensnitch.service 2>/dev/null)" == "masked" ]]'
+;;
+*)
+hard "known firewall selector" false
+;;
+esac
 
 say "== first-boot oneshot =="
 soft "firstboot service not failed" not_failed bazzite-tower-firstboot.service

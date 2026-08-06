@@ -1,0 +1,36 @@
+# Pins the shell style so it is a property of this repo rather than whatever
+# the locally installed shfmt happens to default to. shfmt reads .editorconfig.
+#
+# Without this, `shfmt` defaults to TABS while every script here uses 4 spaces,
+# so running `just format` would reindent the entire tree. Measured 2026-08-06:
+# 1325 diff lines at shfmt's defaults, 954 with the indent pinned here.
+#
+# The remaining 954 lines are shfmt expanding multi-statement one-line functions
+# (`bad()`, `hard()`, `soft()`, `skip()`, `note()`, `local x="$1"; shift`). That
+# idiom is deliberate -- a one-line `hard()` is what lets a long run of
+# assertions in tests/*.sh read as a scannable list -- so this repo does not
+# adopt it. `just lint` (shellcheck) is the enforced gate. See
+# docs/CONTRIBUTING.md "Code style" and .agent_native/agent_roadmap.md item 6.
+
+root = true
+
+[*]
+end_of_line = lf
+insert_final_newline = true
+charset = utf-8
+trim_trailing_whitespace = true
+
+[*.sh]
+indent_style = space
+indent_size = 4
+
+[Justfile]
+indent_style = space
+indent_size = 4
+
+[*.{yml,yaml,toml,json}]
+indent_style = space
+indent_size = 2
+
+[*.md]
+trim_trailing_whitespace = false

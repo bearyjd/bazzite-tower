@@ -1,6 +1,9 @@
 # Portmaster bootc VM spike
 
-> **Status:** VM gate failed; not approved for the host or merge.
+> **Status:** VM gate PASSES (2026-08-06). Portmaster is viable on this image.
+> Still **not** approved for the host: interception is unproven, verdict 3
+> (Tailscale/NextDNS/TorGuard) is untested, and the VM models none of the
+> laptop's real conditions. See "What a PASS does not license" below.
 
 This repository has a deliberately opt-in `portmaster` firewall build variant.
 It exists to answer runtime questions that source review cannot settle. It is
@@ -161,8 +164,70 @@ matching the mountpoint, source, and `ro` flag in the daemon's own
 `/proc/PID/mountinfo` — checking the pinned *value* would pass whether or not
 the mount worked.
 
-**Still unverified:** every fix here is source-derived. The gate has not been
-run. Do not merge or enable this variant on the host until it exits 0, and note
-that a pass still says nothing about Docker, libvirt, VPN transitions,
-suspend/resume, or NetworkManager resolver rewrites — none of which the VM
-models.
+## VM gate verdict — 2026-08-06: PASS
+
+`tests/portmaster-vm-gate.sh` exited 0 with all twenty checks green, against a
+qcow2 whose booted unit was verified to contain the code under test.
+
+```
+V0   image contains the code under test              ok
+V1   holds active 30s, NRestarts=0, Result=success   ok
+V4a  mount applied / from /usr / ro / values read    ok
+V3   no config-write errors                          ok
+V5   journal carries daemon output                   ok
+V2   name resolution survives                        ok
+V6   chains appear, gone after stop, nothing moved   ok
+V6b  cleanup idempotent                              ok
+V7   fails closed without the pin source             ok
+```
+
+**Both blockers from the parent PRP are answered.**
+[parameterized-firewall-module.md](../prp/parameterized-firewall-module.md) §"The
+two blockers that actually defer it" named DNS and `/var`-resident config. In a
+plain VM the daemon coexists with the guest resolver, and the config now lives
+in `/usr`, is bind-mounted read-only into the daemon's namespace, reverts with a
+rollback, and is read back through `nsenter` from inside that namespace rather
+than from a path that would match either way.
+
+Runtime confirmation from the journal: `running Portmaster 2.2.1 (... from
+af0c60140ec4a5d7239aaf61bb3d81ac3c56e51b [clean] ...)`, all managers started,
+API listening on `127.0.0.1:817`.
+
+Also settled: `portmaster-core` does **not** write its own config, so the
+read-only pin does not fight the daemon. That was an open question source review
+could not answer.
+
+### What a PASS does not license
+
+- **Verdict 3 is untested.** Tailscale MagicDNS, NextDNS, and TorGuard need real
+  credentials in a VM. A guest resolving `example.com` over user-mode NAT says
+  nothing about a four-way contest for the resolver path.
+- **Interception is unproven.** Every check here concerns daemon survival,
+  configuration, and rule lifecycle. Nothing demonstrates that a connection is
+  actually matched to a process and allowed or denied. A daemon that boots,
+  resolves DNS, installs chains and intercepts nothing passes this entire gate.
+- **The VM models almost none of the real machine.** libvirt, VPN transitions,
+  suspend/resume, NetworkManager resolver rewrites, and Docker under load are
+  all absent. The ThinkPad has all of them.
+
+Do not enable this variant on the host on the strength of this verdict.
+
+### Prior runs that produced no verdict
+
+Two earlier runs on 2026-08-05 have to be discarded, both for measurement faults
+rather than daemon behaviour, and both worth knowing about:
+
+1. **A stale image was graded for a full cycle.** `_rootful_load_image` ran
+   `podman image scp`, returned 0, and silently declined to move the tag because
+   the destination tag already existed. bootc-image-builder consumed the
+   three-day-old rootful image. Every freshness guard checked artifact
+   *identity* (mtime, size, image ID) at a layer that was correct, while the
+   layer that actually fed the disk build was stale. V0 exists because of this.
+2. **Six gate checks measured the wrong thing**, of which three could produce a
+   false pass: the pinned-value check read `CONFIG_DST` from outside the unit's
+   private mount namespace, where it is the empty file systemd creates as the
+   mount destination; `journalctl | grep -q` under `set -o pipefail` reported
+   SIGPIPE(141) as failure; the rule baseline was captured while Docker was
+   still installing chains; and the ruleset comparison diffed the
+   `[packets:bytes]` counters that `iptables-save` emits on chain-policy lines,
+   which change with every packet and could never match on a live system.

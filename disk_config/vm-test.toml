@@ -28,5 +28,14 @@ groups = ["wheel"]
 password = "gate"
 key = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIM303ctXRgePs9Y0A7emEdkHNbz2ProqyPDCts3lcY20 portmaster-vm-gate-throwaway"
 
-[customizations.services]
-enabled = ["sshd"]
+# NOTE: `[customizations.services] enabled = ["sshd"]` does NOT work here.
+# bootc-image-builder rejects it for the qcow2 image type and then builds anyway:
+#
+#   blueprint validation failed for image type "qcow2":
+#   customizations.services: not supported
+#
+# The build still exits 0, so this is silent unless you grep the log. sshd must
+# be started by hand after boot, over the serial console, using the password
+# above:
+#
+#   sudo systemctl enable --now sshd.socket

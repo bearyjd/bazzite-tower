@@ -44,13 +44,26 @@ table is the single source of truth; don't duplicate it here.
 - **Bash** — must pass `just lint` (shellcheck). Scripts use `set -euo pipefail`.
   Indentation is 4 spaces, pinned in `.editorconfig`.
   **`just format`-clean is *not* a requirement**, and running `just format` on
-  existing files is discouraged. `shfmt` expands multi-statement one-line
-  functions, and this repo deliberately keeps helpers like `bad()`, `hard()`,
-  `soft()` and `skip()` on one line so that long runs of assertions in
-  `tests/*.sh` read as a scannable list. Reformatting the tree to match would
-  restructure ~950 lines of working, shellcheck-clean shell to no benefit.
-  `just format` remains available for new files where you want a starting
-  point.
+  existing files is discouraged — it would restructure ~807 lines of working,
+  shellcheck-clean shell. The reason is not uniform across the tree, and it
+  matters which half you are in:
+
+  | Where | Lines | Why it differs from shfmt |
+  |---|---:|---|
+  | `tests/*.sh` | 615 (76%) | **Deliberate.** shfmt expands multi-statement one-line functions (`bad()`, `hard()`, `soft()`, `skip()`) and drops column padding; keeping them on one line is what lets long runs of assertions read as a scannable list. |
+  | everywhere else | 192 | **Undecided.** Ordinary shfmt opinions — redirect spacing, case indent. Nobody has ruled on these; they are not a defended style. |
+
+  Do not invoke the `tests/` idiom to dismiss a formatting problem outside
+  `tests/`. In `build_files/build.sh` shfmt was correct — the `FIREWALL_DAEMON`
+  wrap had left an `if` body at column 0 — and the right fix was to indent that
+  block directly, not to reformat the tree or to leave it alone.
+
+  Tuning does not rescue a full adopt either: even at `-i 4 -ci -kp -sr -bn` the
+  floor is ~805, because shfmt preserves *single*-statement one-liners but has no
+  flag for multi-statement ones. Note also that passing any printer flag on the
+  command line disables `.editorconfig` lookup, so such flags belong in
+  `.editorconfig`, not the Justfile. `just format` remains available for new
+  files where you want a starting point.
 - **Just** — `just check` must pass; `just fix` formats.
 - **kargs / units / TOML** — one concern per file (e.g. i915 display and suspend
   are separate `kargs.d/*.toml` fragments) so each can change or be reverted alone.

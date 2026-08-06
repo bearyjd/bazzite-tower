@@ -171,11 +171,17 @@ that shape for any new hardware investigation.
 
 - **Bash** — must pass `just lint` (shellcheck). Indentation is 4 spaces,
   pinned in `.editorconfig`. **`just format`-clean is NOT a requirement and you
-  should not run `just format` over existing files** — shfmt expands
-  multi-statement one-line functions, and this repo deliberately keeps helpers
-  like `bad()`, `hard()`, `soft()` and `skip()` on one line so that long runs of
-  assertions in `tests/*.sh` read as a scannable list. Reformatting would
-  restructure ~950 lines of working, shellcheck-clean shell to no benefit.
+  should not run `just format` over existing files** — it would restructure ~807
+  lines of working, shellcheck-clean shell. Be precise about why, because the
+  reason differs by directory: **615 of those 807 lines (76%) are `tests/*.sh`**,
+  where shfmt expands multi-statement one-line functions and drops column
+  padding — and this repo deliberately keeps helpers like `bad()`, `hard()`,
+  `soft()` and `skip()` on one line so long runs of assertions read as a
+  scannable list. The other **192 lines are not a considered objection**, just
+  shfmt opinions (redirect spacing, case indent) nobody has ruled on. So do not
+  cite "the idiom" to wave away a formatting problem outside `tests/` — in
+  `build_files/build.sh` shfmt was *right*, and the fix was to indent the
+  column-0 `if` body directly rather than reformat the tree.
   Scripts use `set -euo pipefail` (or `-uo pipefail` where a script
   intentionally continues past failing checks to report all of them, e.g.
   `tests/smoke.sh`/`tests/boot-check.sh` — match the existing pattern in the

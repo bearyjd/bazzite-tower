@@ -420,14 +420,19 @@ lint:
 
 # Runs shfmt on all Bash scripts.
 #
-# NOT a required gate, and running this over existing files is discouraged.
-# shfmt expands multi-statement one-line functions, and this repo deliberately
-# keeps helpers like bad()/hard()/soft()/skip() on one line so long runs of
-# assertions in tests/*.sh read as a scannable list. Running this would
-# restructure ~950 lines of working, shellcheck-clean shell to no benefit.
+# NOT a required gate, and running this over existing files is discouraged:
+# it would restructure ~807 lines of working, shellcheck-clean shell.
+#
+# 615 of those (76%) are tests/*.sh, where shfmt expands multi-statement
+# one-line functions and drops column padding — and keeping helpers like
+# bad()/hard()/soft()/skip() on one line is what lets long runs of assertions
+# read as a scannable list. The other 192 lines are undecided, not defended, so
+# do not cite the tests/ idiom to dismiss a formatting problem outside tests/.
+#
 # `just lint` (shellcheck) is the enforced gate. Indentation is pinned in
-# .editorconfig so shfmt at least agrees on whitespace. See docs/CONTRIBUTING.md
-# "Code style".
+# .editorconfig so shfmt at least agrees on whitespace — note that passing any
+# printer flag here on the command line would DISABLE that .editorconfig lookup.
+# See docs/CONTRIBUTING.md "Code style".
 format:
     #!/usr/bin/env bash
     set -eoux pipefail

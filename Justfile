@@ -158,22 +158,54 @@ _rootful_load_image $target_image=image_name $tag=default_tag:
     return_code=$?
     set -e
 
-    USER_IMG_ID=$(podman images --filter reference="${target_image}:${tag}" --format "'{{ '{{.ID}}' }}'")
+    # Normalise both IDs. `just sudoif` re-parses its arguments, which strips the
+    # quotes a "'{{ '{{.ID}}' }}'" format embeds, so the rootful ID came back bare
+    # while the rootless one kept its quotes. The two therefore never compared
+    # equal and the copy below ran on *every* invocation.
+    USER_IMG_ID=$(podman images --filter reference="${target_image}:${tag}" --format "{{ '{{.ID}}' }}" | tr -d "'")
 
     if [[ $return_code -eq 0 ]]; then
         # If the image is found, load it into rootful podman
-        ID=$(just sudoif podman images --filter reference="${target_image}:${tag}" --format "'{{ '{{.ID}}' }}'")
+        ID=$(just sudoif podman images --filter reference="${target_image}:${tag}" --format "{{ '{{.ID}}' }}" | tr -d "'")
         if [[ "$ID" != "$USER_IMG_ID" ]]; then
             # If the image ID is not found or different from user, copy the image from user podman to root podman
             COPYTMP=$(mktemp -p "${PWD}" -d -t _build_podman_scp.XXXXXXXXXX)
-            # Some sudo policies reject command-line environment assignments.
-            # Set TMPDIR inside the root shell instead, using positional
-            # arguments so image/tag values are never shell-interpolated.
-            just sudoif bash -c 'TMPDIR="$1" podman image scp "$2" "$3"' bash \
-                "${COPYTMP}" \
+            # `podman image scp` silently declines to move a destination tag that
+            # already exists, and still exits 0. Untag first so there is nothing
+            # to collide with.
+            just sudoif podman untag "${target_image}:${tag}" || true
+            # Call sudo directly, NOT through `just sudoif`. That recipe splats
+            # its command and args into the shell *unquoted*, so any multi-word
+            # quoted argument is word-split before it runs. The previous form
+            # here was:
+            #
+            #   just sudoif bash -c 'TMPDIR="$1" podman image scp "$2" "$3"' ...
+            #
+            # which reached bash as separate words, so bash executed only
+            # `TMPDIR="$1"` -- a no-op assignment -- and exited 0. podman was
+            # never invoked. The copy produced no output, changed nothing, and
+            # reported success, which is how a stale image reached BIB on
+            # 2026-08-05 and was built, booted and graded before anyone noticed.
+            #
+            # `sudo env VAR=x cmd` rather than `sudo VAR=x cmd` because some
+            # sudo policies reject command-line environment assignments; env is
+            # an ordinary binary. _build-bib already calls `sudo podman run`
+            # directly, so this matches the file's existing pattern.
+            sudo env TMPDIR="${COPYTMP}" podman image scp \
                 "${UID}@localhost::${target_image}:${tag}" \
                 "root@localhost::${target_image}:${tag}"
             rm -rf "${COPYTMP}"
+            # Verify. A silent no-op here hands bootc-image-builder a stale image
+            # and every downstream artifact then describes the wrong code, with
+            # nothing in the log to say so. This happened on 2026-08-05: a
+            # three-day-old image was built, booted and graded before anyone
+            # noticed. Fail loudly instead.
+            NEW_ID=$(just sudoif podman images --filter reference="${target_image}:${tag}" --format "{{ '{{.ID}}' }}" | tr -d "'")
+            if [[ "$NEW_ID" != "$USER_IMG_ID" ]]; then
+                echo "ERROR: rootful ${target_image}:${tag} is ${NEW_ID:-<missing>}, expected ${USER_IMG_ID}." >&2
+                echo "       The copy into rootful storage did not take. Refusing to build a stale image." >&2
+                exit 1
+            fi
         fi
     else
         # If the image is not found, pull it from the repository
@@ -214,8 +246,18 @@ _build-bib $target_image $tag $type $config: (_rootful_load_image target_image t
       "${target_image}:${tag}"
 
     mkdir -p output
-    sudo mv -f $BUILDTMP/* output/
-    sudo rmdir $BUILDTMP
+    # `mv -f` will not merge into an existing non-empty directory, so a second
+    # build of the same type failed here with "cannot overwrite 'output/qcow2':
+    # Directory not empty" -- *after* BIB had already printed "Build complete!".
+    # The new artifact stayed stranded in the temp dir while the stale one
+    # remained in output/, where `just run-vm-*` would happily boot it. Replace
+    # each artifact directory explicitly instead.
+    for artifact in "${BUILDTMP}"/*; do
+        [[ -e "${artifact}" ]] || continue
+        sudo rm -rf "output/$(basename "${artifact}")"
+        sudo mv -f "${artifact}" output/
+    done
+    sudo rmdir "${BUILDTMP}"
     sudo chown -R $USER:$USER output/
 
 # Podman builds the image from the Containerfile and creates a bootable image

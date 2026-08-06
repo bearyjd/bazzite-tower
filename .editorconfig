@@ -5,11 +5,25 @@
 # so running `just format` would reindent the entire tree. Measured 2026-08-06:
 # 1325 diff lines at shfmt's defaults, 954 with the indent pinned here.
 #
-# The remaining 954 lines are shfmt expanding multi-statement one-line functions
-# (`bad()`, `hard()`, `soft()`, `skip()`, `note()`, `local x="$1"; shift`). That
-# idiom is deliberate -- a one-line `hard()` is what lets a long run of
-# assertions in tests/*.sh read as a scannable list -- so this repo does not
-# adopt it. `just lint` (shellcheck) is the enforced gate. See
+# Careful: passing ANY printer flag to shfmt on the command line disables
+# .editorconfig lookup entirely, so `shfmt -ci` silently reverts to tabs and
+# measures WORSE (1332) than no flag at all. Tuning belongs here, not in the
+# Justfile.
+#
+# Of that 954, 216 lines were build_files/build.sh alone, where shfmt was simply
+# right: the FIREWALL_DAEMON wrap had left an if-body at column 0. That was
+# indented directly rather than by reformatting, dropping the tree to 807.
+#
+# Of the 807 remaining, 615 (76%) are tests/*.sh and ARE the deliberate part:
+# shfmt expands multi-statement one-line functions (`bad()`, `hard()`, `soft()`,
+# `skip()`, `local x="$1"; shift`) and drops column padding, and a one-line
+# `hard()` is what lets a long run of assertions read as a scannable list. The
+# other 192 lines are ordinary shfmt opinions (redirect spacing, case indent)
+# this repo has not adopted -- absence of a decision, not a considered objection.
+#
+# Tuning cannot close the gap: even at `-i 4 -ci -kp -sr -bn` the floor is ~805,
+# because shfmt keeps SINGLE-statement one-liners but offers no flag to preserve
+# multi-statement ones. `just lint` (shellcheck) is the enforced gate. See
 # docs/CONTRIBUTING.md "Code style" and .agent_native/agent_roadmap.md item 6.
 
 root = true

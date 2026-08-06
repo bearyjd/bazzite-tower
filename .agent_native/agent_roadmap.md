@@ -295,9 +295,11 @@ literal build entry point) before spending the time/resources of a full
 
 ## 6. Reconcile `just format` with the repo's actual style — RESOLVED (2026-08-06)
 
-**Resolution: the convention moved, not the code.** Investigating the reformat
-showed `shfmt`'s defaults disagree with this repo on *taste*, not correctness,
-so reformatting would have been a regression rather than a cleanup.
+**Resolution: mostly the convention moved — but one real defect was hiding
+behind the convention.** Reformatting the tree would still have been a
+regression. The original write-up overstated the case, though, by attributing
+*all* residual drift to the compact-helper idiom; a re-measure the same day
+showed a quarter of it was in files with no helpers at all.
 
 Measured 2026-08-06 with `shfmt` 3.7.0:
 
@@ -305,21 +307,39 @@ Measured 2026-08-06 with `shfmt` 3.7.0:
 shfmt defaults (tabs):                1325 diff lines
 with .editorconfig pinning 4-space:    954 diff lines
   -> indentation accounted for:         371 lines (28%)
-  -> genuine restructuring:             954 lines (72%)
+after fixing build.sh's column-0 body:  807 diff lines
+  -> tests/*.sh (deliberate idiom):     615 lines (76%)
+  -> everywhere else (undecided):       192 lines (24%)
 ```
 
-Two distinct disagreements, only one of which was drift:
+Three distinct disagreements, not two:
 
 1. **Indentation.** `shfmt` defaults to tabs; every script here uses 4 spaces
    (0 tab-indented lines across the tree). This *was* worth pinning, and now is,
    in `.editorconfig` — so the style is a property of the repo rather than of
-   whichever `shfmt` version happens to be installed.
-2. **One-line functions.** The remaining 954 lines are `shfmt` expanding
-   multi-statement one-liners: `bad()`, `hard()`, `soft()`, `skip()`, `note()`,
-   and every `local x="$1"; shift`. That idiom is deliberate — a one-line
-   `hard()` is what lets a long run of assertions in `tests/*.sh` read as a
-   scannable list. Expanding ~950 lines of working, shellcheck-clean shell to
-   satisfy a formatter's opinion buys nothing.
+   whichever `shfmt` version happens to be installed. Caveat found later:
+   passing any printer flag on the command line **disables `.editorconfig`
+   lookup**, so `shfmt -ci` measures 1332, worse than no flag. Tuning must live
+   in `.editorconfig`.
+2. **One-line functions — deliberate, and confined to `tests/`.** 615 of the
+   807 residual lines are `tests/*.sh`, where `shfmt` expands multi-statement
+   one-liners (`bad()`, `hard()`, `soft()`, `skip()`, `local x="$1"; shift`) and
+   drops column padding. That idiom is what lets a long run of assertions read
+   as a scannable list. Note `shfmt` *preserves* single-statement one-liners, so
+   `pass()` is untouched — the disagreement is narrower than first stated.
+3. **`build_files/build.sh` — shfmt was right (216 lines).** The
+   `FIREWALL_DAEMON` wrap added in the parameterized-firewall work left the
+   whole OpenSnitch block's body at **column 0** inside its `if`, an artifact of
+   keeping that review diff small. This was a genuine readability defect, not a
+   style preference, and the blanket "don't run `just format`" rule was
+   concealing it. Fixed by indenting lines 295–376 directly — verified
+   whitespace-only (`git diff -w` empty) and semantics-preserving (`shfmt -mn`
+   output byte-identical before and after), which is a stronger guarantee than a
+   rebuild for a pure-whitespace change. build.sh drift: 216 → 69.
+
+**Lesson for future readers:** do not cite the `tests/` idiom to dismiss a
+formatting complaint outside `tests/`. The remaining 192 non-test lines are
+*undecided*, not defended.
 
 **What changed:** `.editorconfig` added (pins 4-space, plus `end_of_line`,
 `insert_final_newline`, `charset`). `docs/CONTRIBUTING.md` and `CLAUDE.md` no
@@ -331,9 +351,17 @@ at its definition, so it is visible at the point of use. `just lint`
 **Deliberately not done:** no repo-wide reformat, no `.git-blame-ignore-revs`,
 no `shfmt --diff` CI gate. Those all presuppose that shfmt's output is the
 target, which this resolution rejects. If a future contributor wants
-shfmt-clean as a hard standard, that is a real choice — but it costs a 954-line
+shfmt-clean as a hard standard, that is a real choice — but it costs an 807-line
 mechanical diff and the loss of the compact-helper idiom, and should be decided
-deliberately rather than by running `just format` once and committing it.
+deliberately rather than by running `just format` once and committing it. Tuning
+does not offer a cheap middle: even at `-i 4 -ci -kp -sr -bn` the floor is ~805,
+because `shfmt` has no flag to preserve multi-statement one-liners.
+
+**Still open (deliberately not taken here):** scoping the `format` recipe to
+`build_files/`, `scripts/`, `installer/` and excluding `tests/`. That would make
+`just format` safe to run instead of a recipe whose own comment says not to run
+it, and would cover the 192 undecided lines. It changes standing policy, so it
+wants an explicit decision rather than being folded into a correction.
 
 ---
 

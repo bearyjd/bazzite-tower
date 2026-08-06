@@ -31,7 +31,7 @@ any of it.
 | `just spawn-vm` | Boot via `systemd-vmspawn` instead (no browser console) |
 | `just build-iso-live` | Build the `installer/` payload + titanoboa live/installer ISO → `./output/` (UNVERIFIED path per `.claude/PRPs/reports/titanoboa-iso-workflow-report.md` — the runtime boot-in-VM gate has not been run) |
 | `just lint` | `shellcheck` every `*.sh` in the repo |
-| `just format` | `shfmt --write` every `*.sh` in the repo |
+| `just format` | `shfmt --write` every `*.sh` — **not** a required gate; do not run it over existing files (see "Code style") |
 | `just check` / `just fix` | Check / auto-format `Justfile`/`*.just` syntax |
 | `just clean` | Remove build artifacts (`output/`, manifests, `*_build*`) |
 
@@ -169,8 +169,14 @@ that shape for any new hardware investigation.
 
 ## Code style (from `docs/CONTRIBUTING.md`)
 
-- **Bash** — must pass `just lint` (shellcheck) and be `just format`-clean
-  (shfmt). Scripts use `set -euo pipefail` (or `-uo pipefail` where a script
+- **Bash** — must pass `just lint` (shellcheck). Indentation is 4 spaces,
+  pinned in `.editorconfig`. **`just format`-clean is NOT a requirement and you
+  should not run `just format` over existing files** — shfmt expands
+  multi-statement one-line functions, and this repo deliberately keeps helpers
+  like `bad()`, `hard()`, `soft()` and `skip()` on one line so that long runs of
+  assertions in `tests/*.sh` read as a scannable list. Reformatting would
+  restructure ~950 lines of working, shellcheck-clean shell to no benefit.
+  Scripts use `set -euo pipefail` (or `-uo pipefail` where a script
   intentionally continues past failing checks to report all of them, e.g.
   `tests/smoke.sh`/`tests/boot-check.sh` — match the existing pattern in the
   file you're editing).

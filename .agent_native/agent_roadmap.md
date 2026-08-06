@@ -293,7 +293,52 @@ literal build entry point) before spending the time/resources of a full
 
 ---
 
-## 6. Make `just format` actually true, then keep it true (small effort, low-but-real leverage)
+## 6. Reconcile `just format` with the repo's actual style — RESOLVED (2026-08-06)
+
+**Resolution: the convention moved, not the code.** Investigating the reformat
+showed `shfmt`'s defaults disagree with this repo on *taste*, not correctness,
+so reformatting would have been a regression rather than a cleanup.
+
+Measured 2026-08-06 with `shfmt` 3.7.0:
+
+```
+shfmt defaults (tabs):                1325 diff lines
+with .editorconfig pinning 4-space:    954 diff lines
+  -> indentation accounted for:         371 lines (28%)
+  -> genuine restructuring:             954 lines (72%)
+```
+
+Two distinct disagreements, only one of which was drift:
+
+1. **Indentation.** `shfmt` defaults to tabs; every script here uses 4 spaces
+   (0 tab-indented lines across the tree). This *was* worth pinning, and now is,
+   in `.editorconfig` — so the style is a property of the repo rather than of
+   whichever `shfmt` version happens to be installed.
+2. **One-line functions.** The remaining 954 lines are `shfmt` expanding
+   multi-statement one-liners: `bad()`, `hard()`, `soft()`, `skip()`, `note()`,
+   and every `local x="$1"; shift`. That idiom is deliberate — a one-line
+   `hard()` is what lets a long run of assertions in `tests/*.sh` read as a
+   scannable list. Expanding ~950 lines of working, shellcheck-clean shell to
+   satisfy a formatter's opinion buys nothing.
+
+**What changed:** `.editorconfig` added (pins 4-space, plus `end_of_line`,
+`insert_final_newline`, `charset`). `docs/CONTRIBUTING.md` and `CLAUDE.md` no
+longer claim shell must be `just format`-clean and now say plainly not to run
+`just format` over existing files. The `format` recipe carries the same warning
+at its definition, so it is visible at the point of use. `just lint`
+(shellcheck) is and remains the enforced gate.
+
+**Deliberately not done:** no repo-wide reformat, no `.git-blame-ignore-revs`,
+no `shfmt --diff` CI gate. Those all presuppose that shfmt's output is the
+target, which this resolution rejects. If a future contributor wants
+shfmt-clean as a hard standard, that is a real choice — but it costs a 954-line
+mechanical diff and the loss of the compact-helper idiom, and should be decided
+deliberately rather than by running `just format` once and committing it.
+
+---
+
+<details>
+<summary>Original problem statement (2026-08-05), kept for context</summary>
 
 **Problem:** `docs/CONTRIBUTING.md` says shell must be `just format`-clean.
 It never has been. Measured 2026-08-05 with `shfmt` 3.7.0, **every** `*.sh`
@@ -346,6 +391,8 @@ structural entanglement (item 4).
 **Files:** all nine `*.sh` files (reformat commit), `Justfile` (check recipe),
 `docs/CONTRIBUTING.md`, `.github/workflows/`, `.editorconfig` (new),
 `.git-blame-ignore-revs` (new).
+
+</details>
 
 ---
 

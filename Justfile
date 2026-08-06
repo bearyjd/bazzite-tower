@@ -418,7 +418,16 @@ lint:
     # Run shellcheck on all Bash scripts
     /usr/bin/find . -iname "*.sh" -type f -exec shellcheck "{}" ';'
 
-# Runs shfmt on all Bash scripts
+# Runs shfmt on all Bash scripts.
+#
+# NOT a required gate, and running this over existing files is discouraged.
+# shfmt expands multi-statement one-line functions, and this repo deliberately
+# keeps helpers like bad()/hard()/soft()/skip() on one line so long runs of
+# assertions in tests/*.sh read as a scannable list. Running this would
+# restructure ~950 lines of working, shellcheck-clean shell to no benefit.
+# `just lint` (shellcheck) is the enforced gate. Indentation is pinned in
+# .editorconfig so shfmt at least agrees on whitespace. See docs/CONTRIBUTING.md
+# "Code style".
 format:
     #!/usr/bin/env bash
     set -eoux pipefail

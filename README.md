@@ -235,7 +235,8 @@ The proprietary driver supports Maxwell and newer, so there's no pre-Turing cuto
 | Path | Purpose |
 |---|---|
 | `Containerfile` | Image build definition (`FROM` + `COPY system_files` + invoke `build.sh`) |
-| `build_files/build.sh` | All customizations: packages, repos, units, polkit, first-boot oneshot |
+| `build_files/build.sh` | Thin runner — executes every `build_files/build.d/*.sh` in filename order |
+| `build_files/build.d/` | All customizations, one concern per script: packages, repos, units, polkit, firewall |
 | `system_files/` | Static content copied verbatim into the image (systemd units, ujust recipes, bootc kargs) |
 | `disk_config/disk.toml` | qcow2/raw config for bootc-image-builder |
 | `disk_config/iso-kde.toml` | bootc-image-builder anaconda-iso config (unused — see ISO note) |
@@ -274,9 +275,11 @@ just run-vm-qcow2        # boot the qcow2 in qemu, browser console at localhost:
 
 The [Containerfile](./Containerfile) defines the operations used to customize the selected image. This file is the entrypoint for the image build and works exactly like a regular podman Containerfile. For reference, see the [Podman Documentation](https://docs.podman.io/en/latest/Introduction.html).
 
-## build.sh
+## build.sh and build.d/
 
-The [build.sh](./build_files/build.sh) file is called from the Containerfile. It is where every customization in this image lives: package installs, repo files, systemd unit drops, polkit rules, and the first-boot oneshot. Edit this file to change what's in the image.
+The [build.sh](./build_files/build.sh) file is called from the Containerfile, but it is now a thin runner: it executes every script in [build_files/build.d/](./build_files/build.d/) in filename order. Each of those scripts owns one concern — `30-docker-ce.sh`, `40-sysusers-fixup.sh`, `95-firewall.sh` and so on — so **to change what's in the image, edit the file that owns that concern**, not the runner.
+
+The numbers are execution order, and order matters: the sysusers fixup (`40-`) has to run after the Docker install (`30-`) and before libvirt daemon enablement (`60-`). Add a new script at the number that puts it in the right place rather than appending one.
 
 ## build.yml
 

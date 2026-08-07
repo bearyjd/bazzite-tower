@@ -51,11 +51,17 @@ verify.
 
 - `Containerfile` — build entry: `FROM` base → `COPY system_files/` → `RUN
   build_files/build.sh` → `bootc container lint`.
-- `build_files/build.sh` — all image customization (dnf installs, systemd
-  unit enables, the sysusers/orphan-shadow workaround). Currently one 276-line
-  script covering several unrelated concerns — see "Structural note" below
-  before making an unrelated change land in the middle of someone else's
-  section.
+- `build_files/build.sh` — thin runner. Executes every `build_files/build.d/*.sh`
+  in filename order with `bash` (not `source`, so nothing leaks between them).
+- `build_files/build.d/` — all image customization, **one concern per script**
+  (dnf installs, systemd unit enables, the sysusers/orphan-shadow workaround,
+  the firewall selector). The numeric prefixes are execution order and it is
+  load-bearing: `40-sysusers-fixup.sh` must run after `30-docker-ce.sh` and
+  before `60-libvirt-services.sh`. Edit the script that owns the concern; add a
+  new one at the number that places it correctly rather than appending.
+- `build_files/firewall/portmaster.sh` — sourced by `95-firewall.sh` only when
+  `FIREWALL_DAEMON=portmaster`. Not in `build.d/` because it is conditional, not
+  part of the unconditional glob.
 - `system_files/` — static content `COPY`ed verbatim to `/`: systemd units,
   `kargs.d/*.toml` fragments, libexec helpers, ujust recipes, sysctl/modprobe/
   journald drop-ins. **One concern per file** here — e.g. i915 display and

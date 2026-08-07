@@ -14,7 +14,7 @@ cosign-signed by digest.
 ```
 Containerfile ──FROM base────┐
 system_files/ ──COPY /───────┤ build.sh  (dnf + systemctl + drop-in files)
-build_files/build.sh ──RUN───┘        │
+build_files/build.d/ ─RUN────┘        │
                                       ▼
                             bootc container lint
                                       │   CI: smoke gate → push GHCR → cosign sign (by digest)
@@ -30,7 +30,8 @@ build_files/build.sh ──RUN───┘        │
 ## Entry points
 
 - `Containerfile` — build entry: FROM base → COPY system_files → RUN build.sh → lint
-- `build_files/build.sh` — all image customization (276 lines)
+- `build_files/build.sh` — thin runner; executes `build_files/build.d/*.sh` in filename order
+- `build_files/build.d/` — all image customization, one concern per script (12 scripts)
 - `system_files/` — static content baked verbatim into the image (units, recipes, kargs, helpers)
 - `installer/` — separate payload builder for the live/installer ISO (titanoboa input)
 - `Justfile` — local build / VM / test recipes

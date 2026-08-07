@@ -12,27 +12,31 @@
 5. `RUN --mount=bind,from=ctx … /ctx/build.sh` — modifications (caches: /var/cache, /var/log; tmpfs /tmp)
 6. `RUN bootc container lint`
 
-## build.sh sections (in order, 309 lines)
+## build.d scripts (executed in filename order)
 
-| Lines | Section | Effect |
-|---|---|---|
-| 5–19   | QEMU/libvirt stack | dnf: qemu-kvm, libvirt*, virt-install/manager/viewer, edk2-ovmf, guestfs-tools, spice-gtk3 |
-| 21–30  | Dev tooling | dnf: android-tools, ccache, flatpak-builder, podman-machine/tui, rclone, restic, zsh |
-| 32–110 | Docker CE | write inert `docker-ce.repo` (every section enabled=0); remove `podman-docker`; install via `--enablerepo=docker-ce-stable` |
-| 112–141| sysusers fix | **generic** orphan strip (keep only shadow/gshadow lines with a matching passwd/group) → `systemd-sysusers` → guarded `groupadd -r qemu` + `useradd qemu` + **`groupadd -r docker`**. Fixes virtqemud + docker.socket "Unknown group" boot failures |
-| 143–146| docker-in-docker | `/etc/modules-load.d/iptable_nat.conf` |
-| 148–171| libvirt modular + docker | mask `libvirtd.service`; enable `virtqemud/virtnetworkd/virtnodedevd/virtnwfilterd/virtstoraged/virtproxyd.socket`; enable `docker.service` |
-| 173–181| default NAT net autostart | symlink `autostart/default.xml` (virsh can't run at build time) |
-| 183–192| polkit rule | `wheel` → `qemu:///system` (manage + monitor) |
-| 194    | enable firstboot | `bazzite-tower-firstboot.service` |
-| 201    | enable wifi guard | `bazzite-tower-wifi-backend-guard.service` |
-| 210–215| **Storage SMART** | dnf: smartmontools; enable `smartd.service` (config in `system_files/`) |
-| 217–225| **Cockpit** | dnf: cockpit, cockpit-machines; enable `cockpit.socket` (web mgmt :9090; rest of Cockpit is base-provided) |
-| 227–245| **RAS / MCE** | dnf: rasdaemon (enable) ; **mask `mcelog.service`** ; dnf: microcode_ctl (latest) |
-| 247–255| **i915 resume-regression watcher** | enable `i915-resume-fix-check.timer` — periodic, kernel-version-gated check for the cx0 DPLL s2idle-resume regression signature (see system-files); the machine-checkable signal the Containerfile kernel-pin comment points at |
-| 258–273| **CPU power/thermal** | dnf: thermald (enable) ; enable `bazzite-tower-power-tuning.service` (balanced EPP + platform-profile). SOF audio: **no install** — bypassed via the `dsp_driver=1` karg (see system-files) |
-| 275–end| **Firewall selector** | default `opensnitch`: pinned v1.8.0 RPM extraction, Snitchwatch config and enablement as before. Explicit `FIREWALL_DAEMON=portmaster` is a disabled VM spike: source-build exact Portmaster v2.2.1 commit, direct core (no updater/bootstrapper), config pinned from `/usr` via the unit's `BindReadOnlyPaths=` (never seeded into `/var`, which rollback cannot revert), Go toolchain removed after the build, OpenSnitch masked. Build with `just build-portmaster-spike`; never a default image. |
-| 348–349| `dnf clean all` | |
+`build.sh` is a thin runner: it `bash`-executes each `build_files/build.d/*.sh` in
+glob order. Numbers encode execution order, which is load-bearing — `40-` must run
+after `30-` and before `60-`. Filenames replace the line ranges this table used to
+carry, because line ranges drift and filenames do not.
+
+| Script | Effect |
+|---|---|
+| `10-virt-packages.sh` | dnf: qemu-kvm, libvirt*, virt-install/manager/viewer, edk2-ovmf, guestfs-tools, spice-gtk3 |
+| `20-dev-tooling.sh` | dnf: android-tools, ccache, flatpak-builder, podman-machine/tui, rclone, restic, zsh |
+| `30-docker-ce.sh` | write inert `docker-ce.repo` (every section enabled=0); remove `podman-docker`; install via `--enablerepo=docker-ce-stable` |
+| `40-sysusers-fixup.sh` | **generic** orphan strip (keep only shadow/gshadow lines with a matching passwd/group) -> `systemd-sysusers` -> guarded `groupadd -r qemu` + `useradd qemu` + **`groupadd -r docker`**. Fixes virtqemud + docker.socket "Unknown group" boot failures. The most fragile piece; kept isolated on purpose |
+| `50-docker-networking.sh` | `/etc/modules-load.d/iptable_nat.conf` (docker-in-docker) |
+| `60-libvirt-services.sh` | mask `libvirtd.service`; enable `virtqemud/virtnetworkd/virtnodedevd/virtnwfilterd/virtstoraged/virtproxyd.socket`; enable `docker.service`; default NAT net autostart symlink (virsh can't run at build time); polkit `wheel` -> `qemu:///system`; enable `bazzite-tower-firstboot.service` |
+| `70-guards-monitoring.sh` | enable `bazzite-tower-wifi-backend-guard.service`; dnf smartmontools + enable `smartd.service`; dnf cockpit/cockpit-machines + enable `cockpit.socket` (:9090) |
+| `80-ras-microcode.sh` | dnf rasdaemon (enable); **mask `mcelog.service`**; dnf microcode_ctl (latest) |
+| `85-i915-watcher.sh` | enable `i915-resume-fix-check.timer` — kernel-version-gated check for the cx0 DPLL s2idle-resume regression signature; the machine-checkable signal the Containerfile kernel-pin comment points at |
+| `90-power-thermal.sh` | dnf thermald (enable); enable `bazzite-tower-power-tuning.service` (balanced EPP + platform-profile). SOF audio: **no install** — bypassed via the `dsp_driver=1` karg |
+| `95-firewall.sh` | Firewall selector. Default `opensnitch`: pinned v1.8.0 RPM extraction, Snitchwatch config + enablement. `FIREWALL_DAEMON=portmaster` is a disabled VM spike, sourcing `../firewall/portmaster.sh`: source-build of the exact Portmaster v2.2.1 commit, direct core (no updater/bootstrapper), config pinned from `/usr` via `BindReadOnlyPaths=`, Go toolchain removed after build, OpenSnitch masked. Build with `just build-portmaster-spike`; never a default image |
+| `99-cleanup.sh` | `dnf clean all` |
+
+`FIREWALL_DAEMON` reaches `95-firewall.sh` as an inherited environment variable —
+the Containerfile sets it as a command-prefix on the `RUN`, so the runner's shell
+has it and every child `bash` inherits it.
 
 ## Verified by
 

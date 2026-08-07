@@ -11,12 +11,22 @@ prior worked example of an agent-driven hardware-bug investigation
 
 Ranked by **Human-Attention-Saved per Unit of Effort** (highest first).
 
-**Status (2026-08-07): 5 of 6 resolved.** Items 1, 2, 3, 5 and 6 are done — see
-each heading. Still open: **item 4** (split `build_files/build.sh` into
-per-concern scripts), now the only remaining item. Item 5 shipped first on
-purpose: `just lint-containerfile` is the missing rung between `just lint`
-(seconds) and `just build` (minutes), so item 4's rebuild-heavy verification is
-cheaper than it would have been.
+**Status (2026-08-07): 6 of 6 resolved. Nothing open.**
+
+Every item in this audit is closed. Two things are worth carrying forward more
+than the individual fixes:
+
+- **Specs in this file went stale faster than the code.** Items 4 and 5 both
+  described a repo that no longer existed by the time they ran (item 4 said 265
+  lines / 7 concerns against an actual 380 / 18; item 5 prescribed a `hadolint`
+  invocation that hangs). Two codemaps carried two further wrong line counts.
+  **Re-measure before implementing an entry here; do not trust its numbers.**
+- **Prefer filenames to line numbers in docs.** The line ranges in
+  `docs/downstream-change-tracking.md` were already drifting before item 4
+  touched anything. They are now `build.d/` filenames, which cannot.
+
+New gaps should be appended as item 7 onward rather than edited into the closed
+entries above.
 
 ---
 
@@ -240,7 +250,54 @@ fixtures, `Justfile` (new recipe), `docs/CONTRIBUTING.md` command table.
 
 ---
 
-## 4. Split `build_files/build.sh` into per-concern scripts (medium effort, fixes the main structural obstacle)
+## 4. Split `build_files/build.sh` into per-concern scripts — DONE (2026-08-07)
+
+**Resolution: extracted to `build_files/build.d/`, 12 scripts, one concern each.**
+`build.sh` is now a 37-line runner that `bash`-executes each `build.d/*.sh` in
+filename order. Scoped in
+[`.claude/PRPs/plans/build-sh-split.plan.md`](../.claude/PRPs/plans/build-sh-split.plan.md),
+which was itself reviewed by `/codex review` before implementation.
+
+**The spec here was stale and could not be followed as written.** It describes a
+265-line file with seven concerns and proposes nine filenames; the file was 380
+lines with 18 sections by the time this ran. Two codemaps carried two further,
+different, wrong counts (309 and 276). All corrected.
+
+**Extraction proven lossless, not asserted.** Every one of the 12 files covers a
+contiguous line range; the 12 ranges cover 5-380 with no gap and no overlap.
+Stripping each file's 3-line header and concatenating in glob order reproduces
+`build.sh` lines 5-380 **byte for byte** (`cmp` clean, 376 lines). Non-contiguous
+grouping was rejected precisely because it would have silently reordered build
+steps: `40-sysusers-fixup.sh` must run after `30-docker-ce.sh` and before
+`60-libvirt-services.sh`.
+
+**Two of the three hazards the plan named were real. One was not:**
+
+1. ~~`portmaster.sh` lacks `set -euo pipefail` and would lose it under
+   `bash`-per-script~~ — **false alarm.** `portmaster.sh` is `source`d by
+   `95-firewall.sh`, not executed, and `set -e` propagates into sourced files
+   (verified: a `set -e` parent sourcing a child with a failing command exits 1).
+   It inherits from `95-firewall.sh` exactly as it did from `build.sh`.
+   `portmaster.sh` was left untouched. Neither the plan nor the codex review
+   caught this; running it did.
+2. **`FIREWALL_DAEMON` inheritance** — real, and verified working. The
+   Containerfile sets it as a `RUN` command-prefix, so the runner's shell has it
+   and the child `bash` running `95-firewall.sh` inherits it.
+3. **The relocated portmaster `source` path** — real. `dirname
+   "${BASH_SOURCE[0]}"` now resolves to `build.d/`, so the path became
+   `../firewall/portmaster.sh`. Verified to resolve to
+   `build_files/firewall/portmaster.sh`.
+
+**Docs updated** (the sweep the codex review expanded): `CLAUDE.md`,
+`README.md`, `docs/CODEMAPS/image-build.md`, `docs/CODEMAPS/architecture.md`,
+`docs/downstream-change-tracking.md`. The last of those carried `build.sh` *line
+ranges*, one already stale before this change; they are now `build.d/` filenames,
+which cannot drift the same way.
+
+---
+
+<details>
+<summary>Original problem statement, kept for context</summary>
 
 **Problem:** `build_files/build.sh` is 265 lines covering seven unrelated
 concerns (virt stack, dev tooling, Docker CE repo+install, the sysusers/orphan-
@@ -291,6 +348,8 @@ touches this file.
 **Files:** `build_files/build.sh` (becomes runner), new
 `build_files/build.d/*.sh`, `docs/CODEMAPS/image-build.md`,
 `docs/CODEMAPS/architecture.md`.
+
+</details>
 
 ---
 

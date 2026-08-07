@@ -418,6 +418,49 @@ lint:
     # Run shellcheck on all Bash scripts
     /usr/bin/find . -iname "*.sh" -type f -exec shellcheck "{}" ';'
 
+# Fills the gap between `just lint` (shellcheck, seconds) and `just build`
+# (minutes). Until this existed, the only check on the Containerfile itself was
+# `bootc container lint`, which runs as the LAST LINE of the RUN instruction
+# inside a real build -- so the only way to lint the build entry point was to
+# perform the build. This catches syntax, instruction ordering and common
+# anti-patterns first.
+#
+# Runs hadolint from a container so nothing needs installing locally, matching
+# how bootc-image-builder is already pulled on demand. Pinned by digest for the
+# same reason the base image and the CI action SHAs are: an unpinned linter can
+# change its findings between runs, which would make "passes clean" meaningless.
+# Override with HADOLINT_IMAGE to test a newer version before repinning.
+#
+# Deliberately NOT `hadolint -` reading stdin, which is the form the upstream
+# README shows. Measured 2026-08-07: stdin mode HANGS against this image (killed
+# at the timeout, exit 124) while podman's -i echoes the input back, so it looks
+# like output. A lint that hangs -- or worse, exits 0 having read nothing -- is
+# a false pass. File mode is deterministic: it exits 1 with rule codes on bad
+# input. The Containerfile is copied to a temp dir rather than bind-mounting the
+# repo because `:z` relabels what it mounts, and relabelling the working tree to
+# run a linter is not a trade worth making.
+#
+# NOT a CI gate. It passes clean on the current Containerfile (hadolint 2.14.0,
+# verified 2026-08-07); wiring it into build.yml is a separate, deliberate
+# change. See .agent_native/agent_roadmap.md item 5.
+
+# Static-lints the Containerfile in seconds, without building the image
+lint-containerfile:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if ! command -v podman &> /dev/null; then
+        echo "podman could not be found. Please install it."
+        exit 1
+    fi
+    hadolint_image="${HADOLINT_IMAGE:-docker.io/hadolint/hadolint@sha256:27086352fd5e1907ea2b934eb1023f217c5ae087992eb59fde121dce9c9ff21e}"
+    workdir="$(mktemp -d)"
+    trap 'rm -rf "${workdir}"' EXIT
+    cp Containerfile "${workdir}/Containerfile"
+    echo "Linting Containerfile with ${hadolint_image}"
+    podman run --rm -v "${workdir}:/lint:z" -w /lint "${hadolint_image}" \
+        hadolint Containerfile
+    echo "Containerfile: no findings"
+
 # Runs shfmt on all Bash scripts.
 #
 # NOT a required gate, and running this over existing files is discouraged:

@@ -31,6 +31,7 @@ any of it.
 | `just spawn-vm` | Boot via `systemd-vmspawn` instead (no browser console) |
 | `just build-iso-live` | Build the `installer/` payload + titanoboa live/installer ISO → `./output/` (UNVERIFIED path per `.claude/PRPs/reports/titanoboa-iso-workflow-report.md` — the runtime boot-in-VM gate has not been run) |
 | `just lint` | `shellcheck` every `*.sh` in the repo |
+| `just lint-containerfile` | `hadolint` the `Containerfile` via a digest-pinned container — seconds, no image build. Run it after any `Containerfile` edit; it is **not** a CI gate |
 | `just format` | `shfmt --write` every `*.sh` — **not** a required gate; do not run it over existing files (see "Code style") |
 | `just check` / `just fix` | Check / auto-format `Justfile`/`*.just` syntax |
 | `just clean` | Remove build artifacts (`output/`, manifests, `*_build*`) |
@@ -102,6 +103,11 @@ verify.
 
 1. **`just lint` / `just check`** — shellcheck + Just-syntax check. Seconds,
    no container involved.
+1b. **`just lint-containerfile`** — `hadolint` over the `Containerfile`. Seconds,
+   and it *does* run a (tiny, digest-pinned) container, but it does not build the
+   image. Run it whenever you touch the `Containerfile`: before this existed the
+   only check on the build entry point was `bootc container lint`, which runs
+   inside the real build, so linting it meant building it.
 2. **`just smoke`** against an already-built local image, if one exists and
    is fresh — offline assertions, seconds.
 3. **`just build`** — only when a change needs the actual image rebuilt to

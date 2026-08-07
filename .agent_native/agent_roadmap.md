@@ -11,11 +11,12 @@ prior worked example of an agent-driven hardware-bug investigation
 
 Ranked by **Human-Attention-Saved per Unit of Effort** (highest first).
 
-**Status (2026-08-06): 4 of 6 resolved.** Items 1, 2, 3 and 6 are done — see each
-heading. Still open: **item 4** (split `build_files/build.sh` into per-concern
-scripts) and **item 5** (fast, buildless Containerfile lint). Item 5 is worth
-doing first: it is the missing rung between `just lint` (seconds) and
-`just build` (minutes), and it makes item 4's rebuild-heavy verification cheaper.
+**Status (2026-08-07): 5 of 6 resolved.** Items 1, 2, 3, 5 and 6 are done — see
+each heading. Still open: **item 4** (split `build_files/build.sh` into
+per-concern scripts), now the only remaining item. Item 5 shipped first on
+purpose: `just lint-containerfile` is the missing rung between `just lint`
+(seconds) and `just build` (minutes), so item 4's rebuild-heavy verification is
+cheaper than it would have been.
 
 ---
 
@@ -293,7 +294,53 @@ touches this file.
 
 ---
 
-## 5. Add a fast, buildless Containerfile lint (small-medium effort, closes a verification gap)
+## 5. Add a fast, buildless Containerfile lint — DONE (2026-08-07)
+
+**Resolution: shipped as `just lint-containerfile`.** hadolint 2.14.0, pulled
+from a digest-pinned container so nothing needs installing locally. Runs in
+seconds and never builds the image.
+
+| Acceptance criterion | Status |
+|---|---|
+| `just lint-containerfile` recipe using hadolint | **Met** |
+| Added to `docs/CONTRIBUTING.md` checklist + AUTO-GENERATED table | **Met** (also `CLAUDE.md`'s command table and verification loop, which this repo requires kept in sync) |
+| Not a CI gate; prove it passes clean first | **Met** — passes clean, and it is *not* wired into `build.yml` |
+
+**The invocation in the criteria above does not work.** They prescribe
+`podman run --rm -i hadolint/hadolint < Containerfile` — hadolint's own README
+form. Measured 2026-08-07 against `hadolint@sha256:27086352…`: stdin mode
+**hangs** (killed at the timeout, exit 124), and because `podman -i` echoes
+stdin back it *looks* like the linter emitted output. An early run of this
+task recorded "zero findings, exit 0" from that path; the exit code was the
+pipeline's `tail`, not hadolint. That is a false pass, the worst failure mode
+for a linter.
+
+Shipped form copies the `Containerfile` to a temp dir and lints it by path.
+Verified both directions, which is the only way to trust a linter:
+
+- Clean input → exits 0, prints `Containerfile: no findings`
+- Known-bad input (`FROM ubuntu:latest`, unpinned `apt-get install`) → exits 1
+  with `DL3007`, `DL3008`, `DL3015` at correct line numbers
+
+The temp-dir copy is deliberate: `-v "$PWD:...:z"` would relabel the working
+tree's SELinux context to run a linter, which is not a trade worth making.
+
+**Also fixed during implementation:** the first draft put a long rationale
+comment directly above the recipe, and `just` takes the *last* contiguous
+comment line as the doc string — so `just --list` showed
+`# deliberate change. See .agent_native/agent_roadmap.md item 5.`. A blank line
+now separates the rationale from a one-line summary. Note `just format` has the
+same defect today (`just --list` renders it as `# "Code style".`); not fixed
+here to keep this change reviewable in isolation.
+
+**Still not done, deliberately:** no `build.yml` gate. It passes clean today, but
+wiring it in is a separate decision — and `hadolint` findings can change when the
+pin moves, so a gate wants its own change with its own CI run.
+
+---
+
+<details>
+<summary>Original problem statement, kept for context</summary>
 
 **Problem:** the only static check on the `Containerfile` itself is `bootc
 container lint`, which runs as the **last line of the `RUN` instruction
@@ -323,6 +370,8 @@ literal build entry point) before spending the time/resources of a full
   wiring it into `build.yml`; this keeps the change reviewable in isolation.
 
 **Files:** `Justfile` (new recipe), `docs/CONTRIBUTING.md`.
+
+</details>
 
 ---
 

@@ -28,6 +28,7 @@ pieces fit together read [docs/CODEMAPS/](./CODEMAPS/architecture.md).
 | `just spawn-vm` | Boot via `systemd-vmspawn` instead (no browser console) |
 | `just build-iso-live` | Build the `installer/` payload + titanoboa live/installer ISO → `./output/` |
 | `just lint` | `shellcheck` every `*.sh` |
+| `just lint-containerfile` | `hadolint` the `Containerfile` in seconds, no image build — not a CI gate |
 | `just format` | `shfmt --write` every `*.sh` — **not** a required gate, see "Code style" |
 | `just check` / `just fix` | Check / auto-format Just syntax |
 | `just test-ci` | Fixture-based tests for `ci/base-diff.py` (offline, no live upstream manifests needed) |
@@ -79,6 +80,8 @@ scoped where useful (`fix(ci): …`, `feat(wifi-debug): …`).
 
 - [ ] `just smoke` passes locally (the image still satisfies the gate)
 - [ ] `just lint` and `just check` are clean
+- [ ] `just lint-containerfile` is clean *if you touched the `Containerfile`*
+      (seconds, no build — cheaper than finding out from a failed CI build)
 - [ ] Touched behaviour is reflected in the README and/or CODEMAPS
 - [ ] Commit subjects follow the convention above
 

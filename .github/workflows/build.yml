@@ -128,7 +128,7 @@ jobs:
 
       - name: Build Image
         id: build_image
-        uses: redhat-actions/buildah-build@7a95fa7ee0f02d552a32753e7414641a04307056 # v2
+        uses: redhat-actions/buildah-build@3a51aade9afa17e5c78256bcbe2e1ee08c7b995b # v3.0.2
         with:
           containerfiles: |
             ./Containerfile
@@ -140,6 +140,14 @@ jobs:
           build-args: |
             BASE_IMAGE=${{ matrix.base_image }}
           oci: false
+          # Pinned explicitly because buildah-build v3.0.0 flipped this default
+          # from false to true. Squashing collapses the image into one layer,
+          # which is precisely what the (currently disabled) Rechunker step below
+          # exists to avoid — a single huge layer costs resumability on every
+          # `bootc upgrade` pull. Inheriting the new default would have changed
+          # published image layering silently, with no smoke-test assertion to
+          # catch it. Keep this line even if it looks redundant.
+          squash: false
 
       # ── Promotion gate ──────────────────────────────────────────────────────
       # Run offline assertions against the freshly built (not-yet-pushed) image.
@@ -188,7 +196,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Push To GHCR
-        uses: redhat-actions/push-to-registry@5ed88d269cf581ea9ef6dd6806d01562096bee9c # v2
+        uses: redhat-actions/push-to-registry@94ade333c38ecc0e60e94785125d9a52ca423b37 # v3.0.0
         if: github.event_name != 'pull_request' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
         id: push
         env:
@@ -236,7 +244,7 @@ jobs:
       # failure, so this is the tracked, in-repo complement to that.)
       - name: Open tracking issue on failure
         if: failure() && github.event_name != 'pull_request'
-        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         with:
           # Labelled per matrix leg: with two independent legs (fail-fast:
           # false), one leg's success must never auto-close an issue the
@@ -268,7 +276,7 @@ jobs:
       # the open step above is.
       - name: Close tracking issue on success
         if: success() && github.event_name != 'pull_request' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
-        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         with:
           script: |
             const label = 'ci-failure-${{ matrix.variant }}';

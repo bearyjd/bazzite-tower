@@ -21,9 +21,18 @@ Fix the counts in the same change.
 
 ## What makes this safer than it looks
 
-- **No cross-section shell state.** Zero top-level variable assignments outside
-  heredocs (the apparent ones are `docker-ce.repo` heredoc content), zero
-  function definitions. Nothing to untangle.
+- **No shell state crosses a proposed file boundary.** Zero function definitions.
+  The only variable assignments are `docker-ce.repo` heredoc content (not shell
+  state at all) and three real ones at 314-316 (`opensnitch_version`,
+  `opensnitch_rpm`, `opensnitch_sha256`). Those three are consumed only within
+  the OpenSnitch block, which lands whole in `95-firewall.sh`, so nothing is read
+  across a boundary.
+
+  An earlier draft claimed "zero top-level variable assignments". That was wrong,
+  and the way it was wrong is instructive: the survey grepped `^[a-z_]+=`, which
+  anchors at column 0, and the OpenSnitch block was indented by PR #38 earlier
+  the same day. The repo's own fix hid the evidence from the repo's own survey.
+  Grep for `^\s*[a-z_][a-z0-9_]*=` when re-checking.
 - **The section banners are already the seams.** All 18 are `# ── … ──` headers;
   the split is a pure line-range extraction, not a rewrite.
 - **A precedent exists.** `build_files/firewall/portmaster.sh` (60 lines) is
@@ -119,8 +128,21 @@ Full gate order:
 1. concatenation-equivalence check (above) — seconds
 2. `just lint` (shellcheck, now across 13 files) and `just check`
 3. `just build` **once**, then `just smoke`
-4. CI on the PR: both build variants plus `boot-test.yml`, which triggers here
+4. **`just build-portmaster-spike`, then `just smoke bazzite-tower portmaster-spike`**
+5. CI on the PR: both build variants plus `boot-test.yml`, which triggers here
    because `build_files/**` is in its path filter
+
+**Step 4 is not optional, and it is the step this plan originally missed.**
+`FIREWALL_DAEMON` is set **nowhere** in `build.yml` — CI's two matrix legs vary
+only `BASE_IMAGE`, and `just build` takes the default OpenSnitch selector. So
+steps 1-3 and 5 combined never execute the `portmaster)` branch, and therefore
+never execute the relocated `source ../firewall/portmaster.sh` line. Hazard 3
+below is precisely a change to that line. Without step 4, the plan's own named
+hazard ships unverified and breaks `just build-portmaster-spike` for whoever
+next picks up the spike.
+
+Raised by `/codex review` on the first draft. Confirmed by grepping `build.yml`
+for `FIREWALL_DAEMON`: no match.
 
 No assertion in `tests/smoke.sh` may be weakened. If the split is correct, the
 existing suite passes untouched — that is the whole point.
@@ -132,14 +154,28 @@ existing suite passes untouched — that is the whole point.
 - `docs/CODEMAPS/architecture.md` — `build_files/build.sh` "(276 lines)"
 - `CLAUDE.md` "Repository layout" — currently calls build.sh "one 276-line script
   covering several unrelated concerns"; that structural note becomes obsolete
+- **`README.md`** — has a whole `## build.sh` section stating *"It is where every
+  customization in this image lives … Edit this file to change what's in the
+  image"*, plus a file-table row. That instruction becomes actively wrong: the
+  answer will be "edit the right file in `build.d/`".
+- **`docs/downstream-change-tracking.md`** — carries `build.sh` **line ranges** at
+  lines 40, 46 and 56 (`~112-131`, `~143-158`, `~173-182`). Two are already stale
+  against the current file (polkit is 183-193, not ~173-182) and the split
+  invalidates all three. Replace line ranges with `build.d/` filenames, which
+  cannot drift the same way.
 - `agent_roadmap.md` item 4 — mark DONE, record the stale-spec correction
+
+README and downstream-change-tracking were missed by the first draft and found by
+`/codex review`. Note the pattern: both encode *"the customizations live in one
+file"* as an assumption, which is exactly what this change falsifies. Grep for
+`build.sh` repo-wide before declaring the doc sweep complete.
 
 ## Out of scope
 
 - Any behaviour change. If a section looks wrong, note it, do not fix it here.
-- Reordering build steps, merging `dnf install` calls (there are 7), or
-  consolidating the 16 scattered `systemctl enable` calls. All tempting, all
-  separate changes.
+- Reordering build steps, merging `dnf install` calls (there are **9**: lines 7,
+  22, 105, 214, 224, 236, 245, 264, 312), or consolidating the 16 scattered
+  `systemctl enable` calls. All tempting, all separate changes.
 - Moving `firewall/portmaster.sh` into `build.d/`. It is conditionally sourced,
   not unconditionally run, so it does not belong in a `*.sh`-glob directory.
 

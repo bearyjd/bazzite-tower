@@ -37,13 +37,13 @@ quietly doing nothing after an upstream change.
 
 The specific upstream changes that can trigger each failure:
 
-- **QEMU user (`build.sh` lines ~112–131):** the base image moves from shipping
+- **QEMU user (`build.d/40-sysusers-fixup.sh`):** the base image moves from shipping
   orphan `qemu:` shadow/gshadow lines to something else; `systemd-sysusers`
   behavior changes; a packaging change ships (or stops shipping) the qemu
   sysusers snippet. Our guarded `groupadd`/`useradd` fallback covers a lot, but
   a *rename* of the user or a libvirt change in how it resolves the user would
   slip through.
-- **Modular libvirt unit names (`build.sh` lines ~143–158):** upstream renames
+- **Modular libvirt unit names (`build.d/60-libvirt-services.sh`):** upstream renames
   or consolidates `virtqemud.socket` / `virtproxyd.socket` / etc., or flips back
   toward monolithic `libvirtd`. `systemctl enable <missing-unit>` errors at
   build (caught), but a *semantic* change — e.g. `libvirtd.service` no longer
@@ -53,7 +53,7 @@ The specific upstream changes that can trigger each failure:
   or the default supplicant; `iwd`/`wpa_supplicant` packaging changes. The guard
   greps real paths (`/etc/NetworkManager`, `/usr/lib/NetworkManager`) and calls
   `systemctl is-enabled iwd` — any of those assumptions can drift.
-- **Polkit rule (`build.sh` lines ~173–182):** a polkit major bump changes the
+- **Polkit rule (`build.d/60-libvirt-services.sh`):** a polkit major bump changes the
   JS rules API, so `wheel → qemu:///system` access stops applying.
 - **kargs (`system_files/usr/lib/bootc/kargs.d/00-iommu.toml`):** bootc changes
   how `kargs.d` is read, so IOMMU silently stops being applied.
@@ -109,7 +109,7 @@ candidate digest to `:latest` and the dated tags, gated on `needs: test`.
 ### Layer 2 — Cheap container smoke tests (seconds, no VM)
 
 Run `podman run --rm <candidate> <cmd>` assertions. Proposed checks, each tied
-to a line of `build.sh` or a `system_files/` artifact:
+to a script in `build.d/` or a `system_files/` artifact:
 
 **QEMU / libvirt**
 - `getent passwd qemu` and `id qemu` succeed → guards the sysusers/orphan-shadow

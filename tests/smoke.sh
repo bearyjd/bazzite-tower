@@ -114,6 +114,32 @@ echo "== i915 resume-regression watcher =="
 check_enabled "i915-resume-fix-check.timer"
 check "i915-resume-fix-check helper is executable" test -x /usr/libexec/i915-resume-fix-check
 
+echo "== KDE Plasma version consistency =="
+# docs/research/kwin-screenlocker-abi-2026-07-26/ and -2026-08-08/: kwin dlopens a
+# kscreenlocker symbol at runtime with no RPM-level dependency enforcing a matching
+# build, so a version skew between them isn't a missing-package failure -- it's a
+# silent undefined-symbol crash (kwin_wayland exit 127) at login, with no compositor
+# and no login prompt. 05-pin-kde-packages.sh excludes the whole family from this
+# build's own dnf transactions so it can't introduce the skew itself; this check
+# catches a skew already present in the base image before it ships.
+kwin_ver="$(rpm -q --qf '%{version}' kwin 2>/dev/null)" || kwin_ver=MISSING
+kscreenlocker_ver="$(rpm -q --qf '%{version}' kscreenlocker 2>/dev/null)" || kscreenlocker_ver=MISSING
+if [[ "${kwin_ver}" == "MISSING" || "${kscreenlocker_ver}" == "MISSING" ]]; then
+    bad "kwin/kscreenlocker present (kwin=${kwin_ver}, kscreenlocker=${kscreenlocker_ver})"
+elif [[ "${kwin_ver%.*}" == "${kscreenlocker_ver%.*}" ]]; then
+    pass "kwin/kscreenlocker version-matched (${kwin_ver} / ${kscreenlocker_ver})"
+else
+    bad "kwin/kscreenlocker version skew (kwin=${kwin_ver}, kscreenlocker=${kscreenlocker_ver}) -- kwin_wayland will fail to link at login"
+fi
+# Mechanism-level check, not just the symptom above: if a future refactor of
+# 05-pin-kde-packages.sh silently reverts to a path dnf5 doesn't read (as the
+# first version of this fix did — see the "Correction" note in
+# docs/research/kwin-screenlocker-abi-2026-08-08/REPORT.md), this fails
+# immediately with a specific cause instead of waiting for the symptom above
+# to reappear.
+check "KDE Plasma dnf exclude present in dnf.conf" \
+    grep -q '^exclude=.*kwin' /etc/dnf/dnf.conf
+
 echo "== Audio (SOF bypass) =="
 # SOF/DSP is bypassed via snd_intel_dspcfg.dsp_driver=1 (legacy HDA): the kernel's
 # SOF ABI (3.23) can't load stock firmware's ABI-3.29 topology, and no ABI-≤3.23

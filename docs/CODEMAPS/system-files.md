@@ -1,4 +1,4 @@
-<!-- Generated: 2026-06-14 | Files scanned: 19 | Token estimate: ~900 -->
+<!-- Generated: 2026-08-08 | Files scanned: 21 | Token estimate: ~1050 -->
 # System Files (baked-in runtime surface)
 
 `system_files/` is `COPY`ed verbatim to `/`. Paths below are image-absolute.
@@ -33,6 +33,19 @@ enabled in build.sh.
 - `i915-resume-fix-check` — kernel-version-gated check for the Meteor Lake cx0 DPLL s2idle-resume regression signature in the current boot's journal
 (The former `bazzite-tower-portmaster-seed` helper is gone. Portmaster's config is no longer copied into `/var`: the unit `BindReadOnlyPaths=`-mounts `/usr/share/bazzite-tower/portmaster-config.default.json` over `/var/lib/portmaster/config.json`, so the update pin is image-managed and reverts with a rollback. systemd creates the mount destination itself, and a missing source fails the unit before `ExecStart` — fail closed.)
 
+## Firewall selector (`build.d/95-firewall.sh`, `FIREWALL_DAEMON` build-arg)
+
+Default `opensnitch`: pinned v1.8.0 RPM extraction (not repo-installed — see the
+script for the systemd-live-at-%post hazard it works around), `opensnitch.service`
+enabled, config staged at
+`/usr/share/bazzite-tower/opensnitchd-default-config.json` (see below).
+`portmaster.service` is symlinked to `/dev/null` (masked) in this default build.
+
+`FIREWALL_DAEMON=portmaster` (never a default/published tag — build with
+`just build-portmaster-spike`, validate in a VM first): OpenSnitch masked
+instead, `portmaster.service` enabled — see the systemd units table above and
+`docs/research/portmaster-bootc-spike.md`.
+
 ## ujust recipes (`/usr/share/ublue-os/just/60-custom.just`)
 
 - **Virtualization**: `vm-start`, `vm-stop`, `vm-list`, `vm-net-status`, `fix-vm-groups`, `install-looking-glass-client` (installs the version-coupled LG client into a Fedora distrobox from the pgaskin COPR → `~/.local/bin`; kvmfr module is base-provided)
@@ -49,6 +62,7 @@ enabled in build.sh.
 
 ## Other drop-ins
 
+- `/etc/dnf/dnf.conf` (appended `exclude=` line, guarded on `[main]` being present) → written by `build.d/05-pin-kde-packages.sh` (build-time only, not from `system_files/`); excludes the KDE Plasma/KWin family so this build's own dnf transactions can't skew `kwin` ahead of `kscreenlocker`. Not `/etc/dnf/dnf.conf.d/` — this base runs dnf5, which has no such directory (real dnf5 drop-in dir is `/etc/dnf/libdnf5.conf.d/`); see `dependencies.md` and the "Correction" note in `docs/research/kwin-screenlocker-abi-2026-08-08/`
 - `/usr/lib/modprobe.d/blacklist-unused-gpu.conf` → blacklist `amdgpu`, `amdxcp` (no AMD silicon; `xe` left loaded)
 - `/usr/lib/sysctl.d/99-tower-swappiness.conf` → `vm.swappiness=10` (zram was filling with RAM free)
 - `/usr/lib/systemd/journald.conf.d/90-tower-journal-cap.conf` → `SystemMaxUse=500M` (default ~10% of fs)

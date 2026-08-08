@@ -1,19 +1,49 @@
-<!-- Generated: 2026-06-14 | Files scanned: 6 | Token estimate: ~640 -->
+<!-- Generated: 2026-08-08 | Files scanned: 6 | Token estimate: ~700 -->
 # Dependencies & External Surfaces
 
 ## Base image
 
-`ghcr.io/ublue-os/bazzite-nvidia:stable` — Bazzite KDE + proprietary NVIDIA, F44+.
-Swap the Containerfile `FROM` → `bazzite-nvidia-open:stable` for the open modules.
-Base provides (relied on, not installed here): the `kvmfr` Looking Glass module
-(`kvmfr` + `kmod-kvmfr`, hikariknight COPR), tailscale, distrobox, most of Cockpit.
+`ghcr.io/ublue-os/bazzite-nvidia`, **default pinned to the dated tag
+`44.20260429`** (kernel `6.19.11-ogc1`) — Bazzite KDE + proprietary NVIDIA, F44+ —
+not `:stable`, to dodge an unfixed Meteor Lake i915 s2idle-resume regression on
+every 7.0.x/7.1.x base as of 2026-08-08. `:stable` is still built as the opt-in
+`:latest-kernel` tag. Swap the Containerfile `FROM` → `bazzite-nvidia-open` for
+the open kernel modules. Base provides (relied on, not installed here): the
+`kvmfr` Looking Glass module (`kvmfr` + `kmod-kvmfr`, hikariknight COPR),
+tailscale, distrobox, most of Cockpit, the KDE Plasma desktop (`kwin`,
+`kscreenlocker`, `libplasma`, ...).
 
 ## Packages layered by build.sh
 
 virt stack (qemu-kvm, libvirt*, virt-*, edk2-ovmf, guestfs-tools, spice-gtk3),
 Docker CE, dev tooling (android-tools, ccache, flatpak-builder, podman-machine/tui,
-rclone, restic, zsh), and the hardware/health additions: **smartmontools**,
-**cockpit + cockpit-machines**, **rasdaemon**, **microcode_ctl**, **thermald**.
+rclone, restic, zsh), the hardware/health additions (**smartmontools**,
+**cockpit + cockpit-machines**, **rasdaemon**, **microcode_ctl**, **thermald**),
+and the firewall selector (default **OpenSnitch** v1.8.0, pinned RPM extraction +
+Snitchwatch config; disabled **Portmaster** VM spike behind
+`FIREWALL_DAEMON=portmaster`, see `docs/research/portmaster-bootc-spike.md`).
+
+## KDE Plasma package-family pin
+
+`05-pin-kde-packages.sh` (runs first, before any other `dnf install` in
+`build.d/`) appends an `exclude=` line to `/etc/dnf/dnf.conf`'s `[main]` section
+(guarded — refuses to run if `[main]` isn't found, rather than appending blind)
+for `kwin`/`kwin-libs`/`kwin-common`/`libplasma`/`kscreenlocker`/
+`plasma-workspace*`/`plasma-desktop`/`kdecoration`/`kf6-kwindowsystem`, so none
+of this build's own dnf transactions can touch them. Not a `dnf.conf.d/`
+drop-in — this base runs **dnf5**, whose real drop-in directory is
+`/etc/dnf/libdnf5.conf.d/`, not `/etc/dnf/dnf.conf.d/`; the first version of
+this fix used the latter, silently did nothing, and was caught by CI's own
+smoke gate (see the "Correction" note in
+`docs/research/kwin-screenlocker-abi-2026-08-08/REPORT.md`). Root cause it
+guards against: `dnf install` for an unrelated package can still resolve a
+newer `kwin`/`libplasma` against live Fedora/COPR repo metadata at build time
+without a matching `kscreenlocker` build existing yet, producing an
+undefined-symbol crash in `kwin_wayland` at login (black screen, no login
+prompt) — see `docs/research/kwin-screenlocker-abi-2026-07-26/` and
+`-2026-08-08/`. Verified by two `tests/smoke.sh` checks: `kwin`/`kscreenlocker`
+share the same major.minor, and the `exclude=` line is actually present in
+`/etc/dnf/dnf.conf`.
 
 ## Package repos
 

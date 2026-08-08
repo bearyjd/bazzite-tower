@@ -1,4 +1,4 @@
-<!-- Generated: 2026-06-14 | Files scanned: 8 | Token estimate: ~760 -->
+<!-- Generated: 2026-08-08 | Files scanned: 8 | Token estimate: ~800 -->
 # CI / CD
 
 5 workflows + 2 test scripts + 1 diff filter. Full failure model:
@@ -25,7 +25,7 @@ labelled tracking issue.
 
 ## Test scripts (`tests/`)
 
-- `smoke.sh` (154L) — offline, `podman run -i <img> bash -s <`. Asserts: qemu user resolves; 6 `virt*.socket` enabled; `libvirtd` masked; default-net symlink; polkit rule; wifi-guard/firstboot/docker enabled; **docker group exists**; `iptable_nat`; **looking-glass-client ujust recipe present**; all 6 `kargs.d` fragments (incl. SOF bypass, vfio-kvm, nvme); **SOF bypass karg + WirePlumber backoff**; **CPU power tuning (thermald + power-tuning svc/helper)**; **RAS** (rasdaemon enabled, mcelog masked, microcode_ctl); **smartd**; **swappiness=10 + baloofilerc**; **journald 500M cap**; **amdgpu blacklist**; **Cockpit Machines UI manifest + cockpit.socket**. The Cockpit check uses the served manifest rather than `rpm -q`, because the compose may omit that RPM database record while retaining the UI files. Reports every failure, not just the first.
+- `smoke.sh` (303L) — offline, `podman run -i <img> bash -s <`. Asserts: qemu user resolves; 6 `virt*.socket` enabled; `libvirtd` masked; default-net symlink; polkit rule; wifi-guard/firstboot/docker enabled; **docker group exists**; `iptable_nat`; **looking-glass-client ujust recipe present**; all 6 `kargs.d` fragments (incl. SOF bypass, vfio-kvm, nvme); **SOF bypass karg + WirePlumber backoff**; **CPU power tuning (thermald + power-tuning svc/helper)**; **RAS** (rasdaemon enabled, mcelog masked, microcode_ctl); **i915-resume-fix-check timer enabled + helper executable**; **KDE Plasma version consistency** (`kwin`/`kscreenlocker` major.minor match — see `dependencies.md`); **smartd**; **swappiness=10 + baloofilerc**; **journald 500M cap**; **amdgpu blacklist**; firewall-selector-conditional checks (OpenSnitch enabled + config valid, or Portmaster spike config/disabled-by-default + OpenSnitch absent); **Cockpit Machines UI manifest + cockpit.socket**. The Cockpit check uses the served manifest rather than `rpm -q`, because the compose may omit that RPM database record while retaining the UI files. Reports every failure, not just the first.
 - `boot-check.sh` (69L) — runtime, inside the booted image. HARD = qemu user resolves, virtqemud/virtnetworkd active, `virsh -c qemu:///system` connects, wifi-guard active + not-failed, **no SOF `FW reported error: 9` / `failed widget list set up` in the boot journal**. SOFT (container limits) = NetworkManager, firstboot, docker.
 
 ## Diff filter (`ci/base-diff.py`)

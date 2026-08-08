@@ -90,6 +90,7 @@ CI mirrors these: `tests/smoke.sh` (offline, the gate) and `tests/boot-check.sh`
 | Frequent corrected MCEs in the journal | corrected CPU **cache** errors on Meteor Lake (EDAC `igen6` ECC counters 0/0 → not DRAM) | `rasdaemon` records/decodes them; `mcelog` is masked (its trigger tried to offline a CPU). Decode with `sudo ras-mc-ctl --errors` |
 | `smartd` warns of media errors / available-spare drop | NVMe wear or developing fault | `journalctl -u smartd`; confirm with `sudo smartctl -a /dev/nvmeN`; a falling available-spare or rising media-error count is an escalation/back-up signal |
 | Secure Boot refuses the image | — | the image kernel is signed with the shared ublue MOK (already enrolled on ublue/Bazzite hosts); no MOK work needed when switching ublue↔bazzite-tower |
+| Black screen at login, no prompt, after a deployment update | KDE Plasma package-family skew — `kwin` landed a point release ahead of `kscreenlocker` in that day's dnf transaction (`kwin_wayland: undefined symbol: ...inhibitSuspend()`, exit 127, no compositor); recurred twice, see `docs/research/kwin-screenlocker-abi-2026-07-26/` and `-2026-08-08/` | roll back to the previous deployment via the GRUB menu or `rpm-ostree rollback`; `build.d/05-pin-kde-packages.sh` now excludes the KDE Plasma/KWin family from this build's own dnf transactions, and `tests/smoke.sh` fails the build if `kwin`/`kscreenlocker` don't share a major.minor version |
 
 ## Audio: SOF bypass (legacy HDA)
 
@@ -197,7 +198,7 @@ Each guard workflow opens — and later auto-closes — a labelled tracking issu
 <!-- AUTO-GENERATED:ci-labels (from .github/workflows/) -->
 | Label | Workflow | Meaning |
 |---|---|---|
-| `ci-failure` | `build.yml` | build or smoke gate failed; nothing published |
+| `ci-failure-<variant>` | `build.yml` | build or smoke gate failed for that matrix leg (`safe-pin` or `latest-kernel`); nothing published for that leg. Per-leg so one leg's success never auto-closes the other's issue |
 | `boot-test-failure` | `boot-test.yml` | image built but misbehaved at runtime |
 | `base-bump` | `base-watch.yml` | upstream base changed a blast-radius package |
 | `iso-failure` | `build-iso.yml` | titanoboa live/installer ISO build failed |

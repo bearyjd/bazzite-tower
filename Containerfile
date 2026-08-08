@@ -28,7 +28,7 @@ COPY build_files /
 # 6.19.x is the only confirmed-good kernel. No karg/driver workaround exists
 # (PSR/DC/FBC, xe, runtime-PM all ruled out). Pinning here (vs :stable) also
 # predates the 7.0-ogc-jump "MCE storm".
-#   :stable      = 7.1.3-ogc3.4  (still regressed as of 2026-07-13, see below)
+#   :stable      = 7.1.5-ogc5.1  (still regressed as of 2026-08-08, see below)
 #   44.20260429  = 6.19.11-ogc1  (this default pin — verified known-good)
 # Re-evaluate the *default* when upstream fixes the framework path — the host
 # watcher i915-resume-fix-check.timer flags it. Full analysis + sources:

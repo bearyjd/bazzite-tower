@@ -1,11 +1,56 @@
 # kwin 6.7.4 ↔ kscreenlocker 6.6.4 ABI skew recurs → black screen at login (latest.20260808)
 
-> **Status (2026-08-08): recurrence of the 2026-07-26 incident, same failure mode, one point
-> release later. Root cause now fixed at the source** — `build_files/build.d/05-pin-kde-packages.sh`
-> excludes the whole KDE Plasma/KWin package family from this repo's own dnf transactions, so this
-> build can no longer introduce the skew itself. `tests/smoke.sh` also gained a
-> `kwin`/`kscreenlocker` major.minor version-match assertion so any future skew already baked into
-> the base image fails the build instead of shipping under `:latest`.
+> **Status (2026-08-08, updated): recurrence of the 2026-07-26 incident, same failure mode, one**
+> **point release later. Root cause fixed at the source, on the second attempt** —
+> `build_files/build.d/05-pin-kde-packages.sh` appends an `exclude=` line to `/etc/dnf/dnf.conf`'s
+> `[main]` section, so this build's own dnf transactions can no longer introduce the skew itself.
+> The *first* attempt at this fix (PR #45, initial commit) was a no-op — see "Correction" below —
+> and was itself caught by the `tests/smoke.sh` gate this same PR added, before anything shipped.
+> The corrected mechanism is verified working: reproducing the exact `10-virt-packages.sh` dnf
+> transaction against the pinned base image with the fix in place completes cleanly and leaves
+> `kwin`/`kf6-kwindowsystem`/`kscreenlocker`/`libplasma` at their original matched versions.
+> `tests/smoke.sh` also gained a `kwin`/`kscreenlocker` major.minor version-match assertion, plus a
+> second check that the `exclude=` line is actually present in `/etc/dnf/dnf.conf` — so a future
+> skew already baked into the base image, or a future regression of the fix mechanism itself, both
+> fail the build instead of shipping under `:latest`.
+
+## Correction (2026-08-08, same day)
+
+The first version of `05-pin-kde-packages.sh` wrote:
+
+```bash
+mkdir -p /etc/dnf/dnf.conf.d
+cat >/etc/dnf/dnf.conf.d/05-pin-kde-plasma.conf <<'EOF'
+[main]
+exclude=kwin kwin-libs ...
+EOF
+```
+
+This was a complete no-op. The assumption — that dnf reads a `dnf.conf.d/*.conf` drop-in
+directory, by analogy with `sysctl.d`/`modprobe.d`-style conventions used elsewhere in this repo
+(e.g. `system_files/usr/lib/sysctl.d/99-tower-swappiness.conf`) — doesn't hold for this base
+image's package manager. `ghcr.io/ublue-os/bazzite-nvidia:44.20260429` runs **dnf5 5.4.1.0**, not
+dnf4, and `/etc/dnf/` there contains `dnf5-aliases.d`, `dnf5-plugins`, `libdnf5-plugins`,
+`libdnf5.conf.d`, `protected.d`, `repos.override.d`, `vendors.d` — no `dnf.conf.d`. (dnf5 *does*
+have a real drop-in directory, `/etc/dnf/libdnf5.conf.d/*.conf`, confirmed via `man dnf5.conf`'s
+"DROP-IN CONFIGURATION DIRECTORIES" section — just not the name assumed here.)
+
+PR #45's own CI run caught this directly: the `safe-pin` matrix leg's `tests/smoke.sh` step failed
+with `kwin=6.7.4, kscreenlocker=6.6.4` — the identical skew the PR claimed to fix, because the
+exclude was written to a file dnf5 never reads. The build log confirms `kwin`/`kf6-kwindowsystem`
+still upgrading inside `10-virt-packages.sh`'s `dnf install`, completely unobstructed by the dead
+config file from the script that ran immediately before it. This is exactly the failure mode the
+`tests/smoke.sh` gate added in the same PR exists to catch — and it did, before anything reached
+`:latest`.
+
+The fix: `/etc/dnf/dnf.conf` is the file dnf5 actually loads (confirmed by reading its live
+content in the base image — a `[main]` section with `install_weak_deps=False` etc. already
+present). Appending the `exclude=` line there, guarded on `[main]` actually being found first,
+was verified two ways: (1) an explicit `dnf install -y kf6-kwindowsystem --refresh` after the
+append fails with `Argument 'kf6-kwindowsystem' matches only excluded packages.`; (2) reproducing
+`10-virt-packages.sh`'s exact install list against a fresh pull of the pinned base image, with the
+fix applied first, completes with exit 0 and leaves the whole KDE Plasma family untouched at its
+original version.
 
 ## Symptom
 
@@ -80,18 +125,27 @@ repo's own later dnf activity was capable of un-syncing it.
 ## Fix
 
 `build_files/build.d/05-pin-kde-packages.sh` (new, runs before every other `dnf install` in
-`build.d/` by filename order) writes a dnf exclude for the whole KDE Plasma/KWin family
-(`kwin kwin-libs kwin-common kwin-wayland kwin-x11 kscreenlocker libplasma libplasma-*
-plasma-workspace plasma-workspace-common plasma-workspace-libs plasma-desktop kdecoration
-kf6-kwindowsystem`) so none of this repo's own dnf transactions can touch them. Whatever the
-pinned base image ships for that family survives the build untouched. Advancing the Containerfile
-`BASE_IMAGE` pin to a later, internally-consistent upstream release still picks up that release's
-own matched set — this exclude only stops *this build* from perturbing it in between base bumps.
+`build.d/` by filename order) appends `exclude=kwin kwin-libs kwin-common kwin-wayland kwin-x11
+kscreenlocker libplasma libplasma-* plasma-workspace plasma-workspace-common
+plasma-workspace-libs plasma-desktop kdecoration kf6-kwindowsystem` to `/etc/dnf/dnf.conf`'s
+`[main]` section (guarded — refuses to run if `[main]` isn't found) so none of this repo's own dnf
+transactions can touch them. See "Correction" above for why it's `/etc/dnf/dnf.conf` and not a
+`dnf.conf.d/` drop-in. Whatever the pinned base image ships for that family survives the build
+untouched. Advancing the Containerfile `BASE_IMAGE` pin to a later, internally-consistent upstream
+release still picks up that release's own matched set — this exclude only stops *this build* from
+perturbing it in between base bumps. Chose `exclude=` over dnf5's `versionlock` plugin
+(`/etc/dnf/versionlock.toml`, already present in the base image): versionlock pins an exact NEVRA,
+which would need manual bumping on every `BASE_IMAGE` advance; exclude just steps aside for
+whatever the new base ships. Tradeoff: if a future `build.d/` addition genuinely needs a newer
+kwin-family package, the transaction hard-fails with "matches only excluded packages" rather than
+a version-lock-specific error.
 
-Belt-and-suspenders: `tests/smoke.sh` gained a "KDE Plasma version consistency" check that reads
-`kwin` and `kscreenlocker`'s installed versions via `rpm -q` and fails the build if their
-major.minor doesn't match — catching a skew already baked into a future base image, not just one
-this build could introduce itself.
+Belt-and-suspenders, two `tests/smoke.sh` checks: a "KDE Plasma version consistency" check that
+reads `kwin` and `kscreenlocker`'s installed versions via `rpm -q` and fails the build if their
+major.minor doesn't match (catches a skew already baked into a future base image, not just one
+this build could introduce itself), and a mechanism-level check that `exclude=.*kwin` is actually
+present in `/etc/dnf/dnf.conf` (catches a future regression of the fix mechanism itself, like the
+one described in "Correction" above, without waiting for the symptom to reappear).
 
 ## Remediation for the currently-affected machine
 

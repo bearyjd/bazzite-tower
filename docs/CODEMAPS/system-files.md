@@ -62,7 +62,7 @@ instead, `portmaster.service` enabled — see the systemd units table above and
 
 ## Other drop-ins
 
-- `/etc/dnf/dnf.conf.d/05-pin-kde-plasma.conf` → written by `build.d/05-pin-kde-packages.sh` (build-time only, not from `system_files/`); `exclude=` for the KDE Plasma/KWin family so this build's own dnf transactions can't skew `kwin` ahead of `kscreenlocker` — see `dependencies.md` and `docs/research/kwin-screenlocker-abi-2026-08-08/`
+- `/etc/dnf/dnf.conf` (appended `exclude=` line, guarded on `[main]` being present) → written by `build.d/05-pin-kde-packages.sh` (build-time only, not from `system_files/`); excludes the KDE Plasma/KWin family so this build's own dnf transactions can't skew `kwin` ahead of `kscreenlocker`. Not `/etc/dnf/dnf.conf.d/` — this base runs dnf5, which has no such directory (real dnf5 drop-in dir is `/etc/dnf/libdnf5.conf.d/`); see `dependencies.md` and the "Correction" note in `docs/research/kwin-screenlocker-abi-2026-08-08/`
 - `/usr/lib/modprobe.d/blacklist-unused-gpu.conf` → blacklist `amdgpu`, `amdxcp` (no AMD silicon; `xe` left loaded)
 - `/usr/lib/sysctl.d/99-tower-swappiness.conf` → `vm.swappiness=10` (zram was filling with RAM free)
 - `/usr/lib/systemd/journald.conf.d/90-tower-journal-cap.conf` → `SystemMaxUse=500M` (default ~10% of fs)

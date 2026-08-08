@@ -25,12 +25,32 @@
 # BASE_IMAGE pin still picks up whatever matched set the new base ships; this
 # file only stops *our own* build from perturbing it in between.
 #
+# Chose dnf exclude over dnf5's versionlock plugin: versionlock pins an exact
+# NEVRA, which would need manual bumping on every BASE_IMAGE advance (more
+# brittle, not less); exclude just steps aside and lets whatever the new base
+# ships through untouched. Tradeoff: if a future build.d/ addition genuinely
+# needs a newer kwin-family package, the dnf transaction will hard-fail with
+# "matches only excluded packages" rather than a version-lock-specific error.
+#
+# CORRECTION (see docs/research/kwin-screenlocker-abi-2026-08-08/REPORT.md,
+# "Correction" section): the first version of this fix wrote a
+# `/etc/dnf/dnf.conf.d/*.conf` fragment, copying the sysctl.d-style drop-in
+# convention used elsewhere in this repo. This base image runs dnf5, which has
+# no such directory (`/etc/dnf/` here is dnf5-aliases.d, dnf5-plugins,
+# libdnf5-plugins, libdnf5.conf.d, protected.d, repos.override.d, vendors.d —
+# no dnf.conf.d). That first version was a complete no-op, silently verified
+# by PR #45's own CI smoke gate, which is exactly what that gate is for.
+# `/etc/dnf/dnf.conf` is the file dnf5 actually loads; write to it directly.
+#
 # Must run before any other build.d script that calls `dnf install`, hence 05-
 # (before 10-virt-packages.sh).
 set -euo pipefail
 
-mkdir -p /etc/dnf/dnf.conf.d
-cat >/etc/dnf/dnf.conf.d/05-pin-kde-plasma.conf <<'EOF'
-[main]
+grep -q '^\[main\]$' /etc/dnf/dnf.conf || {
+    echo "05-pin-kde-packages.sh: /etc/dnf/dnf.conf has no [main] section, refusing to append blind" >&2
+    exit 1
+}
+
+cat >>/etc/dnf/dnf.conf <<'EOF'
 exclude=kwin kwin-libs kwin-common kwin-wayland kwin-x11 kscreenlocker libplasma libplasma-* plasma-workspace plasma-workspace-common plasma-workspace-libs plasma-desktop kdecoration kf6-kwindowsystem
 EOF

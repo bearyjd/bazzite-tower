@@ -122,8 +122,8 @@ echo "== KDE Plasma version consistency =="
 # and no login prompt. 05-pin-kde-packages.sh excludes the whole family from this
 # build's own dnf transactions so it can't introduce the skew itself; this check
 # catches a skew already present in the base image before it ships.
-kwin_ver="$(rpm -q --qf '%{version}' kwin 2>/dev/null || echo MISSING)"
-kscreenlocker_ver="$(rpm -q --qf '%{version}' kscreenlocker 2>/dev/null || echo MISSING)"
+kwin_ver="$(rpm -q --qf '%{version}' kwin 2>/dev/null)" || kwin_ver=MISSING
+kscreenlocker_ver="$(rpm -q --qf '%{version}' kscreenlocker 2>/dev/null)" || kscreenlocker_ver=MISSING
 if [[ "${kwin_ver}" == "MISSING" || "${kscreenlocker_ver}" == "MISSING" ]]; then
     bad "kwin/kscreenlocker present (kwin=${kwin_ver}, kscreenlocker=${kscreenlocker_ver})"
 elif [[ "${kwin_ver%.*}" == "${kscreenlocker_ver%.*}" ]]; then
@@ -131,6 +131,14 @@ elif [[ "${kwin_ver%.*}" == "${kscreenlocker_ver%.*}" ]]; then
 else
     bad "kwin/kscreenlocker version skew (kwin=${kwin_ver}, kscreenlocker=${kscreenlocker_ver}) -- kwin_wayland will fail to link at login"
 fi
+# Mechanism-level check, not just the symptom above: if a future refactor of
+# 05-pin-kde-packages.sh silently reverts to a path dnf5 doesn't read (as the
+# first version of this fix did — see the "Correction" note in
+# docs/research/kwin-screenlocker-abi-2026-08-08/REPORT.md), this fails
+# immediately with a specific cause instead of waiting for the symptom above
+# to reappear.
+check "KDE Plasma dnf exclude present in dnf.conf" \
+    grep -q '^exclude=.*kwin' /etc/dnf/dnf.conf
 
 echo "== Audio (SOF bypass) =="
 # SOF/DSP is bypassed via snd_intel_dspcfg.dsp_driver=1 (legacy HDA): the kernel's

@@ -147,16 +147,23 @@ this build could introduce itself), and a mechanism-level check that `exclude=.*
 present in `/etc/dnf/dnf.conf` (catches a future regression of the fix mechanism itself, like the
 one described in "Correction" above, without waiting for the symptom to reappear).
 
+## Confirmation (2026-08-09)
+
+The fix shipped under `:latest` and CI has now confirmed it end to end, not just via the manual
+reproduction above: the scheduled post-merge `Build container image` run (2026-08-09 06:33 UTC)
+and `Boot test` run (2026-08-09 07:55 UTC) both completed **success**, i.e. the `tests/smoke.sh`
+KDE Plasma version-match + `exclude=` presence checks passed against the real built image, and the
+runtime boot-test gate passed too. No further skew observed.
+
 ## Remediation for the currently-affected machine
 
-Same as the 2026-07-26 incident, no new action needed beyond what already happened:
-
-1. `latest.20260705` (the known-good deployment) is already the booted default. Nothing further
-   required.
-2. Do not manually select the `latest.20260808` GRUB entry — it reproduces the crash.
-3. Once this fix ships under a new `:latest` build, `rpm-ostree upgrade --preview` before deploying
-   is still worth doing as a habit, though the exclude + smoke-test gate should mean a shipped
-   `:latest` can no longer carry this specific skew.
+1. `latest.20260705` (the known-good deployment) was the booted default while this fix was
+   in flight; that constraint is now lifted — see "Confirmation" above.
+2. Do not manually select the `latest.20260808` GRUB entry — it still reproduces the crash if kept
+   around, but it is no longer the current `:latest`.
+3. `rpm-ostree upgrade --preview` before deploying is still worth doing as a habit, though the
+   exclude + smoke-test gate confirmed (not just designed) to catch a shipped `:latest` carrying
+   this specific skew.
 
 ## Not related
 

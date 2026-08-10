@@ -99,11 +99,19 @@ restart_with_config() {
     fi
     systemctl reset-failed "${UNIT}" 2> /dev/null || true
     systemctl start "${UNIT}" || true
+    local activated=0
     for _ in $(seq 1 10); do
-        systemctl is-active --quiet "${UNIT}" && return 0
+        systemctl is-active --quiet "${UNIT}" && { activated=1; break; }
         sleep 1
     done
-    return 1
+    [[ "${activated}" -eq 1 ]] || return 1
+    # A single is-active read right after start is exactly the trap the
+    # 2026-08-05 postmortem (see file header) already burned this repo on:
+    # Type=simple marks a unit active the instant ExecStart forks, before a
+    # near-immediate crash (observed here taking well under a second) is
+    # detected. Settle and re-verify before trusting it.
+    sleep 3
+    systemctl is-active --quiet "${UNIT}"
 }
 # Normalise the [packets:bytes] counters that iptables-save always emits on
 # `:CHAIN POLICY` lines. They increment with every packet the guest handles, so

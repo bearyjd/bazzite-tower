@@ -107,7 +107,7 @@ build-portmaster-spike $target_image=image_name $tag="portmaster-spike":
     #!/usr/bin/env bash
     set -euo pipefail
 
-    BUILD_ARGS=("--build-arg" "FIREWALL_DAEMON=portmaster")
+    BUILD_ARGS=("--build-arg" "FIREWALL_DAEMON=portmaster" "--build-arg" "VM_GATE_SSH=1")
     if [[ -z "$(git status -s)" ]]; then
         BUILD_ARGS+=("--build-arg" "SHA_HEAD_SHORT=$(git rev-parse --short HEAD)")
     fi
@@ -405,6 +405,85 @@ spawn-vm rebuild="0" type="qcow2" ram="6G":
       --network-user-mode \
       --vsock=false --pass-ssh-key=false \
       -i ./output/**/*.{{ type }}
+
+# Boot a login/SSH-capable qcow2 VM for interactive testing (e.g. the
+# Portmaster spike gate) -- see docs/research/portmaster-bootc-spike.md's
+# "VM-gate SSH" section. Requires target_image:tag to already be built with
+# --build-arg VM_GATE_SSH=1 (build-portmaster-spike already does this) --
+# without it sshd.socket is never enabled and this recipe boots a VM you
+# cannot reach. Uses disk_config/vm-test.toml, not disk.toml (which is what
+# ships and what the ThinkPad boots and which has neither a user nor sshd),
+# and generates a fresh ephemeral keypair every run since the checked-in
+# vm-test.toml pubkey is a stale placeholder. Boots with plain
+# qemu-system-x86_64 + an explicit hostfwd, bypassing both run-vm-qcow2 (the
+# qemux/qemu docker wrapper has a qcow2 GPT-probing bug on this host) and
+# spawn-vm (systemd-vmspawn's --network-user-mode has no port-forward option,
+# and its --vsock + systemd-ssh-proxy path failed empirically) -- both
+# documented in the research note above.
+#
+# Deliberately non-secure-boot OVMF: a hand-rolled copy of the *.secboot.
+# OVMF_VARS template is not pre-enrolled with the shim/kernel trust chain
+# that systemd-vmspawn's own vars handling sets up automatically, and boots
+# with it fail at GRUB ("bad shim signature") while sitting at a
+# "Press any key to continue" prompt that -display none can never answer --
+# which looks exactly like a hang (qemu pegged at ~100% CPU, no error
+# visible) unless you attach -serial file:... and actually read it. This
+# variant is disposable VM-gate tooling, not a Secure Boot test, so the
+# plain (non-secboot) firmware sidesteps the whole problem.
+#
+# A TPM (swtpm) is still wired up even though it turned out not to be the
+# fix -- it was added while diagnosing this and kept rather than changing
+# two variables back at once after confirming against a known-working
+# reference config. Once booted, expect ~1 minute of nologin ("System is
+# booting up...") while bazzite-hardware-setup.service (no timeout) runs;
+# that is normal, not a hang -- watch ${KEYDIR}/serial.log if it's ever
+# unclear which one you're looking at.
+[group('Run Virtal Machine')]
+run-vm-ssh $target_image=("localhost/" + image_name) $tag="portmaster-spike" $ssh_port="2222":
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    KEYDIR=output/vm-gate-ssh
+    rm -rf "${KEYDIR}"
+    mkdir -p "${KEYDIR}/tpmstate"
+    ssh-keygen -t ed25519 -N '' -f "${KEYDIR}/key" -C vm-gate-ephemeral -q
+
+    CONFIG="${KEYDIR}/vm-test.toml"
+    PUBKEY=$(cat "${KEYDIR}/key.pub")
+    sed "s#^key = .*#key = \"${PUBKEY}\"#" disk_config/vm-test.toml > "${CONFIG}"
+
+    just _build-bib "${target_image}" "${tag}" qcow2 "${CONFIG}"
+
+    OVMF_CODE=/usr/share/edk2/ovmf/OVMF_CODE_4M.qcow2
+    OVMF_VARS="${KEYDIR}/OVMF_VARS.qcow2"
+    cp /usr/share/edk2/ovmf/OVMF_VARS_4M.qcow2 "${OVMF_VARS}"
+
+    swtpm socket --tpm2 -d --tpmstate "dir=${KEYDIR}/tpmstate" \
+        --ctrl "type=unixio,path=${KEYDIR}/tpmstate/swtpm-sock"
+
+    echo ""
+    echo "Booting -- expect ~1min of \"System is booting up\" (normal, see"
+    echo "bazzite-hardware-setup.service above), then connect with:"
+    echo "  ssh -i ${KEYDIR}/key -p ${ssh_port} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null gate@localhost"
+    echo "(key + config + serial log live in ${KEYDIR}; 'just clean' or an 'rm -rf output' removes them)"
+    echo ""
+
+    qemu-system-x86_64 \
+        -machine type=q35,smm=on,hpet=off \
+        -smp 2 -m 4096M \
+        -accel kvm -cpu max \
+        -drive if=pflash,format=qcow2,readonly=on,file="${OVMF_CODE}" \
+        -drive if=pflash,format=qcow2,file="${OVMF_VARS}" \
+        -drive if=none,id=vmdisk,file=output/qcow2/disk.qcow2,format=qcow2,discard=on \
+        -device virtio-blk-pci,drive=vmdisk,bootindex=1 \
+        -netdev "user,id=net0,hostfwd=tcp:127.0.0.1:${ssh_port}-:22" \
+        -device virtio-net-pci,netdev=net0 \
+        -chardev "socket,id=chrtpm,path=${KEYDIR}/tpmstate/swtpm-sock" \
+        -tpmdev emulator,id=tpm0,chardev=chrtpm \
+        -device tpm-tis,tpmdev=tpm0 \
+        -display none \
+        -serial "file:${KEYDIR}/serial.log" \
+        -daemonize -pidfile "${KEYDIR}/qemu.pid"
 
 # Runs shell check on all Bash scripts
 lint:

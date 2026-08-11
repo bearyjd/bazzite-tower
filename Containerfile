@@ -8,6 +8,7 @@
 #                           this hardware)
 ARG BASE_IMAGE=ghcr.io/ublue-os/bazzite-nvidia:44.20260429
 ARG FIREWALL_DAEMON=opensnitch
+ARG VM_GATE_SSH=0
 
 # Allow build scripts to be referenced without being copied into the final image
 FROM scratch AS ctx
@@ -60,6 +61,14 @@ FROM ${BASE_IMAGE}
 # a published/default tag.  See docs/research/portmaster-bootc-spike.md.
 ARG FIREWALL_DAEMON
 
+# Off by default -- Bazzite does not enable sshd out of the box, and this
+# leaves that alone. Only a VM-gate build run with --build-arg VM_GATE_SSH=1
+# enables sshd.socket, and only a disk built from disk_config/vm-test.toml
+# (not disk.toml, which is what ships and what the ThinkPad boots) has a user
+# or key to log in with. `:latest` is unaffected either way. See
+# docs/research/portmaster-bootc-spike.md's "VM-gate SSH" section.
+ARG VM_GATE_SSH
+
 # OCI image labels. These are baked into the image for local `podman build`;
 # CI additionally layers ArtifactHub/metadata labels via docker/metadata-action.
 LABEL org.opencontainers.image.title="bazzite-tower"
@@ -77,7 +86,7 @@ RUN --mount=type=bind,from=ctx,source=/,target=/ctx \
     --mount=type=cache,dst=/var/cache \
     --mount=type=cache,dst=/var/log \
     --mount=type=tmpfs,dst=/tmp \
-    FIREWALL_DAEMON="${FIREWALL_DAEMON}" /ctx/build.sh
+    FIREWALL_DAEMON="${FIREWALL_DAEMON}" VM_GATE_SSH="${VM_GATE_SSH}" /ctx/build.sh
 
 ### LINTING
 RUN bootc container lint

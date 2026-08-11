@@ -344,6 +344,8 @@ just build-portmaster-spike
 just smoke image_name portmaster-spike
 ```
 
+Boot it with `just run-vm-ssh` (see below) rather than `run-vm-qcow2`/`spawn-vm`
+— it prints a working `ssh` command instead of requiring a GUI console.
 Inside the VM, the verdict comes from `sudo tests/portmaster-vm-gate.sh`, which
 exits 0 only if every check passes. Do not judge the spike by watching
 `systemctl status`: the 2026-08-05 run was recorded as a pass because
@@ -401,6 +403,29 @@ Runs a virtual machine using `systemd-vmspawn`.
 ```bash
 just spawn-vm rebuild="0" type="qcow2" ram="6G"
 ```
+
+### `just run-vm-ssh`
+
+Boots a login/SSH-capable VM for interactive testing (e.g. the Portmaster
+spike gate) — no GUI console, no clipboard needed. Requires the image to be
+built with `--build-arg VM_GATE_SSH=1` (`build-portmaster-spike` already
+does this); prints the `ssh` command to connect once it's up.
+
+```bash
+just run-vm-ssh $target_image $tag $ssh_port
+```
+
+Arguments:
+- `$target_image` — the tag to boot (default: `$image_name`)
+- `$tag` — the tag to boot (default: `portmaster-spike`)
+- `$ssh_port` — host port to forward to the guest's `22` (default: `2222`)
+
+Uses `disk_config/vm-test.toml`, not `disk.toml` (what ships, what the
+ThinkPad boots, and which has neither a user nor `sshd`), and generates a
+fresh ephemeral SSH keypair every run. See the Justfile recipe's own
+comment and [the VM spike runbook](docs/research/portmaster-bootc-spike.md)'s
+"VM-gate SSH" section for why it boots with plain `qemu-system-x86_64`
+instead of `run-vm-qcow2` or `spawn-vm`.
 
 ## File Management
 

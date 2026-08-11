@@ -43,6 +43,13 @@ note() { local d="$1"; shift; if "$@" > /dev/null 2>&1; then say "  ok   ${d}"; 
 # FAIL misattributes a missing precondition to the thing being measured.
 skip() { say "  skip ${1} (${2})"; }
 
+# A fixed IP, not a hostname, for the interception probe (V8): a hostname
+# would make a failed connect ambiguous between "DNS didn't resolve" and
+# "TCP was blocked", and V8 exists specifically to tell those apart. Cloudflare
+# 1.1.1.1:443 is stable enough for a disposable-VM check that runs once.
+PROBE_IP=1.1.1.1
+PROBE_PORT=443
+
 # Predicates, so checks stay readable instead of nesting quotes inside
 # `bash -c`. Same idiom as not_failed() in tests/boot-check.sh -- and like it,
 # each is invoked only indirectly through hard()/note(), which shellcheck
@@ -75,6 +82,37 @@ journal_has() { grep -qi "$1" "${JOURNAL}"; }
 # shellcheck disable=SC2329 # Invoked indirectly through `hard`.
 journal_lacks() { ! grep -qiE "$1" "${JOURNAL}"; }
 journal_dump() { journalctl -u "${UNIT}" -b --no-pager > "${JOURNAL}" 2> /dev/null || true; }
+# shellcheck disable=SC2329 # Invoked indirectly through `hard`.
+tcp_reachable() { timeout 5 bash -c "exec 3<>/dev/tcp/${PROBE_IP}/${PROBE_PORT}" 2> /dev/null; }
+# shellcheck disable=SC2329 # Invoked indirectly through `hard`.
+tcp_blocked() { ! tcp_reachable; }
+# Swap the file BindReadOnlyPaths pulls from, restart, and wait for the
+# terminal state -- same bind-over-CONFIG_SRC technique V7 uses to prove
+# fail-closed, reused here to prove the daemon actually enforces whatever
+# config it reads rather than just holding chains open.
+# shellcheck disable=SC2329 # Invoked indirectly through `hard`.
+restart_with_config() {
+    umount "${CONFIG_SRC}" 2> /dev/null || true
+    systemctl stop "${UNIT}" 2> /dev/null || true
+    if [[ -n "$1" ]]; then
+        mount -o bind,ro "$1" "${CONFIG_SRC}" || return 1
+    fi
+    systemctl reset-failed "${UNIT}" 2> /dev/null || true
+    systemctl start "${UNIT}" || true
+    local activated=0
+    for _ in $(seq 1 10); do
+        systemctl is-active --quiet "${UNIT}" && { activated=1; break; }
+        sleep 1
+    done
+    [[ "${activated}" -eq 1 ]] || return 1
+    # A single is-active read right after start is exactly the trap the
+    # 2026-08-05 postmortem (see file header) already burned this repo on:
+    # Type=simple marks a unit active the instant ExecStart forks, before a
+    # near-immediate crash (observed here taking well under a second) is
+    # detected. Settle and re-verify before trusting it.
+    sleep 3
+    systemctl is-active --quiet "${UNIT}"
+}
 # Normalise the [packets:bytes] counters that iptables-save always emits on
 # `:CHAIN POLICY` lines. They increment with every packet the guest handles, so
 # comparing raw output measures traffic rather than rules and can never match on
@@ -195,6 +233,40 @@ say "== V2 name resolution survives =="
 hard "example.com resolves" getent hosts example.com
 note "port 53 ownership" ss -lunp 'sport = :53'
 
+# ── V8 — the daemon actually enforces what it decides, not just chains ──────
+# Every check above proves the daemon boots, keeps its config, and installs
+# netfilter rules. None of them prove a real connection is ever matched to a
+# verdict: a daemon that boots, resolves DNS, and installs empty chains passes
+# all of it while intercepting nothing. filter/defaultAction (upstream default:
+# "permit") is the one knob that flips a connection's outcome without a
+# profile, a UI, or credentials, so it is usable headlessly in this gate. Prove
+# both directions: baseline reachable under the pinned config's implicit
+# permit, then unreachable once defaultAction is forced to "block", using a
+# fixed IP so the result cannot be confused with a DNS failure.
+say "== V8 interception enforces defaultAction, not just chain presence =="
+if [[ "${DAEMON_UP}" -eq 1 ]]; then
+    hard "probe reachable under default (implicit permit) action" tcp_reachable
+
+    BLOCK_CONFIG="${WORK}/config-block.json"
+    printf '%s\n' '{"core":{"automaticUpdates":false,"automaticIntelUpdates":false},"filter":{"defaultAction":"block"}}' \
+        > "${BLOCK_CONFIG}"
+    if hard "daemon restarts under a forced defaultAction=block config" restart_with_config "${BLOCK_CONFIG}"; then
+        hard "probe blocked under defaultAction=block" tcp_blocked
+    else
+        skip "probe blocked under defaultAction=block" "daemon did not come back up under the block config"
+    fi
+
+    if hard "daemon restarts back under the pinned (permit) config" restart_with_config ""; then
+        hard "probe reachable again after reverting to the pinned config" tcp_reachable
+        DAEMON_UP=1
+    else
+        skip "probe reachable again after reverting to the pinned config" "daemon did not come back up"
+        DAEMON_UP=0
+    fi
+else
+    skip "V8 interception checks" "daemon not running, see V1"
+fi
+
 # ── V6 — rules appear, then are cleaned up, and nothing else moves ──────────
 # The risk is residual firewall rules stranding the guest, not conntrack
 # bookkeeping. Prove Portmaster's chains appear, vanish on stop, and that the
@@ -245,8 +317,9 @@ say ""
 if [[ "${fail}" -eq 0 ]]; then
     say "GATE PASS — record this in docs/research/portmaster-bootc-spike.md."
     say "NOT covered here: verdict 3 (Tailscale MagicDNS + NextDNS + TorGuard),"
-    say "whether interception actually works per-process, and everything the VM"
-    say "cannot model: libvirt, VPN transitions, suspend/resume, NetworkManager"
+    say "per-process/per-profile rule matching (V8 only proves the global"
+    say "defaultAction fallback is enforced), and everything the VM cannot"
+    say "model: libvirt, VPN transitions, suspend/resume, NetworkManager"
     say "resolver rewrites. A pass does not mean host-ready."
 else
     say "GATE FAIL — do not merge, do not enable on the host."

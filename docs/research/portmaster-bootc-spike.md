@@ -202,15 +202,117 @@ could not answer.
 - **Verdict 3 is untested.** Tailscale MagicDNS, NextDNS, and TorGuard need real
   credentials in a VM. A guest resolving `example.com` over user-mode NAT says
   nothing about a four-way contest for the resolver path.
-- **Interception is unproven.** Every check here concerns daemon survival,
-  configuration, and rule lifecycle. Nothing demonstrates that a connection is
-  actually matched to a process and allowed or denied. A daemon that boots,
-  resolves DNS, installs chains and intercepts nothing passes this entire gate.
+- **Per-process/per-profile rule matching is untested.** V8 (below) proves the
+  global `filter/defaultAction` fallback is enforced, not that individual app
+  profiles or rules are.
 - **The VM models almost none of the real machine.** libvirt, VPN transitions,
   suspend/resume, NetworkManager resolver rewrites, and Docker under load are
   all absent. The ThinkPad has all of them.
 
 Do not enable this variant on the host on the strength of this verdict.
+
+## VM-gate SSH
+
+The gate above required typing/pasting into a GUI QEMU console — brittle
+(no host/guest clipboard in this setup) and the reason the 2026-08-06 run's
+findings took a full session to extract. Two fixes now exist:
+
+- **`disk_config/vm-test.toml`** — a VM-gate-only bootc-image-builder config
+  that adds a `gate` user and an SSH key, unlike `disk_config/disk.toml`
+  (what ships, what the ThinkPad boots), which has neither. Never used for a
+  published image.
+- **`--build-arg VM_GATE_SSH=1`** (`build-portmaster-spike` already passes
+  it) — enables `sshd.socket` inside the container image, gated off by
+  default so `:latest` is unaffected either way.
+- **`just run-vm-ssh`** — boots the disk with a fresh ephemeral keypair and
+  an explicit `hostfwd` via plain `qemu-system-x86_64`, printing the exact
+  `ssh` command to connect. See the Justfile recipe's own comment for why it
+  doesn't reuse `run-vm-qcow2` or `spawn-vm`: both were tried and failed for
+  reasons specific to this host, not this repo's config —
+  `run-vm-qcow2`'s `qemux/qemu` docker wrapper has a qcow2 GPT-probing bug
+  (its bundled `qemu-img dd -f qcow2 -O raw bs=512 skip=N count=M` silently
+  truncated output short of the requested size on this host's qemu-img
+  10.2.2, independent of anything in this repo), and `spawn-vm`'s
+  `systemd-vmspawn --network-user-mode` has no port-forward option at all —
+  its documented alternative, `--vsock` + `systemd-ssh-proxy`, was tried and
+  failed empirically (`Connection reset by peer` on every attempt; the
+  daemon-side `systemd-ssh-generator` never bound to vsock port 22 for a
+  reason not root-caused, since diagnosing further needed console access to
+  the guest that wasn't available on that boot path either).
+
+One real dead end costed most of the effort here and is worth recording
+precisely: an initial `run-vm-ssh` draft using the `*.secboot.` OVMF
+firmware (matching what `run-vm-qcow2`/`spawn-vm` use) hung indefinitely —
+qemu pegged near 100% CPU, no error visible, looking exactly like a boot
+timing issue. It was not one. Attaching `-serial file:...` (now permanent in
+the recipe) showed the real cause immediately: `error: bad shim signature`
+— a hand-rolled `cp` of the `OVMF_VARS_4M.secboot.qcow2` template is not
+pre-enrolled with the shim/kernel trust chain that `systemd-vmspawn`'s own
+vars handling sets up automatically, so GRUB refused to boot and sat at a
+"Press any key to continue" prompt that `-display none` can never answer —
+indistinguishable from a hang without a console. `run-vm-ssh` uses the
+plain (non-secboot) OVMF instead; this variant is disposable test tooling,
+not a Secure Boot test.
+
+## V8 — interception enforcement (2026-08-10)
+
+Every check above (V0–V7) proves the daemon boots, keeps its config, and
+installs/removes netfilter rules — none of them prove a connection is ever
+matched to a verdict. A daemon that boots, resolves DNS, and installs empty
+chains passes the whole 2026-08-06 gate while intercepting nothing.
+
+V8 closes that gap using `filter/defaultAction` (default: `permit`) — the
+one knob that changes a connection's outcome without a profile, a UI, or
+credentials, so it's usable headlessly: probe `1.1.1.1:443` under the
+pinned config's implicit permit (reachable), force `defaultAction=block` via
+the same bind-over-`CONFIG_SRC` technique V7 uses, restart, probe again
+(must be blocked), then revert and probe once more (must be reachable
+again).
+
+**First run: false FAIL, root-caused and fixed.** The new
+`restart_with_config` helper read `systemctl is-active` once right after
+`systemctl start` and returned success on that reading — precisely the
+class of bug the 2026-08-05 postmortem (above) already burned this gate
+script on once, reintroduced in new code. `Type=simple` marks a unit active
+the instant `ExecStart` forks, before a near-immediate crash is detected;
+the journal showed the daemon crashing within 100–600ms of each of V8's two
+restarts, twice, with zero log output and exit code 0, before a later
+attempt (V7's, using `/dev/null` as the pin source) finally produced normal
+BOF output. Both fake-successful restarts left no daemon running at all,
+which is why V6 (immediately after V8 in the script) found zero PORTMASTER
+chains and why V8's own block check saw the probe stay reachable — nothing
+was enforcing anything either way. Fix: `restart_with_config` now sleeps 3s
+after the first `is-active` read and re-verifies before trusting it.
+
+### VM gate verdict — 2026-08-10: PASS (interception confirmed)
+
+Re-run after the fix, same qcow2, same daemon build:
+
+```
+V0   image contains the code under test               ok
+V1   holds active 30s, NRestarts=0, Result=success    ok
+V4a  mount applied / from /usr / ro / values read     ok
+V3   no config-write errors                           ok
+V5   journal carries daemon output                    ok
+V2   name resolution survives                         ok
+V8   probe reachable under permit                     ok
+V8   daemon restarts under forced block config         ok
+V8   probe blocked under defaultAction=block           ok
+V8   daemon restarts back under pinned (permit) config  ok
+V8   probe reachable again after reverting             ok
+V6   chains appear, gone after stop, nothing moved     ok
+V6b  cleanup idempotent                                ok
+V7   fails closed without the pin source               ok
+```
+
+Interception is no longer an open question at the `defaultAction` level:
+forcing `block` measurably blocks a real connection, and reverting to the
+pinned config measurably restores it, both confirmed via the daemon's own
+process lifecycle rather than a `systemctl is-active` snapshot alone. Still
+open: per-process/per-profile rule matching (untested beyond the global
+default), and Verdict 3 (Tailscale/NextDNS/TorGuard). Same conclusion as
+2026-08-06 stands — do not enable this variant on the host on the strength
+of this verdict.
 
 ### Prior runs that produced no verdict
 

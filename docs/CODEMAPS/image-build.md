@@ -33,11 +33,13 @@ carry, because line ranges drift and filenames do not.
 | `85-i915-watcher.sh` | enable `i915-resume-fix-check.timer` — kernel-version-gated check for the cx0 DPLL s2idle-resume regression signature; the machine-checkable signal the Containerfile kernel-pin comment points at |
 | `90-power-thermal.sh` | dnf thermald (enable); enable `bazzite-tower-power-tuning.service` (balanced EPP + platform-profile). SOF audio: **no install** — bypassed via the `dsp_driver=1` karg |
 | `95-firewall.sh` | Firewall selector. Default `opensnitch`: pinned v1.8.0 RPM extraction, Snitchwatch config + enablement. `FIREWALL_DAEMON=portmaster` is a disabled VM spike, sourcing `../firewall/portmaster.sh`: source-build of the exact Portmaster v2.2.1 commit, direct core (no updater/bootstrapper), config pinned from `/usr` via `BindReadOnlyPaths=`, Go toolchain removed after build, OpenSnitch masked. Build with `just build-portmaster-spike`; never a default image |
+| `97-vm-gate-ssh.sh` | `VM_GATE_SSH=1` (off by default, `:latest` unaffected): enables `sshd.socket` so VM-gate testing (`just run-vm-ssh`) can SSH in instead of needing a GUI console. `build-portmaster-spike` already passes this build-arg |
 | `99-cleanup.sh` | `dnf clean all` |
 
-`FIREWALL_DAEMON` reaches `95-firewall.sh` as an inherited environment variable —
-the Containerfile sets it as a command-prefix on the `RUN`, so the runner's shell
-has it and every child `bash` inherits it.
+`FIREWALL_DAEMON` and `VM_GATE_SSH` reach `95-firewall.sh`/`97-vm-gate-ssh.sh`
+as inherited environment variables — the Containerfile sets them as a
+command-prefix on the `RUN`, so the runner's shell has them and every child
+`bash` inherits them.
 
 ## Verified by
 

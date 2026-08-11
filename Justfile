@@ -476,7 +476,7 @@ run-vm-ssh $target_image=("localhost/" + image_name) $tag="portmaster-spike" $ss
         -drive if=pflash,format=qcow2,file="${OVMF_VARS}" \
         -drive if=none,id=vmdisk,file=output/qcow2/disk.qcow2,format=qcow2,discard=on \
         -device virtio-blk-pci,drive=vmdisk,bootindex=1 \
-        -netdev "user,id=net0,hostfwd=tcp::${ssh_port}-:22" \
+        -netdev "user,id=net0,hostfwd=tcp:127.0.0.1:${ssh_port}-:22" \
         -device virtio-net-pci,netdev=net0 \
         -chardev "socket,id=chrtpm,path=${KEYDIR}/tpmstate/swtpm-sock" \
         -tpmdev emulator,id=tpm0,chardev=chrtpm \

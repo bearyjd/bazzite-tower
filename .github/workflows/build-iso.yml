@@ -73,16 +73,28 @@ jobs:
       # Privileged build: the payload build.sh runs dracut/podman/dnf scriptlets.
       # This also leaves the payload in local (root) podman storage, which is
       # where titanoboa reads its image from.
+      #
+      # Retry on transient runner-image podman breakage: actions/runner-images has
+      # had repeated regressions from an in-progress "podman bundle install rework"
+      # on ubuntu-24.04 (runner-images#14473 crun mismatch, #14477 /usr+/etc
+      # ownership, #14516 fusermount3 setuid, all rolled back within days) — same
+      # backoff idiom as base-watch.yml's transient-pull retry.
       - name: Build live-ISO payload
         run: |
           set -euo pipefail
-          sudo podman build \
-            --cap-add sys_admin \
-            --security-opt label=disable \
-            --squash \
-            --build-arg BASE_IMAGE="${IMAGE_REGISTRY}/${IMAGE_NAME}:${DEFAULT_TAG}" \
-            -t "localhost/${IMAGE_NAME}-payload:${DEFAULT_TAG}" \
-            installer/
+          for i in 1 2 3; do
+            sudo podman build \
+              --cap-add sys_admin \
+              --security-opt label=disable \
+              --squash \
+              --build-arg BASE_IMAGE="${IMAGE_REGISTRY}/${IMAGE_NAME}:${DEFAULT_TAG}" \
+              -t "localhost/${IMAGE_NAME}-payload:${DEFAULT_TAG}" \
+              installer/ && break
+            echo "podman build failed (attempt ${i}); retrying in $((2 ** i))0s"
+            sleep $((2 ** i * 10))
+          done
+          sudo podman image exists "localhost/${IMAGE_NAME}-payload:${DEFAULT_TAG}" \
+            || { echo "::error::payload build failed after retries"; exit 1; }
 
       # Work around the titanoboa action's iso-dest handling: it runs plain
       # `realpath` on the destination *before* creating it, which errors when the

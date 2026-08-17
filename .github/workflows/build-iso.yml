@@ -74,27 +74,30 @@ jobs:
       # This also leaves the payload in local (root) podman storage, which is
       # where titanoboa reads its image from.
       #
-      # Retry on transient runner-image podman breakage: actions/runner-images has
-      # had repeated regressions from an in-progress "podman bundle install rework"
-      # on ubuntu-24.04 (runner-images#14473 crun mismatch, #14477 /usr+/etc
-      # ownership, #14516 fusermount3 setuid, all rolled back within days) — same
-      # backoff idiom as base-watch.yml's transient-pull retry.
+      # Force fuse-overlayfs as root's storage backend instead of native kernel
+      # overlayfs. Root cause (2026-08-16/17): rootful `sudo podman build`
+      # deterministically failed 5/5 attempts (across two separate scheduled runs
+      # and a 3x in-job retry) unpacking the identical bazzite-tower:latest blob,
+      # always at the same whiteout entry:
+      #   unpacking failed (... open /usr/lib/.build-id/05/.wh.<hash>: invalid argument)
+      # A rootless `podman pull` of the exact same blob on unrelated hardware
+      # succeeded cleanly -- the only relevant difference is rootless podman's
+      # default fuse-overlayfs backend (xattr-based whiteouts) vs rootful's native
+      # kernel overlayfs (mknod-based whiteouts, c 0:0 device nodes). Forcing the
+      # same backend for root removes the divergence. If this doesn't clear it,
+      # the next fallback is the vfs storage driver (slower, no whiteout special
+      # files at all) -- see PR #48 discussion before reaching for that.
       - name: Build live-ISO payload
         run: |
           set -euo pipefail
-          for i in 1 2 3; do
-            sudo podman build \
-              --cap-add sys_admin \
-              --security-opt label=disable \
-              --squash \
-              --build-arg BASE_IMAGE="${IMAGE_REGISTRY}/${IMAGE_NAME}:${DEFAULT_TAG}" \
-              -t "localhost/${IMAGE_NAME}-payload:${DEFAULT_TAG}" \
-              installer/ && break
-            echo "podman build failed (attempt ${i}); retrying in $((2 ** i))0s"
-            sleep $((2 ** i * 10))
-          done
-          sudo podman image exists "localhost/${IMAGE_NAME}-payload:${DEFAULT_TAG}" \
-            || { echo "::error::payload build failed after retries"; exit 1; }
+          command -v fuse-overlayfs >/dev/null || sudo apt-get install -y fuse-overlayfs
+          sudo podman --storage-opt overlay.mount_program=/usr/bin/fuse-overlayfs build \
+            --cap-add sys_admin \
+            --security-opt label=disable \
+            --squash \
+            --build-arg BASE_IMAGE="${IMAGE_REGISTRY}/${IMAGE_NAME}:${DEFAULT_TAG}" \
+            -t "localhost/${IMAGE_NAME}-payload:${DEFAULT_TAG}" \
+            installer/
 
       # Work around the titanoboa action's iso-dest handling: it runs plain
       # `realpath` on the destination *before* creating it, which errors when the

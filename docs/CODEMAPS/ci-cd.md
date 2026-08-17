@@ -16,9 +16,10 @@
 
 The `installer/` payload + titanoboa contract is documented in
 [iso-build.md](iso-build.md). `base-watch.yml` retries the base-image pull
-before failing (transient GHCR 502s); `build-iso.yml`'s payload build retries
-3x with backoff for the same reason (transient `ubuntu-24.04` runner-image
-podman regressions — see actions/runner-images#14473/#14477/#14516).
+before failing (transient GHCR 502s). `build-iso.yml`'s payload build forces
+`fuse-overlayfs` as root's storage backend — rootful podman's native
+mknod-based whiteout unpacking deterministically failed on this image (see
+PR #48); rootless podman's fuse-overlayfs xattr-based whiteouts don't.
 
 **Gate ordering** in `build.yml`: the smoke test runs *before* login/push, so a
 broken image is never published (each variant's tag stays last-good

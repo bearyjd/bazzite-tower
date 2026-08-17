@@ -68,30 +68,60 @@ jobs:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
+      # TEMPORARY DIAGNOSTIC (PR #48, remove once root cause is confirmed): the
+      # real "Build live-ISO payload" step below deterministically fails 5/5
+      # attempts unpacking bazzite-tower:latest's blob sha256:739e9402...29d at
+      # /usr/lib/.build-id/05/.wh.<hash> ("invalid argument"). A rootless pull of
+      # the identical blob succeeded on unrelated hardware. Forcing
+      # overlay.mount_program=fuse-overlayfs for root alone did NOT fix it
+      # (2026-08-17 run 31986032972) -- ruling that hypothesis out. Isolate just
+      # the pull (not the full ~12min dracut build) against several storage
+      # configs in one run, non-gating, to get maximum signal per CI minute
+      # instead of one guess per expensive full-build attempt.
+      - name: Diagnose podman pull failure (isolated, non-gating)
+        run: |
+          set -uo pipefail
+          echo "::group::podman info (default)"
+          sudo podman info --format '{{.Store.GraphDriverName}} {{.Store.GraphOptions}} {{.Store.GraphRoot}}'
+          echo "::endgroup::"
+
+          REF="${IMAGE_REGISTRY}/${IMAGE_NAME}:${DEFAULT_TAG}"
+
+          echo "::group::variant 1: plain sudo podman pull (expected to reproduce the failure)"
+          time sudo podman pull "$REF" && echo "V1 RESULT: SUCCESS" || echo "V1 RESULT: FAILED"
+          sudo podman rmi -f "$REF" 2>/dev/null || true
+          echo "::endgroup::"
+
+          command -v fuse-overlayfs >/dev/null || sudo apt-get install -y fuse-overlayfs
+          echo "::group::variant 2: sudo podman --storage-opt overlay.mount_program=fuse-overlayfs pull"
+          time sudo podman --storage-opt overlay.mount_program=/usr/bin/fuse-overlayfs pull "$REF" && echo "V2 RESULT: SUCCESS" || echo "V2 RESULT: FAILED"
+          sudo podman --storage-opt overlay.mount_program=/usr/bin/fuse-overlayfs rmi -f "$REF" 2>/dev/null || true
+          echo "::endgroup::"
+
+          echo "::group::variant 3: sudo podman --storage-driver=vfs pull (isolated graph root, no whiteout special files)"
+          sudo mkdir -p /tmp/vfs-store
+          time sudo podman --root /tmp/vfs-store --storage-driver=vfs pull "$REF" && echo "V3 RESULT: SUCCESS" || echo "V3 RESULT: FAILED"
+          sudo rm -rf /tmp/vfs-store
+          echo "::endgroup::"
+
+          echo "::group::variant 4: skopeo copy to a local dir (bypasses containers-storage entirely)"
+          command -v skopeo >/dev/null || sudo apt-get install -y skopeo
+          sudo mkdir -p /tmp/skopeo-dest
+          time sudo skopeo copy "docker://${REF}" "dir:/tmp/skopeo-dest" && echo "V4 RESULT: SUCCESS" || echo "V4 RESULT: FAILED"
+          sudo rm -rf /tmp/skopeo-dest
+          echo "::endgroup::"
+
+          echo "All variants attempted; see V1-V4 RESULT lines above. This step never fails the job."
+
       # titanoboa can't use the plain image (it lacks the live/installer layer).
       # Build the payload image (installer/) FROM bazzite-tower, then feed THAT.
       # Privileged build: the payload build.sh runs dracut/podman/dnf scriptlets.
       # This also leaves the payload in local (root) podman storage, which is
       # where titanoboa reads its image from.
-      #
-      # Force fuse-overlayfs as root's storage backend instead of native kernel
-      # overlayfs. Root cause (2026-08-16/17): rootful `sudo podman build`
-      # deterministically failed 5/5 attempts (across two separate scheduled runs
-      # and a 3x in-job retry) unpacking the identical bazzite-tower:latest blob,
-      # always at the same whiteout entry:
-      #   unpacking failed (... open /usr/lib/.build-id/05/.wh.<hash>: invalid argument)
-      # A rootless `podman pull` of the exact same blob on unrelated hardware
-      # succeeded cleanly -- the only relevant difference is rootless podman's
-      # default fuse-overlayfs backend (xattr-based whiteouts) vs rootful's native
-      # kernel overlayfs (mknod-based whiteouts, c 0:0 device nodes). Forcing the
-      # same backend for root removes the divergence. If this doesn't clear it,
-      # the next fallback is the vfs storage driver (slower, no whiteout special
-      # files at all) -- see PR #48 discussion before reaching for that.
       - name: Build live-ISO payload
         run: |
           set -euo pipefail
-          command -v fuse-overlayfs >/dev/null || sudo apt-get install -y fuse-overlayfs
-          sudo podman --storage-opt overlay.mount_program=/usr/bin/fuse-overlayfs build \
+          sudo podman build \
             --cap-add sys_admin \
             --security-opt label=disable \
             --squash \

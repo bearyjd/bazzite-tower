@@ -68,50 +68,39 @@ jobs:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
-      # TEMPORARY DIAGNOSTIC (PR #48, remove once root cause is confirmed): the
-      # real "Build live-ISO payload" step below deterministically fails 5/5
-      # attempts unpacking bazzite-tower:latest's blob sha256:739e9402...29d at
-      # /usr/lib/.build-id/05/.wh.<hash> ("invalid argument"). A rootless pull of
-      # the identical blob succeeded on unrelated hardware. Forcing
-      # overlay.mount_program=fuse-overlayfs for root alone did NOT fix it
-      # (2026-08-17 run 31986032972) -- ruling that hypothesis out. Isolate just
-      # the pull (not the full ~12min dracut build) against several storage
-      # configs in one run, non-gating, to get maximum signal per CI minute
-      # instead of one guess per expensive full-build attempt.
-      - name: Diagnose podman pull failure (isolated, non-gating)
+      # Root cause of the 2026-08-16 deterministic failure (issue #47 / PR #48):
+      # the ubuntu-24.04 runner's podman bundle rework (the same one behind
+      # actions/runner-images#14473/#14516) switched ROOTFUL podman's overlay
+      # storage to overlay.mount_program=/usr/local/bin/fuse-overlayfs. That
+      # makes the payload build container's rootfs a fuse-overlayfs mount, and
+      # installer/src/build.sh's NESTED `podman pull` (embedding bazzite-tower
+      # into the ISO for offline install) then writes its layer store through
+      # that mount. When the nested store writes a whiteout as a literal
+      # `.wh.<name>` file, fuse-overlayfs rejects the reserved prefix with
+      # EINVAL: "open /usr/lib/.build-id/05/.wh.<hash>: invalid argument".
+      # Native kernel overlayfs (what these runners used for the 10 prior green
+      # weekly runs) has no such name restriction. Host-level pulls never hit
+      # this (extraction to plain ext4 dirs is fine under either config), which
+      # is what the PR #48 diagnostic run proved. So: pin rootful podman back to
+      # native kernel overlayfs for the whole job -- both this build and the
+      # titanoboa action read the same root storage, so the config must be
+      # job-global and set before ANY rootful podman use.
+      - name: Use native kernel overlayfs for rootful podman
         run: |
-          set -uo pipefail
-          echo "::group::podman info (default)"
-          sudo podman info --format '{{.Store.GraphDriverName}} {{.Store.GraphOptions}} {{.Store.GraphRoot}}'
-          echo "::endgroup::"
-
-          REF="${IMAGE_REGISTRY}/${IMAGE_NAME}:${DEFAULT_TAG}"
-
-          echo "::group::variant 1: plain sudo podman pull (expected to reproduce the failure)"
-          time sudo podman pull "$REF" && echo "V1 RESULT: SUCCESS" || echo "V1 RESULT: FAILED"
-          sudo podman rmi -f "$REF" 2>/dev/null || true
-          echo "::endgroup::"
-
-          command -v fuse-overlayfs >/dev/null || sudo apt-get install -y fuse-overlayfs
-          echo "::group::variant 2: sudo podman --storage-opt overlay.mount_program=fuse-overlayfs pull"
-          time sudo podman --storage-opt overlay.mount_program=/usr/bin/fuse-overlayfs pull "$REF" && echo "V2 RESULT: SUCCESS" || echo "V2 RESULT: FAILED"
-          sudo podman --storage-opt overlay.mount_program=/usr/bin/fuse-overlayfs rmi -f "$REF" 2>/dev/null || true
-          echo "::endgroup::"
-
-          echo "::group::variant 3: sudo podman --storage-driver=vfs pull (isolated graph root, no whiteout special files)"
-          sudo mkdir -p /tmp/vfs-store
-          time sudo podman --root /tmp/vfs-store --storage-driver=vfs pull "$REF" && echo "V3 RESULT: SUCCESS" || echo "V3 RESULT: FAILED"
-          sudo rm -rf /tmp/vfs-store
-          echo "::endgroup::"
-
-          echo "::group::variant 4: skopeo copy to a local dir (bypasses containers-storage entirely)"
-          command -v skopeo >/dev/null || sudo apt-get install -y skopeo
-          sudo mkdir -p /tmp/skopeo-dest
-          time sudo skopeo copy "docker://${REF}" "dir:/tmp/skopeo-dest" && echo "V4 RESULT: SUCCESS" || echo "V4 RESULT: FAILED"
-          sudo rm -rf /tmp/skopeo-dest
-          echo "::endgroup::"
-
-          echo "All variants attempted; see V1-V4 RESULT lines above. This step never fails the job."
+          set -euo pipefail
+          printf '[storage]\ndriver = "overlay"\nrunroot = "/run/containers/storage"\ngraphroot = "/var/lib/containers/storage"\n' \
+            | sudo tee /etc/containers/storage.conf
+          # Clear any state the bundle's fuse-overlayfs config already wrote so
+          # the store isn't mixed-format. Ignore errors: an empty/fresh store is fine.
+          sudo podman system reset -f 2>/dev/null || true
+          sudo podman info --format 'driver={{.Store.GraphDriverName}} options={{.Store.GraphOptions}}'
+          # Fail loudly if the mount_program override somehow survived -- a
+          # silent fallback would reintroduce the exact failure this step exists
+          # to prevent.
+          if sudo podman info --format '{{.Store.GraphOptions}}' | grep -q mount_program; then
+            echo "::error::rootful podman still uses a mount_program (fuse-overlayfs); native overlayfs pin failed"
+            exit 1
+          fi
 
       # titanoboa can't use the plain image (it lacks the live/installer layer).
       # Build the payload image (installer/) FROM bazzite-tower, then feed THAT.

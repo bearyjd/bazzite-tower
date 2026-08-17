@@ -68,6 +68,40 @@ jobs:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
+      # Root cause of the 2026-08-16 deterministic failure (issue #47 / PR #48):
+      # the ubuntu-24.04 runner's podman bundle rework (the same one behind
+      # actions/runner-images#14473/#14516) switched ROOTFUL podman's overlay
+      # storage to overlay.mount_program=/usr/local/bin/fuse-overlayfs. That
+      # makes the payload build container's rootfs a fuse-overlayfs mount, and
+      # installer/src/build.sh's NESTED `podman pull` (embedding bazzite-tower
+      # into the ISO for offline install) then writes its layer store through
+      # that mount. When the nested store writes a whiteout as a literal
+      # `.wh.<name>` file, fuse-overlayfs rejects the reserved prefix with
+      # EINVAL: "open /usr/lib/.build-id/05/.wh.<hash>: invalid argument".
+      # Native kernel overlayfs (what these runners used for the 10 prior green
+      # weekly runs) has no such name restriction. Host-level pulls never hit
+      # this (extraction to plain ext4 dirs is fine under either config), which
+      # is what the PR #48 diagnostic run proved. So: pin rootful podman back to
+      # native kernel overlayfs for the whole job -- both this build and the
+      # titanoboa action read the same root storage, so the config must be
+      # job-global and set before ANY rootful podman use.
+      - name: Use native kernel overlayfs for rootful podman
+        run: |
+          set -euo pipefail
+          printf '[storage]\ndriver = "overlay"\nrunroot = "/run/containers/storage"\ngraphroot = "/var/lib/containers/storage"\n' \
+            | sudo tee /etc/containers/storage.conf
+          # Clear any state the bundle's fuse-overlayfs config already wrote so
+          # the store isn't mixed-format. Ignore errors: an empty/fresh store is fine.
+          sudo podman system reset -f 2>/dev/null || true
+          sudo podman info --format 'driver={{.Store.GraphDriverName}} options={{.Store.GraphOptions}}'
+          # Fail loudly if the mount_program override somehow survived -- a
+          # silent fallback would reintroduce the exact failure this step exists
+          # to prevent.
+          if sudo podman info --format '{{.Store.GraphOptions}}' | grep -q mount_program; then
+            echo "::error::rootful podman still uses a mount_program (fuse-overlayfs); native overlayfs pin failed"
+            exit 1
+          fi
+
       # titanoboa can't use the plain image (it lacks the live/installer layer).
       # Build the payload image (installer/) FROM bazzite-tower, then feed THAT.
       # Privileged build: the payload build.sh runs dracut/podman/dnf scriptlets.

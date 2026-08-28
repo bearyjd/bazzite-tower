@@ -154,7 +154,11 @@ check "swappiness sysctl present" test -f /usr/lib/sysctl.d/99-tower-swappiness.
 check "swappiness set to 10"      grep -qE '^vm\.swappiness[[:space:]]*=[[:space:]]*10$' /usr/lib/sysctl.d/99-tower-swappiness.conf
 check "baloo exclude config present" test -f /etc/xdg/baloofilerc
 check "journald size cap present" test -f /usr/lib/systemd/journald.conf.d/90-tower-journal-cap.conf
-check "journald cap is 500M" grep -qE '^SystemMaxUse=500M$' /usr/lib/systemd/journald.conf.d/90-tower-journal-cap.conf
+# Raised 500M -> 4G on 2026-08-28: the old cap vacuumed away all prior-boot kernel
+# messages within hours, hiding a recurring BE200 firmware assert. Time-based
+# retention is now the primary bound; size is the backstop.
+check "journald cap is 4G" grep -qE '^SystemMaxUse=4G$' /usr/lib/systemd/journald.conf.d/90-tower-journal-cap.conf
+check "journald retains 1 month" grep -qE '^MaxRetentionSec=1month$' /usr/lib/systemd/journald.conf.d/90-tower-journal-cap.conf
 
 echo "== GPU module blacklist =="
 # No AMD GPU exists on this hardware; amdgpu/amdxcp are blacklisted as a lean-boot

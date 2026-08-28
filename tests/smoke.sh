@@ -166,6 +166,16 @@ echo "== GPU module blacklist =="
 check "unused-GPU blacklist present" test -f /usr/lib/modprobe.d/blacklist-unused-gpu.conf
 check "amdgpu blacklisted" grep -qx 'blacklist amdgpu' /usr/lib/modprobe.d/blacklist-unused-gpu.conf
 
+echo "== Wi-Fi (BE200 firmware assert mitigation) =="
+# The BE200 firmware asserts NMI_INTERRUPT_UNKNOWN and the driver hard-resets the
+# chip; wifi is the only uplink here so that freezes the desktop for 5-15s.
+# power_scheme=1 (CAM) is the key one: iwlmld has its OWN power scheme that
+# iwlwifi.power_save does not cover, and it defaults to 2 (firmware sleeps).
+check "BE200 stability drop-in present" test -f /usr/lib/modprobe.d/iwlwifi-be200-stability.conf
+check "iwlmld power_scheme=1 (CAM)" grep -qE '^options iwlmld power_scheme=1$' /usr/lib/modprobe.d/iwlwifi-be200-stability.conf
+check "iwlwifi power_save off"      grep -qE '^options iwlwifi power_save=0$' /usr/lib/modprobe.d/iwlwifi-be200-stability.conf
+check "iwlwifi 11be disabled"       grep -qE '^options iwlwifi disable_11be=1$' /usr/lib/modprobe.d/iwlwifi-be200-stability.conf
+
 echo "== Docker CE =="
 check "docker present"     command -v docker
 check "containerd present" command -v containerd

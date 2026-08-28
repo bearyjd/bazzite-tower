@@ -23,13 +23,13 @@
 </div>
 <!-- glowup:hero end -->
 
-A custom [bootc](https://github.com/bootc-dev/bootc) image derived from `ghcr.io/ublue-os/bazzite-nvidia:stable`, tailored for an NVIDIA RTX-equipped desktop/laptop workstation that doubles as a virtualization host and developer machine. Built weekly, signed with cosign, published to `ghcr.io/bearyjd/bazzite-tower`.
+A custom [bootc](https://github.com/bootc-dev/bootc) image derived from `ghcr.io/ublue-os/bazzite-nvidia-open`, tailored for an NVIDIA RTX-equipped desktop/laptop workstation that doubles as a virtualization host and developer machine. Built weekly, signed with cosign, published to `ghcr.io/bearyjd/bazzite-tower`.
 
 ## Why this exists
 
 Stock Bazzite KDE is excellent for gaming, but every install needs the same post-boot setup: enable libvirt sockets, run `ujust setup-virtualization` (which is broken on the modular libvirt that ships in F44+), add yourself to libvirt and kvm groups, install Docker on top of Podman, drag in dev tooling. `bazzite-tower` bakes all of that into the image so the first boot is the only boot you need.
 
-This is a **desktop/laptop variant** — not for handhelds or Steam Deck. It uses the **proprietary NVIDIA driver** rather than the open kernel modules: on hybrid (Optimus) laptops the proprietary driver is currently the more reliable choice for suspend/resume and power management, which the open modules still struggle with (see [Design choices](#nvidia-proprietary-driver-over-open-modules)). If you prefer the open modules (NVIDIA's default for Turing+), rebase the `FROM` to `bazzite-nvidia-open:stable`.
+This is a **desktop/laptop variant** — not for handhelds or Steam Deck. It uses NVIDIA's **open kernel modules** rather than the proprietary driver (see [Design choices](#nvidia-open-kernel-modules-over-proprietary) for why, and the trade-offs that decision carries). If you'd rather run the proprietary driver — required for pre-Turing cards (Maxwell/Pascal/Volta) — rebase the `FROM` to `bazzite-nvidia:stable` or a pinned `bazzite-nvidia` tag.
 
 ## What's included beyond stock Bazzite
 
@@ -84,7 +84,7 @@ Flip first and the next boot denies every new outbound connection with nothing l
 
 The pristine image-intent copy lives at `/usr/share/bazzite-tower/opensnitchd-default-config.json`. Because `/etc` is 3-way merged across bootc upgrades, a locally edited `/etc/opensnitchd/default-config.json` stops tracking the image — `diff` the two to see exactly what drifted.
 
-Runtime dependencies are installed explicitly (`libnetfilter_queue`, `nftables`) because the extraction below resolves none: `libnetfilter_queue.so.1` is a hard `DT_NEEDED` of `opensnitchd` and is absent from the bazzite-nvidia base, so without it the daemon cannot exec at all.
+Runtime dependencies are installed explicitly (`libnetfilter_queue`, `nftables`) because the extraction below resolves none: `libnetfilter_queue.so.1` is a hard `DT_NEEDED` of `opensnitchd` and is absent from the pinned base, so without it the daemon cannot exec at all.
 
 Not available in Fedora or RPM Fusion (the one Fedora-44 COPR has zero builds), so it's extracted directly from the pinned upstream release RPM (`v1.8.0`, verified by a hardcoded sha256 before extraction) rather than `dnf`/`rpm install`ed — see [Disabled-by-default external repos](#disabled-by-default-external-repos) for why this repo prefers pin-and-verify over trusting an unverifiable third-party GPG key. It's therefore not registered in the rpm database (`rpm -q opensnitch` won't find it); check for `/usr/bin/opensnitchd` instead.
 
@@ -115,11 +115,15 @@ If Wi-Fi looks dead after a boot — no networks, NetworkManager shows no usable
 
 ## Design choices
 
-### NVIDIA proprietary driver over open modules
+### NVIDIA open kernel modules over proprietary
 
-NVIDIA's open kernel modules are the default for Turing+ since driver R560 and are at performance parity, so they're the obvious pick on paper. But this image targets a **hybrid (Optimus) laptop** where the priority is reliable *host* dGPU use — PRIME render offload plus dependable suspend/resume — not GPU passthrough. That's exactly where the open modules still lag: NVIDIA's own driver docs list power management as a known-incomplete area, and upstream `open-gpu-kernel-modules` bug reports of suspend/hibernate failures on Intel+NVIDIA hybrid laptops remained open into 2026. Bazzite users on hybrid laptops have reported better stability (and lower idle power) on the proprietary driver.
+Until 2026-08-28 this image ran the proprietary driver instead, on the reasoning that hybrid (Optimus) laptops were where the open modules lagged — NVIDIA's docs flagged power management as known-incomplete, and hybrid-laptop suspend/hibernate bug reports against `open-gpu-kernel-modules` remained open into 2026. That reasoning didn't get overturned by new evidence about this specific hardware (Meteor Lake + Ada RTX 4070 Max-Q, ThinkPad P1) — no suspend/resume report specific to this platform surfaced in either direction for either driver family. What changed was upstream's kernel packaging: the [i915 Meteor Lake s2idle-resume fix](#intel-display--suspend-stability) landed in kernel 7.2, but `bazzite-nvidia` (proprietary) then forked onto its own `ogc-lts` kernel track (6.18.x) that will not follow 7.2 forward. `bazzite-nvidia-open` is the only upstream-tracked tag that carries both the fix and ongoing updates. Full history: `docs/research/i915-bug-report/UPSTREAM-FIX-STATUS-2026-08-28.md`.
 
-So `bazzite-tower` builds on `bazzite-nvidia:stable` (proprietary). On an RTX 40-series (Ada) card the proprietary driver is fully supported; the open modules remain one `FROM`-line swap away (`bazzite-nvidia-open:stable`) if you'd rather track NVIDIA's open default — and `bootc rollback` makes trying either low-risk.
+This is a deliberate trade, not a strict upgrade, on two fronts:
+- **Driver branch.** `bazzite-nvidia-open` tracks NVIDIA's New Feature Branch (currently `610.x`, an 11-month support window, weeks old at the time of this switch). The proprietary flavor stayed on the Long Term Support Branch (`580.x`, 3 years of support, bugfix/security-only by policy — it will never gain the newer Vulkan extensions, DRM color-pipeline/HDR output, or zero-copy NVDEC import that `610` added). Faster features, less field-proven.
+- **GPU-switching stack.** The open flavor uses `cardwire` (eBPF-based, describes itself as "early development"); the proprietary/LTS flavor uses the older `supergfxctl`, which has at least one reproduced failure mode on this same Bazzite stack (`ublue-os/hwe#200`, dGPU-only mode leaving the internal display black). Neither tool has a clean record.
+
+`bootc rollback`, or re-pinning `BASE_IMAGE` back to a `bazzite-nvidia` tag, is the fallback if this doesn't hold up in practice. On an RTX 40-series (Ada) card the open modules are fully supported (Turing+); the proprietary driver remains one `FROM`-line swap away (`bazzite-nvidia:stable`, or a pinned tag) if you'd rather trade features back for the LTSB's longer track record — or if your card predates Turing, where the open modules aren't an option at all.
 
 ### Wi-Fi backend guard
 
@@ -143,10 +147,10 @@ The default NAT network (shipped by `libvirt-daemon-config-network`) is marked a
 
 ### Intel display & suspend stability
 
-The target panel (Intel iGPU on Meteor Lake) throws eDP link/PLL errors with flicker and post-resume corruption when the i915 driver's panel power-saving is left on. Separately, a kernel 7.0 regression corrupts the i915 PHY A / C10 (cx0) PLL state on s2idle resume (~30s of flip-done timeouts and a sluggish display after wake). Two more bootc `kargs.d` fragments address these:
+The target panel (Intel iGPU on Meteor Lake) throws eDP link/PLL errors with flicker and post-resume corruption when the i915 driver's panel power-saving is left on. Separately, a kernel 7.0 regression corrupted the i915 PHY A / C10 (cx0) PLL state on s2idle resume (~30s of flip-done timeouts and a sluggish display after wake); the upstream fix (`062499cc4813b5a3`, closes freedesktop #16042) landed in kernel 7.2, which is what this image now pins to (see [Design choices](#nvidia-open-kernel-modules-over-proprietary) for why that specifically required moving off the proprietary driver). Two more bootc `kargs.d` fragments address the panel-power-saving side, which the kernel fix doesn't touch:
 
-- `10-i915-display.toml` — `i915.enable_dc=0 i915.enable_psr=0 i915.enable_psr2_sel_fetch=0` disable Display C-states and Panel Self Refresh (the three are one intervention). Cost is marginally higher panel power; the trade is a stable display. (These mitigate the panel power-saving faults; they do **not** fix the PHY A resume regression on their own.)
-- `20-suspend.toml` — `mem_sleep_default=s2idle` pins s2idle suspend. Meteor Lake has no working S3 ("deep") suspend; an earlier attempt to default to deep made resume worse (bounce behaviour), so we pin s2idle explicitly rather than relying on the firmware fallback. Check the live mode with `cat /sys/power/mem_sleep` (the bracketed entry is active). The PHY A resume regression itself needs an upstream kernel fix — `scripts/check-i915-resume-fix.sh` (weekly user timer) watches for it.
+- `10-i915-display.toml` — `i915.enable_dc=0 i915.enable_psr=0 i915.enable_psr2_sel_fetch=0` disable Display C-states and Panel Self Refresh (the three are one intervention). Cost is marginally higher panel power; the trade is a stable display.
+- `20-suspend.toml` — `mem_sleep_default=s2idle` pins s2idle suspend. Meteor Lake has no working S3 ("deep") suspend; an earlier attempt to default to deep made resume worse (bounce behaviour), so we pin s2idle explicitly rather than relying on the firmware fallback. Check the live mode with `cat /sys/power/mem_sleep` (the bracketed entry is active). `scripts/check-i915-resume-fix.sh` (weekly user timer) keeps watching the journal for the PHY A regression signature — insurance against a future regression, now that this pin carries the fix.
 
 Each is its own fragment, so you can drop either independently if your hardware is happy without it. Like the IOMMU karg, these use bootc's native mechanism rather than `rpm-ostree kargs` (which only sets per-machine local state and can't run during an image build).
 
@@ -175,7 +179,7 @@ To keep the image lean and focused, these are **not** installed even though some
 
 ## Continuous testing & upstream tracking
 
-This image rides `bazzite-nvidia:stable` and the laptop rebases onto `:latest`, so **"the build is green" has to also mean "the image works."** A green build can still publish a silently-broken image — e.g. an upstream change makes the qemu-user logic create nothing, `virtqemud` crash-loops on boot, and `qemu:///system` never comes up, yet nothing ever errors at build time. Three layers guard that gap; the full failure model and the reasoning behind each layer live in [`docs/downstream-change-tracking.md`](./docs/downstream-change-tracking.md).
+This image rides upstream Bazzite's base and the laptop rebases onto `:latest`, so **"the build is green" has to also mean "the image works."** A green build can still publish a silently-broken image — e.g. an upstream change makes the qemu-user logic create nothing, `virtqemud` crash-loops on boot, and `qemu:///system` never comes up, yet nothing ever errors at build time. Three layers guard that gap; the full failure model and the reasoning behind each layer live in [`docs/downstream-change-tracking.md`](./docs/downstream-change-tracking.md).
 
 | Layer | Where | What it does |
 |---|---|---|
@@ -207,15 +211,16 @@ the `BASE_IMAGE` build-arg — see the comment above `FROM` in `Containerfile`):
 - `YYYYMMDD` — date-only tag
 - `<short-sha>` — the 7-character git SHA of the build commit
 
-**`latest-kernel` — opt-in, tracks upstream `bazzite-nvidia:stable`'s current kernel**
+**`latest-kernel` — opt-in, tracks upstream `bazzite-nvidia-open:stable`'s current kernel/driver**
 - `latest-kernel` / `latest-kernel.YYYYMMDD` / `latest-kernel-YYYYMMDD` / `latest-kernel-<short-sha>`
-- **Never boot this on the ThinkPad P1 this repo targets without checking
-  `docs/research/i915-bug-report/` first.** It exists to make it easy to test
-  when upstream's kernel actually fixes the Meteor Lake s2idle-resume
-  regression (see [Intel display & suspend stability](#intel-display--suspend-stability));
-  until then it carries the same known black-screen/flip_done bug the `latest`
-  pin exists to avoid. Never the default — `bootc switch` to it explicitly if
-  you want to track it.
+- Exists as an early-warning channel: since `latest` is a reproducible pinned
+  tag rather than a moving `:stable` reference (see
+  [Intel display & suspend stability](#intel-display--suspend-stability) for
+  why this repo pins base images at all), this leg surfaces whatever upstream
+  ships next before it's ever considered for the pinned default. Check
+  `docs/research/i915-bug-report/` before booting it on the ThinkPad P1 this
+  repo targets. Never the default — `bootc switch` to it explicitly if you
+  want to track it.
 
 CI rebuilds weekly (Sunday 06:00 UTC) and on every push to `main`, building
 and smoke-testing both variants independently (a break in one never blocks
@@ -224,11 +229,11 @@ or affects the other's publish).
 ## Hardware target
 
 - Desktop or laptop (not handheld / Deck)
-- NVIDIA GPU on the **proprietary** driver (developed against an RTX 4070 Max-Q / Ada on a hybrid Optimus laptop)
+- NVIDIA GPU on the **open kernel modules** (developed against an RTX 4070 Max-Q / Ada on a hybrid Optimus laptop)
 - KVM-capable CPU (Intel VT-x or AMD-V)
 - Sufficient RAM for KDE Plasma + concurrent VMs
 
-The proprietary driver supports Maxwell and newer, so there's no pre-Turing cutoff here. If you'd rather run NVIDIA's open kernel modules (default for Turing+), swap the Containerfile `FROM` to `bazzite-nvidia-open:stable` and rebuild.
+The open kernel modules are NVIDIA's default for Turing and newer — there's a hard cutoff below Turing (Maxwell/Pascal/Volta aren't supported). If your card predates Turing, or you'd rather run the proprietary driver (see [Design choices](#nvidia-open-kernel-modules-over-proprietary) for the trade-offs), swap the Containerfile `FROM` to `bazzite-nvidia:stable` and rebuild.
 
 ## Repository layout
 

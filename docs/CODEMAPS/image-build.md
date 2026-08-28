@@ -5,7 +5,7 @@
 
 ## Containerfile stages
 
-1. `ARG BASE_IMAGE=ghcr.io/ublue-os/bazzite-nvidia:44.20260429` (pinned default — see `:latest`/`:latest-kernel` in README's Tags section for how CI overrides this per matrix leg)
+1. `ARG BASE_IMAGE=ghcr.io/ublue-os/bazzite-nvidia-open:44.20260825` (pinned default — see `:latest`/`:latest-kernel` in README's Tags section for how CI overrides this per matrix leg)
 2. `FROM scratch AS ctx` + `COPY build_files /` — scripts reachable via bind mount, not baked in
 3. `FROM ${BASE_IMAGE}` + OCI labels
 4. `COPY system_files/ /` — static content, copied **before** build.sh so it can enable those units

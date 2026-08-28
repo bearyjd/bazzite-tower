@@ -31,7 +31,7 @@ if [[ "${FIREWALL_DAEMON:-opensnitch}" == "opensnitch" ]]; then
     # Runtime deps must be installed explicitly: the rpm2cpio extraction below
     # bypasses RPM dependency resolution entirely, so nothing pulls in what
     # opensnitchd's ELF headers ask for. `libnetfilter_queue.so.1` is a hard
-    # DT_NEEDED of /usr/bin/opensnitchd and is NOT in the bazzite-nvidia base
+    # DT_NEEDED of /usr/bin/opensnitchd and is NOT in the pinned base
     # (verified against the pinned base's /usr/lib64) — without it the daemon
     # cannot exec at all and opensnitch.service fails every boot. nftables (the
     # configured Firewall backend) and libnfnetlink.so.0 are already in the base;

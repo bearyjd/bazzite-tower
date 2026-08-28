@@ -5,14 +5,17 @@
 no app runtime, database, or frontend; the "program" is a container image that
 becomes a bootable OS.
 
-**Base:** `ghcr.io/ublue-os/bazzite-nvidia` (KDE + proprietary NVIDIA, F44+),
-**pinned to a dated tag** (`44.20260429`, kernel `6.19.11-ogc1`) as the default —
-not `:stable` — to dodge an active Meteor Lake i915 s2idle-resume regression
-present on every 7.0.x/7.1.x base as of 2026-08-08 (see
-`docs/research/i915-mtl-resume-2026-06-20.md`). `:stable` is still built, as the
-opt-in `:latest-kernel` tag (`BASE_IMAGE=...:stable` build-arg) — do not boot it
-on this hardware. See the `Containerfile` header comment for the current
-re-check log.
+**Base:** `ghcr.io/ublue-os/bazzite-nvidia-open` (KDE + NVIDIA open kernel
+modules, F44+), **pinned to a dated tag** (`44.20260825`, kernel
+`7.2.0-ogc6.1`) as the default. This carries the i915 Meteor Lake s2idle-resume
+fix (kernel 7.2) — proprietary `bazzite-nvidia` was used until 2026-08-28 but
+forked onto a kernel track (`ogc-lts`, 6.18.x) that won't receive it; see
+`docs/research/i915-bug-report/UPSTREAM-FIX-STATUS-2026-08-28.md`. Pinned
+rather than `:stable` for reproducibility, same as every base pin here.
+`bazzite-nvidia-open:stable` is still built, as the opt-in `:latest-kernel` tag
+(`BASE_IMAGE=...:stable` build-arg) — an early-warning channel, not a
+recommendation to boot it. See the `Containerfile` header comment for the
+full history.
 **Publishes:** `ghcr.io/bearyjd/bazzite-tower:{latest, latest.YYYYMMDD, YYYYMMDD, <sha>}`
 and the same shape under `latest-kernel-*`, cosign-signed by digest.
 

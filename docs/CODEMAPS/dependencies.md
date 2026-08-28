@@ -3,12 +3,15 @@
 
 ## Base image
 
-`ghcr.io/ublue-os/bazzite-nvidia`, **default pinned to the dated tag
-`44.20260429`** (kernel `6.19.11-ogc1`) — Bazzite KDE + proprietary NVIDIA, F44+ —
-not `:stable`, to dodge an unfixed Meteor Lake i915 s2idle-resume regression on
-every 7.0.x/7.1.x base as of 2026-08-08. `:stable` is still built as the opt-in
-`:latest-kernel` tag. Swap the Containerfile `FROM` → `bazzite-nvidia-open` for
-the open kernel modules. Base provides (relied on, not installed here): the
+`ghcr.io/ublue-os/bazzite-nvidia-open`, **default pinned to the dated tag
+`44.20260825`** (kernel `7.2.0-ogc6.1`) — Bazzite KDE + NVIDIA open kernel
+modules, F44+ — not `:stable`, for reproducibility. Carries the i915 Meteor
+Lake s2idle-resume fix; proprietary `bazzite-nvidia` was used until
+2026-08-28 but forked onto a kernel track that won't get it (see
+`docs/research/i915-bug-report/UPSTREAM-FIX-STATUS-2026-08-28.md`).
+`:stable` is still built as the opt-in `:latest-kernel` tag. Swap the
+Containerfile `FROM` → `bazzite-nvidia` for the proprietary driver. Base
+provides (relied on, not installed here): the
 `kvmfr` Looking Glass module (`kvmfr` + `kmod-kvmfr`, hikariknight COPR),
 tailscale, distrobox, most of Cockpit, the KDE Plasma desktop (`kwin`,
 `kscreenlocker`, `libplasma`, ...).

@@ -1,12 +1,12 @@
 # BASE_IMAGE selects which published tag this Containerfile builds. Two variants
 # are built in CI from this one file (see .github/workflows/build.yml):
 #   default (unset)     -> the pin below, published as `:latest` (safe/default)
-#   ghcr.io/ublue-os/bazzite-nvidia:stable
+#   ghcr.io/ublue-os/bazzite-nvidia-open:stable
 #                        -> published as `:latest-kernel` (opt-in, tracks
-#                           whatever kernel upstream currently ships — see the
-#                           regression notes below before ever booting it on
-#                           this hardware)
-ARG BASE_IMAGE=ghcr.io/ublue-os/bazzite-nvidia:44.20260429
+#                           whatever kernel/driver upstream currently ships —
+#                           see the history below for what that's meant in
+#                           practice)
+ARG BASE_IMAGE=ghcr.io/ublue-os/bazzite-nvidia-open:44.20260825
 ARG FIREWALL_DAEMON=opensnitch
 ARG VM_GATE_SSH=0
 
@@ -14,45 +14,63 @@ ARG VM_GATE_SSH=0
 FROM scratch AS ctx
 COPY build_files /
 
-# Base: bazzite KDE + proprietary NVIDIA driver. Chosen over the -open variant
-# for more reliable suspend/resume and power management on this Optimus laptop —
-# the open kernel modules still have known gaps there (NVIDIA's own docs flag
-# power management; upstream hybrid-laptop suspend bugs remained open into 2026).
-# Swap to ghcr.io/ublue-os/bazzite-nvidia-open:stable to use the open modules.
-# Desktop variant — not deck-based, tracks F44+.
+# Base: bazzite KDE + NVIDIA **open** kernel modules, F44+, desktop variant
+# (not deck-based). This was proprietary (`bazzite-nvidia`) until 2026-08-28;
+# see the dated history below for the full chain of reasoning. Short version:
 #
-# DEFAULTS (BASE_IMAGE unset) to a 6.19.x-ogc base (FC44) to dodge the Meteor
-# Lake i915 cx0 PHY-A s2idle-resume regression. Root cause (git-verified
-# 2026-06-20): the cx0 DPLL-framework rewrite landed in kernel 7.0 (lead commit
-# 1a7fad2aea74), is absent in 6.19, and is still unreverted upstream — so EVERY
-# 7.0.x-ogc base corrupts the C10 PLL on resume (~30s flip_done storm), while
-# 6.19.x is the only confirmed-good kernel. No karg/driver workaround exists
-# (PSR/DC/FBC, xe, runtime-PM all ruled out). Pinning here (vs :stable) also
-# predates the 7.0-ogc-jump "MCE storm".
-#   :stable      = 7.1.5-ogc5.1  (still regressed as of 2026-08-08, see below)
-#   44.20260429  = 6.19.11-ogc1  (this default pin — verified known-good)
-# Re-evaluate the *default* when upstream fixes the framework path — the host
-# watcher i915-resume-fix-check.timer flags it. Full analysis + sources:
-# docs/research/i915-mtl-resume-2026-06-20.md
+# The Meteor Lake i915 cx0 PHY-A s2idle-resume regression (root cause,
+# git-verified 2026-06-20: the cx0 DPLL-framework rewrite, lead commit
+# 1a7fad2aea74, landed in kernel 7.0 and was absent in 6.19 — no karg/driver
+# workaround existed; PSR/DC/FBC, xe, runtime-PM were all ruled out) forced
+# this repo onto a 6.19.x pin for two months while every 7.0.x/7.1.x kernel
+# remained broken. The fix (commit 062499cc4813b5a3, "drm/i915/mtl+: Enable
+# PPS before PLL", closes freedesktop #16042) landed in mainline 7.2 — but by
+# the time 7.2 actually shipped (2026-08-20), upstream had forked the
+# proprietary/`bazzite-nvidia` flavor onto its own `ogc-lts` kernel track
+# (6.18.44), decoupled from the fixed 7.2.x main line, while `bazzite-nvidia-
+# open` followed main to 7.2.0-ogc6.1. So the *only* upstream tag that both
+# carries the i915 fix and is still actively tracked is the open-modules one.
 #
-# 2026-07-04: fix landed in torvalds/linux master (commit 062499cc4813b5a3,
-# "drm/i915/mtl+: Enable PPS before PLL", Closes: #16042) but is NOT YET in
-# any released 7.0.y/7.1.y stable kernel or in bazzite-nvidia:stable
-# (still 7.0.9-ogc3.2). Stay pinned. See
-# docs/research/i915-bug-report/UPSTREAM-FIX-STATUS-2026-07-04.md
+# Decision (2026-08-28): move the default pin to `bazzite-nvidia-open`,
+# pinned to `44.20260825` (kernel 7.2.0-ogc6.1, driver 610.57.04) rather than
+# tracking `:stable`, for the same reproducibility reason as every prior pin
+# here. This is a deliberate trade, not a strict upgrade:
+#   - Driver `610.57.04` is NVIDIA's New Feature Branch (NFB, 11-month
+#     support window), released 2026-08-03 — i.e. weeks old at pin time, not
+#     the 3-year-support Long Term Support Branch (`580.x`) the proprietary
+#     flavor carries. It's also what unlocks features the LTSB will not get
+#     by policy (bugfix/security only) — DRM color-pipeline / HDR output,
+#     newer Vulkan extensions, zero-copy NVDEC import for Wayland compositors.
+#   - The hybrid GPU-switching stack changes with it: `bazzite-nvidia-open`
+#     uses `cardwire` (eBPF-based, "early development" per its own README);
+#     the proprietary/LTS flavor uses `supergfxctl` instead (an older,
+#     previously-deprecated-then-restored tool with at least one reproduced
+#     failure mode on this same Bazzite stack — ublue-os/hwe#200).
+#   - No suspend/resume evidence specific to this exact hardware (Meteor Lake
+#     + Ada RTX 4070 Max-Q, ThinkPad P1) was found for either flavor in either
+#     direction — the field reports checked were all other platforms/GPUs.
+# `bootc rollback` / re-pinning BASE_IMAGE back to a `bazzite-nvidia` tag is
+# the mitigation if this regresses in practice. Full analysis:
+# docs/research/i915-bug-report/UPSTREAM-FIX-STATUS-2026-08-28.md
 #
-# 2026-07-13: bazzite-nvidia:stable jumped to 44.20260713 (kernel 7.1.3-ogc3.4,
-# the 7.1.y line) but the fix is confirmed absent from linux-7.1.y at 7.1.3
-# (git merge-base --is-ancestor check). Default pin unchanged. See
-# docs/research/i915-bug-report/UPSTREAM-FIX-STATUS-2026-07-13.md. This is
-# exactly what `:latest-kernel` (BASE_IMAGE=...:stable) currently ships — do
-# not boot that tag on this ThinkPad expecting working s2idle resume yet.
-#
-# 2026-07-23: fix confirmed present in mainline v7.2-rc1+ (git ancestry check),
-# but kernel 7.2 has not released, no linux-7.2.y stable branch exists, and
-# bazzite-nvidia:stable is still 7.1.3-ogc5.1 (pre-fix) as of 44.20260721.
-# Nothing shippable contains the fix yet — default pin unchanged. See
-# docs/research/i915-bug-report/UPSTREAM-FIX-STATUS-2026-07-23.md
+# --- Prior history, while the default pin was proprietary `bazzite-nvidia` ---
+#   :stable      = 7.1.5-ogc5.1  (still regressed as of 2026-08-08)
+#   44.20260429  = 6.19.11-ogc1  (the pin used 2026-06-20 through 2026-08-28)
+# 2026-07-04: fix landed in torvalds/linux master (062499cc4813b5a3) but was
+#   not yet in any released 7.0.y/7.1.y stable kernel or bazzite-nvidia:stable.
+#   docs/research/i915-bug-report/UPSTREAM-FIX-STATUS-2026-07-04.md
+# 2026-07-13: bazzite-nvidia:stable jumped to 7.1.3-ogc3.4; fix confirmed
+#   absent from linux-7.1.y at 7.1.3.
+#   docs/research/i915-bug-report/UPSTREAM-FIX-STATUS-2026-07-13.md
+# 2026-07-23: fix confirmed present in mainline v7.2-rc1+, but 7.2 had not
+#   released and bazzite-nvidia:stable was still on 7.1.3-ogc5.1.
+#   docs/research/i915-bug-report/UPSTREAM-FIX-STATUS-2026-07-23.md
+# 2026-08-08: 7.2 still unreleased; bazzite-nvidia:stable at 7.1.5-ogc5.1.
+#   docs/research/i915-bug-report/UPSTREAM-FIX-STATUS-2026-08-08.md
+# 2026-08-28: 7.2 released with the fix — but bazzite-nvidia:stable had by
+#   then moved to the unaffected-but-unfixed 6.18.44 `ogc-lts` track instead
+#   of following it. Default pin moved to bazzite-nvidia-open (see above).
+#   docs/research/i915-bug-report/UPSTREAM-FIX-STATUS-2026-08-28.md
 FROM ${BASE_IMAGE}
 
 # The production image remains on OpenSnitch.  `portmaster` is a deliberately

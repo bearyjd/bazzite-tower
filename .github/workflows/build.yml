@@ -51,18 +51,22 @@ jobs:
           # default. tag_prefix empty => tag strings below are byte-identical
           # to this workflow's pre-matrix behavior (no disruption to existing
           # installs or anyone pinned to a `:<date>`/`:<sha>` tag).
+          # As of 2026-08-28 this is bazzite-nvidia-open (NVIDIA open kernel
+          # modules) — moved off proprietary bazzite-nvidia because that
+          # flavor forked onto a kernel track (`ogc-lts`, 6.18.x) that will
+          # not receive the i915 cx0 s2idle-resume fix; see the Containerfile
+          # comment and docs/research/i915-bug-report/UPSTREAM-FIX-STATUS-2026-08-28.md.
           - variant: safe-pin
-            base_image: ghcr.io/ublue-os/bazzite-nvidia:44.20260429
+            base_image: ghcr.io/ublue-os/bazzite-nvidia-open:44.20260825
             tag_base: latest
             tag_prefix: ""
-          # Opt-in — tracks upstream bazzite-nvidia:stable's current kernel.
-          # As of 2026-07-13 that kernel (7.1.3-ogc3.4) still carries the
-          # unfixed cx0 DPLL s2idle-resume regression (see Containerfile and
-          # docs/research/i915-bug-report/). Never the default tag; every
-          # tag this leg produces is namespaced under tag_prefix so it can
-          # never collide with the safe-pin leg's pushed tags.
+          # Opt-in — tracks upstream bazzite-nvidia-open:stable's current
+          # kernel/driver, for early warning of the next upstream surprise
+          # before it reaches the pinned safe-pin leg. Never the default tag;
+          # every tag this leg produces is namespaced under tag_prefix so it
+          # can never collide with the safe-pin leg's pushed tags.
           - variant: latest-kernel
-            base_image: ghcr.io/ublue-os/bazzite-nvidia:stable
+            base_image: ghcr.io/ublue-os/bazzite-nvidia-open:stable
             tag_base: latest-kernel
             tag_prefix: "latest-kernel-"
 

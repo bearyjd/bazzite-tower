@@ -150,6 +150,55 @@ Microcode: `microcode_ctl` is layered at the latest Fedora revision in `build.sh
 Early-load takes effect once the initramfs is regenerated (on a base bump); confirm
 the running revision with `grep -m1 microcode /proc/cpuinfo`.
 
+## Wi-Fi: BE200 firmware asserts (desktop freezes)
+
+Symptom: the whole desktop stops for 5–30s, then resumes. Wi-Fi is this machine's
+**only** uplink (no ethernet port), so when the BE200 firmware asserts and the
+driver resets the chip, every network-dependent process blocks at once and the
+machine looks frozen.
+
+```bash
+journalctl -k -b 0 | grep -c "Device error - SW reset"   # the metric that matters
+```
+
+The signature:
+
+```
+iwlwifi: Error sending SYSTEM_STATISTICS_CMD: time out after 2000ms.
+iwlwifi: 0x00000084 | NMI_INTERRUPT_UNKNOWN
+iwlwifi: 0x20000066 | NMI_INTERRUPT_HOST
+iwlwifi: Device error - SW reset
+ieee80211 phy0: Hardware restart was requested
+```
+
+The host sends a routine statistics command, the firmware never answers, both its
+processors take an NMI, and the driver hard-resets the device. Recovery is 5–15s.
+
+**No kernel watchdog catches this.** The soft-lockup watchdog only fires on a CPU
+spinning in kernel mode; `hung_task` only after 120s. The CPU is never stalled
+here — only network I/O blocks. The iwlwifi error log is the sole reliable signal,
+which is why the journal cap must retain weeks of history.
+
+Mitigation: `…/modprobe.d/iwlwifi-be200-stability.conf` sets `iwlmld
+power_scheme=1` (CAM — the radio never sleeps). `iwlmld` carries its **own** power
+scheme, independent of `iwlwifi.power_save`, and it defaults to 2 (firmware
+sleeps); power-save sleep/wake transitions are the suspected trigger.
+
+```bash
+cat /sys/module/iwlmld/parameters/power_scheme    # want 1
+
+# apply without a reboot
+sudo nmcli radio wifi off
+sudo modprobe -r iwlmld && sudo modprobe iwlmld
+sudo nmcli radio wifi on
+```
+
+Revert by deleting the file. If asserts continue with `power_scheme=1`, power save
+is not the trigger — the next discriminator is a **real AP instead of a phone
+hotspot** (every observation to date was on a tethered hotspot), and after that a
+wired uplink, which is also the only way to stop Wi-Fi being a single point of
+failure for the entire desktop.
+
 ## Module blacklists (lean boot)
 
 `…/modprobe.d/blacklist-unused-gpu.conf` blacklists **amdgpu** / **amdxcp** — there
@@ -167,9 +216,35 @@ shows it loaded after a rebase, it's initramfs-embedded — add the kernel arg
   (`.gradle`, `target`, `build`, language caches; `node_modules` is already a baloo
   default). It only seeds new users — a user's `~/.config/baloofilerc` overrides it.
   Re-index after editing with `balooctl6 disable && balooctl6 enable`.
-- `…/journald.conf.d/90-tower-journal-cap.conf` sets `SystemMaxUse=500M` (default
-  is 10% of the fs ≈ 730 GiB here). journald enforces it continuously — no
-  `journalctl --vacuum` timer needed. Check with `journalctl --disk-usage`.
+- `…/journald.conf.d/90-tower-journal-cap.conf` sets `SystemMaxUse=4G` plus
+  `MaxRetentionSec=1month` / `MaxFileSec=1day` (default cap is 10% of the fs
+  ≈ 730 GiB here). journald enforces it continuously — no `journalctl --vacuum`
+  timer needed. Check with `journalctl --disk-usage`. Raised from 500M on
+  2026-08-28: that cap vacuumed away all prior-boot kernel messages within hours
+  and hid the BE200 firmware asserts below. Growth is now bounded mainly by time,
+  with size as the backstop.
+
+## /etc drift vs the image
+
+`/etc` is writable and 3-way merged across `rpm-ostree upgrade`, so a fix dropped
+there survives reboots and updates — but **not** a rebase or a fresh install, and
+it silently shadows whatever the image ships. Anything meant to be permanent
+belongs in `system_files/`.
+
+```bash
+sudo ostree admin config-diff | grep -E '^[AMD] '   # A = added locally, M = modified
+```
+
+**Open item.** ~300 local modifications as of 2026-08-28, unaudited. Three of them
+now duplicate what the image ships and should be removed once the Wi-Fi mitigation
+is confirmed holding (keep them until then as a no-rebuild fallback):
+
+```bash
+sudo rm /etc/modprobe.d/iwlwifi-fix.conf                # -> iwlwifi-be200-stability.conf
+sudo rm /etc/systemd/journald.conf.d/99-retention.conf  # -> 90-tower-journal-cap.conf
+# keep /etc/sysctl.d/99-watchdog-thresh.conf — diagnostic instrumentation,
+# deliberately NOT in the image
+```
 
 ## CPU power & thermal
 

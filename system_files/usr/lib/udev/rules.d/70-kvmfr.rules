@@ -1,0 +1,8 @@
+# Looking Glass shared-memory device permissions.
+#
+# The kvmfr module is base-provided and its size is set by the
+# kvmfr.static_size_mb=128 karg (kargs.d/30-vfio-kvm.toml). Without this rule
+# /dev/kvmfr0 comes up root-owned and the Looking Glass client cannot open it.
+# GROUP=qemu so the VM side can map it; uaccess so the logged-in local user can.
+# See `ujust install-looking-glass-client`.
+SUBSYSTEM=="kvmfr", TAG+="uaccess", GROUP="qemu", MODE="0660"

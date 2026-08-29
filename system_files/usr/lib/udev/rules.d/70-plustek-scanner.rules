@@ -1,0 +1,9 @@
+# Plustek scanner (07b3:1436).
+#
+# Native SANE scanning never worked on this hardware, so the scanner is used by
+# passing the USB device into a VM. Keep the rule anyway: SPICE/virt-manager USB
+# redirection runs in the *user's* client process, which needs read access to the
+# device node to enumerate and claim it. (A persistent libvirt <hostdev> would be
+# handled by libvirtd's own device ACLs instead, but no domain XML defines one —
+# it is attached at runtime.)
+SUBSYSTEM=="usb", ATTRS{idVendor}=="07b3", ATTRS{idProduct}=="1436", TAG+="uaccess"

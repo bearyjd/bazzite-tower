@@ -235,9 +235,53 @@ belongs in `system_files/`.
 sudo ostree admin config-diff | grep -E '^[AMD] '   # A = added locally, M = modified
 ```
 
-**Open item.** ~300 local modifications as of 2026-08-28, unaudited. Three of them
-now duplicate what the image ships and should be removed once the Wi-Fi mitigation
-is confirmed holding (keep them until then as a no-rebuild fallback):
+Most of the ~300 entries are runtime state that *belongs* in `/etc` and must be
+left alone: `systemd/system.control` (transient properties), `libvirt/nwfilter`
+and `libvirt/storage` (libvirt regenerates these), `selinux/targeted` (policy
+store), `bazzite/fixups` (ublue's own "already ran" markers), the user database,
+akmods signing keys. **`NetworkManager/system-connections` holds Wi-Fi and VPN
+secrets and must never be baked into the image.**
+
+### Service enablement — triaged 2026-08-28
+
+| Unit | Disposition |
+|------|-------------|
+| `tailscaled.service` | **Baked** into the image (`build.d/62-host-services.sh`) |
+| `waydroid-container.service` | **Baked** into the image |
+| `sshd.service` | **Local only, on purpose.** The image ships sshd off so it stays safe to hand to anyone. Re-apply after a rebase with `ujust enable-ssh` |
+| `plugin_loader.service` | **Never bake.** Decky Loader; runs as root with an ExecStart inside one user's home. Owned by Decky's installer |
+| `libvirtd.service` | `/etc` carries an inert enable symlink. `60-libvirt-services.sh` **masks** this unit in favour of the modular `virt*` daemons and the mask wins. Delete the symlink, do not promote: `sudo rm /etc/systemd/system/multi-user.target.wants/libvirtd.service` |
+
+### Device rules — triaged 2026-08-29
+
+Promoted to `system_files/usr/lib/udev/rules.d/`: `70-kvmfr.rules` (Looking
+Glass needs `/dev/kvmfr0` group-owned by qemu), `99-smartcard.rules` (rewritten
+from `MODE="0666"` to `TAG+="uaccess"` — the old rule was world read/write),
+`99-i2c-designware.rules`, `70-xreal-xr.rules`, `70-viture-xr.rules`,
+`70-plustek-scanner.rules`. Plus `btusb-no-autosuspend.conf` to `modprobe.d/`.
+
+**Not promoted, delete from `/etc`:**
+
+| File | Why |
+|------|-----|
+| `72-usbhp.rules` | **Fails `udevadm verify`** (missing comma after `ACTION=="add"`), so it has never worked. Even corrected it would tag *every* USB device with uaccess. Whatever printer problem it was for is still unsolved |
+| `70-rokid-xr.rules`, `70-rayneo-xr.rules`, `70-uinput-xr.rules` | Empty — comments only, zero directives |
+| `modprobe.d/kvmfr.conf` | Empty — 290 bytes of comments, zero directives |
+| `modprobe.d/i915-sleep.conf` | Redundant: all three options are already kernel args from `kargs.d/10-i915-display.toml` |
+| `modprobe.d/kvm.conf` | Likely redundant with `kvm.ignore_msrs=1` in `kargs.d/30-vfio-kvm.toml` — verify before deleting |
+| `firewalld/zones/FedoraWorkstation.xml` | Diff vs the base file is *attribute reordering only* (`port protocol= port=` vs `port port= protocol=`). Semantically identical; firewalld rewrote it on load. `.xml.old` is cruft |
+| `libvirt/hooks/qemu` + `qemu.d/` | SharkWipf per-guest hook dispatcher, left from a GPU-passthrough experiment. `qemu.d/` is empty so it dispatches nothing. Delete; it is a well-known public script if ever wanted again |
+
+This box has a habit of fixing things twice — `i915-sleep.conf` and `kvm.conf`
+both duplicate settings already applied as kernel args. Check `kargs.d/` before
+adding a `modprobe.d` drop-in.
+
+### Superseded /etc copies
+
+Three files now duplicate what the image ships and should be removed once the
+Wi-Fi mitigation is confirmed holding — keep them until then as a no-rebuild
+fallback, and note they only become redundant **after** an
+`rpm-ostree upgrade` + reboot onto an image that contains them:
 
 ```bash
 sudo rm /etc/modprobe.d/iwlwifi-fix.conf                # -> iwlwifi-be200-stability.conf

@@ -166,6 +166,26 @@ echo "== GPU module blacklist =="
 check "unused-GPU blacklist present" test -f /usr/lib/modprobe.d/blacklist-unused-gpu.conf
 check "amdgpu blacklisted" grep -qx 'blacklist amdgpu' /usr/lib/modprobe.d/blacklist-unused-gpu.conf
 
+echo "== Device rules (promoted from /etc drift) =="
+# All previously local-only in /etc, so a rebase lost them. Deliberately NOT
+# promoted: 72-usbhp.rules (fails udevadm verify, and tags every USB device),
+# and four empty files. See docs/RUNBOOK.md "/etc drift vs the image".
+check "kvmfr device rule present"      test -f /usr/lib/udev/rules.d/70-kvmfr.rules
+check "kvmfr grants qemu group"        grep -q 'GROUP="qemu"' /usr/lib/udev/rules.d/70-kvmfr.rules
+check "smartcard rule is uaccess, not 0666" grep -qxF 'SUBSYSTEM=="usb", ATTR{idVendor}=="058f", ATTR{idProduct}=="9540", TAG+="uaccess"' /usr/lib/udev/rules.d/99-smartcard.rules
+check "i2c-designware power rule"      test -f /usr/lib/udev/rules.d/99-i2c-designware.rules
+check "XR glasses rules (xreal)"       test -f /usr/lib/udev/rules.d/70-xreal-xr.rules
+check "XR glasses rules (viture)"      test -f /usr/lib/udev/rules.d/70-viture-xr.rules
+check "plustek scanner rule"           test -f /usr/lib/udev/rules.d/70-plustek-scanner.rules
+check "btusb autosuspend disabled"     grep -qE '^options btusb enable_autosuspend=0$' /usr/lib/modprobe.d/btusb-no-autosuspend.conf
+
+echo "== Host services (were /etc-only, now baked) =="
+# Both ship in the Bazzite base; only their enablement was drifting in /etc, so a
+# rebase came up without them. sshd/plugin_loader/libvirtd are deliberately NOT
+# here — see build_files/build.d/62-host-services.sh for why.
+check_enabled "tailscaled.service"
+check_enabled "waydroid-container.service"
+
 echo "== Wi-Fi (BE200 firmware assert mitigation) =="
 # The BE200 firmware asserts NMI_INTERRUPT_UNKNOWN and the driver hard-resets the
 # chip; wifi is the only uplink here so that freezes the desktop for 5-15s.

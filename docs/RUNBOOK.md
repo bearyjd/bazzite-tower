@@ -77,6 +77,18 @@ in one pass. Run with `sudo` for the root-only checks:
 CI mirrors these: `tests/smoke.sh` (offline, the gate) and `tests/boot-check.sh`
 (runtime). See [docs/CODEMAPS/ci-cd.md](./CODEMAPS/ci-cd.md).
 
+## Intel CSME / ME firmware
+
+Carries the PCODE fix for the i915 GuC stall (see the Wi-Fi/GuC sections above).
+
+```bash
+cat /sys/class/mei/mei0/fw_ver     # want >= 18.1.18.2644
+fwupdmgr get-updates               # ME appears as "Intel Management Engine"
+```
+
+Known-bad: `18.0.5.2141` (factory), `18.0.15.2515` (insufficient).
+Known-good: `18.1.18.2644` and above.
+
 ## Common issues
 
 | Symptom | Cause | Fix |
@@ -198,6 +210,70 @@ is not the trigger — the next discriminator is a **real AP instead of a phone
 hotspot** (every observation to date was on a tethered hotspot), and after that a
 wired uplink, which is also the only way to stop Wi-Fi being a single point of
 failure for the entire desktop.
+
+## Freezes with no kernel trace (i915 GuC / stall detector)
+
+Some stalls on this machine leave **no kernel message at all**. The soft-lockup
+watchdog only fires on a CPU spinning in kernel mode; `hung_task` only after
+`hung_task_timeout_secs` (120s by default). A 5-15s freeze caused by a *blocked*
+kernel worker trips neither, at any threshold.
+
+`bazzite-tower-stall-detect.service` fills that gap: it samples `CLOCK_MONOTONIC`
+and, on a gap, records which workers were stuck in D state. That is what
+identifies the subsystem — without it a freeze is just "the machine paused".
+
+```bash
+ujust freeze-report                  # last week
+ujust freeze-report "3 days ago"
+```
+
+The known local cause is the **i915 GuC TLB invalidation timeout**:
+
+```
+i915 0000:00:02.0: [drm] *ERROR* GT0: GUC: TLB invalidation response timed out
+```
+
+with `kworker/*+i915_flip` blocked — the display flip worker waiting on the GPU
+microcontroller. This is [drm/i915 issue 14469](https://gitlab.freedesktop.org/drm/i915/kernel/-/issues/14469),
+**unfixed upstream**. Intel attribute it to the GuC dying while waking the
+hardware from RC6. It affects both the i915 and xe drivers, so it is firmware or
+silicon, not driver code.
+
+**The fix is a CSME firmware update — and this machine does not have it.**
+Intel attribute the bug to the GuC dying while waking from RC6; the fix is in
+PCODE, which ships inside Intel CSME firmware, which ships inside OEM BIOS.
+
+```bash
+cat /sys/class/mei/mei0/fw_ver     # want >= 18.1.18.2644
+```
+
+As of 2026-08-29 this box reports **18.0.5.2141** — the factory original. BIOS
+N48ET34W (1.21, 2026-05-11) did not bundle the update, and `fwupd` offers no ME
+update even with `lvfs-testing` enabled. Lenovo publishes it under the
+**Chipset** category, not BIOS. Re-check periodically; a reporter on this same
+laptop model received 18.1.18.2724 through fwupd/LVFS in April 2026, so the path
+exists, it is just not offered for machine type 21KV yet.
+
+Meanwhile, verified-ineffective (do not re-try these):
+
+- `i915.enable_psr=0`, `i915.enable_dc=0` — **already set here**, and documented
+  upstream as tested-and-ineffective against *this* bug. They are present for the
+  cx0 resume regression, a different problem.
+- `i915.enable_guc=0` / `=2` — the machine **will not boot**; GuC is mandatory on MTL.
+- the `xe` driver — **worse** on this exact laptop model: silent hard lockups and
+  failed resumes instead of a recoverable stall.
+- BIOS updates alone, and CSME 18.0.15.x — both insufficient.
+- `i915.enable_rc6=0` works, but the parameter was removed from the kernel in
+  2018 and Lenovo BIOS has no Render Standby toggle, so it needs a patched kernel.
+
+Available mitigations that cost nothing: **disable hardware video acceleration in
+browsers** (the most consistently reported trigger is browser video playback), and
+stay on the `balanced` platform profile rather than `performance`.
+
+Full investigation, including the elimination table from a reporter with this same
+laptop: [`docs/research/i915-guc-tlb-2026-08-29.md`](research/i915-guc-tlb-2026-08-29.md).
+
+Until the firmware lands: **measure, do not patch.**
 
 ## Module blacklists (lean boot)
 

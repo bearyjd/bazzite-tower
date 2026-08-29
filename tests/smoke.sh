@@ -114,6 +114,17 @@ echo "== i915 resume-regression watcher =="
 check_enabled "i915-resume-fix-check.timer"
 check "i915-resume-fix-check helper is executable" test -x /usr/libexec/i915-resume-fix-check
 
+echo "== Stall detector =="
+# Records freezes that NO kernel watchdog reports: the soft-lockup watchdog only
+# fires on a CPU spinning in kernel mode, hung_task only after 120s. An 8s stall
+# from a blocked kernel worker leaves no other trace. Built for the i915 GuC TLB
+# invalidation timeout (drm/i915 #14469, unfixed upstream). `ujust freeze-report`
+# summarises what it has collected.
+check "stall-detect helper present"    test -f /usr/libexec/bazzite-tower-stall-detect
+check "stall-detect helper executable" test -x /usr/libexec/bazzite-tower-stall-detect
+check_enabled "bazzite-tower-stall-detect.service"
+check "freeze-report ujust recipe"     grep -q '^freeze-report' /usr/share/ublue-os/just/60-custom.just
+
 echo "== KDE Plasma version consistency =="
 # docs/research/kwin-screenlocker-abi-2026-07-26/ and -2026-08-08/: kwin dlopens a
 # kscreenlocker symbol at runtime with no RPM-level dependency enforcing a matching

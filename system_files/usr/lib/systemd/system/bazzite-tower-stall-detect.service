@@ -1,0 +1,26 @@
+[Unit]
+Description=Desktop stall detector (records freezes no kernel watchdog reports)
+Documentation=https://gitlab.freedesktop.org/drm/i915/kernel/-/issues/14469
+After=multi-user.target
+
+[Service]
+Type=simple
+ExecStart=/usr/libexec/bazzite-tower-stall-detect
+Environment=STALL_THRESH=1.5
+Restart=always
+RestartSec=10
+
+# Reads /proc and the kernel journal only. No writes anywhere.
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+NoNewPrivileges=yes
+RestrictAddressFamilies=AF_UNIX
+MemoryMax=64M
+# NB: Nice / IOSchedulingClass are deliberately left at defaults. A *user*
+# service dies with 211/IOPRIO if it asks for realtime IO priority; this one is
+# a system service so it could, but a detector that preempts the workload would
+# measure something other than what the user experiences.
+
+[Install]
+WantedBy=multi-user.target

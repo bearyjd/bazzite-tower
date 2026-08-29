@@ -91,3 +91,41 @@ enable-ssh:
     echo "sshd.service: $(systemctl is-enabled sshd.service) / $(systemctl is-active sshd.service)"
     echo "Note: this is a LOCAL /etc change. It will not survive the next rebase —"
     echo "re-run this recipe after one."
+
+# Summarise desktop stalls and the kernel events around them.
+#
+# bazzite-tower-stall-detect records freezes that no kernel watchdog reports:
+# the soft-lockup watchdog only fires on a spinning CPU, hung_task only after
+# 120s. An 8s stall from a blocked kernel worker leaves no other trace.
+#
+# Known local cause: i915 GuC TLB invalidation timeout — unfixed upstream
+# (drm/i915 issue 14469), Intel attribute it to the GuC dying while waking
+# from RC6. Accumulate events here; the blocked-worker histogram is the
+# evidence that identifies the subsystem.
+#
+# Usage: ujust freeze-report [since]     e.g. ujust freeze-report "3 days ago"
+[group('Diagnostics')]
+freeze-report since="1 week ago":
+    #!/usr/bin/bash
+    set -euo pipefail
+    echo "== Stalls since {{ since }} =="
+    n=$(journalctl -t bazzite-tower-stall-detect --since "{{ since }}" --no-pager 2>/dev/null \
+        | grep -c "STALL duration=" || true)
+    echo "  ${n} stall(s) recorded"
+    if [ "${n}" -gt 0 ]; then
+        echo
+        echo "  -- longest --"
+        journalctl -t bazzite-tower-stall-detect --since "{{ since }}" --no-pager 2>/dev/null \
+          | grep -oE "STALL duration=[0-9.]+s blocked=[^ ]*" | sort -t= -k2 -rn | head -5 | sed 's/^/    /'
+        echo
+        echo "  -- blocked workers (which subsystem is stalling) --"
+        journalctl -t bazzite-tower-stall-detect --since "{{ since }}" --no-pager 2>/dev/null \
+          | grep -oE "blocked=[^ ]*" | sed 's/blocked=//' | tr ',' '\n' \
+          | grep -v '^none$' | sort | uniq -c | sort -rn | head -10 | sed 's/^/    /'
+    fi
+    echo
+    echo "== Correlated kernel events since {{ since }} =="
+    for sig in "GUC: TLB invalidation response timed out" "timeout reading config space" "timeout writing config space" "Device error - SW reset" "soft lockup"; do
+        c=$(journalctl -k --since "{{ since }}" --no-pager 2>/dev/null | grep -c "${sig}" || true)
+        printf "  %-46s %s\n" "${sig}" "${c}"
+    done

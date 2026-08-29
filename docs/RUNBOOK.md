@@ -199,6 +199,54 @@ hotspot** (every observation to date was on a tethered hotspot), and after that 
 wired uplink, which is also the only way to stop Wi-Fi being a single point of
 failure for the entire desktop.
 
+## Freezes with no kernel trace (i915 GuC / stall detector)
+
+Some stalls on this machine leave **no kernel message at all**. The soft-lockup
+watchdog only fires on a CPU spinning in kernel mode; `hung_task` only after
+`hung_task_timeout_secs` (120s by default). A 5-15s freeze caused by a *blocked*
+kernel worker trips neither, at any threshold.
+
+`bazzite-tower-stall-detect.service` fills that gap: it samples `CLOCK_MONOTONIC`
+and, on a gap, records which workers were stuck in D state. That is what
+identifies the subsystem — without it a freeze is just "the machine paused".
+
+```bash
+ujust freeze-report                  # last week
+ujust freeze-report "3 days ago"
+```
+
+The known local cause is the **i915 GuC TLB invalidation timeout**:
+
+```
+i915 0000:00:02.0: [drm] *ERROR* GT0: GUC: TLB invalidation response timed out
+```
+
+with `kworker/*+i915_flip` blocked — the display flip worker waiting on the GPU
+microcontroller. This is [drm/i915 issue 14469](https://gitlab.freedesktop.org/drm/i915/kernel/-/issues/14469),
+**unfixed upstream**. Intel attribute it to the GuC dying while waking the
+hardware from RC6. It affects both the i915 and xe drivers, so it is firmware or
+silicon, not driver code.
+
+**There is no fix available on this machine, and that is not for lack of
+looking:**
+
+- `i915.enable_rc6` — the known-good workaround. Removed from the kernel in 2018;
+  reaching it needs a custom kernel with the parameter patched back in.
+- BIOS Render Standby toggle — reported to stop the hangs entirely, but that is a
+  coreboot/Dasharo option. Lenovo BIOS has none.
+- BIOS update — already on the latest (`fwupdmgr` confirms), so nothing to take.
+- `i915.enable_psr=0`, `i915.enable_dc=0` — **already set here**, and both are
+  reported upstream as tested-and-ineffective against this bug. They are
+  legitimately present for the *other* i915 problem (the MTL cx0 DPLL
+  s2idle-resume regression the kernel pin addresses); they buy nothing here.
+- Disabling VT-d reduced one reporter's freezes from daily to weekly, but
+  `intel_iommu=on iommu=pt` is required for the VFIO passthrough this machine is
+  built around.
+
+So: **measure, do not patch.** Frequency has been roughly 1-2 stutters/day. If
+that degrades sharply, or if a kernel bump changes it, `ujust freeze-report` is
+where you will see it.
+
 ## Module blacklists (lean boot)
 
 `…/modprobe.d/blacklist-unused-gpu.conf` blacklists **amdgpu** / **amdxcp** — there

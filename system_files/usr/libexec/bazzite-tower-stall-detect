@@ -1,0 +1,100 @@
+#!/usr/bin/env python3
+"""bazzite-tower-stall-detect — record desktop stalls with evidence.
+
+Catches the freezes that NO kernel watchdog reports:
+  * the soft-lockup watchdog only fires on a CPU spinning in kernel mode
+  * hung_task only fires after hung_task_timeout_secs (default 120s)
+A 5-15s stall caused by a blocked kernel worker is invisible to both.
+
+Samples CLOCK_MONOTONIC. When wall time jumps, it records WHICH kernel
+workers were stuck in D state — that is the evidence that identifies the
+subsystem. CLOCK_BOOTTIME is used to tell a real stall from suspend/resume.
+
+Known local failure modes this was built to measure:
+  i915 GuC TLB invalidation timeout (kworker/*+i915_flip blocks) — a known
+  unfixed Meteor Lake bug, drm/i915 issue 14469.
+
+Output goes to the JOURNAL, not a file: rotation and retention are already
+solved there (see journald.conf.d/90-tower-journal-cap.conf). Query with
+`ujust freeze-report`.
+"""
+import os
+import subprocess
+import sys
+import time
+
+THRESH = float(os.environ.get("STALL_THRESH", "1.5"))
+INTERVAL = float(os.environ.get("STALL_INTERVAL", "0.2"))
+# Below this, a "stall" is indistinguishable from ordinary scheduling jitter.
+MIN_THRESH = 0.5
+
+
+def log(msg, level="info"):
+    """Emit to the journal. systemd routes stdout/stderr for us."""
+    stream = sys.stderr if level in ("warning", "err") else sys.stdout
+    print(msg, file=stream, flush=True)
+
+
+def sh(cmd, timeout=5):
+    try:
+        r = subprocess.run(cmd, shell=True, capture_output=True,
+                           text=True, timeout=timeout)
+        return r.stdout.strip()
+    except Exception as exc:                                  # noqa: BLE001
+        return f"(collection failed: {exc})"
+
+
+def d_state_tasks():
+    """Kernel workers and processes stuck uninterruptible, with wchan."""
+    return sh("ps -eo state,pid,wchan:28,comm --no-headers 2>/dev/null "
+              "| awk '$1==\"D\"'")
+
+
+def pressure():
+    out = []
+    for res in ("cpu", "io", "memory"):
+        try:
+            with open(f"/proc/pressure/{res}") as fh:
+                out.append(f"{res}={fh.readline().strip()}")
+        except OSError:
+            pass
+    return " | ".join(out)
+
+
+def record(duration, suspended):
+    if suspended:
+        log(f"suspend/resume gap {duration:.2f}s (ignored)")
+        return
+
+    blocked = d_state_tasks()
+    # One greppable summary line. `ujust freeze-report` parses this.
+    workers = ",".join(sorted({ln.split()[-1] for ln in blocked.splitlines()})) or "none"
+    log(f"STALL duration={duration:.2f}s blocked={workers}", level="warning")
+
+    log(f"  d-state: {blocked if blocked else '(none still blocked)'}")
+    log(f"  pressure: {pressure()}")
+    recent = sh("journalctl -k -n 8 --no-pager -o short 2>/dev/null")
+    for line in recent.splitlines():
+        log(f"  kmsg: {line}")
+
+
+def main():
+    thresh = max(THRESH, MIN_THRESH)
+    log(f"started: threshold={thresh}s interval={INTERVAL}s")
+    prev_mono, prev_boot = time.monotonic(), time.clock_gettime(time.CLOCK_BOOTTIME)
+    while True:
+        time.sleep(INTERVAL)
+        mono = time.monotonic()
+        boot = time.clock_gettime(time.CLOCK_BOOTTIME)
+        d_mono = mono - prev_mono
+        if d_mono > thresh:
+            # BOOTTIME advances across suspend, MONOTONIC does not.
+            record(d_mono, suspended=(boot - prev_boot) - d_mono > 1.0)
+        prev_mono, prev_boot = mono, boot
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except KeyboardInterrupt:
+        pass

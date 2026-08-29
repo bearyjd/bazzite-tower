@@ -75,3 +75,19 @@ install-looking-glass-client:
 [group('Diagnostics')]
 wifi-debug:
     @/usr/libexec/bazzite-tower-wifi-debug
+
+# Re-enable SSH on this host after a rebase or fresh install.
+#
+# This image deliberately ships sshd OFF (see build_files/build.d/97-vm-gate-ssh.sh
+# — sshd.socket only under VM_GATE_SSH=1, never in :latest), so that the published
+# image is safe to hand to anyone. A host that wants SSH opts in locally, which
+# means /etc carries the enable and a rebase drops it. This recipe re-applies it
+# in one step rather than relying on remembering.
+[group('Host')]
+enable-ssh:
+    #!/usr/bin/bash
+    set -euo pipefail
+    sudo systemctl enable --now sshd.service
+    echo "sshd.service: $(systemctl is-enabled sshd.service) / $(systemctl is-active sshd.service)"
+    echo "Note: this is a LOCAL /etc change. It will not survive the next rebase —"
+    echo "re-run this recipe after one."

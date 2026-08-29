@@ -166,6 +166,13 @@ echo "== GPU module blacklist =="
 check "unused-GPU blacklist present" test -f /usr/lib/modprobe.d/blacklist-unused-gpu.conf
 check "amdgpu blacklisted" grep -qx 'blacklist amdgpu' /usr/lib/modprobe.d/blacklist-unused-gpu.conf
 
+echo "== Host services (were /etc-only, now baked) =="
+# Both ship in the Bazzite base; only their enablement was drifting in /etc, so a
+# rebase came up without them. sshd/plugin_loader/libvirtd are deliberately NOT
+# here — see build_files/build.d/62-host-services.sh for why.
+check_enabled "tailscaled.service"
+check_enabled "waydroid-container.service"
+
 echo "== Wi-Fi (BE200 firmware assert mitigation) =="
 # The BE200 firmware asserts NMI_INTERRUPT_UNKNOWN and the driver hard-resets the
 # chip; wifi is the only uplink here so that freezes the desktop for 5-15s.

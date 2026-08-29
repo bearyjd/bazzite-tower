@@ -77,6 +77,18 @@ in one pass. Run with `sudo` for the root-only checks:
 CI mirrors these: `tests/smoke.sh` (offline, the gate) and `tests/boot-check.sh`
 (runtime). See [docs/CODEMAPS/ci-cd.md](./CODEMAPS/ci-cd.md).
 
+## Intel CSME / ME firmware
+
+Carries the PCODE fix for the i915 GuC stall (see the Wi-Fi/GuC sections above).
+
+```bash
+cat /sys/class/mei/mei0/fw_ver     # want >= 18.1.18.2644
+fwupdmgr get-updates               # ME appears as "Intel Management Engine"
+```
+
+Known-bad: `18.0.5.2141` (factory), `18.0.15.2515` (insufficient).
+Known-good: `18.1.18.2644` and above.
+
 ## Common issues
 
 | Symptom | Cause | Fix |
@@ -227,25 +239,41 @@ microcontroller. This is [drm/i915 issue 14469](https://gitlab.freedesktop.org/d
 hardware from RC6. It affects both the i915 and xe drivers, so it is firmware or
 silicon, not driver code.
 
-**There is no fix available on this machine, and that is not for lack of
-looking:**
+**The fix is a CSME firmware update — and this machine does not have it.**
+Intel attribute the bug to the GuC dying while waking from RC6; the fix is in
+PCODE, which ships inside Intel CSME firmware, which ships inside OEM BIOS.
 
-- `i915.enable_rc6` — the known-good workaround. Removed from the kernel in 2018;
-  reaching it needs a custom kernel with the parameter patched back in.
-- BIOS Render Standby toggle — reported to stop the hangs entirely, but that is a
-  coreboot/Dasharo option. Lenovo BIOS has none.
-- BIOS update — already on the latest (`fwupdmgr` confirms), so nothing to take.
-- `i915.enable_psr=0`, `i915.enable_dc=0` — **already set here**, and both are
-  reported upstream as tested-and-ineffective against this bug. They are
-  legitimately present for the *other* i915 problem (the MTL cx0 DPLL
-  s2idle-resume regression the kernel pin addresses); they buy nothing here.
-- Disabling VT-d reduced one reporter's freezes from daily to weekly, but
-  `intel_iommu=on iommu=pt` is required for the VFIO passthrough this machine is
-  built around.
+```bash
+cat /sys/class/mei/mei0/fw_ver     # want >= 18.1.18.2644
+```
 
-So: **measure, do not patch.** Frequency has been roughly 1-2 stutters/day. If
-that degrades sharply, or if a kernel bump changes it, `ujust freeze-report` is
-where you will see it.
+As of 2026-08-29 this box reports **18.0.5.2141** — the factory original. BIOS
+N48ET34W (1.21, 2026-05-11) did not bundle the update, and `fwupd` offers no ME
+update even with `lvfs-testing` enabled. Lenovo publishes it under the
+**Chipset** category, not BIOS. Re-check periodically; a reporter on this same
+laptop model received 18.1.18.2724 through fwupd/LVFS in April 2026, so the path
+exists, it is just not offered for machine type 21KV yet.
+
+Meanwhile, verified-ineffective (do not re-try these):
+
+- `i915.enable_psr=0`, `i915.enable_dc=0` — **already set here**, and documented
+  upstream as tested-and-ineffective against *this* bug. They are present for the
+  cx0 resume regression, a different problem.
+- `i915.enable_guc=0` / `=2` — the machine **will not boot**; GuC is mandatory on MTL.
+- the `xe` driver — **worse** on this exact laptop model: silent hard lockups and
+  failed resumes instead of a recoverable stall.
+- BIOS updates alone, and CSME 18.0.15.x — both insufficient.
+- `i915.enable_rc6=0` works, but the parameter was removed from the kernel in
+  2018 and Lenovo BIOS has no Render Standby toggle, so it needs a patched kernel.
+
+Available mitigations that cost nothing: **disable hardware video acceleration in
+browsers** (the most consistently reported trigger is browser video playback), and
+stay on the `balanced` platform profile rather than `performance`.
+
+Full investigation, including the elimination table from a reporter with this same
+laptop: [`docs/research/i915-guc-tlb-2026-08-29.md`](research/i915-guc-tlb-2026-08-29.md).
+
+Until the firmware lands: **measure, do not patch.**
 
 ## Module blacklists (lean boot)
 

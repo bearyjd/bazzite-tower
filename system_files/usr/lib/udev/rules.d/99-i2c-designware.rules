@@ -1,0 +1,8 @@
+# Keep the Designware I2C controller and its touch device powered.
+#
+# Runtime PM on this controller makes the attached i2c-HID device miss wakeups.
+# Pinning power/control=on costs a little idle power in exchange for the device
+# actually responding. Device paths are specific to this ThinkPad.
+ACTION=="add", SUBSYSTEM=="pci", KERNEL=="0000:00:15.0", ATTR{power/control}="on"
+ACTION=="add", SUBSYSTEM=="platform", KERNEL=="i2c_designware.0", ATTR{power/control}="on"
+ACTION=="add", SUBSYSTEM=="i2c", KERNEL=="i2c-SNSL002D:00", ATTR{power/control}="on"

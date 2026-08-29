@@ -64,8 +64,9 @@ instead, `portmaster.service` enabled — see the systemd units table above and
 
 - `/etc/dnf/dnf.conf` (appended `exclude=` line, guarded on `[main]` being present) → written by `build.d/05-pin-kde-packages.sh` (build-time only, not from `system_files/`); excludes the KDE Plasma/KWin family so this build's own dnf transactions can't skew `kwin` ahead of `kscreenlocker`. Not `/etc/dnf/dnf.conf.d/` — this base runs dnf5, which has no such directory (real dnf5 drop-in dir is `/etc/dnf/libdnf5.conf.d/`); see `dependencies.md` and the "Correction" note in `docs/research/kwin-screenlocker-abi-2026-08-08/`
 - `/usr/lib/modprobe.d/blacklist-unused-gpu.conf` → blacklist `amdgpu`, `amdxcp` (no AMD silicon; `xe` left loaded)
+- `/usr/lib/modprobe.d/iwlwifi-be200-stability.conf` → `iwlmld power_scheme=1` (CAM) + `iwlwifi disable_11be=1 power_save=0 uapsd_disable=1` — BE200 firmware asserts `NMI_INTERRUPT_UNKNOWN` and the driver hard-resets the chip, freezing the desktop for 5-15s on this wifi-only box. `iwlmld` has its own power scheme that `iwlwifi.power_save` does not cover; see RUNBOOK "Wi-Fi: BE200 firmware asserts"
 - `/usr/lib/sysctl.d/99-tower-swappiness.conf` → `vm.swappiness=10` (zram was filling with RAM free)
-- `/usr/lib/systemd/journald.conf.d/90-tower-journal-cap.conf` → `SystemMaxUse=500M` (default ~10% of fs)
+- `/usr/lib/systemd/journald.conf.d/90-tower-journal-cap.conf` → `SystemMaxUse=4G` + `MaxRetentionSec=1month` (default cap ~10% of fs)
 - `/usr/share/wireplumber/wireplumber.conf.d/90-tower-sof-backoff.conf` → shorten SOF node idle/error suspend window (defense-in-depth; dormant while SOF is bypassed)
 - `/etc/smartmontools/smartd.conf` → monitor `/dev/nvme0`+`/dev/nvme1` (health, media errors, weekly long test, temp); logs to journal
 - `/etc/xdg/baloofilerc` → seed indexer `exclude filters` with build/cache trees (.gradle, target, language caches)

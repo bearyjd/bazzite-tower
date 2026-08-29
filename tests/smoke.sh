@@ -154,13 +154,27 @@ check "swappiness sysctl present" test -f /usr/lib/sysctl.d/99-tower-swappiness.
 check "swappiness set to 10"      grep -qE '^vm\.swappiness[[:space:]]*=[[:space:]]*10$' /usr/lib/sysctl.d/99-tower-swappiness.conf
 check "baloo exclude config present" test -f /etc/xdg/baloofilerc
 check "journald size cap present" test -f /usr/lib/systemd/journald.conf.d/90-tower-journal-cap.conf
-check "journald cap is 500M" grep -qE '^SystemMaxUse=500M$' /usr/lib/systemd/journald.conf.d/90-tower-journal-cap.conf
+# Raised 500M -> 4G on 2026-08-28: the old cap vacuumed away all prior-boot kernel
+# messages within hours, hiding a recurring BE200 firmware assert. Time-based
+# retention is now the primary bound; size is the backstop.
+check "journald cap is 4G" grep -qE '^SystemMaxUse=4G$' /usr/lib/systemd/journald.conf.d/90-tower-journal-cap.conf
+check "journald retains 1 month" grep -qE '^MaxRetentionSec=1month$' /usr/lib/systemd/journald.conf.d/90-tower-journal-cap.conf
 
 echo "== GPU module blacklist =="
 # No AMD GPU exists on this hardware; amdgpu/amdxcp are blacklisted as a lean-boot
 # optimization. xe is intentionally left loaded.
 check "unused-GPU blacklist present" test -f /usr/lib/modprobe.d/blacklist-unused-gpu.conf
 check "amdgpu blacklisted" grep -qx 'blacklist amdgpu' /usr/lib/modprobe.d/blacklist-unused-gpu.conf
+
+echo "== Wi-Fi (BE200 firmware assert mitigation) =="
+# The BE200 firmware asserts NMI_INTERRUPT_UNKNOWN and the driver hard-resets the
+# chip; wifi is the only uplink here so that freezes the desktop for 5-15s.
+# power_scheme=1 (CAM) is the key one: iwlmld has its OWN power scheme that
+# iwlwifi.power_save does not cover, and it defaults to 2 (firmware sleeps).
+check "BE200 stability drop-in present" test -f /usr/lib/modprobe.d/iwlwifi-be200-stability.conf
+check "iwlmld power_scheme=1 (CAM)" grep -qE '^options iwlmld power_scheme=1$' /usr/lib/modprobe.d/iwlwifi-be200-stability.conf
+check "iwlwifi power_save off"      grep -qE '^options iwlwifi power_save=0$' /usr/lib/modprobe.d/iwlwifi-be200-stability.conf
+check "iwlwifi 11be disabled"       grep -qE '^options iwlwifi disable_11be=1$' /usr/lib/modprobe.d/iwlwifi-be200-stability.conf
 
 echo "== Docker CE =="
 check "docker present"     command -v docker

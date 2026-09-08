@@ -44,10 +44,15 @@ sudo bootc switch ghcr.io/bearyjd/bazzite-tower:latest.YYYYMMDD
 
 Tag scheme (`latest`, `latest.YYYYMMDD`, `YYYYMMDD`, `<short-sha>`):
 [README "Tags"](../README.md#tags). A second, opt-in `:latest-kernel` variant
-also exists, tracking upstream `bazzite-nvidia:stable`'s current kernel — do
-**not** `bootc switch` to it on this hardware without first checking
-`docs/research/i915-bug-report/` for whether the s2idle-resume regression is
-actually fixed yet.
+also exists, tracking upstream `bazzite-nvidia-open:stable`'s current kernel.
+The Meteor Lake cx0 DPLL s2idle-resume regression that once made this variant
+risky is now fixed upstream (mainline 7.2, commit `062499cc4813b5a3`) and
+`:latest` itself moved onto a kernel carrying the fix on 2026-08-28 — see
+`Containerfile`'s header comment and
+`docs/research/i915-bug-report/UPSTREAM-FIX-STATUS-2026-08-28.md` for the full
+chain of reasoning. `:latest-kernel` is still worth checking against that doc
+before switching, since it floats independently and could in principle regress
+again on a future kernel bump.
 
 ## Health checks
 
@@ -73,6 +78,26 @@ actually fixed yet.
 runs all of the above (SOF/ABI, MCE/RAS, i915 resume, thermals, SMART, rpm-ostree)
 in one pass. Run with `sudo` for the root-only checks:
 `sudo ./scripts/tower-diagnostic.sh`.
+
+**Display glitch that leaves no log trace:**
+[`scripts/i915-drm-debug-capture.sh`](../scripts/i915-drm-debug-capture.sh) raises
+`drm.debug` at runtime (no reboot) and extracts the journal around the moment a
+glitch was *seen*. Some display symptoms — the 2026-09-07 flicker being the worked
+example — produce zero i915/nvidia errors at default verbosity, so this is the only
+way to see the pipeline at the moment it happens:
+
+```bash
+sudo ./scripts/i915-drm-debug-capture.sh on          # default mask 0x104 (KMS+DP)
+# ...use the machine; note the wall-clock time when you SEE the glitch...
+sudo ./scripts/i915-drm-debug-capture.sh grab 23:26  # writes a +/-60s capture
+sudo ./scripts/i915-drm-debug-capture.sh off         # always turn it back off
+```
+
+Costs ~17 MB of journal per day at the default mask (measured), against the 4G cap
+in `90-tower-journal-cap.conf` — safe to leave on for days while waiting to catch
+one. Do **not** add the VBL bit (`0x20`): the panel runs at 165 Hz and would emit
+~165 lines/second. See
+[docs/research/nvidia-modeset-head-flicker-2026-09-07.md](./research/nvidia-modeset-head-flicker-2026-09-07.md).
 
 CI mirrors these: `tests/smoke.sh` (offline, the gate) and `tests/boot-check.sh`
 (runtime). See [docs/CODEMAPS/ci-cd.md](./CODEMAPS/ci-cd.md).

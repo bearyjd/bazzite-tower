@@ -6,7 +6,18 @@
 #                           whatever kernel/driver upstream currently ships —
 #                           see the history below for what that's meant in
 #                           practice)
-ARG BASE_IMAGE=ghcr.io/ublue-os/bazzite-nvidia-open:44.20260825
+#
+# Pinned by digest (not just tag) as of 2026-08-31: a tag is a mutable label at
+# the registry, a digest is a hash of the actual content, so this is a stronger
+# reproducibility guarantee than the dated tag alone — see "Strategic option:
+# pin the base by digest" in docs/downstream-change-tracking.md. This digest is
+# `bazzite-nvidia-open:44.20260825` (kernel 7.2.0-ogc6.1, driver 610.57.04),
+# confirmed via `skopeo inspect docker://ghcr.io/ublue-os/bazzite-nvidia-open:44.20260825`.
+# Bumping the base now means re-running that command against a newer tag and
+# replacing the digest below in its own PR — no Renovate automation wired up
+# yet (docs/downstream-change-tracking.md's Section 4 also proposed that; not
+# done here, just the pin).
+ARG BASE_IMAGE=ghcr.io/ublue-os/bazzite-nvidia-open@sha256:010616ed07152c36c6fbe2a4116d20c038ca5eb2a83a3fa3997d545ed75de51d
 ARG FIREWALL_DAEMON=opensnitch
 ARG VM_GATE_SSH=0
 

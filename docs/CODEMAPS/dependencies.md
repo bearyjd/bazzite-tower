@@ -68,8 +68,11 @@ share the same major.minor, and the `exclude=` line is actually present in
 cosign — `cosign.pub` tracked; private key via mandatory `SIGNING_SECRET` for
 default-branch image releases. Images are signed by digest, carry a signed SPDX
 SBOM attestation and GitHub provenance. The image merges a repository-scoped
-`sigstoreSigned` policy plus a sigstore-attachment registry config; bootstrap a
-host's first verified switch with `scripts/install-signature-policy.sh`.
+`sigstoreSigned` policy plus a sigstore-attachment registry config. The global
+policy default is `reject`; only unrelated Docker/Podman pulls retain an
+empty-scope Docker compatibility fallback. Bootstrap a host's first verified
+switch with `scripts/install-signature-policy.sh` and
+`bootc switch --enforce-container-sigpolicy`.
 `matchRepository` accepts any digest signed by this repository key, so it does
 not prevent a signed rollback: rollback-sensitive installs should switch to a
 reviewed immutable `@sha256:…` reference rather than a mutable tag.

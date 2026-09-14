@@ -23,7 +23,7 @@ carry, because line ranges drift and filenames do not.
 |---|---|
 | `05-pin-kde-packages.sh` | `/etc/dnf/dnf.conf` `exclude=` for the KDE Plasma/KWin package family, so this build's own dnf transactions can't skew `kwin` ahead of `kscreenlocker` (see `docs/research/kwin-screenlocker-abi-2026-08-08/`). Must run before any other script's `dnf install` |
 | `10-virt-packages.sh` | dnf: qemu-kvm, libvirt*, virt-install/manager/viewer, edk2-ovmf, guestfs-tools, spice-gtk3 |
-| `15-signature-policy.sh` | merges a repository-scoped cosign `sigstoreSigned` rule into the existing containers policy and installs the sigstore-attachment registry configuration without erasing other policy rules |
+| `15-signature-policy.sh` | migrates the global policy default to `reject`, adds a Docker-only empty-scope compatibility fallback if absent, merges the repository-scoped cosign `sigstoreSigned` rule, and installs sigstore attachments without erasing unrelated explicit policy rules |
 | `20-dev-tooling.sh` | dnf: android-tools, ccache, flatpak-builder, podman-machine/tui, rclone, restic, zsh |
 | `30-docker-ce.sh` | write inert `docker-ce.repo` (every section enabled=0); remove `podman-docker`; install via `--enablerepo=docker-ce-stable`, including explicit `iptables` for the Docker/libvirt forwarding helper |
 | `40-sysusers-fixup.sh` | **generic** orphan strip (keep only shadow/gshadow lines with a matching passwd/group) -> `systemd-sysusers` -> guarded `groupadd -r qemu` + `useradd qemu` + **`groupadd -r docker`**. Fixes virtqemud + docker.socket "Unknown group" boot failures. The most fragile piece; kept isolated on purpose |

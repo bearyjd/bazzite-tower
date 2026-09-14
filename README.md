@@ -69,12 +69,15 @@ bridge's live IPv4 network and the current default-route interface, then allows
 only `NEW,ESTABLISHED,RELATED` guest-originated traffic toward that uplink plus
 `RELATED,ESTABLISHED` reply traffic. It neither broadens source-RFC1918 or bridge-wildcard access nor changes Docker's FORWARD policy,
 Docker-managed chains, or nftables tables. If Docker did not create
-`DOCKER-USER`, startup fails rather than creating or bypassing the chain. Every
+`DOCKER-USER`, the post-start helper reports the failure but does not prevent
+Docker from starting; later libvirt and NetworkManager hooks retry reconciliation.
+Every
 generated pair has a deterministic helper-owned comment. When a NAT network,
-bridge address, or default route changes, reconciliation removes only stale
-rules with that comment prefix; it never flushes or changes unowned
-`DOCKER-USER` rules. Libvirt network lifecycle and NetworkManager route events
-request reconciliation asynchronously, without blocking either event.
+bridge address, default route, VPN state, or NetworkManager connection
+configuration changes, reconciliation removes only stale rules with that
+comment prefix; it never flushes or changes unowned `DOCKER-USER` rules.
+Libvirt network lifecycle and NetworkManager route/VPN/reapply events request
+reconciliation asynchronously, without blocking either event.
 
 Run the privileged host check after opting in with
 `just test-docker-libvirt-forwarding`; it restarts Docker, verifies those exact
@@ -254,15 +257,18 @@ policy on the host **before** the first switch:
 
 ```bash
 sudo ./scripts/install-signature-policy.sh
-sudo bootc switch ghcr.io/bearyjd/bazzite-tower:latest
+sudo bootc switch --enforce-container-sigpolicy ghcr.io/bearyjd/bazzite-tower:latest
 sudo systemctl reboot
 ```
 
 The image is signed with cosign — the public key lives at `cosign.pub`. The
-installed policy verifies this repository and preserves other host policy rules.
-It cannot verify the first image retroactively when it lives only inside that
-image, which is why the host bootstrap step is required. Subsequent upgrades
-retain the policy in `/etc`.
+installed policy rejects by default, verifies this repository's more-specific
+`sigstoreSigned` rule, and preserves unrelated explicit host rules. It retains
+only a Docker-transport empty-scope compatibility fallback for unrelated
+Docker/Podman pulls; that fallback never applies to this repository's specific
+rule. It cannot verify the first image retroactively when it lives only inside
+that image, which is why the host bootstrap step is required. Subsequent
+upgrades retain the policy in `/etc`.
 
 ## Tags
 
@@ -364,7 +370,7 @@ This template provides a way to upload the disk images generated from the workfl
 
 The [build-disk.yml](./.github/workflows/build-disk.yml) GitHub Actions workflow creates a disk image from your OCI image using the [bootc-image-builder](https://osbuild.org/docs/bootc/). To use this workflow:
 
-1. **Two artifacts, two tools.** `build-disk.yml` builds a **qcow2** (rootfs=btrfs) for VM testing. **Bootable ISOs** are built separately by [`build-iso.yml`](./.github/workflows/build-iso.yml) using [titanoboa](https://github.com/ublue-os/titanoboa) (ublue's live-ISO toolchain), **not** `bootc-image-builder`'s `anaconda-iso` — that path is upstream-broken ([BIB#1188](https://github.com/osbuild/bootc-image-builder/issues/1188), [bazzite#3418](https://github.com/ublue-os/bazzite/issues/3418)). The ISO is built from the [`installer/`](./installer) payload image (a live KDE session + Anaconda that installs bazzite-tower via `ostreecontainer`); it boots under **Secure Boot** (the payload swaps in a Fedora-signed kernel) and can be built locally with `just build-iso-live`. The `iso-kde.toml`/`iso-gnome.toml` files are leftover BIB configs and are unused. For an existing bootc system, `bootc switch` (see [Installing](#installing)) is still the simplest path.
+1. **Two artifacts, two tools.** `build-disk.yml` builds a **qcow2** (rootfs=btrfs) for VM testing. The image's `/usr/lib/bootc/install/50-signature-policy.toml` asks unattended bootc disk installations to enforce its container policy; `disk_config/disk.toml` intentionally does not duplicate that image-owned setting. **Bootable ISOs** are built separately by [`build-iso.yml`](./.github/workflows/build-iso.yml) using [titanoboa](https://github.com/ublue-os/titanoboa) (ublue's live-ISO toolchain), **not** `bootc-image-builder`'s `anaconda-iso` — that path is upstream-broken ([BIB#1188](https://github.com/osbuild/bootc-image-builder/issues/1188), [bazzite#3418](https://github.com/ublue-os/bazzite/issues/3418)). The ISO is built from the [`installer/`](./installer) payload image (a live KDE session + Anaconda that installs bazzite-tower via `ostreecontainer`); it boots under **Secure Boot** (the payload swaps in a Fedora-signed kernel) and can be built locally with `just build-iso-live`. That ISO has a separate installer path: Secure Boot validates its boot chain, but does not by itself prove the OCI image's sigstore policy was enforced. The `iso-kde.toml`/`iso-gnome.toml` files are leftover BIB configs and are unused. For an existing bootc system, `bootc switch` (see [Installing](#installing)) is still the simplest path.
 2. If you changed your image name from the default in `build.yml`, then in `build-disk.yml` edit the `IMAGE_REGISTRY`, `IMAGE_NAME`, and `DEFAULT_TAG` environment variables to match. If you didn't, skip this step.
 3. If you want to upload your disk images to S3, add the S3 configuration to the repository's Action secrets (Settings → Secrets and Variables → Actions):
    - `S3_PROVIDER` — must match one of the values from the [supported list](https://rclone.org/s3/)

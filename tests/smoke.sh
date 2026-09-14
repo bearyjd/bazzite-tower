@@ -232,7 +232,7 @@ check "Docker/libvirt forwarding helper is executable" test -x /usr/local/libexe
 check "Docker/libvirt forwarding helper is root-owned" \
     bash -c '[[ "$(stat -c %u:%g /usr/local/libexec/docker-libvirt-forwarding)" == "0:0" ]]'
 check "Docker/libvirt forwarding runs after Docker starts" \
-    grep -qx 'ExecStartPost=/usr/local/libexec/docker-libvirt-forwarding' \
+    grep -qx 'ExecStartPost=-/usr/local/libexec/docker-libvirt-forwarding' \
         /etc/systemd/system/docker.service.d/libvirt-forwarding.conf
 # shellcheck disable=SC2016 # This is the literal helper source text.
 check "Docker/libvirt forwarding checks rules before insertion" \
@@ -254,6 +254,14 @@ check "bazzite-tower cosign public key installed" \
 check "bazzite-tower sigstore policy targets only this repository" \
     jq -e '.transports.docker["ghcr.io/bearyjd/bazzite-tower"] | type == "array" and length == 1 and .[0].type == "sigstoreSigned" and .[0].keyPath == "/etc/pki/containers/bazzite-tower-cosign.pub" and .[0].signedIdentity == {"type":"matchRepository"}' \
         /etc/containers/policy.json
+check "sigstore policy rejects by default" \
+    jq -e '.default == [{"type":"reject"}]' /etc/containers/policy.json
+check "Docker policy retains compatibility fallback" \
+    jq -e '.transports.docker[""] == [{"type":"insecureAcceptAnything"}]' \
+        /etc/containers/policy.json
+check "bootc disk install enforces container signature policy" \
+    grep -qx 'enforce-container-sigpolicy = true' \
+        /usr/lib/bootc/install/50-signature-policy.toml
 check "sigstore registry attachments enabled" \
     grep -qx '    use-sigstore-attachments: true' \
         /etc/containers/registries.d/bazzite-tower.yaml

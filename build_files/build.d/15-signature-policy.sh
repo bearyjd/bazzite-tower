@@ -23,9 +23,14 @@ requested = json.loads(source.read_text(encoding="utf-8"))
 if destination.exists():
     current = json.loads(destination.read_text(encoding="utf-8"))
 else:
-    current = {"default": [{"type": "insecureAcceptAnything"}]}
+    current = {}
+# bootc's --enforce-container-sigpolicy rejects an insecure global default.
+# Keep unrelated explicit transport rules, while limiting ordinary Docker/Podman
+# compatibility to docker's empty-scope fallback.
+current["default"] = requested["default"]
 transports = current.setdefault("transports", {})
 docker = transports.setdefault("docker", {})
+docker.setdefault("", requested["transports"]["docker"][""])
 docker["ghcr.io/bearyjd/bazzite-tower"] = requested["transports"]["docker"]["ghcr.io/bearyjd/bazzite-tower"]
 destination.parent.mkdir(parents=True, exist_ok=True)
 temporary = destination.with_suffix(".json.tmp")

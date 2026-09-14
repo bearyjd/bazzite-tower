@@ -10,14 +10,17 @@ Image: `ghcr.io/bearyjd/bazzite-tower:latest` · signed with `cosign.pub`.
 
 ```bash
 sudo ./scripts/install-signature-policy.sh
-sudo bootc switch ghcr.io/bearyjd/bazzite-tower:latest
+sudo bootc switch --enforce-container-sigpolicy ghcr.io/bearyjd/bazzite-tower:latest
 sudo systemctl reboot
 ```
 
 From any bootc host (Bazzite, Bluefin, Aurora, Silverblue, Fedora Atomic), run
-the bootstrap helper from a trusted checkout before the first switch. It merges
-only this repository's sigstore rule into the host policy; an image cannot
-securely enforce a policy that is first introduced by that same image. See
+the bootstrap helper from a trusted checkout before the first switch. It makes
+the global default reject, installs this repository's more-specific sigstore
+rule, and preserves unrelated explicit host rules. An empty Docker-transport
+compatibility fallback still permits unrelated Docker/Podman pulls; it cannot
+override this repository's specific rule. An image cannot securely enforce a
+policy that is first introduced by that same image. See
 [README "Installing"](../README.md#installing).
 
 ## Update
@@ -42,7 +45,7 @@ Or pick the previous entry in the GRUB boot menu at power-on. To **freeze** on a
 known-good build instead of tracking `:latest`, switch to a date-stamped tag:
 
 ```bash
-sudo bootc switch ghcr.io/bearyjd/bazzite-tower:latest.YYYYMMDD
+sudo bootc switch --enforce-container-sigpolicy ghcr.io/bearyjd/bazzite-tower:latest.YYYYMMDD
 ```
 
 Tag scheme (`latest`, `latest.YYYYMMDD`, `YYYYMMDD`, `<short-sha>`):
@@ -74,7 +77,7 @@ again on a future kernel bump.
 | Virt stack up | `systemctl is-active virtqemud.socket` · `virsh -c qemu:///system list --all` |
 | Read-only image/host summary | `ujust tower-health` — optional-service states, SMART/RAS/timers, firmware and security-tool availability |
 | Cockpit web management (opt-in) | `ujust enable-cockpit`; it binds only to loopback. Review Tailnet ACLs, then separately run `tailscale serve --https=443 http://127.0.0.1:9090`; do not expose :9090 directly without explicit firewall policy. |
-| Docker/libvirt NAT forwarding (opt-in Docker) | `just test-docker-libvirt-forwarding` (from a repository checkout) — restarts Docker, checks its `DOCKER-USER` NAT-bridge/uplink pair rules, then probes Docker bridge networking. Rules are only for active libvirt XML `forward mode='nat'` bridges; no broad source-RFC1918 or bridge-wildcard policy is added. |
+| Docker/libvirt NAT forwarding (opt-in Docker) | `just test-docker-libvirt-forwarding` (from a repository checkout) — restarts Docker, checks its `DOCKER-USER` NAT-bridge/uplink pair rules, then probes Docker bridge networking. Rules are only for active libvirt XML `forward mode='nat'` bridges; no broad source-RFC1918 or bridge-wildcard policy is added. A post-start reconciliation failure is non-fatal to Docker and later libvirt/NetworkManager events retry it. |
 | Looking Glass client | kvmfr host module is baked (`ls /dev/kvmfr0`); install the version-coupled client on demand with `ujust install-looking-glass-client`, then `looking-glass-client` (match its B-version to the Windows host app) |
 | Default NAT network | `ujust vm-net-status` |
 | Wi-Fi diagnostics (offline) | `ujust wifi-debug` |
@@ -127,7 +130,7 @@ Known-good: `18.1.18.2644` and above.
 | `virtqemud` won't start | upstream change dropped the `qemu` system user | rebuilt/guarded in `build.sh`; the smoke + boot tests catch regressions |
 | Can't manage VMs as your user | user not yet in `kvm`/`libvirt` | `ujust fix-vm-groups`, then re-login (the first-boot oneshot adds the first user automatically) |
 | Docker command cannot connect | Docker is intentionally disabled by default | Run `ujust enable-docker`, acknowledge that the Docker group is root-equivalent, then re-login |
-| Libvirt NAT guests cannot reach the default uplink after Docker starts | Docker's `DOCKER-USER` chain was not created or the active NAT bridge lacks an IPv4 address | `sudo systemctl restart docker.service`; inspect `journalctl -u docker.service -b`; the post-start helper refuses to create a missing Docker chain. From a repository checkout, run `just test-docker-libvirt-forwarding` on a suitable host. |
+| Libvirt NAT guests cannot reach the default uplink after Docker starts | Docker's `DOCKER-USER` chain was not created or the active NAT bridge lacks an IPv4 address | `sudo systemctl restart docker.service`; inspect `journalctl -u docker.service -b`; the post-start helper refuses to create a missing Docker chain but does not fail Docker itself. Libvirt lifecycle and NetworkManager route/VPN/reapply events retry it. From a repository checkout, run `just test-docker-libvirt-forwarding` on a suitable host. |
 | `docker.socket` fails at boot (`Failed to resolve group 'docker'`) | the `docker` group wasn't baked into the image (stale gshadow orphan made `systemd-sysusers` abort, so the group got created late) | `build.sh` now strips all shadow/gshadow orphans and bakes `groupadd -r docker`; the smoke test asserts the group exists |
 | Display flicker / ~30s sluggish wake | i915 PSR/DC or `deep` suspend on Meteor Lake | baked kargs disable PSR/DC and pin `s2idle`; verify `cat /sys/power/mem_sleep` |
 | No audio; journal floods with `FW reported error: 9` / `failed to create module pipeline` | SOF topology ABI (3.29) newer than the kernel's SOF driver ABI (3.23); no ABI-≤3.23 firmware in repos to downgrade to | `25-audio-sof-bypass.toml` forces the legacy HDA driver (`snd_intel_dspcfg.dsp_driver=1`), sidestepping SOF; verify `journalctl -k \| grep -i dsp_driver` |
@@ -485,7 +488,7 @@ digest. For rollback-sensitive hosts, record a reviewed image digest and switch
 to that immutable reference instead of a tag:
 
 ```bash
-sudo bootc switch ghcr.io/bearyjd/bazzite-tower@sha256:<reviewed-digest>
+sudo bootc switch --enforce-container-sigpolicy ghcr.io/bearyjd/bazzite-tower@sha256:<reviewed-digest>
 ```
 
 ## Disk / ISO artifacts

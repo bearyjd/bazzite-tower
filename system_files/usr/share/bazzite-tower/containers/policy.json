@@ -1,9 +1,12 @@
 {
   "default": [
-    { "type": "insecureAcceptAnything" }
+    { "type": "reject" }
   ],
   "transports": {
     "docker": {
+      "": [
+        { "type": "insecureAcceptAnything" }
+      ],
       "ghcr.io/bearyjd/bazzite-tower": [
         {
           "type": "sigstoreSigned",

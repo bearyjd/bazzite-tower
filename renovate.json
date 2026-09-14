@@ -6,5 +6,23 @@
   ],
   "dockerfile": {
     "enabled": true
-  }
+  },
+  "packageRules": [
+    {
+      "description": "Keep branch-pinned GitHub Actions immutable while following their source branch.",
+      "matchManagers": ["github-actions"],
+      "matchPackageNames": ["osbuild/bootc-image-builder-action"],
+      "pinDigests": true
+    }
+  ],
+  "customManagers": [
+    {
+      "customType": "regex",
+      "managerFilePatterns": ["/^\\.github\\/workflows\\/build-disk\\.yml$/", "/^Justfile$/"],
+      "matchStrings": ["(?<depName>quay.io/centos-bootc/bootc-image-builder)@(?<currentDigest>sha256:[a-f0-9]+)"],
+      "currentValueTemplate": "latest",
+      "datasourceTemplate": "docker",
+      "versioningTemplate": "docker"
+    }
+  ]
 }

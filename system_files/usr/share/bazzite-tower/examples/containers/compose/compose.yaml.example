@@ -1,0 +1,34 @@
+# Copy this directory outside version control and replace the invalid image digest.
+services:
+  app:
+    image: registry.example.invalid/example/app@sha256:REPLACE_WITH_REVIEWED_DIGEST
+    user: "${APP_UID:?set APP_UID}:${APP_GID:?set APP_GID}"
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m
+      - /run:rw,noexec,nosuid,size=16m
+    volumes:
+      - app-data:/var/lib/app:Z
+    networks:
+      - app
+    secrets:
+      - app_secret
+    # Publish only to loopback when the application truly needs a listener:
+    # ports:
+    #   - 127.0.0.1:8080:8080
+    restart: unless-stopped
+
+volumes:
+  app-data: {}
+
+networks:
+  app:
+    internal: true
+
+secrets:
+  app_secret:
+    file: ./secrets/app_secret

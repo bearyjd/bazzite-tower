@@ -7,14 +7,15 @@
 
 | Unit | Type | Ordering / condition | Helper | Purpose |
 |---|---|---|---|---|
-| `bazzite-tower-firstboot.service` | oneshot, RemainAfterExit | `After=systemd-user-sessions`; `ConditionPathExists=!/var/lib/.bazzite-tower-groups-done` | `…/firstboot` | add first uid≥1000 user to kvm,libvirt,docker; retries each boot until a user exists, then drops the marker |
+| `bazzite-tower-firstboot.service` | oneshot, RemainAfterExit | `After=systemd-user-sessions`; `ConditionPathExists=!/var/lib/.bazzite-tower-groups-done` | `…/firstboot` | add first uid≥1000 user to kvm,libvirt only; retries each boot until a user exists, then drops the marker |
 | `bazzite-tower-wifi-backend-guard.service` | oneshot, RemainAfterExit | `After=local-fs`; `Before=NetworkManager` | `…/wifi-backend-guard` | force wpa_supplicant if `wifi.backend=iwd` is selected but iwd isn't enabled |
 | `bazzite-tower-power-tuning.service` | oneshot, RemainAfterExit | `After=basic.target` | `…/power-tuning` | set `platform_profile=balanced` + EPP=`balance_performance` on every core (was firmware low-power) |
 | `i915-resume-fix-check.service` | oneshot | `After=systemd-journald.service`; triggered by its `.timer` | `…/i915-resume-fix-check` | pre-7.0 kernel: no-op; 7.0+: grep this boot's journal for the cx0 DPLL s2idle-resume regression signature, warn if found |
 | `portmaster.service` | simple, disabled VM spike | `After=network-online`; conflicts with OpenSnitch/firewalld; `StateDirectory=portmaster`; `BindReadOnlyPaths=` pins config from `/usr`; `StartLimitBurst=3`; `ExecStopPost=` recovers netfilter rules | `…/portmaster/portmaster-core --bin-dir … --data-dir … --log-stdout` | direct, pinned Portmaster core test; never enabled in an image. Both dir flags are load-bearing: without `--bin-dir` the daemon falls back to a hardcoded `/usr/lib/portmaster` and its updater exits 2 mkdir'ing it on read-only `/usr` |
 
-All `.service` units except the disabled `portmaster.service` VM spike are
-enabled in build.sh.
+Docker, Cockpit, and Waydroid are explicitly disabled in the image; Tailscale
+is enabled without a node identity. Other listed services are enabled in
+build.sh except the disabled `portmaster.service` VM spike.
 
 ## systemd timers (`/usr/lib/systemd/system/`)
 
@@ -29,6 +30,7 @@ enabled in build.sh.
 - `bazzite-tower-firstboot` — first regular user → `usermod -aG` only existing groups
 - `bazzite-tower-wifi-backend-guard` — NM iwd-backend guard, idempotent
 - `bazzite-tower-wifi-debug` — read-only Wi-Fi diagnostics (offline)
+- `bazzite-tower-health` — reporting-only optional-service, monitoring, firmware, and security-tool summary (no sudo or state changes)
 - `bazzite-tower-power-tuning` — write platform_profile + per-CPU EPP; skips absent/read-only knobs
 - `i915-resume-fix-check` — kernel-version-gated check for the Meteor Lake cx0 DPLL s2idle-resume regression signature in the current boot's journal
 (The former `bazzite-tower-portmaster-seed` helper is gone. Portmaster's config is no longer copied into `/var`: the unit `BindReadOnlyPaths=`-mounts `/usr/share/bazzite-tower/portmaster-config.default.json` over `/var/lib/portmaster/config.json`, so the update pin is image-managed and reverts with a rollback. systemd creates the mount destination itself, and a missing source fails the unit before `ExecStart` — fail closed.)
@@ -49,7 +51,8 @@ instead, `portmaster.service` enabled — see the systemd units table above and
 ## ujust recipes (`/usr/share/ublue-os/just/60-custom.just`)
 
 - **Virtualization**: `vm-start`, `vm-stop`, `vm-list`, `vm-net-status`, `fix-vm-groups`, `install-looking-glass-client` (installs the version-coupled LG client into a Fedora distrobox from the pgaskin COPR → `~/.local/bin`; kvmfr module is base-provided)
-- **Diagnostics**: `wifi-debug`
+- **Diagnostics**: `wifi-debug`, `tower-health`
+- **Host opt-ins**: `enable-docker` (root-equivalent group warning), `enable-cockpit` (loopback-only socket; prints a separate Tailscale Serve command), `enable-waydroid` (does not initialise Android)
 
 ## bootc kargs (`/usr/lib/bootc/kargs.d/`, applied at install + every upgrade)
 
@@ -71,6 +74,7 @@ instead, `portmaster.service` enabled — see the systemd units table above and
 - `/usr/lib/systemd/journald.conf.d/90-tower-journal-cap.conf` → `SystemMaxUse=4G` + `MaxRetentionSec=1month` (default cap ~10% of fs)
 - `/usr/share/wireplumber/wireplumber.conf.d/90-tower-sof-backoff.conf` → shorten SOF node idle/error suspend window (defense-in-depth; dormant while SOF is bypassed)
 - `/etc/smartmontools/smartd.conf` → monitor `/dev/nvme0`+`/dev/nvme1` (health, media errors, weekly long test, temp); logs to journal
+- `/etc/systemd/system/cockpit.socket.d/10-loopback.conf` → clears Cockpit's wildcard listener and binds the opt-in socket only to `127.0.0.1` and `::1`
 - `/etc/xdg/baloofilerc` → seed indexer `exclude filters` with build/cache trees (.gradle, target, language caches)
 - `/usr/libexec/bazzite-tower-stall-detect` + `/usr/lib/systemd/system/bazzite-tower-stall-detect.service` → samples CLOCK_MONOTONIC and records D-state workers on a stall. Catches freezes no kernel watchdog reports (soft lockup needs a spinning CPU; hung_task needs 120s). Built for the i915 GuC TLB invalidation timeout, drm/i915 #14469. Logs to the journal; query with `ujust freeze-report`
 - `/usr/share/bazzite-tower/opensnitchd-default-config.json` → Snitchwatch-tuned opensnitchd config. **Staged, not live**: build.sh `install`s it over `/etc/opensnitchd/default-config.json` *after* the OpenSnitch RPM extraction (which writes that path itself), so it can't live at the real path here. Doubles as the pristine image-intent copy to diff a 3-way-merged `/etc` against. Deltas from the RPM default: `Server.Address` `127.0.0.1:50051` (Snitchwatch bridge), `ProcMonitorMethod` `proc` (bundled eBPF won't load on 6.19/7.x), `DefaultAction` `allow` (fail open during rollout)

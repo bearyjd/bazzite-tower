@@ -38,6 +38,16 @@ check_enabled() {
     esac
 }
 
+check_disabled() {
+    local unit="$1" state
+    state="$(unit_state "${unit}")"
+    if [[ "${state}" == "disabled" || "${state}" == "disabled-runtime" ]]; then
+        pass "disabled: ${unit}"
+    else
+        bad "disabled: ${unit} (got '${state:-missing}')"
+    fi
+}
+
 check_masked() {
     local unit="$1" state
     state="$(unit_state "${unit}")"
@@ -190,12 +200,10 @@ check "XR glasses rules (viture)"      test -f /usr/lib/udev/rules.d/70-viture-x
 check "plustek scanner rule"           test -f /usr/lib/udev/rules.d/70-plustek-scanner.rules
 check "btusb autosuspend disabled"     grep -qE '^options btusb enable_autosuspend=0$' /usr/lib/modprobe.d/btusb-no-autosuspend.conf
 
-echo "== Host services (were /etc-only, now baked) =="
-# Both ship in the Bazzite base; only their enablement was drifting in /etc, so a
-# rebase came up without them. sshd/plugin_loader/libvirtd are deliberately NOT
-# here — see build_files/build.d/62-host-services.sh for why.
+echo "== Host services =="
+# tailscaled has no baked auth state; remote management surfaces remain opt-in.
 check_enabled "tailscaled.service"
-check_enabled "waydroid-container.service"
+check_disabled "waydroid-container.service"
 
 echo "== Wi-Fi (BE200 firmware assert mitigation) =="
 # The BE200 firmware asserts NMI_INTERRUPT_UNKNOWN and the driver hard-resets the
@@ -213,10 +221,23 @@ check "containerd present" command -v containerd
 # The 'docker' group must be baked into the image: docker.socket resolves it at
 # early boot, and if it's only created late at runtime the socket fails every boot.
 check "docker group exists (getent group docker)" getent group docker
-# Docker daemon set to start at boot.
-check_enabled "docker.service"
-# iptable_nat is loaded at boot for docker-in-docker.
-check "iptable_nat modules-load.d present" test -f /etc/modules-load.d/iptable_nat.conf
+# Docker remains installed but inactive until an operator runs ujust enable-docker.
+check_disabled "docker.service"
+check_disabled "docker.socket"
+check "no Docker-specific boot module load" test ! -e /etc/modules-load.d/iptable_nat.conf
+
+echo "== Image signature policy =="
+# The policy is merged at compose time so it must retain the targeted sigstore
+# rule in the final image, not merely exist as source material in /usr/share.
+check "bazzite-tower cosign public key installed" \
+    cmp -s /usr/share/bazzite-tower/containers/bazzite-tower-cosign.pub \
+        /etc/pki/containers/bazzite-tower-cosign.pub
+check "bazzite-tower sigstore policy targets only this repository" \
+    jq -e '.transports.docker["ghcr.io/bearyjd/bazzite-tower"][0] | .type == "sigstoreSigned" and .signedIdentity.type == "matchRepository"' \
+        /etc/containers/policy.json
+check "sigstore registry attachments enabled" \
+    grep -qx '    use-sigstore-attachments: true' \
+        /etc/containers/registries.d/bazzite-tower.yaml
 
 echo "== OpenSnitch (application firewall) =="
 firewall_daemon="$(cat /usr/share/bazzite-tower/firewall-daemon 2>/dev/null || true)"
@@ -340,7 +361,11 @@ echo "== Cockpit (web management) =="
 # The compose can retain Cockpit Machines' files while omitting its RPM database
 # record, so test the UI manifest the image actually serves rather than rpm -q.
 check "Cockpit Machines UI assets present" test -f /usr/share/cockpit/machines/manifest.json
-check_enabled "cockpit.socket"
+check_disabled "cockpit.socket"
+check "Cockpit loopback socket drop-in present" test -f /etc/systemd/system/cockpit.socket.d/10-loopback.conf
+check "Cockpit loopback socket drop-in resets wildcard listener" \
+    grep -qx 'ListenStream=' /etc/systemd/system/cockpit.socket.d/10-loopback.conf
+check "tower-health helper is executable" test -x /usr/libexec/bazzite-tower-health
 
 echo
 if [[ "${fail}" -ne 0 ]]; then

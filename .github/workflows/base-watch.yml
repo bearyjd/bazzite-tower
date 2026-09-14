@@ -23,8 +23,8 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  BASE_IMAGE: ghcr.io/ublue-os/bazzite-nvidia:stable
-  MANIFEST: docs/manifests/bazzite-nvidia-stable.txt
+  BASE_IMAGE: ghcr.io/ublue-os/bazzite-nvidia-open:stable
+  MANIFEST: docs/manifests/bazzite-nvidia-open-stable.txt
 
 jobs:
   watch:
@@ -70,7 +70,7 @@ jobs:
             const label = 'base-bump';
             const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
             const body = [
-              `Upstream \`${process.env.BASE_IMAGE || 'ghcr.io/ublue-os/bazzite-nvidia:stable'}\` moved.`,
+              `Upstream \`${process.env.BASE_IMAGE || 'ghcr.io/ublue-os/bazzite-nvidia-open:stable'}\` moved.`,
               `Digest: \`${process.env.BASE_DIGEST}\``,
               ``,
               `Blast-radius package changes (qemu / libvirt / NetworkManager / Docker / kernel / systemd / polkit / bootc):`,
@@ -99,7 +99,14 @@ jobs:
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add "${MANIFEST}"
-          git commit -m "chore(base-watch): refresh bazzite-nvidia:stable manifest"
+          git commit -m "chore(base-watch): refresh bazzite-nvidia-open:stable manifest"
+          pushed=
           for i in 1 2 3 4; do
-            git push && break || { echo "push failed, retry ${i}"; sleep $((2 ** i)); }
+            if git push; then
+              pushed=1
+              break
+            fi
+            echo "push failed (attempt ${i}); retrying in $((2 ** i))s"
+            sleep $((2 ** i))
           done
+          [[ -n "${pushed}" ]] || { echo "::error::could not push refreshed manifest after retries"; exit 1; }

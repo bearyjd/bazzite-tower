@@ -1,0 +1,2 @@
+# Copy to .gitignore in the local Compose directory before creating a secret.
+secrets/

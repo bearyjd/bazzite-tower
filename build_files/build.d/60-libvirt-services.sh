@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# ── libvirt: modular daemons + Docker service ─────────────────────────────────
+# ── libvirt: modular daemons ──────────────────────────────────────────────────
 # Bazzite/F44+ ships modular libvirt: one socket-activated daemon per driver
 # (virtqemud, virtnetworkd, ...) instead of the monolithic libvirtd. Mask the
 # legacy libvirtd.service so it can't race the modular daemons — that race is the
@@ -23,8 +23,9 @@ systemctl enable virtstoraged.socket
 # masked).
 systemctl enable virtproxyd.socket
 
-# Docker daemon starts at boot (Docker CE is baked in alongside Podman).
-systemctl enable docker.service
+# Docker CE is present but its daemon and socket remain a host-local opt-in.
+# Explicitly remove a package/base preset if one exists.
+systemctl disable docker.service docker.socket || true
 
 # ── libvirt default NAT network: autostart on boot ────────────────────────────
 # libvirt-daemon-config-network ships the default NAT network definition. Mark it
@@ -47,10 +48,10 @@ polkit.addRule(function(action, subject) {
 });
 EOF
 
-# ── First-boot oneshot: add the first regular user to the virt + docker groups ─
-# Polkit covers libvirt access for wheel users, but raw /dev/kvm, the docker
-# socket, and tools that check `groups` membership need real group entries. The
-# unit and its helper ship in system_files/; the unit retries every boot until a
-# regular user exists, then drops a marker so it stops running.
+# ── First-boot oneshot: add the first regular user to virtualisation groups ────
+# Polkit covers libvirt access for wheel users, but raw /dev/kvm and tools that
+# check `groups` membership need real kvm/libvirt entries. Docker access is an
+# explicit opt-in because its group is root-equivalent. The unit and its helper
+# ship in system_files/; the unit retries every boot until a regular user exists,
+# then drops a marker so it stops running.
 systemctl enable bazzite-tower-firstboot.service
-

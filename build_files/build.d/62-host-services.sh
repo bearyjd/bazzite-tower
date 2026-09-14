@@ -1,13 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# ── Host services that were only ever enabled in /etc ─────────────────────────
-# Both units ship in the Bazzite base (no layering needed), but their enablement
-# lived only as symlinks in /etc — so a rebase or fresh install came up without
-# them. Baking the enable here makes the image reproduce the machine's actual
-# intended state. See docs/RUNBOOK.md "/etc drift vs the image".
+# ── Tailscale daemon (network identity remains unconfigured) ──────────────────
+# The daemon itself has no baked node identity, auth key, serve/funnel setup, or
+# public listener. Keep it available for an operator's later `tailscale up`, but
+# leave every externally reachable management surface opt-in.
 systemctl enable tailscaled.service
-systemctl enable waydroid-container.service
+
+# Waydroid's Android runtime is potentially large and pulls initial state; make
+# activation an explicit per-host choice even if an upstream preset changes.
+systemctl disable waydroid-container.service || true
 
 # ── Deliberately NOT enabled here ────────────────────────────────────────────
 # sshd.service — Bazzite ships sshd off, and 97-vm-gate-ssh.sh keeps it that way
@@ -20,6 +22,11 @@ systemctl enable waydroid-container.service
 #   ExecStart=/home/user/homebrew/services/PluginLoader, a path inside one user's
 #   home. Host-specific by construction, and owned by Decky's own installer.
 #   Never bake it into a shared image.
+#
+# docker.service/docker.socket, cockpit.socket, waydroid-container.service — all
+#   are deliberately disabled. Their respective `ujust enable-*` recipes make
+#   the host-local opt-in explicit. Cockpit's shipped socket drop-in limits it
+#   to loopback even after it is enabled.
 #
 # libvirtd.service — deliberately MASKED by 60-libvirt-services.sh in favour of
 #   the modular virt*.socket daemons. An enable symlink for it exists in /etc on

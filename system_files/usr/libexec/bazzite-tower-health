@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+# bazzite-tower-health — reporting-only host health summary.
+#
+# This intentionally does not use sudo and never enables, starts, stops, or
+# modifies a service. Individual probes may be unavailable on a particular base
+# image; that is reported rather than treated as a health-command failure.
+set +e
+
+unit_status() {
+    local unit="$1"
+    local enabled active
+    enabled=$(systemctl is-enabled "${unit}" 2>/dev/null || true)
+    active=$(systemctl is-active "${unit}" 2>/dev/null || true)
+    printf '  %-36s enabled=%-10s active=%s\n' "${unit}" "${enabled:-unknown}" "${active:-unknown}"
+}
+
+available() {
+    command -v "$1" >/dev/null 2>&1
+}
+
+echo "== bazzite-tower health (reporting only) =="
+echo
+echo "== Optional host services =="
+unit_status docker.socket
+unit_status docker.service
+unit_status cockpit.socket
+unit_status waydroid-container.service
+unit_status tailscaled.service
+echo "  Docker, Cockpit, and Waydroid are opt-in; tailscaled has no node identity until 'tailscale up'."
+
+echo
+echo "== Included monitoring and timers =="
+unit_status smartd.service
+unit_status rasdaemon.service
+for unit in bazzite-tower-power-tuning.service i915-resume-fix-check.timer; do
+    unit_status "${unit}"
+done
+
+echo
+echo "== Firmware and security availability =="
+if available bootc; then
+    echo "  bootc: $(bootc --version 2>/dev/null | head -n 1 || echo unavailable)"
+fi
+if available rpm-ostree; then
+    echo "  rpm-ostree: $(rpm-ostree --version 2>/dev/null | head -n 1 || echo unavailable)"
+fi
+if available mokutil; then
+    echo "  Secure Boot: $(mokutil --sb-state 2>/dev/null || echo unavailable)"
+fi
+if available fwupdmgr; then
+    echo "  fwupdmgr security:"
+    fwupdmgr security 2>/dev/null | sed 's/^/    /' || echo "    unavailable (firmware service may not be running)"
+fi
+if available rpm; then
+    echo "  firmware packages:"
+    rpm -q linux-firmware microcode_ctl 2>/dev/null | sed 's/^/    /' || echo "    package query unavailable"
+fi
+
+echo
+echo "This command did not change host state. For privileged diagnostics, see docs/RUNBOOK.md."
+exit 0

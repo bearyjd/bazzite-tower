@@ -27,11 +27,109 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  build_push:
-    name: Build and push image (${{ matrix.variant }})
+  verify:
+    name: Verify image (${{ matrix.variant }})
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+
+    # Pull requests receive no token capable of publishing, attesting, signing,
+    # or filing issues. This job builds and exercises its own local candidate.
+    permissions:
+      contents: read
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - variant: safe-pin
+            build_args: ""
+            tag_base: verify-safe-pin
+          - variant: latest-kernel
+            build_args: "BASE_IMAGE=ghcr.io/ublue-os/bazzite-nvidia-open:stable"
+            tag_base: verify-latest-kernel
+
+    steps:
+      - name: Prepare environment
+        run: |
+          echo "IMAGE_REGISTRY=${IMAGE_REGISTRY,,}" >> ${GITHUB_ENV}
+          echo "IMAGE_NAME=${IMAGE_NAME,,}" >> ${GITHUB_ENV}
+
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Maximize build space
+        uses: ublue-os/remove-unwanted-software@695eb75bc387dbcd9685a8e72d23439d8686cba6
+
+      - name: Validate source safety contracts
+        run: |
+          tests/check-supply-chain.sh
+          tests/test-firstboot-no-docker.sh
+          tests/test-tower-health.sh
+          tests/test-container-templates.sh
+
+      # A local-only tag avoids metadata/publish semantics while ensuring the
+      # smoke and runtime checks exercise the exact image this job built.
+      - name: Build image
+        uses: redhat-actions/buildah-build@3a51aade9afa17e5c78256bcbe2e1ee08c7b995b # v3.0.2
+        with:
+          containerfiles: |
+            ./Containerfile
+          image: ${{ env.IMAGE_NAME }}
+          tags: ${{ matrix.tag_base }}
+          build-args: |
+            ${{ matrix.build_args }}
+          oci: false
+          squash: false
+
+      - name: Smoke test built image
+        run: podman run --rm -i "${IMAGE_NAME}:${TAG_BASE}" bash -s < tests/smoke.sh
+        env:
+          TAG_BASE: ${{ matrix.tag_base }}
+
+      - name: Runtime test built image
+        run: |
+          set -uo pipefail
+          container="bzverify-${{ matrix.variant }}"
+          cleanup() { podman rm -f "${container}" >/dev/null 2>&1 || true; }
+          trap cleanup EXIT
+          podman run -d --name "${container}" --privileged --systemd=always \
+            "${IMAGE_NAME}:${TAG_BASE}" /sbin/init
+          booted=
+          for i in $(seq 1 90); do
+            state="$(podman exec "${container}" systemctl is-system-running 2>/dev/null || true)"
+            echo "[${i}] is-system-running: ${state:-<none>}"
+            case "${state}" in running|degraded) booted=1; break ;; esac
+            sleep 2
+          done
+          if [[ -z "${booted}" ]]; then
+            echo "::error::image systemd never reached running/degraded"
+            podman exec "${container}" journalctl --no-pager -n 120 2>/dev/null || podman logs "${container}" || true
+            exit 1
+          fi
+          podman cp tests/boot-check.sh "${container}":/usr/local/bin/boot-check.sh
+          podman exec "${container}" chmod +x /usr/local/bin/boot-check.sh
+          set +e
+          podman exec "${container}" /usr/local/bin/boot-check.sh
+          rc=$?
+          set -e
+          podman exec "${container}" journalctl --no-pager -n 80 \
+            -u virtqemud.service -u virtqemud.socket \
+            -u bazzite-tower-wifi-backend-guard.service 2>/dev/null || true
+          exit "${rc}"
+        env:
+          TAG_BASE: ${{ matrix.tag_base }}
+
+  release:
+    name: Build, verify, and release image (${{ matrix.variant }})
+    if: github.event_name != 'pull_request' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
     runs-on: ubuntu-24.04
 
     permissions:
+      attestations: write
+      artifact-metadata: write
       contents: read
       packages: write
       id-token: write
@@ -47,8 +145,9 @@ jobs:
       matrix:
         include:
           # Default/primary — what `bootc upgrade` pulls with no explicit tag.
-          # Pinned base; keep in sync with the Containerfile's BASE_IMAGE ARG
-          # default. tag_prefix empty => tag strings below are byte-identical
+          # Pinned base comes exclusively from the Containerfile's BASE_IMAGE
+          # default. Do not add a build arg here: that would create a second,
+          # mutable source of truth. tag_prefix empty => tag strings below are byte-identical
           # to this workflow's pre-matrix behavior (no disruption to existing
           # installs or anyone pinned to a `:<date>`/`:<sha>` tag).
           # As of 2026-08-28 this is bazzite-nvidia-open (NVIDIA open kernel
@@ -57,7 +156,7 @@ jobs:
           # not receive the i915 cx0 s2idle-resume fix; see the Containerfile
           # comment and docs/research/i915-bug-report/UPSTREAM-FIX-STATUS-2026-08-28.md.
           - variant: safe-pin
-            base_image: ghcr.io/ublue-os/bazzite-nvidia-open:44.20260825
+            build_args: ""
             tag_base: latest
             tag_prefix: ""
           # Opt-in — tracks upstream bazzite-nvidia-open:stable's current
@@ -66,7 +165,7 @@ jobs:
           # every tag this leg produces is namespaced under tag_prefix so it
           # can never collide with the safe-pin leg's pushed tags.
           - variant: latest-kernel
-            base_image: ghcr.io/ublue-os/bazzite-nvidia-open:stable
+            build_args: "BASE_IMAGE=ghcr.io/ublue-os/bazzite-nvidia-open:stable"
             tag_base: latest-kernel
             tag_prefix: "latest-kernel-"
 
@@ -80,10 +179,20 @@ jobs:
       # These stage versions are pinned by https://github.com/renovatebot/renovate
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
 
       # This is optional, but if you see that your builds are way too big for the runners, you can enable this by uncommenting the following lines:
       - name: Maximize build space
         uses: ublue-os/remove-unwanted-software@695eb75bc387dbcd9685a8e72d23439d8686cba6
+
+      - name: Validate source safety contracts
+        run: |
+          tests/check-supply-chain.sh
+          tests/test-firstboot-no-docker.sh
+          tests/test-tower-health.sh
+          tests/test-container-templates.sh
 
       - name: Get current date
         id: date
@@ -142,7 +251,7 @@ jobs:
           tags: ${{ steps.metadata.outputs.tags }}
           labels: ${{ steps.metadata.outputs.labels }}
           build-args: |
-            BASE_IMAGE=${{ matrix.base_image }}
+            ${{ matrix.build_args }}
           oci: false
           # Pinned explicitly because buildah-build v3.0.0 flipped this default
           # from false to true. Squashing collapses the image into one layer,
@@ -162,6 +271,49 @@ jobs:
       - name: Smoke test built image
         run: |
           podman run --rm -i "${IMAGE_NAME}:${TAG_BASE}" bash -s < tests/smoke.sh
+        env:
+          TAG_BASE: ${{ matrix.tag_base }}
+
+      # This is deliberately in the release job, not a separate workflow: it
+      # exercises the exact local candidate that will be promoted below. The
+      # PR-only verify job independently rebuilds and runs its own equivalent
+      # check with no registry credentials.
+      - name: Runtime test built image
+        run: |
+          set -uo pipefail
+          container="bztest-${{ matrix.variant }}"
+          cleanup() { podman rm -f "${container}" >/dev/null 2>&1 || true; }
+          trap cleanup EXIT
+
+          podman run -d --name "${container}" --privileged --systemd=always \
+            "${IMAGE_NAME}:${TAG_BASE}" /sbin/init
+
+          booted=
+          for i in $(seq 1 90); do
+            state="$(podman exec "${container}" systemctl is-system-running 2>/dev/null || true)"
+            echo "[${i}] is-system-running: ${state:-<none>}"
+            case "${state}" in
+              running|degraded) booted=1; break ;;
+            esac
+            sleep 2
+          done
+
+          if [[ -z "${booted}" ]]; then
+            echo "::error::image systemd never reached running/degraded"
+            podman exec "${container}" journalctl --no-pager -n 120 2>/dev/null || podman logs "${container}" || true
+            exit 1
+          fi
+
+          podman cp tests/boot-check.sh "${container}":/usr/local/bin/boot-check.sh
+          podman exec "${container}" chmod +x /usr/local/bin/boot-check.sh
+          set +e
+          podman exec "${container}" /usr/local/bin/boot-check.sh
+          rc=$?
+          set -e
+          podman exec "${container}" journalctl --no-pager -n 80 \
+            -u virtqemud.service -u virtqemud.socket \
+            -u bazzite-tower-wifi-backend-guard.service 2>/dev/null || true
+          exit "${rc}"
         env:
           TAG_BASE: ${{ matrix.tag_base }}
 
@@ -191,6 +343,14 @@ jobs:
 
       # These `if` statements are so that pull requests for your custom images do not make it publish any packages under your name without you knowing
       # They also check if the runner is on the default branch so that things like the merge queue (if you enable it), are going to work
+      - name: Require release signing key
+        if: github.event_name != 'pull_request' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+        run: |
+          if [[ -z "${SIGNING_SECRET}" ]]; then
+            echo "::error::SIGNING_SECRET is required to publish a release image."
+            exit 1
+          fi
+
       - name: Login to GitHub Container Registry
         uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4.2.0
         if: github.event_name != 'pull_request' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
@@ -199,10 +359,117 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Push To GHCR
+      # Publish an unreferenced-by-users candidate first. Public tags remain on
+      # their last verified digest until every signing and attestation check
+      # below succeeds.
+      - name: Tag release candidate
+        if: github.event_name != 'pull_request' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+        run: podman tag "${IMAGE_NAME}:${TAG_BASE}" "${IMAGE_NAME}:${CANDIDATE_TAG}"
+        env:
+          TAG_BASE: ${{ matrix.tag_base }}
+          CANDIDATE_TAG: candidate-${{ github.run_id }}-${{ matrix.variant }}
+
+      - name: Push candidate to GHCR
         uses: redhat-actions/push-to-registry@94ade333c38ecc0e60e94785125d9a52ca423b37 # v3.0.0
         if: github.event_name != 'pull_request' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
-        id: push
+        id: push_candidate
+        env:
+          REGISTRY_USER: ${{ github.actor }}
+          REGISTRY_PASSWORD: ${{ github.token }}
+        with:
+          registry: ${{ env.IMAGE_REGISTRY }}
+          image: ${{ env.IMAGE_NAME }}
+          tags: candidate-${{ github.run_id }}-${{ matrix.variant }}
+          username: ${{ env.REGISTRY_USER }}
+          password: ${{ env.REGISTRY_PASSWORD }}
+
+      # Image signing is mandatory for every default-branch release. PRs never
+      # push and therefore need neither registry nor signing credentials. The
+      # image is signed by digest. Do not replace the key in place: rotation
+      # requires a staged dual-key, dual-signing transition; see RUNBOOK.md.
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        if: github.event_name != 'pull_request' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+        with:
+          cosign-release: 'v2.6.3'
+
+      - name: Sign container image
+        if: github.event_name != 'pull_request' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+        run: |
+          # Sign the immutable digest once, not each mutable tag.
+          cosign sign -y --key env://COSIGN_PRIVATE_KEY \
+            "${IMAGE_REGISTRY}/${IMAGE_NAME}@${DIGEST}"
+        env:
+          DIGEST: ${{ steps.push_candidate.outputs.digest }}
+          COSIGN_EXPERIMENTAL: false
+          COSIGN_PRIVATE_KEY: ${{ secrets.SIGNING_SECRET }}
+          COSIGN_PASSWORD: ""
+
+      - name: Generate SPDX SBOM
+        id: sbom
+        uses: anchore/sbom-action@e11c554f704a0b820cbf8c51673f6945e0731532 # v0.20.0
+        if: github.event_name != 'pull_request' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+        with:
+          image: ${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.push_candidate.outputs.digest }}
+          format: spdx-json
+          output-file: ${{ runner.temp }}/bazzite-tower-${{ matrix.variant }}.spdx.json
+          upload-artifact: false
+
+      - name: Attach signed SBOM attestation
+        if: github.event_name != 'pull_request' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+        run: |
+          cosign attest -y --key env://COSIGN_PRIVATE_KEY --type spdxjson \
+            --predicate "${SBOM}" "${IMAGE_REGISTRY}/${IMAGE_NAME}@${DIGEST}"
+        env:
+          DIGEST: ${{ steps.push_candidate.outputs.digest }}
+          SBOM: ${{ runner.temp }}/bazzite-tower-${{ matrix.variant }}.spdx.json
+          COSIGN_PRIVATE_KEY: ${{ secrets.SIGNING_SECRET }}
+          COSIGN_PASSWORD: ""
+
+      - name: Verify signed image and SBOM
+        if: github.event_name != 'pull_request' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+        run: |
+          image="${IMAGE_REGISTRY}/${IMAGE_NAME}@${DIGEST}"
+          cosign verify --key cosign.pub "${image}"
+          cosign verify-attestation --key cosign.pub --type spdxjson "${image}"
+        env:
+          DIGEST: ${{ steps.push_candidate.outputs.digest }}
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@9d57eef8c06cd9d6b433effeeb7a6a77b3ff94ad # main
+        if: github.event_name != 'pull_request' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+        with:
+          subject-name: ${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAME }}
+          subject-digest: ${{ steps.push_candidate.outputs.digest }}
+          push-to-registry: true
+
+      - name: Verify GitHub provenance
+        if: github.event_name != 'pull_request' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+        run: gh attestation verify "oci://${IMAGE_REGISTRY}/${IMAGE_NAME}@${DIGEST}" --repo "${GITHUB_REPOSITORY}"
+        env:
+          DIGEST: ${{ steps.push_candidate.outputs.digest }}
+          GH_TOKEN: ${{ github.token }}
+
+      # Re-pull by the already signed remote digest before creating local public
+      # tags. Promotion therefore cannot use a mutable candidate tag or a stale
+      # local image reference.
+      - name: Prepare verified digest for promotion
+        if: github.event_name != 'pull_request' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+        run: |
+          set -euo pipefail
+          candidate="${IMAGE_REGISTRY}/${IMAGE_NAME}@${DIGEST}"
+          podman pull "${candidate}"
+          for tag in ${TAGS}; do
+            podman tag "${candidate}" "${IMAGE_NAME}:${tag}"
+          done
+        env:
+          DIGEST: ${{ steps.push_candidate.outputs.digest }}
+          TAGS: ${{ steps.metadata.outputs.tags }}
+
+      - name: Promote verified candidate tags
+        uses: redhat-actions/push-to-registry@94ade333c38ecc0e60e94785125d9a52ca423b37 # v3.0.0
+        if: github.event_name != 'pull_request' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+        id: promote
         env:
           REGISTRY_USER: ${{ github.actor }}
           REGISTRY_PASSWORD: ${{ github.token }}
@@ -213,32 +480,16 @@ jobs:
           username: ${{ env.REGISTRY_USER }}
           password: ${{ env.REGISTRY_PASSWORD }}
 
-      # Image signing with cosign. These steps run automatically once a
-      # SIGNING_SECRET repository secret exists; until then they are skipped via
-      # the `env.SIGNING_SECRET != ''` guard, so the build never fails on its
-      # absence. The image is signed by digest. To enable signing:
-      #   1. COSIGN_PASSWORD="" cosign generate-key-pair   # leave the passphrase
-      #      EMPTY: CI is non-interactive and the sign step passes COSIGN_PASSWORD="".
-      #   2. Add the cosign.key contents as the SIGNING_SECRET repo secret
-      #      (Settings -> Secrets and variables -> Actions -> New repository secret).
-      #   3. Commit the resulting cosign.pub so consumers can verify with --key.
-      - name: Install Cosign
-        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
-        if: github.event_name != 'pull_request' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && env.SIGNING_SECRET != ''
-        with:
-          cosign-release: 'v2.6.3'
-
-      - name: Sign container image
-        if: github.event_name != 'pull_request' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && env.SIGNING_SECRET != ''
+      - name: Verify promoted digest
+        if: github.event_name != 'pull_request' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
         run: |
-          # Sign the immutable digest once, not each mutable tag.
-          cosign sign -y --key env://COSIGN_PRIVATE_KEY \
-            "${IMAGE_REGISTRY}/${IMAGE_NAME}@${DIGEST}"
+          [[ "${PROMOTED_DIGEST}" == "${CANDIDATE_DIGEST}" ]] || {
+            echo "::error::promotion digest ${PROMOTED_DIGEST} did not match verified candidate ${CANDIDATE_DIGEST}"
+            exit 1
+          }
         env:
-          DIGEST: ${{ steps.push.outputs.digest }}
-          COSIGN_EXPERIMENTAL: false
-          COSIGN_PRIVATE_KEY: ${{ secrets.SIGNING_SECRET }}
-          COSIGN_PASSWORD: ""
+          CANDIDATE_DIGEST: ${{ steps.push_candidate.outputs.digest }}
+          PROMOTED_DIGEST: ${{ steps.promote.outputs.digest }}
 
       # ── Notification: open/refresh a tracking issue when the gate fails ───────
       # PR failures already show as a red check on the PR, so only file an issue
@@ -262,7 +513,7 @@ jobs:
               ``,
               `Run: ${runUrl}`,
               ``,
-              `This usually means an upstream Bazzite change broke the build or tripped a smoke-test assertion (qemu user, modular \`virt*.socket\`s, the Wi-Fi backend guard, IOMMU kargs, Docker CE). Because the gate runs before push, \`:${tagBase}\` was **not** updated and stays on the last-good image.`,
+              `This usually means an upstream Bazzite change broke the build or release verification (smoke/runtime gate, signature, SBOM, or provenance). The public \`:${tagBase}\` tag was **not** promoted and stays on the last-good image.`,
               ``,
               `See \`docs/downstream-change-tracking.md\` for the failure model and which area each check maps to.`,
             ].join('\n');

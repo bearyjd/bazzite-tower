@@ -5,7 +5,7 @@
 
 ## Containerfile stages
 
-1. `ARG BASE_IMAGE=ghcr.io/ublue-os/bazzite-nvidia-open:44.20260825` (pinned default — see `:latest`/`:latest-kernel` in README's Tags section for how CI overrides this per matrix leg)
+1. `ARG BASE_IMAGE=ghcr.io/ublue-os/bazzite-nvidia-open@sha256:…` (the single pinned default source for `:latest`; CI leaves it unset for safe-pin and overrides it only for `:latest-kernel`)
 2. `FROM scratch AS ctx` + `COPY build_files /` — scripts reachable via bind mount, not baked in
 3. `FROM ${BASE_IMAGE}` + OCI labels
 4. `COPY system_files/ /` — static content, copied **before** build.sh so it can enable those units
@@ -23,12 +23,13 @@ carry, because line ranges drift and filenames do not.
 |---|---|
 | `05-pin-kde-packages.sh` | `/etc/dnf/dnf.conf` `exclude=` for the KDE Plasma/KWin package family, so this build's own dnf transactions can't skew `kwin` ahead of `kscreenlocker` (see `docs/research/kwin-screenlocker-abi-2026-08-08/`). Must run before any other script's `dnf install` |
 | `10-virt-packages.sh` | dnf: qemu-kvm, libvirt*, virt-install/manager/viewer, edk2-ovmf, guestfs-tools, spice-gtk3 |
+| `15-signature-policy.sh` | merges a repository-scoped cosign `sigstoreSigned` rule into the existing containers policy and installs the sigstore-attachment registry configuration without erasing other policy rules |
 | `20-dev-tooling.sh` | dnf: android-tools, ccache, flatpak-builder, podman-machine/tui, rclone, restic, zsh |
 | `30-docker-ce.sh` | write inert `docker-ce.repo` (every section enabled=0); remove `podman-docker`; install via `--enablerepo=docker-ce-stable` |
 | `40-sysusers-fixup.sh` | **generic** orphan strip (keep only shadow/gshadow lines with a matching passwd/group) -> `systemd-sysusers` -> guarded `groupadd -r qemu` + `useradd qemu` + **`groupadd -r docker`**. Fixes virtqemud + docker.socket "Unknown group" boot failures. The most fragile piece; kept isolated on purpose |
-| `50-docker-networking.sh` | `/etc/modules-load.d/iptable_nat.conf` (docker-in-docker) |
-| `60-libvirt-services.sh` | mask `libvirtd.service`; enable `virtqemud/virtnetworkd/virtnodedevd/virtnwfilterd/virtstoraged/virtproxyd.socket`; enable `docker.service`; default NAT net autostart symlink (virsh can't run at build time); polkit `wheel` -> `qemu:///system`; enable `bazzite-tower-firstboot.service` |
-| `70-guards-monitoring.sh` | enable `bazzite-tower-wifi-backend-guard.service`; dnf smartmontools + enable `smartd.service`; dnf cockpit/cockpit-machines + enable `cockpit.socket` (:9090) |
+| `50-docker-networking.sh` | intentional no-op: `ujust enable-docker` creates the Docker-only `iptable_nat` modules-load file locally |
+| `60-libvirt-services.sh` | mask `libvirtd.service`; enable `virtqemud/virtnetworkd/virtnodedevd/virtnwfilterd/virtstoraged/virtproxyd.socket`; explicitly disable Docker service/socket; default NAT net autostart symlink (virsh can't run at build time); polkit `wheel` -> `qemu:///system`; enable `bazzite-tower-firstboot.service` (kvm/libvirt only) |
+| `70-guards-monitoring.sh` | enable `bazzite-tower-wifi-backend-guard.service`; dnf smartmontools + enable `smartd.service`; dnf cockpit/cockpit-machines but explicitly disable Cockpit socket (loopback-only if an operator later enables it) |
 | `80-ras-microcode.sh` | dnf rasdaemon (enable); **mask `mcelog.service`**; dnf microcode_ctl (latest) |
 | `85-i915-watcher.sh` | enable `i915-resume-fix-check.timer` — kernel-version-gated check for the cx0 DPLL s2idle-resume regression signature; the machine-checkable signal the Containerfile kernel-pin comment points at |
 | `90-power-thermal.sh` | dnf thermald (enable); enable `bazzite-tower-power-tuning.service` (balanced EPP + platform-profile). SOF audio: **no install** — bypassed via the `dsp_driver=1` karg |

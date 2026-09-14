@@ -8,10 +8,10 @@
 
 | Workflow | Triggers | Flow | Issue label |
 |---|---|---|---|
-| `build.yml` | push main (ignores README/docs/**), PR, Sun 06:00 UTC, dispatch | **matrix** (`safe-pin` tag `latest`, pinned base; `latest-kernel`, tracks upstream `:stable`) — each: build (own `BASE_IMAGE` build-arg) → **smoke gate** (`tests/smoke.sh`, pre-push) → login → push GHCR → cosign sign by digest (if `SIGNING_SECRET`). `fail-fast: false` — one leg failing never blocks/cancels the other | `ci-failure-<variant>` (per-leg label, so one leg's success never auto-closes the other's issue) |
+| `build.yml` | push main (ignores README/docs/**), PR, Sun 06:00 UTC, dispatch | Two mutually exclusive matrices: PR-only **verify** has `contents: read`, credential-free SHA checkout, then builds/smokes/runtime-tests its own local candidates; default-branch **release** independently rebuilds/retests, pushes a unique candidate digest, requires cosign+signed SPDX+GitHub provenance verification, then promotes that unchanged digest to public tags. `fail-fast: false` — one leg failing never cancels the other | `ci-failure-<variant>` (release only; per-leg label, so one leg's success never auto-closes the other's issue) |
 | `boot-test.yml` | PR (build paths), Sun 07:00 UTC, dispatch | build → `podman run --systemd=always /sbin/init` → wait running/degraded → exec `tests/boot-check.sh` | `boot-test-failure` |
-| `base-watch.yml` | daily 05:00 UTC, dispatch | pull base → `rpm -qa` manifest → `ci/base-diff.py` vs last-seen baseline in `docs/manifests/` (written on first run) → commit refreshed manifest | `base-bump` |
-| `build-disk.yml` | dispatch (platform amd64/arm64), PR (disk.toml path) | bootc-image-builder → qcow2 disk image (rootfs=btrfs) → artifact or S3. anaconda-iso disabled: upstream BIB#1188 + bazzite#3418 | — |
+| `base-watch.yml` | daily 05:00 UTC, dispatch | pull `bazzite-nvidia-open:stable` → `rpm -qa` manifest → `ci/base-diff.py` vs last-seen baseline in `docs/manifests/` (written on first run) → commit refreshed manifest (and fail if every push retry fails) | `base-bump` |
+| `build-disk.yml` | dispatch (platform amd64/arm64), PR (disk.toml path) | resolve `:latest` once to an immutable digest → verify it with `cosign.pub` → pass that digest to bootc-image-builder → qcow2 disk image (rootfs=btrfs) → artifact or S3. anaconda-iso disabled: upstream BIB#1188 + bazzite#3418 | — |
 | `build-iso.yml` | dispatch, Sun 08:00 UTC | `podman build installer/` payload (live session + Anaconda, Fedora-signed kernel for Secure Boot) → titanoboa → bootable ISO → checksum + cosign sign-blob → artifact or S3 | `iso-failure` |
 
 The `installer/` payload + titanoboa contract is documented in
@@ -22,15 +22,17 @@ any podman use: the ubuntu-24.04 runner's podman bundle rework switched root
 storage to fuse-overlayfs, which EINVALs the nested `podman pull`'s literal
 `.wh.*` whiteout writes inside the payload build container (issue #47, PR #48).
 
-**Gate ordering** in `build.yml`: the smoke test runs *before* login/push, so a
-broken image is never published (each variant's tag stays last-good
-independently). Each gated workflow opens — and later auto-closes — its
-labelled tracking issue.
+**Gate ordering** in `build.yml`: both jobs build and run smoke/runtime-systemd
+checks against their own exact local candidates. The release job then logs in,
+pushes a unique candidate, verifies cosign/SBOM/GitHub provenance, and only then
+promotes that unchanged digest to public tags. A broken image therefore never
+advances a published variant (each tag stays last-good independently). The
+release job opens — and later auto-closes — its labelled tracking issue.
 
 ## Test scripts (`tests/`)
 
-- `smoke.sh` (303L) — offline, `podman run -i <img> bash -s <`. Asserts: qemu user resolves; 6 `virt*.socket` enabled; `libvirtd` masked; default-net symlink; polkit rule; wifi-guard/firstboot/docker enabled; **docker group exists**; `iptable_nat`; **looking-glass-client ujust recipe present**; all 6 `kargs.d` fragments (incl. SOF bypass, vfio-kvm, nvme); **SOF bypass karg + WirePlumber backoff**; **CPU power tuning (thermald + power-tuning svc/helper)**; **RAS** (rasdaemon enabled, mcelog masked, microcode_ctl); **i915-resume-fix-check timer enabled + helper executable**; **KDE Plasma version consistency** (`kwin`/`kscreenlocker` major.minor match — see `dependencies.md`); **smartd**; **swappiness=10 + baloofilerc**; **journald 4G cap + 1-month retention**; **amdgpu blacklist**; **BE200 wifi stability drop-in (`iwlmld power_scheme=1`)**; firewall-selector-conditional checks (OpenSnitch enabled + config valid, or Portmaster spike config/disabled-by-default + OpenSnitch absent); **Cockpit Machines UI manifest + cockpit.socket**. The Cockpit check uses the served manifest rather than `rpm -q`, because the compose may omit that RPM database record while retaining the UI files. Reports every failure, not just the first.
-- `boot-check.sh` (69L) — runtime, inside the booted image. HARD = qemu user resolves, virtqemud/virtnetworkd active, `virsh -c qemu:///system` connects, wifi-guard active + not-failed, **no SOF `FW reported error: 9` / `failed widget list set up` in the boot journal**. SOFT (container limits) = NetworkManager, firstboot, docker.
+- `smoke.sh` — offline, `podman run -i <img> bash -s <`. Asserts the virtualisation and monitoring intent plus Docker/Cockpit/Waydroid disabled by default, a baked Docker group without user membership, Cockpit's loopback drop-in, and the reporting-only health helper. It retains the existing firewall, kernel-argument, firmware, and desktop contracts; reports every failure, not just the first.
+- `boot-check.sh` — runtime, inside the booted image. HARD = qemu user resolves, virtqemud/virtnetworkd active, `virsh -c qemu:///system` connects, wifi-guard active + not-failed, optional Docker/Cockpit/Waydroid services disabled, and no SOF storm in the boot journal. SOFT (container limits) = NetworkManager and firstboot.
 
 ## Diff filter (`ci/base-diff.py`)
 

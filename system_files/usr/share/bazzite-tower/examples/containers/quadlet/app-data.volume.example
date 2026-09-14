@@ -1,0 +1,3 @@
+# Copy beside app.container as ~/.config/containers/systemd/app-data.volume.
+[Volume]
+VolumeName=app-data

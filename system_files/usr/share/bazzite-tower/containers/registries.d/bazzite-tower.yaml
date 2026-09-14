@@ -1,0 +1,3 @@
+docker:
+  ghcr.io/bearyjd/bazzite-tower:
+    use-sigstore-attachments: true

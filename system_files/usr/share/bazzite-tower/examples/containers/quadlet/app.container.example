@@ -1,0 +1,26 @@
+# Copy to ~/.config/containers/systemd/app.container after replacing the image
+# digest and application paths. This file is an example, not a discovered unit.
+[Unit]
+Description=Example rootless application container
+Wants=network-online.target
+After=network-online.target
+
+[Container]
+Image=registry.example.invalid/example/app@sha256:REPLACE_WITH_REVIEWED_DIGEST
+ContainerName=app
+UserNS=keep-id
+ReadOnly=true
+NoNewPrivileges=true
+DropCapability=all
+Network=app.network
+Volume=app-data.volume:/var/lib/app:Z
+# Secret=app-secret,type=mount,target=/run/secrets/app-secret
+# PublishPort=127.0.0.1:8080:8080
+
+[Service]
+Restart=on-failure
+RestartSec=5
+TimeoutStartSec=900
+
+[Install]
+WantedBy=default.target

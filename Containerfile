@@ -109,6 +109,9 @@ LABEL org.opencontainers.image.source="https://github.com/bearyjd/bazzite-tower"
 # and bootc kernel-argument fragments. Copied before build.sh runs so it can
 # enable the units that land here.
 COPY system_files/ /
+# Kept with the policy source under /usr/share and installed into /etc by the
+# build step, which merges rather than replacing any base policy entries.
+COPY cosign.pub /usr/share/bazzite-tower/containers/bazzite-tower-cosign.pub
 
 ### MODIFICATIONS
 RUN --mount=type=bind,from=ctx,source=/,target=/ctx \

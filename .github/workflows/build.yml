@@ -389,18 +389,39 @@ jobs:
         env:
           CANDIDATE_TAG: candidate-${{ github.run_id }}-${{ matrix.variant }}
 
-      - name: Generate SPDX SBOM from local candidate
-        id: sbom
-        uses: anchore/sbom-action@e11c554f704a0b820cbf8c51673f6945e0731532 # v0.20.0
+      # Downloading Syft separately lets the scan stream JSON directly to disk.
+      # The composite sbom-action buffers all scanner stdout in its Node process,
+      # which is unsafe for the large Fedora/bootc OCI archives built here.
+      - name: Download Syft
+        id: syft
         if: github.event_name != 'pull_request' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
-        # A timeout is fail-closed: no candidate is pushed or public tag
-        # promoted until the SBOM exists and is later signed and verified.
-        timeout-minutes: 10
+        uses: anchore/sbom-action/download-syft@e11c554f704a0b820cbf8c51673f6945e0731532 # v0.20.0
+        timeout-minutes: 5
         with:
-          image: oci-archive:${{ runner.temp }}/bazzite-tower-${{ matrix.variant }}.oci.tar
-          format: spdx-json
-          output-file: ${{ runner.temp }}/bazzite-tower-${{ matrix.variant }}.spdx.json
-          upload-artifact: false
+          syft-version: v1.51.1 # renovate: datasource=github-releases depName=anchore/syft
+
+      - name: Generate SPDX SBOM from local candidate
+        if: github.event_name != 'pull_request' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+        # Serialized cataloging bounds Syft's peak memory on the large
+        # Fedora/bootc archive. The command timeout is fail-closed: no candidate
+        # is pushed or public tag promoted until valid SPDX JSON exists.
+        timeout-minutes: 18
+        run: |
+          set -euo pipefail
+          archive="${RUNNER_TEMP}/bazzite-tower-${{ matrix.variant }}.oci.tar"
+          sbom="${RUNNER_TEMP}/bazzite-tower-${{ matrix.variant }}.spdx.json"
+
+          timeout --foreground --signal=TERM --kill-after=60s 15m "${SYFT_CMD}" scan \
+            --from oci-archive "${archive}" -o spdx-json > "${sbom}"
+          test -s "${sbom}"
+          jq -e 'type == "object" and (.spdxVersion | type == "string" and startswith("SPDX-")) and (.packages | type == "array")' "${sbom}" >/dev/null
+        env:
+          SYFT_CMD: ${{ steps.syft.outputs.cmd }}
+          SYFT_CHECK_FOR_APP_UPDATE: "false"
+          SYFT_PARALLELISM: "1"
+          SYFT_JAVASCRIPT_SEARCH_REMOTE_LICENSES: "false"
+          SYFT_PYTHON_SEARCH_REMOTE_LICENSES: "false"
+          SYFT_JAVA_USE_NETWORK: "false"
 
       - name: Push candidate to GHCR
         uses: redhat-actions/push-to-registry@94ade333c38ecc0e60e94785125d9a52ca423b37 # v3.0.0

@@ -13,13 +13,13 @@ registry="${repo_root}/system_files/usr/share/bazzite-tower/containers/registrie
 # the presence of a matching identity field.
 jq -e '.transports.docker["ghcr.io/bearyjd/bazzite-tower"] | type == "array" and length == 1 and .[0].type == "sigstoreSigned" and .[0].keyPath == "/etc/pki/containers/bazzite-tower-cosign.pub" and .[0].signedIdentity == {"type":"matchRepository"}' "${policy}" >/dev/null
 
-python3 - "${policy}" "${registry}" "${repo_root}/Containerfile" "${repo_root}/cosign.pub" "${repo_root}/.github/workflows/build.yml" "${repo_root}/build_files/build.d/15-signature-policy.sh" "${repo_root}/scripts/install-signature-policy.sh" "${repo_root}/system_files/usr/lib/bootc/install/50-signature-policy.toml" <<'PY'
+python3 - "${policy}" "${registry}" "${repo_root}/Containerfile" "${repo_root}/cosign.pub" "${repo_root}/.github/workflows/build.yml" "${repo_root}/build_files/build.d/15-signature-policy.sh" "${repo_root}/scripts/install-signature-policy.sh" "${repo_root}/system_files/usr/lib/bootc/install/50-signature-policy.toml" "${repo_root}/renovate.json" <<'PY'
 import json
 import sys
 import tempfile
 from pathlib import Path
 
-policy_path, registry_path, containerfile_path, public_key_path, workflow_path, image_installer_path, bootstrap_installer_path, install_config_path = map(Path, sys.argv[1:])
+policy_path, registry_path, containerfile_path, public_key_path, workflow_path, image_installer_path, bootstrap_installer_path, install_config_path, renovate_path = map(Path, sys.argv[1:])
 policy = json.loads(policy_path.read_text(encoding="utf-8"))
 rules = policy["transports"]["docker"]["ghcr.io/bearyjd/bazzite-tower"]
 assert policy["default"] == [{"type": "reject"}]
@@ -85,8 +85,30 @@ assert 'podman tag "${candidate}" "${IMAGE_NAME}:${tag}"' in workflow
 assert '- name: Verify GitHub provenance' in workflow
 assert 'gh attestation verify "oci://${IMAGE_REGISTRY}/${IMAGE_NAME}@${DIGEST}" --repo "${GITHUB_REPOSITORY}"' in workflow
 assert 'podman save --format oci-archive --output "${archive}"' in workflow
-assert 'image: oci-archive:${{ runner.temp }}/bazzite-tower-${{ matrix.variant }}.oci.tar' in workflow
-assert 'timeout-minutes: 10' in workflow
+# Syft must scan the pre-push local archive directly. Do not restore the
+# sbom-action wrapper: it buffers scanner stdout in Node and leaves the large
+# bootc archive scan susceptible to runner OOM. Serialized cataloging and the
+# external timeout make this gate bounded and fail closed.
+assert 'uses: anchore/sbom-action/download-syft@e11c554f704a0b820cbf8c51673f6945e0731532' in workflow
+assert 'syft-version: v1.51.1 # renovate: datasource=github-releases depName=anchore/syft' in workflow
+assert 'uses: anchore/sbom-action@e11c554f704a0b820cbf8c51673f6945e0731532' not in workflow
+assert 'SYFT_PARALLELISM: "1"' in workflow
+assert 'SYFT_CHECK_FOR_APP_UPDATE: "false"' in workflow
+assert 'SYFT_JAVASCRIPT_SEARCH_REMOTE_LICENSES: "false"' in workflow
+assert 'SYFT_PYTHON_SEARCH_REMOTE_LICENSES: "false"' in workflow
+assert 'SYFT_JAVA_USE_NETWORK: "false"' in workflow
+assert 'timeout-minutes: 5' in workflow
+assert 'timeout --foreground --signal=TERM --kill-after=60s 15m "${SYFT_CMD}" scan' in workflow
+assert '--from oci-archive "${archive}" -o spdx-json > "${sbom}"' in workflow
+assert 'test -s "${sbom}"' in workflow
+assert 'startswith("SPDX-")' in workflow
+assert 'timeout-minutes: 18' in workflow
+renovate = json.loads(renovate_path.read_text(encoding="utf-8"))
+assert any(
+    manager.get("datasourceTemplate") == "github-releases"
+    and "syft-version" in "".join(manager.get("matchStrings", []))
+    for manager in renovate["customManagers"]
+)
 assert 'image: ${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.push_candidate.outputs.digest }}' not in workflow
 assert workflow.index('- name: Generate SPDX SBOM from local candidate') < workflow.index('- name: Push candidate to GHCR')
 assert workflow.index('- name: Attach signed SBOM attestation') < workflow.index('- name: Promote verified candidate tags')

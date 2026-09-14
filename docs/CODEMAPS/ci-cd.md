@@ -8,7 +8,7 @@
 
 | Workflow | Triggers | Flow | Issue label |
 |---|---|---|---|
-| `build.yml` | push main (ignores README/docs/**), PR, Sun 06:00 UTC, dispatch | Two mutually exclusive matrices: PR-only **verify** has `contents: read`, credential-free SHA checkout, then builds/smokes/runtime-tests its own local candidates; default-branch **release** independently rebuilds/retests, pushes a unique candidate digest, requires cosign+signed SPDX+GitHub provenance verification, then promotes that unchanged digest to public tags. `fail-fast: false` — one leg failing never cancels the other | `ci-failure-<variant>` (release only; per-leg label, so one leg's success never auto-closes the other's issue) |
+| `build.yml` | push main (ignores README/docs/**), PR, Sun 06:00 UTC, dispatch | Two mutually exclusive matrices: PR-only **verify** has `contents: read`, credential-free SHA checkout, then builds/smokes/runtime-tests its own local candidates; default-branch **release** independently rebuilds/retests, freezes that local candidate as an OCI archive for a bounded SPDX scan, pushes a unique candidate digest, requires cosign+signed SPDX+GitHub provenance verification, then promotes that unchanged digest to public tags. `fail-fast: false` — one leg failing never cancels the other | `ci-failure-<variant>` (release only; per-leg label, so one leg's success never auto-closes the other's issue) |
 | `boot-test.yml` | PR (build paths), Sun 07:00 UTC, dispatch | build → `podman run --systemd=always /sbin/init` → wait running/degraded → exec `tests/boot-check.sh` | `boot-test-failure` |
 | `base-watch.yml` | daily 05:00 UTC, dispatch | pull `bazzite-nvidia-open:stable` → `rpm -qa` manifest → `ci/base-diff.py` vs last-seen baseline in `docs/manifests/` (written on first run) → commit refreshed manifest (and fail if every push retry fails) | `base-bump` |
 | `build-disk.yml` | dispatch (platform amd64/arm64), PR (disk.toml path) | resolve `:latest` once to an immutable digest → verify it with `cosign.pub` → pass that digest to bootc-image-builder → qcow2 disk image (rootfs=btrfs) → artifact or S3. anaconda-iso disabled: upstream BIB#1188 + bazzite#3418 | — |
@@ -23,8 +23,11 @@ storage to fuse-overlayfs, which EINVALs the nested `podman pull`'s literal
 `.wh.*` whiteout writes inside the payload build container (issue #47, PR #48).
 
 **Gate ordering** in `build.yml`: both jobs build and run smoke/runtime-systemd
-checks against their own exact local candidates. The release job then logs in,
-pushes a unique candidate, verifies cosign/SBOM/GitHub provenance, and only then
+checks against their own exact local candidates. Before any candidate push, the
+release job exports that immutable local tag to an OCI archive and scans it with
+an explicit ten-minute fail-closed bound; it does not re-pull the candidate for
+SBOM generation. It then pushes the same local candidate, signs and verifies
+the SBOM against its remote digest, verifies GitHub provenance, and only then
 promotes that unchanged digest to public tags. A broken image therefore never
 advances a published variant (each tag stays last-good independently). The
 release job opens — and later auto-closes — its labelled tracking issue.

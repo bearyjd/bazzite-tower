@@ -84,6 +84,12 @@ workflow = workflow_path.read_text(encoding="utf-8")
 assert 'podman tag "${candidate}" "${IMAGE_NAME}:${tag}"' in workflow
 assert '- name: Verify GitHub provenance' in workflow
 assert 'gh attestation verify "oci://${IMAGE_REGISTRY}/${IMAGE_NAME}@${DIGEST}" --repo "${GITHUB_REPOSITORY}"' in workflow
+assert 'podman save --format oci-archive --output "${archive}"' in workflow
+assert 'image: oci-archive:${{ runner.temp }}/bazzite-tower-${{ matrix.variant }}.oci.tar' in workflow
+assert 'timeout-minutes: 10' in workflow
+assert 'image: ${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.push_candidate.outputs.digest }}' not in workflow
+assert workflow.index('- name: Generate SPDX SBOM from local candidate') < workflow.index('- name: Push candidate to GHCR')
+assert workflow.index('- name: Attach signed SBOM attestation') < workflow.index('- name: Promote verified candidate tags')
 PY
 
 echo "Signature policy source is valid and targets ghcr.io/bearyjd/bazzite-tower."

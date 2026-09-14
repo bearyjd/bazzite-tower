@@ -13,12 +13,12 @@ registry="${repo_root}/system_files/usr/share/bazzite-tower/containers/registrie
 # the presence of a matching identity field.
 jq -e '.transports.docker["ghcr.io/bearyjd/bazzite-tower"] | type == "array" and length == 1 and .[0].type == "sigstoreSigned" and .[0].keyPath == "/etc/pki/containers/bazzite-tower-cosign.pub" and .[0].signedIdentity == {"type":"matchRepository"}' "${policy}" >/dev/null
 
-python3 - "${policy}" "${registry}" "${repo_root}/Containerfile" "${repo_root}/cosign.pub" "${repo_root}/.github/workflows/build.yml" "${repo_root}/build_files/build.d/15-signature-policy.sh" <<'PY'
+python3 - "${policy}" "${registry}" "${repo_root}/Containerfile" "${repo_root}/cosign.pub" "${repo_root}/.github/workflows/build.yml" "${repo_root}/build_files/build.d/15-signature-policy.sh" "${repo_root}/scripts/install-signature-policy.sh" <<'PY'
 import json
 import sys
 from pathlib import Path
 
-policy_path, registry_path, containerfile_path, public_key_path, workflow_path, installer_path = map(Path, sys.argv[1:])
+policy_path, registry_path, containerfile_path, public_key_path, workflow_path, image_installer_path, bootstrap_installer_path = map(Path, sys.argv[1:])
 policy = json.loads(policy_path.read_text(encoding="utf-8"))
 rules = policy["transports"]["docker"]["ghcr.io/bearyjd/bazzite-tower"]
 assert len(rules) == 1
@@ -28,11 +28,13 @@ assert rule["keyPath"] == "/etc/pki/containers/bazzite-tower-cosign.pub"
 assert rule["signedIdentity"] == {"type": "matchRepository"}
 assert "use-sigstore-attachments: true" in registry_path.read_text(encoding="utf-8")
 assert "COPY cosign.pub /usr/share/bazzite-tower/containers/bazzite-tower-cosign.pub" in containerfile_path.read_text(encoding="utf-8")
-installer = installer_path.read_text(encoding="utf-8")
 # A literal backslash-n makes jq reject the installed policy even though the
-# source policy is valid; the serializer must append a real newline.
-assert 'json.dumps(current, indent=2) + "\\n"' in installer
-assert 'json.dumps(current, indent=2) + "\\\\n"' not in installer
+# source policy is valid; both image and host-bootstrap serializers must append
+# a real newline.
+for installer_path in (image_installer_path, bootstrap_installer_path):
+    installer = installer_path.read_text(encoding="utf-8")
+    assert 'json.dumps(current, indent=2) + "\\n"' in installer
+    assert 'json.dumps(current, indent=2) + "\\\\n"' not in installer
 key = public_key_path.read_text(encoding="utf-8")
 assert key.startswith("-----BEGIN PUBLIC KEY-----") and key.rstrip().endswith("-----END PUBLIC KEY-----")
 workflow = workflow_path.read_text(encoding="utf-8")

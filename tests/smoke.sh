@@ -218,6 +218,8 @@ check "iwlwifi 11be disabled"       grep -qE '^options iwlwifi disable_11be=1$' 
 echo "== Docker CE =="
 check "docker present"     command -v docker
 check "containerd present" command -v containerd
+check "iptables explicitly present" command -v iptables
+check "flock present for Docker/libvirt reconciliation" command -v flock
 # The 'docker' group must be baked into the image: docker.socket resolves it at
 # early boot, and if it's only created late at runtime the socket fails every boot.
 check "docker group exists (getent group docker)" getent group docker
@@ -225,6 +227,23 @@ check "docker group exists (getent group docker)" getent group docker
 check_disabled "docker.service"
 check_disabled "docker.socket"
 check "no Docker-specific boot module load" test ! -e /etc/modules-load.d/iptable_nat.conf
+check "Docker/libvirt forwarding helper is executable" test -x /usr/local/libexec/docker-libvirt-forwarding
+# shellcheck disable=SC2016 # The inner shell expands stat, not this script.
+check "Docker/libvirt forwarding helper is root-owned" \
+    bash -c '[[ "$(stat -c %u:%g /usr/local/libexec/docker-libvirt-forwarding)" == "0:0" ]]'
+check "Docker/libvirt forwarding runs after Docker starts" \
+    grep -qx 'ExecStartPost=/usr/local/libexec/docker-libvirt-forwarding' \
+        /etc/systemd/system/docker.service.d/libvirt-forwarding.conf
+# shellcheck disable=SC2016 # This is the literal helper source text.
+check "Docker/libvirt forwarding checks rules before insertion" \
+    grep -qF '"${iptables_bin}" -w -C DOCKER-USER' /usr/local/libexec/docker-libvirt-forwarding
+check "Docker/libvirt forwarding tags owned rules" \
+    grep -qx 'comment_prefix=bazzite-tower-libvirt-forwarding' /usr/local/libexec/docker-libvirt-forwarding
+check "Docker/libvirt forwarding uses a bounded whole-helper lock" \
+    grep -qx 'if ! flock -w 30 9; then' /usr/local/libexec/docker-libvirt-forwarding
+check "libvirt lifecycle hook is executable" test -x /etc/libvirt/hooks/network
+check "NetworkManager route reconciliation hook is executable" \
+    test -x /etc/NetworkManager/dispatcher.d/90-docker-libvirt-forwarding
 
 echo "== Image signature policy =="
 # The policy is merged at compose time so it must retain the targeted sigstore

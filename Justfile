@@ -571,3 +571,12 @@ test-ci:
     #!/usr/bin/env bash
     set -euo pipefail
     bash tests/test-base-diff.sh
+
+# Privileged, opt-in host check: restarts Docker, verifies the narrow
+# DOCKER-USER rules for active libvirt NAT bridges, then probes Docker bridge
+# networking. It may pull a small probe image; it is not a required CI test.
+[group('Test')]
+test-docker-libvirt-forwarding:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    sudo tests/test-docker-libvirt-forwarding-integration.sh

@@ -79,5 +79,5 @@ dnf install -y --enablerepo=docker-ce-stable \
     docker-ce-cli \
     containerd.io \
     docker-buildx-plugin \
-    docker-compose-plugin
-
+    docker-compose-plugin \
+    iptables

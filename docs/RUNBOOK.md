@@ -74,6 +74,7 @@ again on a future kernel bump.
 | Virt stack up | `systemctl is-active virtqemud.socket` · `virsh -c qemu:///system list --all` |
 | Read-only image/host summary | `ujust tower-health` — optional-service states, SMART/RAS/timers, firmware and security-tool availability |
 | Cockpit web management (opt-in) | `ujust enable-cockpit`; it binds only to loopback. Review Tailnet ACLs, then separately run `tailscale serve --https=443 http://127.0.0.1:9090`; do not expose :9090 directly without explicit firewall policy. |
+| Docker/libvirt NAT forwarding (opt-in Docker) | `just test-docker-libvirt-forwarding` (from a repository checkout) — restarts Docker, checks its `DOCKER-USER` NAT-bridge/uplink pair rules, then probes Docker bridge networking. Rules are only for active libvirt XML `forward mode='nat'` bridges; no broad source-RFC1918 or bridge-wildcard policy is added. |
 | Looking Glass client | kvmfr host module is baked (`ls /dev/kvmfr0`); install the version-coupled client on demand with `ujust install-looking-glass-client`, then `looking-glass-client` (match its B-version to the Windows host app) |
 | Default NAT network | `ujust vm-net-status` |
 | Wi-Fi diagnostics (offline) | `ujust wifi-debug` |
@@ -126,6 +127,7 @@ Known-good: `18.1.18.2644` and above.
 | `virtqemud` won't start | upstream change dropped the `qemu` system user | rebuilt/guarded in `build.sh`; the smoke + boot tests catch regressions |
 | Can't manage VMs as your user | user not yet in `kvm`/`libvirt` | `ujust fix-vm-groups`, then re-login (the first-boot oneshot adds the first user automatically) |
 | Docker command cannot connect | Docker is intentionally disabled by default | Run `ujust enable-docker`, acknowledge that the Docker group is root-equivalent, then re-login |
+| Libvirt NAT guests cannot reach the default uplink after Docker starts | Docker's `DOCKER-USER` chain was not created or the active NAT bridge lacks an IPv4 address | `sudo systemctl restart docker.service`; inspect `journalctl -u docker.service -b`; the post-start helper refuses to create a missing Docker chain. From a repository checkout, run `just test-docker-libvirt-forwarding` on a suitable host. |
 | `docker.socket` fails at boot (`Failed to resolve group 'docker'`) | the `docker` group wasn't baked into the image (stale gshadow orphan made `systemd-sysusers` abort, so the group got created late) | `build.sh` now strips all shadow/gshadow orphans and bakes `groupadd -r docker`; the smoke test asserts the group exists |
 | Display flicker / ~30s sluggish wake | i915 PSR/DC or `deep` suspend on Meteor Lake | baked kargs disable PSR/DC and pin `s2idle`; verify `cat /sys/power/mem_sleep` |
 | No audio; journal floods with `FW reported error: 9` / `failed to create module pipeline` | SOF topology ABI (3.29) newer than the kernel's SOF driver ABI (3.23); no ABI-≤3.23 firmware in repos to downgrade to | `25-audio-sof-bypass.toml` forces the legacy HDA driver (`snd_intel_dspcfg.dsp_driver=1`), sidestepping SOF; verify `journalctl -k \| grep -i dsp_driver` |

@@ -25,7 +25,7 @@ carry, because line ranges drift and filenames do not.
 | `10-virt-packages.sh` | dnf: qemu-kvm, libvirt*, virt-install/manager/viewer, edk2-ovmf, guestfs-tools, spice-gtk3 |
 | `15-signature-policy.sh` | merges a repository-scoped cosign `sigstoreSigned` rule into the existing containers policy and installs the sigstore-attachment registry configuration without erasing other policy rules |
 | `20-dev-tooling.sh` | dnf: android-tools, ccache, flatpak-builder, podman-machine/tui, rclone, restic, zsh |
-| `30-docker-ce.sh` | write inert `docker-ce.repo` (every section enabled=0); remove `podman-docker`; install via `--enablerepo=docker-ce-stable` |
+| `30-docker-ce.sh` | write inert `docker-ce.repo` (every section enabled=0); remove `podman-docker`; install via `--enablerepo=docker-ce-stable`, including explicit `iptables` for the Docker/libvirt forwarding helper |
 | `40-sysusers-fixup.sh` | **generic** orphan strip (keep only shadow/gshadow lines with a matching passwd/group) -> `systemd-sysusers` -> guarded `groupadd -r qemu` + `useradd qemu` + **`groupadd -r docker`**. Fixes virtqemud + docker.socket "Unknown group" boot failures. The most fragile piece; kept isolated on purpose |
 | `50-docker-networking.sh` | intentional no-op: `ujust enable-docker` creates the Docker-only `iptable_nat` modules-load file locally |
 | `60-libvirt-services.sh` | mask `libvirtd.service`; enable `virtqemud/virtnetworkd/virtnodedevd/virtnwfilterd/virtstoraged/virtproxyd.socket`; explicitly disable Docker service/socket; default NAT net autostart symlink (virsh can't run at build time); polkit `wheel` -> `qemu:///system`; enable `bazzite-tower-firstboot.service` (kvm/libvirt only) |

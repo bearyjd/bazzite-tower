@@ -69,6 +69,8 @@ jobs:
           tests/test-firstboot-no-docker.sh
           tests/test-tower-health.sh
           tests/test-container-templates.sh
+          tests/test-docker-libvirt-forwarding.sh
+          tests/test-docker-libvirt-forwarding-hooks.sh
 
       # A local-only tag avoids metadata/publish semantics while ensuring the
       # smoke and runtime checks exercise the exact image this job built.
@@ -193,6 +195,8 @@ jobs:
           tests/test-firstboot-no-docker.sh
           tests/test-tower-health.sh
           tests/test-container-templates.sh
+          tests/test-docker-libvirt-forwarding.sh
+          tests/test-docker-libvirt-forwarding-hooks.sh
 
       - name: Get current date
         id: date

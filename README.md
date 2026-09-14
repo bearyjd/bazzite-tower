@@ -63,6 +63,24 @@ Docker is installed but its daemon/socket and group membership are **off by
 default**. Opt in per host with `ujust enable-docker`; it loads `iptable_nat`
 only for that host and warns that the `docker` group is root-equivalent.
 
+When Docker starts, its `DOCKER-USER` chain receives narrowly-scoped rules for
+each **active libvirt network configured as NAT**. The helper derives that
+bridge's live IPv4 network and the current default-route interface, then allows
+only `NEW,ESTABLISHED,RELATED` guest-originated traffic toward that uplink plus
+`RELATED,ESTABLISHED` reply traffic. It neither broadens source-RFC1918 or bridge-wildcard access nor changes Docker's FORWARD policy,
+Docker-managed chains, or nftables tables. If Docker did not create
+`DOCKER-USER`, startup fails rather than creating or bypassing the chain. Every
+generated pair has a deterministic helper-owned comment. When a NAT network,
+bridge address, or default route changes, reconciliation removes only stale
+rules with that comment prefix; it never flushes or changes unowned
+`DOCKER-USER` rules. Libvirt network lifecycle and NetworkManager route events
+request reconciliation asynchronously, without blocking either event.
+
+Run the privileged host check after opting in with
+`just test-docker-libvirt-forwarding`; it restarts Docker, verifies those exact
+rules, and runs a Docker bridge-network probe. It is deliberately not a CI
+requirement because nested Docker/firewall support is runner-dependent.
+
 ### OpenSnitch (application firewall)
 
 [OpenSnitch](https://github.com/evilsocket/opensnitch) is baked in daemon-only (no GUI package): `opensnitch.service` is enabled at boot. It is the interception engine for [Snitchwatch](https://github.com/bearyjd/snitchwatch), which replaces upstream's `opensnitch-ui` — **do not install `opensnitch-ui`**, the two conflict and Snitchwatch has an explicit coexistence check.

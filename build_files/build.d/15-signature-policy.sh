@@ -29,6 +29,6 @@ docker = transports.setdefault("docker", {})
 docker["ghcr.io/bearyjd/bazzite-tower"] = requested["transports"]["docker"]["ghcr.io/bearyjd/bazzite-tower"]
 destination.parent.mkdir(parents=True, exist_ok=True)
 temporary = destination.with_suffix(".json.tmp")
-temporary.write_text(json.dumps(current, indent=2) + "\\n", encoding="utf-8")
+temporary.write_text(json.dumps(current, indent=2) + "\n", encoding="utf-8")
 os.replace(temporary, destination)
 PY

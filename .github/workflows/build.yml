@@ -389,16 +389,30 @@ jobs:
         env:
           CANDIDATE_TAG: candidate-${{ github.run_id }}-${{ matrix.variant }}
 
-      # Downloading Syft separately lets the scan stream JSON directly to disk.
-      # The composite sbom-action buffers all scanner stdout in its Node process,
-      # which is unsafe for the large Fedora/bootc OCI archives built here.
-      - name: Download Syft
+      # Download and authenticate an immutable Syft release asset before use.
+      # The generic download-syft action delegates to a mutable installer, so it
+      # cannot establish the binary's release-asset integrity here.
+      - name: Download and verify Syft
         id: syft
         if: github.event_name != 'pull_request' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
-        uses: anchore/sbom-action/download-syft@e11c554f704a0b820cbf8c51673f6945e0731532 # v0.20.0
         timeout-minutes: 5
-        with:
-          syft-version: v1.51.1 # renovate: datasource=github-releases depName=anchore/syft
+        run: |
+          set -euo pipefail
+          archive="${RUNNER_TEMP}/syft_${SYFT_VERSION#v}_linux_amd64.tar.gz"
+          syft_dir="${RUNNER_TEMP}/syft-${SYFT_VERSION}"
+          url="https://github.com/anchore/syft/releases/download/${SYFT_VERSION}/syft_${SYFT_VERSION#v}_linux_amd64.tar.gz"
+
+          curl --fail --location --retry 3 --retry-all-errors --connect-timeout 30 --max-time 240 \
+            --output "${archive}" "${url}"
+          printf '%s  %s\n' "${SYFT_SHA256}" "${archive}" | sha256sum --check --status
+          mkdir -p "${syft_dir}"
+          tar --extract --gzip --file "${archive}" --directory "${syft_dir}" syft
+          chmod 0755 "${syft_dir}/syft"
+          printf 'cmd=%s\n' "${syft_dir}/syft" >> "${GITHUB_OUTPUT}"
+        env:
+          # renovate: datasource=custom.syft-release-asset depName=anchore/syft versioning=semver
+          SYFT_VERSION: v1.51.1
+          SYFT_SHA256: 8fcb33017a0dc1058298c923c436d19dfa68ae93968e0b423248542e3afb9fc3
 
       - name: Generate SPDX SBOM from local candidate
         if: github.event_name != 'pull_request' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)

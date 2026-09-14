@@ -373,6 +373,35 @@ jobs:
           TAG_BASE: ${{ matrix.tag_base }}
           CANDIDATE_TAG: candidate-${{ github.run_id }}-${{ matrix.variant }}
 
+      # Freeze the already smoke/runtime-tested local candidate into an OCI
+      # archive. Syft is given this explicit local source rather than a
+      # registry-qualified reference, so it cannot hang pulling the candidate
+      # back from GHCR. The candidate tag is not mutated between this export and
+      # the push below; its remote digest remains the attestation subject.
+      - name: Export local candidate for SBOM
+        if: github.event_name != 'pull_request' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+        run: |
+          set -euo pipefail
+          archive="${RUNNER_TEMP}/bazzite-tower-${{ matrix.variant }}.oci.tar"
+          timeout 5m podman save --format oci-archive --output "${archive}" \
+            "${IMAGE_NAME}:${CANDIDATE_TAG}"
+          test -s "${archive}"
+        env:
+          CANDIDATE_TAG: candidate-${{ github.run_id }}-${{ matrix.variant }}
+
+      - name: Generate SPDX SBOM from local candidate
+        id: sbom
+        uses: anchore/sbom-action@e11c554f704a0b820cbf8c51673f6945e0731532 # v0.20.0
+        if: github.event_name != 'pull_request' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+        # A timeout is fail-closed: no candidate is pushed or public tag
+        # promoted until the SBOM exists and is later signed and verified.
+        timeout-minutes: 10
+        with:
+          image: oci-archive:${{ runner.temp }}/bazzite-tower-${{ matrix.variant }}.oci.tar
+          format: spdx-json
+          output-file: ${{ runner.temp }}/bazzite-tower-${{ matrix.variant }}.spdx.json
+          upload-artifact: false
+
       - name: Push candidate to GHCR
         uses: redhat-actions/push-to-registry@94ade333c38ecc0e60e94785125d9a52ca423b37 # v3.0.0
         if: github.event_name != 'pull_request' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
@@ -408,16 +437,6 @@ jobs:
           COSIGN_EXPERIMENTAL: false
           COSIGN_PRIVATE_KEY: ${{ secrets.SIGNING_SECRET }}
           COSIGN_PASSWORD: ""
-
-      - name: Generate SPDX SBOM
-        id: sbom
-        uses: anchore/sbom-action@e11c554f704a0b820cbf8c51673f6945e0731532 # v0.20.0
-        if: github.event_name != 'pull_request' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
-        with:
-          image: ${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.push_candidate.outputs.digest }}
-          format: spdx-json
-          output-file: ${{ runner.temp }}/bazzite-tower-${{ matrix.variant }}.spdx.json
-          upload-artifact: false
 
       - name: Attach signed SBOM attestation
         if: github.event_name != 'pull_request' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)

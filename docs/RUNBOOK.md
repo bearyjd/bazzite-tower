@@ -9,12 +9,18 @@ Image: `ghcr.io/bearyjd/bazzite-tower:latest` · signed with `cosign.pub`.
 ## Install / switch
 
 ```bash
-sudo bootc switch ghcr.io/bearyjd/bazzite-tower:latest
+sudo ./scripts/install-signature-policy.sh
+sudo bootc switch --enforce-container-sigpolicy ghcr.io/bearyjd/bazzite-tower:latest
 sudo systemctl reboot
 ```
 
-From any bootc host (Bazzite, Bluefin, Aurora, Silverblue, Fedora Atomic). Bazzite's
-policy enforces signature verification against `cosign.pub`. See
+From any bootc host (Bazzite, Bluefin, Aurora, Silverblue, Fedora Atomic), run
+the bootstrap helper from a trusted checkout before the first switch. It makes
+the global default reject, installs this repository's more-specific sigstore
+rule, and preserves unrelated explicit host rules. An empty Docker-transport
+compatibility fallback still permits unrelated Docker/Podman pulls; it cannot
+override this repository's specific rule. An image cannot securely enforce a
+policy that is first introduced by that same image. See
 [README "Installing"](../README.md#installing).
 
 ## Update
@@ -39,15 +45,20 @@ Or pick the previous entry in the GRUB boot menu at power-on. To **freeze** on a
 known-good build instead of tracking `:latest`, switch to a date-stamped tag:
 
 ```bash
-sudo bootc switch ghcr.io/bearyjd/bazzite-tower:latest.YYYYMMDD
+sudo bootc switch --enforce-container-sigpolicy ghcr.io/bearyjd/bazzite-tower:latest.YYYYMMDD
 ```
 
 Tag scheme (`latest`, `latest.YYYYMMDD`, `YYYYMMDD`, `<short-sha>`):
 [README "Tags"](../README.md#tags). A second, opt-in `:latest-kernel` variant
-also exists, tracking upstream `bazzite-nvidia:stable`'s current kernel — do
-**not** `bootc switch` to it on this hardware without first checking
-`docs/research/i915-bug-report/` for whether the s2idle-resume regression is
-actually fixed yet.
+also exists, tracking upstream `bazzite-nvidia-open:stable`'s current kernel.
+The Meteor Lake cx0 DPLL s2idle-resume regression that once made this variant
+risky is now fixed upstream (mainline 7.2, commit `062499cc4813b5a3`) and
+`:latest` itself moved onto a kernel carrying the fix on 2026-08-28 — see
+`Containerfile`'s header comment and
+`docs/research/i915-bug-report/UPSTREAM-FIX-STATUS-2026-08-28.md` for the full
+chain of reasoning. `:latest-kernel` is still worth checking against that doc
+before switching, since it floats independently and could in principle regress
+again on a future kernel bump.
 
 ## Health checks
 
@@ -64,7 +75,9 @@ actually fixed yet.
 | Indexer excludes applied | `balooctl6 config show excludeFilters` (expect `.gradle`, build/cache dirs) |
 | CPU power baseline | `cat /sys/devices/system/cpu/cpu0/cpufreq/energy_performance_preference` (expect `balance_performance`); `cat /sys/firmware/acpi/platform_profile` (expect `balanced`); `systemctl is-active thermald` |
 | Virt stack up | `systemctl is-active virtqemud.socket` · `virsh -c qemu:///system list --all` |
-| Cockpit web management | `systemctl is-active cockpit.socket`; browse `https://<tower>:9090` (over Tailscale) — VMs (cockpit-machines), services, storage, podman, logs |
+| Read-only image/host summary | `ujust tower-health` — optional-service states, SMART/RAS/timers, firmware and security-tool availability |
+| Cockpit web management (opt-in) | `ujust enable-cockpit`; it binds only to loopback. Review Tailnet ACLs, then separately run `tailscale serve --https=443 http://127.0.0.1:9090`; do not expose :9090 directly without explicit firewall policy. |
+| Docker/libvirt NAT forwarding (opt-in Docker) | `just test-docker-libvirt-forwarding` (from a repository checkout) — restarts Docker, checks its `DOCKER-USER` NAT-bridge/uplink pair rules, then probes Docker bridge networking. Rules are only for active libvirt XML `forward mode='nat'` bridges; no broad source-RFC1918 or bridge-wildcard policy is added. A post-start reconciliation failure is non-fatal to Docker and later libvirt/NetworkManager events retry it. |
 | Looking Glass client | kvmfr host module is baked (`ls /dev/kvmfr0`); install the version-coupled client on demand with `ujust install-looking-glass-client`, then `looking-glass-client` (match its B-version to the Windows host app) |
 | Default NAT network | `ujust vm-net-status` |
 | Wi-Fi diagnostics (offline) | `ujust wifi-debug` |
@@ -73,6 +86,26 @@ actually fixed yet.
 runs all of the above (SOF/ABI, MCE/RAS, i915 resume, thermals, SMART, rpm-ostree)
 in one pass. Run with `sudo` for the root-only checks:
 `sudo ./scripts/tower-diagnostic.sh`.
+
+**Display glitch that leaves no log trace:**
+[`scripts/i915-drm-debug-capture.sh`](../scripts/i915-drm-debug-capture.sh) raises
+`drm.debug` at runtime (no reboot) and extracts the journal around the moment a
+glitch was *seen*. Some display symptoms — the 2026-09-07 flicker being the worked
+example — produce zero i915/nvidia errors at default verbosity, so this is the only
+way to see the pipeline at the moment it happens:
+
+```bash
+sudo ./scripts/i915-drm-debug-capture.sh on          # default mask 0x104 (KMS+DP)
+# ...use the machine; note the wall-clock time when you SEE the glitch...
+sudo ./scripts/i915-drm-debug-capture.sh grab 23:26  # writes a +/-60s capture
+sudo ./scripts/i915-drm-debug-capture.sh off         # always turn it back off
+```
+
+Costs ~17 MB of journal per day at the default mask (measured), against the 4G cap
+in `90-tower-journal-cap.conf` — safe to leave on for days while waiting to catch
+one. Do **not** add the VBL bit (`0x20`): the panel runs at 165 Hz and would emit
+~165 lines/second. See
+[docs/research/nvidia-modeset-head-flicker-2026-09-07.md](./research/nvidia-modeset-head-flicker-2026-09-07.md).
 
 CI mirrors these: `tests/smoke.sh` (offline, the gate) and `tests/boot-check.sh`
 (runtime). See [docs/CODEMAPS/ci-cd.md](./CODEMAPS/ci-cd.md).
@@ -95,7 +128,9 @@ Known-good: `18.1.18.2644` and above.
 |---|---|---|
 | Wi-Fi gone after a rebase | stale `wifi.backend=iwd` with iwd not enabled | the `wifi-backend-guard` service auto-recovers on boot; inspect with `ujust wifi-debug` |
 | `virtqemud` won't start | upstream change dropped the `qemu` system user | rebuilt/guarded in `build.sh`; the smoke + boot tests catch regressions |
-| Can't manage VMs as your user | user not yet in `kvm`/`libvirt`/`docker` | `ujust fix-vm-groups`, then re-login (the first-boot oneshot adds the first user automatically) |
+| Can't manage VMs as your user | user not yet in `kvm`/`libvirt` | `ujust fix-vm-groups`, then re-login (the first-boot oneshot adds the first user automatically) |
+| Docker command cannot connect | Docker is intentionally disabled by default | Run `ujust enable-docker`, acknowledge that the Docker group is root-equivalent, then re-login |
+| Libvirt NAT guests cannot reach the default uplink after Docker starts | Docker's `DOCKER-USER` chain was not created or the active NAT bridge lacks an IPv4 address | `sudo systemctl restart docker.service`; inspect `journalctl -u docker.service -b`; the post-start helper refuses to create a missing Docker chain but does not fail Docker itself. Libvirt lifecycle and NetworkManager route/VPN/reapply events retry it. From a repository checkout, run `just test-docker-libvirt-forwarding` on a suitable host. |
 | `docker.socket` fails at boot (`Failed to resolve group 'docker'`) | the `docker` group wasn't baked into the image (stale gshadow orphan made `systemd-sysusers` abort, so the group got created late) | `build.sh` now strips all shadow/gshadow orphans and bakes `groupadd -r docker`; the smoke test asserts the group exists |
 | Display flicker / ~30s sluggish wake | i915 PSR/DC or `deep` suspend on Meteor Lake | baked kargs disable PSR/DC and pin `s2idle`; verify `cat /sys/power/mem_sleep` |
 | No audio; journal floods with `FW reported error: 9` / `failed to create module pipeline` | SOF topology ABI (3.29) newer than the kernel's SOF driver ABI (3.23); no ABI-≤3.23 firmware in repos to downgrade to | `25-audio-sof-bypass.toml` forces the legacy HDA driver (`snd_intel_dspcfg.dsp_driver=1`), sidestepping SOF; verify `journalctl -k \| grep -i dsp_driver` |
@@ -302,10 +337,11 @@ shows it loaded after a rebase, it's initramfs-embedded — add the kernel arg
 
 ## /etc drift vs the image
 
-`/etc` is writable and 3-way merged across `rpm-ostree upgrade`, so a fix dropped
-there survives reboots and updates — but **not** a rebase or a fresh install, and
-it silently shadows whatever the image ships. Anything meant to be permanent
-belongs in `system_files/`.
+`/etc` is writable and 3-way merged across `rpm-ostree upgrade`; local state can
+also persist across bootc rebases. It silently shadows whatever the image ships,
+so a previously enabled optional service may remain enabled after switching to a
+newer image. Inspect with `ujust tower-health` and explicitly disable unwanted
+units. Anything intended as image policy belongs in `system_files/`.
 
 ```bash
 sudo ostree admin config-diff | grep -E '^[AMD] '   # A = added locally, M = modified
@@ -322,8 +358,10 @@ secrets and must never be baked into the image.**
 
 | Unit | Disposition |
 |------|-------------|
-| `tailscaled.service` | **Baked** into the image (`build.d/62-host-services.sh`) |
-| `waydroid-container.service` | **Baked** into the image |
+| `tailscaled.service` | **Baked** only as an unauthenticated client daemon. No node identity, auth key, Serve/Funnel setup, or listener is included; the operator runs `tailscale up` separately. |
+| `docker.service` / `docker.socket` | **Disabled by default.** `ujust enable-docker` is explicit because its group is root-equivalent. |
+| `cockpit.socket` | **Disabled by default** and loopback-only when enabled with `ujust enable-cockpit`. The recipe prints, but does not run, the Tailscale Serve command. |
+| `waydroid-container.service` | **Disabled by default.** `ujust enable-waydroid` starts only the service; Android image initialisation stays separate. |
 | `sshd.service` | **Local only, on purpose.** The image ships sshd off so it stays safe to hand to anyone. Re-apply after a rebase with `ujust enable-ssh` |
 | `plugin_loader.service` | **Never bake.** Decky Loader; runs as root with an ExecStart inside one user's home. Owned by Decky's installer |
 | `libvirtd.service` | `/etc` carries an inert enable symlink. `60-libvirt-services.sh` **masks** this unit in favour of the modular `virt*` daemons and the mask wins. Delete the symlink, do not promote: `sudo rm /etc/systemd/system/multi-user.target.wants/libvirtd.service` |
@@ -405,17 +443,52 @@ Each guard workflow opens — and later auto-closes — a labelled tracking issu
 | Secret | Required | Used for |
 |---|---|---|
 | `GITHUB_TOKEN` | auto | GHCR push; open/close tracking issues (provided by Actions) |
-| `SIGNING_SECRET` | optional | cosign private key — sign image by digest (`build.yml`) and ISO sign-blob (`build-iso.yml`). Unset → signing step skipped |
+| `SIGNING_SECRET` | required for default-branch image release | cosign private key — signs image digests and SBOM attestations in `build.yml`; image publication fails if absent. ISO sign-blob remains optional. |
 | `S3_PROVIDER`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`, `S3_REGION`, `S3_ENDPOINT`, `S3_BUCKET_NAME` | optional | rclone upload of disk/ISO artifacts (`build-disk.yml`, `build-iso.yml`). Unset → artifact-only |
 <!-- END AUTO-GENERATED:secrets -->
 
-Rotate `SIGNING_SECRET` by generating a new cosign keypair, updating the repo secret,
-and committing the new `cosign.pub`.
+### Signing-key rotation
+
+Do **not** replace `SIGNING_SECRET` and `cosign.pub` in place: hosts that still
+trust only the old key would reject the next image before it can deliver a new
+policy. Use a staged transition instead:
+
+1. Generate and protect the new key, while retaining the current key and its
+   `SIGNING_SECRET`.
+2. Publish an image signed by the **currently trusted** key that adds the new
+   public key to the image/host policy alongside the old key (separate
+   repository-scoped `sigstoreSigned` requirements, each with its own
+   `keyPath`). Deploy that policy update to installed hosts with the bootstrap
+   helper or equivalent managed configuration.
+3. Configure CI to dual-sign every release during the transition, including its
+   image and signed SBOM attestations, and verify both signatures. Confirm every
+   installed host accepts the new key before retiring the old one.
+4. Only then remove the old signing key, its public key, and its policy rule.
+
+The current workflow intentionally supports one `SIGNING_SECRET` only. Dual
+signing and dual-key policy support are prerequisites for a rotation; do not
+start one by changing the existing secret or `cosign.pub` alone.
 
 ## Verify a published image
 
 ```bash
 cosign verify --key cosign.pub ghcr.io/bearyjd/bazzite-tower:latest
+```
+
+Verify the signed SBOM attached to that image:
+
+```bash
+cosign verify-attestation --key cosign.pub --type spdxjson ghcr.io/bearyjd/bazzite-tower:latest
+```
+
+The repository policy uses `matchRepository`: it proves a digest was signed by
+this repository key, but it does not guarantee freshness. A registry (or a
+compromised signing process) could point `:latest` at an older, still-signed
+digest. For rollback-sensitive hosts, record a reviewed image digest and switch
+to that immutable reference instead of a tag:
+
+```bash
+sudo bootc switch --enforce-container-sigpolicy ghcr.io/bearyjd/bazzite-tower@sha256:<reviewed-digest>
 ```
 
 ## Disk / ISO artifacts

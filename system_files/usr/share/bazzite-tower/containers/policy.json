@@ -1,0 +1,19 @@
+{
+  "default": [
+    { "type": "reject" }
+  ],
+  "transports": {
+    "docker": {
+      "": [
+        { "type": "insecureAcceptAnything" }
+      ],
+      "ghcr.io/bearyjd/bazzite-tower": [
+        {
+          "type": "sigstoreSigned",
+          "keyPath": "/etc/pki/containers/bazzite-tower-cosign.pub",
+          "signedIdentity": { "type": "matchRepository" }
+        }
+      ]
+    }
+  }
+}

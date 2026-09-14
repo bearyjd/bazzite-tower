@@ -6,7 +6,7 @@ no app runtime, database, or frontend; the "program" is a container image that
 becomes a bootable OS.
 
 **Base:** `ghcr.io/ublue-os/bazzite-nvidia-open` (KDE + NVIDIA open kernel
-modules, F44+), **pinned to a dated tag** (`44.20260825`, kernel
+modules, F44+), **pinned by digest** (the source tag was `44.20260825`, kernel
 `7.2.0-ogc6.1`) as the default. This carries the i915 Meteor Lake s2idle-resume
 fix (kernel 7.2) — proprietary `bazzite-nvidia` was used until 2026-08-28 but
 forked onto a kernel track (`ogc-lts`, 6.18.x) that won't receive it; see

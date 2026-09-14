@@ -1,0 +1,133 @@
+#!/usr/bin/env bash
+# Allow active libvirt NAT bridges to forward through Docker's DOCKER-USER
+# policy without changing Docker-managed chains, its FORWARD policy, or nft.
+set -euo pipefail
+
+virsh_bin=${VIRSH_BIN:-virsh}
+ip_bin=${IP_BIN:-ip}
+iptables_bin=${IPTABLES_BIN:-iptables}
+python_bin=${PYTHON_BIN:-python3}
+comment_prefix=bazzite-tower-libvirt-forwarding
+lock_path=${DOCKER_LIBVIRT_FORWARDING_LOCK:-/run/docker-libvirt-forwarding.lock}
+
+# Docker start, libvirt lifecycle, and NetworkManager route events can overlap.
+# Hooks invoke this asynchronously, so wait briefly for the current complete
+# transaction rather than discarding a later event's desired-state update.
+exec 9>"${lock_path}"
+if ! flock -w 30 9; then
+    echo "docker-libvirt-forwarding: timed out acquiring reconciliation lock" >&2
+    exit 1
+fi
+
+# Docker creates this chain. Refuse to create it ourselves: a missing chain
+# means Docker's firewall setup is unavailable or has failed.
+if ! "${iptables_bin}" -w -S DOCKER-USER >/dev/null 2>&1; then
+    echo "docker-libvirt-forwarding: DOCKER-USER chain is unavailable" >&2
+    exit 1
+fi
+
+if ! routes=$("${ip_bin}" -o route show default); then
+    echo "docker-libvirt-forwarding: unable to discover the default route" >&2
+    exit 1
+fi
+default_interface=$(printf '%s\n' "${routes}" \
+    | awk '{ for (i = 1; i <= NF; i++) if ($i == "dev") { print $(i + 1); exit } }')
+if [[ -z "${default_interface}" ]]; then
+    echo "docker-libvirt-forwarding: no default-route interface found" >&2
+    exit 1
+fi
+
+ensure_rule() {
+    local -a rule=("$@")
+    if ! "${iptables_bin}" -w -C DOCKER-USER "${rule[@]}" >/dev/null 2>&1; then
+        "${iptables_bin}" -w -I DOCKER-USER 1 "${rule[@]}"
+    fi
+}
+
+declare -A desired_comments=()
+
+reconcile_stale_rules() {
+    local chain_rules line comment_index comment
+    local -a fields rule
+    if ! chain_rules=$("${iptables_bin}" -w -S DOCKER-USER); then
+        echo "docker-libvirt-forwarding: unable to list DOCKER-USER rules" >&2
+        exit 1
+    fi
+    while IFS= read -r line; do
+        read -r -a fields <<< "${line}"
+        [[ ${#fields[@]} -ge 4 && "${fields[0]}" == -A && "${fields[1]}" == DOCKER-USER ]] || continue
+        comment_index=-1
+        for ((i = 2; i < ${#fields[@]} - 1; i++)); do
+            if [[ "${fields[i]}" == --comment ]]; then
+                comment_index=$((i + 1))
+                break
+            fi
+        done
+        [[ ${comment_index} -ge 0 ]] || continue
+        comment=${fields[comment_index]#\"}
+        comment=${comment%\"}
+        [[ "${comment}" == "${comment_prefix}:"* ]] || continue
+        [[ -n "${desired_comments[${comment}]:-}" ]] && continue
+        # The prefix is ours; only then translate this exact saved rule to -D.
+        rule=("${fields[@]:2}")
+        for ((i = 0; i < ${#rule[@]}; i++)); do
+            rule[i]=${rule[i]#\"}
+            rule[i]=${rule[i]%\"}
+        done
+        "${iptables_bin}" -w -D DOCKER-USER "${rule[@]}"
+    done <<< "${chain_rules}"
+}
+
+# `net-list --name` contains active networks only. XML is the source of truth
+# for NAT mode; bridge-name heuristics would accidentally cover unrelated links.
+if ! networks=$("${virsh_bin}" net-list --name); then
+    echo "docker-libvirt-forwarding: unable to list active libvirt networks" >&2
+    exit 1
+fi
+while IFS= read -r network; do
+    [[ -n "${network}" ]] || continue
+    if ! network_xml=$("${virsh_bin}" net-dumpxml "${network}"); then
+        echo "docker-libvirt-forwarding: unable to inspect libvirt network ${network}" >&2
+        exit 1
+    fi
+    if ! bridge=$(printf '%s' "${network_xml}" | "${python_bin}" -c '
+import sys
+import xml.etree.ElementTree as ET
+
+root = ET.fromstring(sys.stdin.read())
+forward = root.find("forward")
+bridge = root.find("bridge")
+if forward is not None and forward.get("mode") == "nat" and bridge is not None:
+    name = bridge.get("name")
+    if name:
+        print(name)
+') ; then
+        echo "docker-libvirt-forwarding: unable to parse libvirt network ${network}" >&2
+        exit 1
+    fi
+    [[ -n "${bridge}" ]] || continue
+
+    # A bridge without a live IPv4 address is not a usable forwarding target.
+    if ! bridge_addresses=$("${ip_bin}" -4 -o addr show dev "${bridge}" scope global); then
+        echo "docker-libvirt-forwarding: unable to discover IPv4 addresses for ${bridge}" >&2
+        exit 1
+    fi
+    while IFS= read -r address; do
+        [[ -n "${address}" ]] || continue
+        cidr=$("${python_bin}" -c 'import ipaddress, sys; print(ipaddress.ip_interface(sys.argv[1]).network)' "${address}")
+        comment="${comment_prefix}:${bridge}:${cidr}:${default_interface}"
+        desired_comments["${comment}"]=1
+        # Guest-originated traffic is allowed toward the current uplink. Only
+        # established/related replies are allowed back into that NAT bridge.
+        ensure_rule -i "${bridge}" -o "${default_interface}" -s "${cidr}" \
+            -m conntrack --ctstate NEW,ESTABLISHED,RELATED \
+            -m comment --comment "${comment}" -j ACCEPT
+        ensure_rule -i "${default_interface}" -o "${bridge}" -d "${cidr}" \
+            -m conntrack --ctstate RELATED,ESTABLISHED \
+            -m comment --comment "${comment}" -j ACCEPT
+    done < <(printf '%s\n' "${bridge_addresses}" | awk '$3 == "inet" { print $4 }')
+done <<< "${networks}"
+
+# Rules from previous bridge addresses, stopped NAT networks, and changed
+# default uplinks must not accumulate. Only our comment prefix is eligible.
+reconcile_stale_rules

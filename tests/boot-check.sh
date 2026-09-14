@@ -120,8 +120,19 @@ esac
 say "== first-boot oneshot =="
 soft "firstboot service not failed" not_failed bazzite-tower-firstboot.service
 
-say "== Docker (soft: daemon netns/iptables limited in a container) =="
-soft "docker.service active" systemctl is-active --quiet docker.service
+say "== Optional host services (disabled unless the operator opts in) =="
+# shellcheck disable=SC2016 # The inner shell, not this script, expands $().
+hard "docker.socket disabled" \
+    bash -c '[[ "$(systemctl is-enabled docker.socket 2>/dev/null)" == "disabled" ]]'
+# shellcheck disable=SC2016 # The inner shell, not this script, expands $().
+hard "docker.service disabled" \
+    bash -c '[[ "$(systemctl is-enabled docker.service 2>/dev/null)" == "disabled" ]]'
+# shellcheck disable=SC2016 # The inner shell, not this script, expands $().
+hard "cockpit.socket disabled" \
+    bash -c '[[ "$(systemctl is-enabled cockpit.socket 2>/dev/null)" == "disabled" ]]'
+# shellcheck disable=SC2016 # The inner shell, not this script, expands $().
+hard "waydroid-container.service disabled" \
+    bash -c '[[ "$(systemctl is-enabled waydroid-container.service 2>/dev/null)" == "disabled" ]]'
 
 say "== done (fail=${fail}) =="
 exit "${fail}"

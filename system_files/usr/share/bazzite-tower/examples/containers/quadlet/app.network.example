@@ -1,0 +1,4 @@
+# Copy beside app.container as ~/.config/containers/systemd/app.network.
+[Network]
+NetworkName=app
+Internal=true

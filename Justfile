@@ -1,6 +1,6 @@
 image_name := "bazzite-tower"
 export default_tag := env("DEFAULT_TAG", "latest")
-export bib_image := env("BIB_IMAGE", "quay.io/centos-bootc/bootc-image-builder:latest")
+export bib_image := env("BIB_IMAGE", "quay.io/centos-bootc/bootc-image-builder@sha256:2b52843ea2bfda73b0a08d97e76b734393b1d3a804681b9fabb26723bd3a2f0b")
 
 alias build-vm := build-qcow2
 alias rebuild-vm := rebuild-qcow2
@@ -571,3 +571,12 @@ test-ci:
     #!/usr/bin/env bash
     set -euo pipefail
     bash tests/test-base-diff.sh
+
+# Privileged, opt-in host check: restarts Docker, verifies the narrow
+# DOCKER-USER rules for active libvirt NAT bridges, then probes Docker bridge
+# networking. It may pull a small probe image; it is not a required CI test.
+[group('Test')]
+test-docker-libvirt-forwarding:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    sudo tests/test-docker-libvirt-forwarding-integration.sh

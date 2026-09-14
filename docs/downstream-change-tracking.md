@@ -1,10 +1,12 @@
 # Staying in sync with upstream Bazzite without silently breaking
 
-**Status:** Layers 1–5 implemented (gate + smoke tests + runtime boot test +
-upstream package-diff early warning + issue notifications). The Section 4
-digest-pin decision is the only open item.
+**Status:** Layers 1–5 implemented (digest-pinned default + smoke and exact
+candidate runtime gates + upstream package-diff early warning + issue
+notifications). The safe-pin workflow inherits its digest only from the
+Containerfile; `latest-kernel` intentionally remains the floating early-warning
+leg.
 **Goal:** keep `bazzite-tower` riding the cutting edge of upstream Bazzite
-(`ghcr.io/ublue-os/bazzite-nvidia:stable`) while guaranteeing that an upstream
+(`ghcr.io/ublue-os/bazzite-nvidia-open:stable`) while guaranteeing that an upstream
 change can never silently land a broken image on the laptop — and that we get a
 GitHub-issue notification the moment something does break.
 
@@ -12,13 +14,14 @@ GitHub-issue notification the moment something does break.
 
 ## 1. The problem, stated precisely
 
-The image is `FROM ghcr.io/ublue-os/bazzite-nvidia:stable` plus
+The safe image is `FROM ghcr.io/ublue-os/bazzite-nvidia-open@sha256:…` plus
 [`build_files/build.sh`](../build_files/build.sh). CI today
-([`build.yml`](../.github/workflows/build.yml)) validates exactly two things, on
-a weekly Sunday cron:
+([`build.yml`](../.github/workflows/build.yml)) validates three things, on a
+weekly Sunday cron:
 
 1. the container **builds**, and
-2. `bootc container lint` passes.
+2. `bootc container lint` passes, and
+3. the exact candidate boots its systemd and passes `tests/boot-check.sh`.
 
 It then pushes `:latest` (and dated tags) on every green build, and the laptop
 rebases onto `:latest`. **"Build is green" is not the same as "image works."**
@@ -140,9 +143,9 @@ catches a large fraction of regressions.
 
 ### Layer 3 — Boot test (the only thing that proves *runtime* behavior)
 
-> **Implemented (with a hosted-runner-friendly twist).** GitHub-hosted runners
+> **Implemented as a promotion gate (with a hosted-runner-friendly twist).** GitHub-hosted runners
 > have no `/dev/kvm`, so instead of a TCG VM boot,
-> `.github/workflows/boot-test.yml` boots the image's own systemd as PID 1 with
+> `.github/workflows/build.yml` boots each exact matrix candidate's own systemd as PID 1 with
 > `podman run --systemd=always` (a path these ublue/Bazzite images are built to
 > support) and runs `tests/boot-check.sh` inside it via `podman exec`. That
 > reliably exercises socket activation, the oneshots and the guard, and — the key
@@ -168,16 +171,16 @@ to reach `multi-user.target`) and run in-guest:
   the Wi-Fi guard behaves.
 - `bootc status` shows the kargs applied (IOMMU).
 
-Heavier, so run it **nightly and pre-promotion**, not on every PR. This is what
-closes the Wi-Fi and virtqemud silent-runtime gap that Layer 2 can only
-approximate.
+The hosted-runner systemd check now runs pre-promotion on every build and PR;
+the separate scheduled workflow remains a diagnostic signal. This closes the
+Wi-Fi and virtqemud silent-runtime gap that Layer 2 can only approximate.
 
 ### Layer 4 — Upstream "what changed" early warning
 
 > **Implemented.** `.github/workflows/base-watch.yml` runs daily (05:00 UTC,
-> ahead of the Sunday build): it pulls `bazzite-nvidia:stable`, builds a package
+> ahead of the Sunday build): it pulls `bazzite-nvidia-open:stable`, builds a package
 > manifest, and `ci/base-diff.py` diffs it against the last-seen manifest stored
-> at `docs/manifests/bazzite-nvidia-stable.txt`, filtered to the blast-radius
+> at `docs/manifests/bazzite-nvidia-open-stable.txt`, filtered to the blast-radius
 > regex. On a blast-radius change it opens/comments on a deduplicated
 > `base-bump` issue with a `name old → new` summary, then commits the refreshed
 > manifest back (`docs/**` is in `build.yml`'s `paths-ignore`, so that commit
@@ -185,7 +188,7 @@ approximate.
 
 On each scheduled run, before/after pulling the base:
 
-1. `podman run --rm ghcr.io/ublue-os/bazzite-nvidia:stable rpm -qa | sort` →
+1. `podman run --rm ghcr.io/ublue-os/bazzite-nvidia-open:stable rpm -qa | sort` →
    current manifest.
 2. Diff against the manifest from the last successful build (stored as a
    workflow artifact or committed under `docs/manifests/`).
@@ -249,6 +252,6 @@ finer-grained attribution. Recommend deciding this once Layers 1–2 land.
   `boot-check.sh`.
 - `.github/workflows/base-watch.yml` *(new, scheduled)* — Layer 4 manifest diff
   + issue.
-- `docs/manifests/bazzite-nvidia-stable.txt` *(new, bot-updated)* — last-seen
+- `docs/manifests/bazzite-nvidia-open-stable.txt` *(new, bot-updated)* — last-seen
   base package manifest for diffing.
-- `Containerfile` / `renovate.json` — only if we adopt Section 4 (digest pin).
+- `Containerfile` / `renovate.json` — digest pin and its update automation.

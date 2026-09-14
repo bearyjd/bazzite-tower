@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+# A default-route change can make a prior NAT/uplink pair stale. Dispatcher
+# hooks must return promptly and must never make network activation fail.
+case "${2:-}" in
+    up|down|dhcp4-change|dhcp6-change|connectivity-change|vpn-up|vpn-down|reapply)
+        if systemctl is-active --quiet docker.service; then
+            /usr/local/libexec/docker-libvirt-forwarding >/dev/null 2>&1 &
+        fi
+        ;;
+esac
+exit 0

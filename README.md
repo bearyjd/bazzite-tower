@@ -59,7 +59,30 @@ Docker CE is installed from the upstream `download.docker.com` repo (not Fedora'
 
 The Docker repo file ships with **every section disabled**. Packages are pulled in via `--enablerepo=docker-ce-stable` only during the image-build transaction, so the repo never participates in runtime updates.
 
-`iptable_nat` is registered in `/etc/modules-load.d/iptable_nat.conf` for docker-in-docker workloads.
+Docker is installed but its daemon/socket and group membership are **off by
+default**. Opt in per host with `ujust enable-docker`; it loads `iptable_nat`
+only for that host and warns that the `docker` group is root-equivalent.
+
+When Docker starts, its `DOCKER-USER` chain receives narrowly-scoped rules for
+each **active libvirt network configured as NAT**. The helper derives that
+bridge's live IPv4 network and the current default-route interface, then allows
+only `NEW,ESTABLISHED,RELATED` guest-originated traffic toward that uplink plus
+`RELATED,ESTABLISHED` reply traffic. It neither broadens source-RFC1918 or bridge-wildcard access nor changes Docker's FORWARD policy,
+Docker-managed chains, or nftables tables. If Docker did not create
+`DOCKER-USER`, the post-start helper reports the failure but does not prevent
+Docker from starting; later libvirt and NetworkManager hooks retry reconciliation.
+Every
+generated pair has a deterministic helper-owned comment. When a NAT network,
+bridge address, default route, VPN state, or NetworkManager connection
+configuration changes, reconciliation removes only stale rules with that
+comment prefix; it never flushes or changes unowned `DOCKER-USER` rules.
+Libvirt network lifecycle and NetworkManager route/VPN/reapply events request
+reconciliation asynchronously, without blocking either event.
+
+Run the privileged host check after opting in with
+`just test-docker-libvirt-forwarding`; it restarts Docker, verifies those exact
+rules, and runs a Docker bridge-network probe. It is deliberately not a CI
+requirement because nested Docker/firewall support is runner-dependent.
 
 ### OpenSnitch (application firewall)
 
@@ -98,8 +121,12 @@ Not available in Fedora or RPM Fusion (the one Fedora-44 COPR has zero builds), 
 | `ujust vm-stop` | Stop those sockets |
 | `ujust vm-list` | `virsh -c qemu:///system list --all` |
 | `ujust vm-net-status` | `virsh -c qemu:///system net-list --all` |
-| `ujust fix-vm-groups` | Add the current user to `kvm`, `libvirt`, `docker` (then log out/in) |
+| `ujust fix-vm-groups` | Add the current user to `kvm`, `libvirt` (then log out/in) |
 | `ujust wifi-debug` | Dump Wi-Fi diagnostics (rfkill, `lspci`, `iwlwifi`/`DMAR` dmesg, modules, NetworkManager, firmware, kernel cmdline) — read-only, works offline |
+| `ujust tower-health` | Read-only summary of optional services, monitoring, firmware, and security-tool availability |
+| `ujust enable-docker` | Opt in to Docker socket activation and the root-equivalent Docker group (then log out/in) |
+| `ujust enable-cockpit` | Opt in to Cockpit bound only to loopback; prints the reviewed Tailscale Serve command to run separately |
+| `ujust enable-waydroid` | Opt in to the Waydroid service; Android initialisation remains separate |
 
 The stack is socket-activated and enabled at boot, so `vm-start` is rarely needed — it's there for when you've manually stopped the daemons.
 
@@ -159,15 +186,47 @@ Each is its own fragment, so you can drop either independently if your hardware 
 Bootc images don't bake in a default user — the first user is created by KDE Plasma's initial-setup on first boot. `bazzite-tower` uses two complementary mechanisms to give that user immediate virtualization access:
 
 1. **Polkit rule** (`/etc/polkit-1/rules.d/50-libvirt-wheel.rules`) — grants `unix-group:wheel` access to `org.libvirt.unix.manage` and `org.libvirt.unix.monitor`. Anyone in `wheel` can talk to `qemu:///system` from `virt-manager` and `virsh` immediately, no logout required.
-2. **First-boot oneshot** (`bazzite-tower-firstboot.service`) — runs after `systemd-user-sessions.service`, finds the first UID≥1000 user, and runs `usermod -aG kvm,libvirt,docker` (adding only groups that exist). This grants real group membership for tools that check `groups`, for raw `/dev/kvm` access, and for the rootless `docker` socket (polkit only covers libvirt). The unit retries every boot until a regular user exists, then writes a marker file (`/var/lib/.bazzite-tower-groups-done`) so it stops running.
+2. **First-boot oneshot** (`bazzite-tower-firstboot.service`) — runs after `systemd-user-sessions.service`, finds the first UID≥1000 user, and runs `usermod -aG kvm,libvirt` (adding only groups that exist). This grants real group membership for tools that check `groups` and for raw `/dev/kvm` access. The unit retries every boot until a regular user exists, then writes a marker file (`/var/lib/.bazzite-tower-groups-done`) so it stops running.
 
-Result: `virsh -c qemu:///system list` and `virt-manager` work on first login (via the polkit rule). Raw `/dev/kvm` (`qemu-system-x86_64 -enable-kvm`) and rootless `docker` depend on group membership, so they work once the first-boot service has applied the groups — in practice after the next reboot following initial account creation, plus a fresh login session to pick the new groups up.
+Result: `virsh -c qemu:///system list` and `virt-manager` work on first login (via the polkit rule). Raw `/dev/kvm` (`qemu-system-x86_64 -enable-kvm`) works once the first-boot service has applied the groups — in practice after the next reboot following initial account creation, plus a fresh login session to pick the new groups up.
 
 ### Docker CE instead of podman-docker
 
 `podman-docker` (the package that aliases `docker` to `podman`) is removed at build time. Docker CE is installed alongside Podman. Both daemons can coexist — different binaries, different sockets, different state — pick whichever your workflow expects without alias trickery.
 
-`docker.service` is enabled at boot, and the first regular user is added to the `docker` group (see below), so `docker` works without `sudo` after the first login cycle.
+Docker remains inactive until `ujust enable-docker` is run on that host. The
+recipe adds the current user to the Docker group only after warning that this is
+root-equivalent; log out and back in before using it without `sudo`.
+
+### Optional host services
+
+Docker, Cockpit, and Waydroid are installed for availability but disabled by
+default. `ujust enable-docker`, `ujust enable-cockpit`, and
+`ujust enable-waydroid` are the only image-provided activation paths. Cockpit's
+socket is loopback-only even after activation; review Tailnet ACLs and run the
+printed `tailscale serve --https=443 http://127.0.0.1:9090` command yourself if
+you choose to publish it. The recipe never configures Serve, auth keys, or
+firewall rules. Waydroid's Android image initialisation is likewise separate.
+
+`tailscaled.service` is enabled only to make the client available; it has no
+baked node identity, authentication, Serve/Funnel configuration, or listener.
+Joining a Tailnet remains the operator's separate `tailscale up` decision.
+
+Systemd enablement is local `/etc` state. It can persist across bootc rebases,
+so moving to an image with safer defaults does not automatically turn off a
+service that was previously enabled locally. Inspect with `ujust tower-health`
+and use `sudo systemctl disable --now <unit>` when intentionally removing a
+prior opt-in.
+
+### Rootless container templates
+
+Inert, hardened templates live in
+`/usr/share/bazzite-tower/examples/containers/` (source:
+[`system_files/usr/share/bazzite-tower/examples/containers/`](./system_files/usr/share/bazzite-tower/examples/containers/)).
+They are outside Quadlet discovery paths and create no service. Copy a Quadlet
+example to `~/.config/containers/systemd/`, replace its invalid digest and paths,
+then reload the user manager. The Compose example uses a user-owned secret file;
+never add a credential to the image or repository.
 
 ### Disabled-by-default external repos
 
@@ -183,8 +242,8 @@ This image rides upstream Bazzite's base and the laptop rebases onto `:latest`, 
 
 | Layer | Where | What it does |
 |---|---|---|
-| **Smoke gate** | `build.yml` → [`tests/smoke.sh`](./tests/smoke.sh) | Offline assertions against the freshly built image, run **before** push: qemu user resolves, the six `virt*.socket`s are enabled, `libvirtd` is masked, the Wi-Fi guard / first-boot / Docker units are enabled, the IOMMU / i915 / suspend kargs are present. A failure blocks the push, so `:latest` stays on the last-good image. |
-| **Runtime boot test** | `boot-test.yml` → [`tests/boot-check.sh`](./tests/boot-check.sh) | Boots the image's own systemd under `podman --systemd=always` and proves the stack *works*: socket-activates `virtqemud` and connects to `qemu:///system` (the end-to-end check for the qemu-user regression), and confirms the Wi-Fi backend guard ran clean. |
+| **Smoke gate** | `build.yml` → [`tests/smoke.sh`](./tests/smoke.sh) | Offline assertions against the freshly built image, run **before** push: qemu user resolves, the six `virt*.socket`s are enabled, `libvirtd` is masked, the Wi-Fi guard / first-boot units are enabled, Docker/Cockpit/Waydroid remain disabled, and the IOMMU / i915 / suspend kargs are present. A failure blocks the push, so `:latest` stays on the last-good image. |
+| **Runtime promotion gate** | `build.yml` → [`tests/boot-check.sh`](./tests/boot-check.sh) | Boots each freshly built matrix candidate under `podman --systemd=always` before any registry login or tag promotion. It proves the stack *works*: socket-activates `virtqemud`, connects to `qemu:///system`, and confirms the Wi-Fi backend guard ran clean. `boot-test.yml` remains an independent scheduled diagnostic. |
 | **Upstream early warning** | `base-watch.yml` → [`ci/base-diff.py`](./ci/base-diff.py) | Daily, diffs the base image's package manifest (committed to `docs/manifests/` after the first run) against the last-seen one, filtered to the blast-radius packages (qemu/libvirt/NetworkManager/Docker/kernel/systemd/polkit/bootc). A change opens a heads-up issue **before** the next build. |
 
 Each failing layer opens — and later auto-closes — a labelled tracking issue (`ci-failure`, `boot-test-failure`, `base-bump`). Reproduce the smoke gate locally with `just smoke`.
@@ -193,12 +252,23 @@ Each failing layer opens — and later auto-closes — a labelled tracking issue
 
 From any bootc-based system (Bazzite, Bluefin, Aurora, Silverblue, Fedora Atomic):
 
+From a trusted checkout of this repository, bootstrap its repository-scoped
+policy on the host **before** the first switch:
+
 ```bash
-sudo bootc switch ghcr.io/bearyjd/bazzite-tower:latest
+sudo ./scripts/install-signature-policy.sh
+sudo bootc switch --enforce-container-sigpolicy ghcr.io/bearyjd/bazzite-tower:latest
 sudo systemctl reboot
 ```
 
-The image is signed with cosign — the public key lives at `cosign.pub` in this repo. Bazzite's bootc policy enforces signature verification by default.
+The image is signed with cosign — the public key lives at `cosign.pub`. The
+installed policy rejects by default, verifies this repository's more-specific
+`sigstoreSigned` rule, and preserves unrelated explicit host rules. It retains
+only a Docker-transport empty-scope compatibility fallback for unrelated
+Docker/Podman pulls; that fallback never applies to this repository's specific
+rule. It cannot verify the first image retroactively when it lives only inside
+that image, which is why the host bootstrap step is required. Subsequent
+upgrades retain the policy in `/etc`.
 
 ## Tags
 
@@ -300,7 +370,7 @@ This template provides a way to upload the disk images generated from the workfl
 
 The [build-disk.yml](./.github/workflows/build-disk.yml) GitHub Actions workflow creates a disk image from your OCI image using the [bootc-image-builder](https://osbuild.org/docs/bootc/). To use this workflow:
 
-1. **Two artifacts, two tools.** `build-disk.yml` builds a **qcow2** (rootfs=btrfs) for VM testing. **Bootable ISOs** are built separately by [`build-iso.yml`](./.github/workflows/build-iso.yml) using [titanoboa](https://github.com/ublue-os/titanoboa) (ublue's live-ISO toolchain), **not** `bootc-image-builder`'s `anaconda-iso` — that path is upstream-broken ([BIB#1188](https://github.com/osbuild/bootc-image-builder/issues/1188), [bazzite#3418](https://github.com/ublue-os/bazzite/issues/3418)). The ISO is built from the [`installer/`](./installer) payload image (a live KDE session + Anaconda that installs bazzite-tower via `ostreecontainer`); it boots under **Secure Boot** (the payload swaps in a Fedora-signed kernel) and can be built locally with `just build-iso-live`. The `iso-kde.toml`/`iso-gnome.toml` files are leftover BIB configs and are unused. For an existing bootc system, `bootc switch` (see [Installing](#installing)) is still the simplest path.
+1. **Two artifacts, two tools.** `build-disk.yml` builds a **qcow2** (rootfs=btrfs) for VM testing. The image's `/usr/lib/bootc/install/50-signature-policy.toml` asks unattended bootc disk installations to enforce its container policy; `disk_config/disk.toml` intentionally does not duplicate that image-owned setting. **Bootable ISOs** are built separately by [`build-iso.yml`](./.github/workflows/build-iso.yml) using [titanoboa](https://github.com/ublue-os/titanoboa) (ublue's live-ISO toolchain), **not** `bootc-image-builder`'s `anaconda-iso` — that path is upstream-broken ([BIB#1188](https://github.com/osbuild/bootc-image-builder/issues/1188), [bazzite#3418](https://github.com/ublue-os/bazzite/issues/3418)). The ISO is built from the [`installer/`](./installer) payload image (a live KDE session + Anaconda that installs bazzite-tower via `ostreecontainer`); it boots under **Secure Boot** (the payload swaps in a Fedora-signed kernel) and can be built locally with `just build-iso-live`. That ISO has a separate installer path: Secure Boot validates its boot chain, but does not by itself prove the OCI image's sigstore policy was enforced. The `iso-kde.toml`/`iso-gnome.toml` files are leftover BIB configs and are unused. For an existing bootc system, `bootc switch` (see [Installing](#installing)) is still the simplest path.
 2. If you changed your image name from the default in `build.yml`, then in `build-disk.yml` edit the `IMAGE_REGISTRY`, `IMAGE_NAME`, and `DEFAULT_TAG` environment variables to match. If you didn't, skip this step.
 3. If you want to upload your disk images to S3, add the S3 configuration to the repository's Action secrets (Settings → Secrets and Variables → Actions):
    - `S3_PROVIDER` — must match one of the values from the [supported list](https://rclone.org/s3/)
@@ -321,7 +391,7 @@ To use it you must have [just](https://just.systems/man/en/introduction.html) in
 
 - `image_name` — the name of the image (default: `bazzite-tower`)
 - `default_tag` — the default tag for the image (default: `latest`)
-- `bib_image` — the Bootc Image Builder image (default: `quay.io/centos-bootc/bootc-image-builder:latest`)
+- `bib_image` — the Bootc Image Builder image (default: digest-pinned `quay.io/centos-bootc/bootc-image-builder@sha256:2b52843ea2bfda73b0a08d97e76b734393b1d3a804681b9fabb26723bd3a2f0b`)
 
 ## Building The Image
 

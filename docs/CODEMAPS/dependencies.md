@@ -65,20 +65,31 @@ share the same major.minor, and the `exclude=` line is actually present in
 
 ## Signing
 
-cosign — `cosign.pub` tracked; private key via `SIGNING_SECRET` (CI) or `cosign.key`
-(local, gitignored). Image signed by digest.
+cosign — `cosign.pub` tracked; private key via mandatory `SIGNING_SECRET` for
+default-branch image releases. Images are signed by digest, carry a signed SPDX
+SBOM attestation and GitHub provenance. The image merges a repository-scoped
+`sigstoreSigned` policy plus a sigstore-attachment registry config. The global
+policy default is `reject`; only unrelated Docker/Podman pulls retain an
+empty-scope Docker compatibility fallback. Bootstrap a host's first verified
+switch with `scripts/install-signature-policy.sh` and
+`bootc switch --enforce-container-sigpolicy`.
+`matchRepository` accepts any digest signed by this repository key, so it does
+not prevent a signed rollback: rollback-sensitive installs should switch to a
+reviewed immutable `@sha256:…` reference rather than a mutable tag.
 
 ## GitHub Actions (SHA-pinned, renovate-managed)
 
 `actions/checkout`, `ublue-os/remove-unwanted-software`,
 `redhat-actions/buildah-build` + `push-to-registry`, `docker/metadata-action` +
-`login-action`, `sigstore/cosign-installer`, `actions/github-script`,
+`login-action`, `sigstore/cosign-installer`, `anchore/sbom-action`,
+`actions/attest-build-provenance`, `actions/github-script`,
 `osbuild/bootc-image-builder-action`, `actions/upload-artifact`,
 `ublue-os/titanoboa` (live-ISO build; pinned to `main`).
 
 ## Local-dev tooling
 
-`just`, `podman`, bootc-image-builder (`quay.io/centos-bootc/bootc-image-builder`),
+`just`, `podman`, bootc-image-builder (digest-pinned
+`quay.io/centos-bootc/bootc-image-builder`),
 qemu (run-vm), `python3` (base-diff.py), `shellcheck`/`shfmt` (`just lint`/`format`).
 
 ## ISO build (live/installer)

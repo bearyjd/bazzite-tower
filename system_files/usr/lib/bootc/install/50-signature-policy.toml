@@ -1,0 +1,4 @@
+# Make bootc disk installations enforce the image's repository-scoped policy.
+# First switches still need the host bootstrap policy installed beforehand.
+[install]
+enforce-container-sigpolicy = true

@@ -25,18 +25,18 @@ vm-list:
 vm-net-status:
     virsh -c qemu:///system net-list --all
 
-# Add the current user to the kvm, libvirt, and docker groups
+# Add the current user to the kvm and libvirt groups
 [group('Virtualization')]
 fix-vm-groups:
     #!/usr/bin/bash
     set -euo pipefail
     groups=""
-    for group in kvm libvirt docker; do
+    for group in kvm libvirt; do
         if getent group "$group" >/dev/null; then
             groups="${groups:+$groups,}$group"
         fi
     done
-    [ -n "$groups" ] || { echo "None of kvm/libvirt/docker exist on this system."; exit 1; }
+    [ -n "$groups" ] || { echo "Neither kvm nor libvirt exists on this system."; exit 1; }
     sudo usermod -aG "$groups" "$USER"
     echo "Added $USER to: $groups"
     echo "Log out and back in (or reboot) for the new group membership to take effect."
@@ -91,6 +91,53 @@ enable-ssh:
     echo "sshd.service: $(systemctl is-enabled sshd.service) / $(systemctl is-active sshd.service)"
     echo "Note: this is a LOCAL /etc change. It will not survive the next rebase —"
     echo "re-run this recipe after one."
+
+# Enable Docker's socket-activated daemon for this host and grant the current
+# user access. Membership in the docker group is equivalent to root access: a
+# user may ask the daemon to mount the host filesystem or run privileged code.
+# Log out and back in before using the group without sudo.
+[group('Host')]
+enable-docker:
+    #!/usr/bin/bash
+    set -euo pipefail
+    sudo install -Dm644 /dev/stdin /etc/modules-load.d/iptable_nat.conf <<'EOF'
+iptable_nat
+EOF
+    sudo modprobe iptable_nat
+    sudo systemctl enable --now docker.socket
+    if ! id -nG "$USER" | tr ' ' '\n' | grep -qx docker; then
+        sudo usermod -aG docker "$USER"
+    fi
+    echo "docker.socket: $(systemctl is-enabled docker.socket) / $(systemctl is-active docker.socket)"
+    echo "WARNING: the docker group is root-equivalent. Log out and back in before using it."
+
+# Enable Cockpit only on localhost. It is not exposed to the LAN by this image.
+# To publish it through your already-authenticated Tailnet, review the policy
+# first, then run the printed command yourself; this recipe never configures it.
+[group('Host')]
+enable-cockpit:
+    #!/usr/bin/bash
+    set -euo pipefail
+    sudo systemctl enable --now cockpit.socket
+    echo "cockpit.socket: $(systemctl is-enabled cockpit.socket) / $(systemctl is-active cockpit.socket)"
+    echo "Cockpit is bound only to 127.0.0.1 and ::1. Review Tailnet ACLs first, then run:"
+    echo "  tailscale serve --https=443 http://127.0.0.1:9090"
+    echo "Do not expose port 9090 directly without an explicit firewall policy."
+
+# Enable the Waydroid container service only. Android image initialisation is a
+# separate, interactive trust decision; this recipe does not run `waydroid init`.
+[group('Host')]
+enable-waydroid:
+    #!/usr/bin/bash
+    set -euo pipefail
+    sudo systemctl enable --now waydroid-container.service
+    echo "waydroid-container.service: $(systemctl is-enabled waydroid-container.service) / $(systemctl is-active waydroid-container.service)"
+    echo "Initialise Android separately with the Waydroid tooling when you are ready."
+
+# Report image and host health without changing daemon state or requiring sudo.
+[group('Diagnostics')]
+tower-health:
+    @/usr/libexec/bazzite-tower-health
 
 # Summarise desktop stalls and the kernel events around them.
 #

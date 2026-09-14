@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
-# bazzite-tower-firstboot — grant the first regular user virtualization and
-# container access.
+# bazzite-tower-firstboot — grant the first regular user virtualization access.
 #
 # Bootc images don't bake in a default user; the first user is created by the
 # desktop initial-setup flow on first boot. That may not have happened yet when
@@ -10,10 +9,12 @@
 # ConditionPathExists keeps it from running again.
 set -euo pipefail
 
-marker=/var/lib/.bazzite-tower-groups-done
+marker=${BAZZITE_TOWER_GROUPS_MARKER:-/var/lib/.bazzite-tower-groups-done}
+passwd_file=${BAZZITE_TOWER_PASSWD_FILE:-/etc/passwd}
+usermod_bin=${BAZZITE_TOWER_USERMOD_BIN:-/usr/sbin/usermod}
 
 # First human account: uid >= 1000, below the "nobody" sentinel (65534).
-user=$(awk -F: '$3 >= 1000 && $3 < 65534 { print $1; exit }' /etc/passwd)
+user=$(awk -F: '$3 >= 1000 && $3 < 65534 { print $1; exit }' "${passwd_file}")
 if [[ -z "${user}" ]]; then
     echo "bazzite-tower-firstboot: no regular user yet, retrying next boot"
     exit 0
@@ -21,7 +22,7 @@ fi
 
 # Only add groups that exist, so a package layout change can never abort the run.
 present=()
-for group in kvm libvirt docker; do
+for group in kvm libvirt; do
     if getent group "${group}" >/dev/null; then
         present+=("${group}")
     else
@@ -31,7 +32,7 @@ done
 
 if [[ ${#present[@]} -gt 0 ]]; then
     groups_csv=$(IFS=,; echo "${present[*]}")
-    /usr/sbin/usermod -aG "${groups_csv}" "${user}"
+    "${usermod_bin}" -aG "${groups_csv}" "${user}"
     echo "bazzite-tower-firstboot: added ${user} to ${groups_csv}"
 fi
 

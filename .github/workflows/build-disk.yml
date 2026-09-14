@@ -26,7 +26,9 @@ env:
   IMAGE_NAME: ${{ github.event.repository.name }} # output of build.yml, keep in sync
   IMAGE_REGISTRY: "ghcr.io/${{ github.repository_owner }}"  # do not edit
   DEFAULT_TAG: "latest"
-  BIB_IMAGE: "quay.io/centos-bootc/bootc-image-builder:latest"
+  # Pin the builder separately from the image-under-test: :latest is mutable
+  # and would make identical disk workflow revisions non-reproducible.
+  BIB_IMAGE: "quay.io/centos-bootc/bootc-image-builder@sha256:2b52843ea2bfda73b0a08d97e76b734393b1d3a804681b9fabb26723bd3a2f0b"
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref || github.run_id }}
@@ -88,13 +90,36 @@ jobs:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: 'v2.6.3'
+
+      # Resolve the mutable release tag once, verify that immutable manifest,
+      # and pass only the verified digest to BIB. This prevents a tag move
+      # between verification and the disk-image pull.
+      - name: Resolve and verify source image
+        id: source_image
+        env:
+          SOURCE_IMAGE: ${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAME }}:${{ env.DEFAULT_TAG }}
+        run: |
+          set -euo pipefail
+          podman pull "${SOURCE_IMAGE}"
+          resolved="$(podman image inspect --format '{{index .RepoDigests 0}}' "${SOURCE_IMAGE}")"
+          case "${resolved}" in
+            "${IMAGE_REGISTRY}/${IMAGE_NAME}"@sha256:*) ;;
+            *) echo "::error::could not resolve ${SOURCE_IMAGE} to this repository's digest"; exit 1 ;;
+          esac
+          cosign verify --key cosign.pub "${resolved}"
+          echo "image=${resolved}" >> "${GITHUB_OUTPUT}"
+
       - name: Build disk images
         id: build
-        uses: osbuild/bootc-image-builder-action@main
+        uses: osbuild/bootc-image-builder-action@cb4b3e9c112077ea96a191fad229d51d2a012885 # main
         with:
           builder-image: ${{ env.BIB_IMAGE }}
           config-file: ${{ matrix.config }}
-          image: ${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_NAME }}:${{ env.DEFAULT_TAG }}
+          image: ${{ steps.source_image.outputs.image }}
           chown: ${{ env.USER_UID }}:${{ env.USER_GID }}
           types: ${{ matrix.type }}
           # The bazzite-nvidia base declares no default root filesystem, so BIB

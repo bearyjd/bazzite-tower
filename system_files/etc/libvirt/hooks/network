@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# Reconcile after network lifecycle changes without delaying or failing libvirt.
+# Arguments follow libvirt's network hook ABI: network name, operation, detail.
+case "${2:-}" in
+    started|stopped|updated)
+        /usr/local/libexec/docker-libvirt-forwarding >/dev/null 2>&1 &
+        ;;
+esac
+exit 0

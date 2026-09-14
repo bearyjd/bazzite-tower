@@ -23,6 +23,22 @@
       "currentValueTemplate": "latest",
       "datasourceTemplate": "docker",
       "versioningTemplate": "docker"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": ["/^\\.github\\/workflows\\/build\\.yml$/"],
+      "matchStrings": ["(?<indentation>[ \\t]*)SYFT_VERSION:\\s*(?<currentValue>v?[0-9.]+)\\s*\\n[ \\t]*SYFT_SHA256:\\s*(?<currentDigest>[a-f0-9]{64})"],
+      "depNameTemplate": "anchore/syft",
+      "datasourceTemplate": "custom.syft-release-asset",
+      "versioningTemplate": "semver",
+      "autoReplaceStringTemplate": "{{{indentation}}}SYFT_VERSION: {{{newValue}}}\\n{{{indentation}}}SYFT_SHA256: {{{newDigest}}}"
     }
-  ]
+  ],
+  "customDatasources": {
+    "syft-release-asset": {
+      "defaultRegistryUrlTemplate": "https://api.github.com/repos/anchore/syft/releases/latest",
+      "format": "json",
+      "transformTemplates": ["{\"releases\":[{\"version\": tag_name, \"digest\": $substring(assets[name = $join([\"syft_\", $substringAfter(tag_name, \"v\"), \"_linux_amd64.tar.gz\"])].digest, 7)}]}" ]
+    }
+  }
 }

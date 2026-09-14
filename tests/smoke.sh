@@ -233,7 +233,7 @@ check "bazzite-tower cosign public key installed" \
     cmp -s /usr/share/bazzite-tower/containers/bazzite-tower-cosign.pub \
         /etc/pki/containers/bazzite-tower-cosign.pub
 check "bazzite-tower sigstore policy targets only this repository" \
-    jq -e '.transports.docker["ghcr.io/bearyjd/bazzite-tower"][0] | .type == "sigstoreSigned" and .signedIdentity.type == "matchRepository"' \
+    jq -e '.transports.docker["ghcr.io/bearyjd/bazzite-tower"] | type == "array" and length == 1 and .[0].type == "sigstoreSigned" and .[0].keyPath == "/etc/pki/containers/bazzite-tower-cosign.pub" and .[0].signedIdentity == {"type":"matchRepository"}' \
         /etc/containers/policy.json
 check "sigstore registry attachments enabled" \
     grep -qx '    use-sigstore-attachments: true' \

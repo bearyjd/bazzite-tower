@@ -8,6 +8,11 @@ repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 policy="${repo_root}/system_files/usr/share/bazzite-tower/containers/policy.json"
 registry="${repo_root}/system_files/usr/share/bazzite-tower/containers/registries.d/bazzite-tower.yaml"
 
+# Keep this byte-for-byte aligned with the final-image smoke predicate. It tests
+# the complete target rule (including its sole-rule shape and key path), not just
+# the presence of a matching identity field.
+jq -e '.transports.docker["ghcr.io/bearyjd/bazzite-tower"] | type == "array" and length == 1 and .[0].type == "sigstoreSigned" and .[0].keyPath == "/etc/pki/containers/bazzite-tower-cosign.pub" and .[0].signedIdentity == {"type":"matchRepository"}' "${policy}" >/dev/null
+
 python3 - "${policy}" "${registry}" "${repo_root}/Containerfile" "${repo_root}/cosign.pub" "${repo_root}/.github/workflows/build.yml" <<'PY'
 import json
 import sys

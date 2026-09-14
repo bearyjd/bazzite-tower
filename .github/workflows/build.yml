@@ -389,7 +389,7 @@ jobs:
         env:
           CANDIDATE_TAG: candidate-${{ github.run_id }}-${{ matrix.variant }}
 
-      # Download and authenticate an immutable Syft release asset before use.
+      # Download and verify the pinned Syft release asset before use.
       # The generic download-syft action delegates to a mutable installer, so it
       # cannot establish the binary's release-asset integrity here.
       - name: Download and verify Syft

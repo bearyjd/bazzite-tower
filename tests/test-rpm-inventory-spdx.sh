@@ -15,6 +15,21 @@ python3 "${generator}" --input "${fixtures}/installed-rpms-reordered.tsv" \
     --output "${tmpdir}/reordered.spdx.json" --created "${created}"
 cmp "${tmpdir}/first.spdx.json" "${tmpdir}/reordered.spdx.json"
 
+# Run the exact structural predicate used by the release workflow. This keeps
+# the document-vs-array jq scope contract from drifting.
+workflow_predicate="$(python3 - "${repo_root}/.github/workflows/build.yml" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+workflow = Path(sys.argv[1]).read_text(encoding="utf-8")
+match = re.search(r"jq -e '([^']+)' \"\$\{sbom\}\" >/dev/null", workflow)
+assert match, "release SPDX jq predicate not found"
+print(match.group(1))
+PY
+)"
+jq -e "${workflow_predicate}" "${tmpdir}/first.spdx.json" >/dev/null
+
 python3 - "${tmpdir}/first.spdx.json" <<'PY'
 import json
 import sys

@@ -393,7 +393,7 @@ jobs:
           python3 ci/rpm-inventory-spdx.py --input "${inventory}" --output "${sbom}" \
             --created "${created}"
           test -s "${sbom}"
-          jq -e 'type == "object" and (.spdxVersion | type == "string" and startswith("SPDX-")) and (.packages | type == "array" and length > 0) and (.relationships | type == "array" and length == (.packages | length))' "${sbom}" >/dev/null
+          jq -e 'type == "object" and (.spdxVersion | type == "string" and startswith("SPDX-")) and (.packages | type == "array" and length > 0) and (.relationships | type == "array") and ((.relationships | length) == (.packages | length))' "${sbom}" >/dev/null
           [[ "$(wc -l < "${inventory}")" -eq "$(jq '.packages | length' "${sbom}")" ]]
         env:
           CANDIDATE_TAG: candidate-${{ github.run_id }}-${{ matrix.variant }}

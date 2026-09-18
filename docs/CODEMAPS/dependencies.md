@@ -67,7 +67,8 @@ share the same major.minor, and the `exclude=` line is actually present in
 
 cosign — `cosign.pub` tracked; private key via mandatory `SIGNING_SECRET` for
 default-branch image releases. Images are signed by digest, carry a signed SPDX
-SBOM attestation and GitHub provenance. The image merges a repository-scoped
+installed-RPM inventory attestation (not a whole-filesystem or language-package
+SBOM) and GitHub provenance. The image merges a repository-scoped
 `sigstoreSigned` policy plus a sigstore-attachment registry config. The global
 policy default is `reject`; only unrelated Docker/Podman pulls retain an
 empty-scope Docker compatibility fallback. Bootstrap a host's first verified
@@ -81,7 +82,7 @@ reviewed immutable `@sha256:…` reference rather than a mutable tag.
 
 `actions/checkout`, `ublue-os/remove-unwanted-software`,
 `redhat-actions/buildah-build` + `push-to-registry`, `docker/metadata-action` +
-`login-action`, `sigstore/cosign-installer`, `anchore/sbom-action`,
+`login-action`, `sigstore/cosign-installer`,
 `actions/attest-build-provenance`, `actions/github-script`,
 `osbuild/bootc-image-builder-action`, `actions/upload-artifact`,
 `ublue-os/titanoboa` (live-ISO build; pinned to `main`).

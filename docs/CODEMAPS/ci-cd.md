@@ -8,7 +8,7 @@
 
 | Workflow | Triggers | Flow | Issue label |
 |---|---|---|---|
-| `build.yml` | push main (ignores README/docs/**), PR, Sun 06:00 UTC, dispatch | Two mutually exclusive matrices: PR-only **verify** has `contents: read`, credential-free SHA checkout, then builds/smokes/runtime-tests its own local candidates; default-branch **release** independently rebuilds/retests, queries the exact local candidate's RPM database into a deterministic SPDX installed-RPM inventory, pushes a unique candidate digest, requires cosign+signed SPDX+GitHub provenance verification, then promotes that unchanged digest to public tags. `fail-fast: false` — one leg failing never cancels the other | `ci-failure-<variant>` (release only; per-leg label, so one leg's success never auto-closes the other's issue) |
+| `build.yml` | push main (ignores README/docs/**), PR, Sun 06:00 UTC, dispatch | Two mutually exclusive matrices: PR-only **verify** has `contents: read`, credential-free SHA checkout, then builds/smokes/runtime-tests its own local candidates; default-branch **release** independently rebuilds/retests, queries the exact local candidate's RPM database into a deterministic SPDX installed-RPM inventory, pushes a unique candidate digest, requires cosign+signed SPDX+GitHub provenance verification, then promotes that unchanged digest to public tags. `fail-fast: false` — one leg failing never cancels the other. A separate **notify** job (`needs: release`, `if: always()`) reads each leg's actual conclusion from the Actions API and syncs its tracking issue — kept out of `release`'s own steps so a leg getting killed mid-step (not just failing cleanly) can't silently skip the notification | `ci-failure-<variant>` (release only; per-leg label, so one leg's success never auto-closes the other's issue) |
 | `boot-test.yml` | PR (build paths), Sun 07:00 UTC, dispatch | build → `podman run --systemd=always /sbin/init` → wait running/degraded → exec `tests/boot-check.sh` | `boot-test-failure` |
 | `base-watch.yml` | daily 05:00 UTC, dispatch | pull `bazzite-nvidia-open:stable` → `rpm -qa` manifest → `ci/base-diff.py` vs last-seen baseline in `docs/manifests/` (written on first run) → commit refreshed manifest (and fail if every push retry fails) | `base-bump` |
 | `build-disk.yml` | dispatch (platform amd64/arm64), PR (disk.toml path) | resolve `:latest` once to an immutable digest → verify it with `cosign.pub` → pass that digest to bootc-image-builder → qcow2 disk image (rootfs=btrfs) → artifact or S3. anaconda-iso disabled: upstream BIB#1188 + bazzite#3418 | — |
@@ -31,8 +31,9 @@ language-dependency catalog. It then pushes the same local candidate, signs and
 verifies the RPM-inventory SBOM against its remote digest, verifies GitHub
 provenance, and only then promotes that unchanged digest to public tags. A
 broken image therefore never advances a published variant (each tag stays
-last-good independently). The release job opens — and later auto-closes — its
-labelled tracking issue.
+last-good independently). The separate `notify` job opens — and later
+auto-closes — each leg's labelled tracking issue, independently of whether
+`release` finished cleanly or was cancelled/killed partway through.
 
 ## Test scripts (`tests/`)
 

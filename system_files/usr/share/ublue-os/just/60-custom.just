@@ -100,9 +100,7 @@ enable-ssh:
 enable-docker:
     #!/usr/bin/bash
     set -euo pipefail
-    sudo install -Dm644 /dev/stdin /etc/modules-load.d/iptable_nat.conf <<'EOF'
-iptable_nat
-EOF
+    echo "iptable_nat" | sudo install -Dm644 /dev/stdin /etc/modules-load.d/iptable_nat.conf
     sudo modprobe iptable_nat
     sudo systemctl enable --now docker.socket
     if ! id -nG "$USER" | tr ' ' '\n' | grep -qx docker; then

@@ -25,6 +25,10 @@ build.sh except the disabled `portmaster.service` VM spike.
 
 `WantedBy=timers.target`, enabled in build.sh (`systemctl enable i915-resume-fix-check.timer`).
 
+## systemd-sleep hooks (`/usr/lib/systemd/system-sleep/`)
+
+- `bazzite-tower-bluetooth-resume-guard` — `systemctl restart bluetooth.service` on `post` resume only. No unit/enable step: any executable in this directory is auto-invoked by `systemd-suspend(-then-hibernate)/-hibernate/-hybrid-sleep.service`. Mitigates a previously-paired Bluetooth device (reported: a mouse) not reconnecting after suspend — bluetoothd stays "active" across the cycle with nothing logged, and there's no BE200-style firmware NMI/reset signature for hci0 the way there is for Wi-Fi (below), so it's the adapter's HCI state, not firmware, that doesn't recover cleanly. Same s2idle-resume-quality class of bug as i915 display and the BE200 Wi-Fi radio on this hardware. Escalates if `bluetoothctl show` doesn't report `Powered: yes` within ~5s of the restart: unbind/rebinds the BE200 Bluetooth USB function (`8087:0036`) to force a closer equivalent of a full reboot's reinitialization, then restarts the daemon again
+
 ## libexec helpers (`/usr/libexec/`)
 
 - `bazzite-tower-firstboot` — first regular user → `usermod -aG` only existing groups

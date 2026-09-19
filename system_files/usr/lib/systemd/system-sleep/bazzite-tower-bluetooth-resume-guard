@@ -1,0 +1,92 @@
+#!/usr/bin/env bash
+# bazzite-tower-bluetooth-resume-guard — restart bluetoothd after resume,
+# escalating to a USB-level reset if a plain restart isn't enough.
+#
+# Symptom (reported on this machine): a previously-connected Bluetooth mouse
+# does not reconnect after the system wakes from suspend; only a full reboot
+# fixes it. bluetoothd itself stays "active" across the suspend cycle (no
+# crash, nothing logged) and there is no BE200-style firmware NMI/hard-reset
+# signature for hci0 the way there is for the Wi-Fi radio on this same combo
+# card (see .../modprobe.d/iwlwifi-be200-stability.conf, docs/RUNBOOK.md) — so
+# it is the adapter's HCI/link state, not the firmware, that does not come
+# back cleanly across resume. Same general class of bug already documented on
+# this exact hardware for i915 display resume and the BE200 Wi-Fi radio: this
+# platform does not reinitialize every subsystem cleanly across suspend.
+# Confirmed 2026-09-19: a ~2.5-day suspend left the adapter with zero
+# reconnect activity for 40+ minutes until a full reboot; a ~3h suspend
+# self-recovered in 23s -- consistent with an occasional stall, not a
+# guaranteed one, worse the longer the sleep.
+#
+# `systemctl restart bluetooth.service` only resets the userspace HCI
+# management layer (bluetoothd's socket to the adapter) -- it does not reload
+# the btusb/btintel kernel driver or reset the USB device itself, which a full
+# reboot does. No incident has yet confirmed whether a plain restart alone is
+# sufficient (only a full reboot was ever tried on the one aggravated case
+# observed so far), so this escalates: if the adapter doesn't report itself
+# healthy shortly after the restart, unbind+rebind its USB device to force
+# the same kind of reinitialization a reboot provides, without the reboot.
+#
+# systemd-sleep contract: every executable in this directory is invoked by
+# systemd-suspend(-then-hibernate)/-hibernate/-hybrid-sleep.service as
+# "$0 $1 $2", where $1 is "pre" or "post" and $2 is the sleep operation
+# ("suspend", "hibernate", "hybrid-sleep", "suspend-then-hibernate"). Only
+# act after resuming; there is nothing to do before suspending.
+set -euo pipefail
+
+# Intel BE200 Bluetooth USB function (distinct from the BE200 Wi-Fi PCI
+# device, which is unaffected by resetting this).
+readonly BT_USB_VENDOR="8087"
+readonly BT_USB_PRODUCT="0036"
+readonly LOG_TAG="bazzite-tower-bluetooth-resume-guard"
+
+adapter_healthy() {
+    bluetoothctl show 2>/dev/null | grep -q 'Powered: yes'
+}
+
+find_bt_usb_syspath() {
+    local d
+    for d in /sys/bus/usb/devices/*/; do
+        if [[ -f "${d}idVendor" && -f "${d}idProduct" ]] \
+            && [[ "$(cat "${d}idVendor" 2>/dev/null)" == "${BT_USB_VENDOR}" ]] \
+            && [[ "$(cat "${d}idProduct" 2>/dev/null)" == "${BT_USB_PRODUCT}" ]]; then
+            echo "${d%/}"
+            return 0
+        fi
+    done
+    return 1
+}
+
+reset_bt_usb_device() {
+    local syspath="$1" bus_id driver_path
+    bus_id="$(basename "${syspath}")"
+    driver_path="${syspath}/driver"
+    if [[ ! -e "${driver_path}" ]]; then
+        logger -t "${LOG_TAG}" "BT USB device ${bus_id} has no bound driver to reset"
+        return 1
+    fi
+    echo "${bus_id}" >"${driver_path}/unbind" 2>/dev/null || true
+    sleep 1
+    echo "${bus_id}" >"${driver_path}/bind" 2>/dev/null || true
+}
+
+if [[ "${1:-}" != "post" ]]; then
+    exit 0
+fi
+
+systemctl restart bluetooth.service
+
+# Give bluetoothd a few seconds to bring the adapter back up before judging it.
+for _ in 1 2 3 4 5; do
+    adapter_healthy && exit 0
+    sleep 1
+done
+
+logger -t "${LOG_TAG}" "adapter not healthy after bluetooth.service restart; escalating to USB reset"
+
+if syspath="$(find_bt_usb_syspath)"; then
+    reset_bt_usb_device "${syspath}"
+    sleep 2
+    systemctl restart bluetooth.service
+else
+    logger -t "${LOG_TAG}" "could not locate BT USB device (${BT_USB_VENDOR}:${BT_USB_PRODUCT}) to reset"
+fi

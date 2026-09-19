@@ -11,13 +11,17 @@ set -euo pipefail
 # ghcr.io/bearyjd/bazzite-tower. Only override the identity fields; the
 # fedora-version/base-image-name/version fields remain true statements about
 # the underlying base and are left as upstream set them.
+#
+# IMAGE_TAG (default "latest") is passed in from the Containerfile ARG of the
+# same name, which CI sets per matrix leg -- without it, a :latest-kernel
+# machine's MOTD would claim to be :latest.
 image_info=/usr/share/ublue-os/image-info.json
 jq \
     --arg name "bazzite-tower" \
     --arg vendor "bearyjd" \
     --arg ref "ostree-image-signed:docker://ghcr.io/bearyjd/bazzite-tower" \
-    --arg tag "latest" \
-    --arg branch "latest" \
+    --arg tag "${IMAGE_TAG:-latest}" \
+    --arg branch "${IMAGE_TAG:-latest}" \
     '."image-name" = $name
      | ."image-vendor" = $vendor
      | ."image-ref" = $ref

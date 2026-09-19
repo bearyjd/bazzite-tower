@@ -397,8 +397,15 @@ check "tower-health helper is executable" test -x /usr/libexec/bazzite-tower-hea
 echo "== MOTD rebrand =="
 # Guards against the upstream image-info.json (which the login MOTD reads
 # image-ref/image-branch from) reverting to the base image's own identity.
+# image-tag/image-branch vary by matrix leg (IMAGE_TAG build-arg: "latest" for
+# safe-pin, "latest-kernel" for that leg) so this accepts either real
+# published tag rather than hardcoding one — a mismatch there is what let a
+# :latest-kernel machine's MOTD wrongly claim :latest (see docs/RUNBOOK.md).
 check "MOTD image-info rebranded to bazzite-tower" \
-    jq -e '."image-name" == "bazzite-tower" and ."image-ref" == "ostree-image-signed:docker://ghcr.io/bearyjd/bazzite-tower"' \
+    jq -e '."image-name" == "bazzite-tower"
+        and ."image-ref" == "ostree-image-signed:docker://ghcr.io/bearyjd/bazzite-tower"
+        and (."image-tag" == "latest" or ."image-tag" == "latest-kernel")
+        and ."image-tag" == ."image-branch"' \
     /usr/share/ublue-os/image-info.json
 
 echo "== Bluetooth =="

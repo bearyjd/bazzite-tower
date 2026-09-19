@@ -158,7 +158,7 @@ jobs:
           # not receive the i915 cx0 s2idle-resume fix; see the Containerfile
           # comment and docs/research/i915-bug-report/UPSTREAM-FIX-STATUS-2026-08-28.md.
           - variant: safe-pin
-            build_args: ""
+            build_args: "IMAGE_TAG=latest"
             tag_base: latest
             tag_prefix: ""
           # Opt-in — tracks upstream bazzite-nvidia-open:stable's current
@@ -167,7 +167,9 @@ jobs:
           # every tag this leg produces is namespaced under tag_prefix so it
           # can never collide with the safe-pin leg's pushed tags.
           - variant: latest-kernel
-            build_args: "BASE_IMAGE=ghcr.io/ublue-os/bazzite-nvidia-open:stable"
+            build_args: |
+              BASE_IMAGE=ghcr.io/ublue-os/bazzite-nvidia-open:stable
+              IMAGE_TAG=latest-kernel
             tag_base: latest-kernel
             tag_prefix: "latest-kernel-"
 

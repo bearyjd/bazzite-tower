@@ -35,6 +35,7 @@ carry, because line ranges drift and filenames do not.
 | `90-power-thermal.sh` | dnf thermald (enable); enable `bazzite-tower-power-tuning.service` (balanced EPP + platform-profile). SOF audio: **no install** — bypassed via the `dsp_driver=1` karg |
 | `95-firewall.sh` | Firewall selector. Default `opensnitch`: pinned v1.8.0 RPM extraction, Snitchwatch config + enablement. `FIREWALL_DAEMON=portmaster` is a disabled VM spike, sourcing `../firewall/portmaster.sh`: source-build of the exact Portmaster v2.2.1 commit, direct core (no updater/bootstrapper), config pinned from `/usr` via `BindReadOnlyPaths=`, Go toolchain removed after build, OpenSnitch masked. Build with `just build-portmaster-spike`; never a default image |
 | `97-vm-gate-ssh.sh` | `VM_GATE_SSH=1` (off by default, `:latest` unaffected): enables `sshd.socket` so VM-gate testing (`just run-vm-ssh`) can SSH in instead of needing a GUI console. `build-portmaster-spike` already passes this build-arg |
+| `98-rebrand-motd.sh` | overwrites the identity fields (`image-name`/`image-vendor`/`image-ref`/`image-tag`/`image-branch`) in `/usr/share/ublue-os/image-info.json` from the upstream base's own identity to `bazzite-tower`'s — the login MOTD template reads this file directly, so left unmodified it always claims the machine is running the upstream base image |
 | `99-cleanup.sh` | `dnf clean all` |
 
 `FIREWALL_DAEMON` and `VM_GATE_SSH` reach `95-firewall.sh`/`97-vm-gate-ssh.sh`

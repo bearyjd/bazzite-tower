@@ -394,6 +394,13 @@ check "Cockpit loopback socket drop-in resets wildcard listener" \
     grep -qx 'ListenStream=' /etc/systemd/system/cockpit.socket.d/10-loopback.conf
 check "tower-health helper is executable" test -x /usr/libexec/bazzite-tower-health
 
+echo "== MOTD rebrand =="
+# Guards against the upstream image-info.json (which the login MOTD reads
+# image-ref/image-branch from) reverting to the base image's own identity.
+check "MOTD image-info rebranded to bazzite-tower" \
+    jq -e '."image-name" == "bazzite-tower" and ."image-ref" == "ostree-image-signed:docker://ghcr.io/bearyjd/bazzite-tower"' \
+    /usr/share/ublue-os/image-info.json
+
 echo
 if [[ "${fail}" -ne 0 ]]; then
     echo "SMOKE TESTS FAILED"

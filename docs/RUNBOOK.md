@@ -257,18 +257,33 @@ back cleanly across a suspend/resume cycle. Same underlying class of issue as
 the i915 display resume regression and the BE200 Wi-Fi asserts: this platform
 doesn't reinitialize every subsystem cleanly across s2idle.
 
+Confirmed 2026-09-19: a ~2.5-day suspend left the adapter with zero reconnect
+activity for 40+ minutes until a full reboot; the same day, a ~3h suspend
+self-recovered on its own in 23s. So the stall is occasional, not guaranteed,
+and gets more likely the longer the sleep.
+
 Mitigation: `…/system-sleep/bazzite-tower-bluetooth-resume-guard` restarts
 `bluetooth.service` on every resume (`systemd-sleep` invokes every executable
 in that directory automatically; no unit/enable step). This re-opens the HCI
-socket and re-initializes the adapter — what a full reboot also does, without
-the reboot.
+socket and re-initializes the adapter — the userspace-layer equivalent of what
+a full reboot also does. A plain daemon restart does **not** reload the
+btusb/btintel kernel driver or reset the USB device itself, and no incident
+has yet confirmed whether that's actually necessary (only a full reboot was
+ever tried on the aggravated case above) — so the guard escalates: if
+`bluetoothctl show` doesn't report `Powered: yes` within ~5s of the restart,
+it unbind/rebinds the BE200 Bluetooth USB device (`8087:0036`, distinct from
+the BE200 Wi-Fi PCI device — resetting it doesn't touch Wi-Fi) to force a
+closer equivalent of what reboot provides, then restarts the daemon again.
 
 ```bash
-# Confirm it ran on the last resume
+# Confirm it ran on the last resume, and whether it had to escalate
+journalctl -t bazzite-tower-bluetooth-resume-guard --no-pager
 journalctl -u bluetooth --no-pager | grep -i "restart\|deactivat"
 
-# Manual equivalent if you need it before the next suspend/resume cycle
+# Manual equivalents if you need them before the next suspend/resume cycle
 sudo systemctl restart bluetooth.service
+echo 3-10 | sudo tee /sys/bus/usb/drivers/btusb/unbind   # bus path varies; see lsusb
+echo 3-10 | sudo tee /sys/bus/usb/drivers/btusb/bind
 ```
 
 This is a separate mechanism from `…/modprobe.d/btusb-no-autosuspend.conf`

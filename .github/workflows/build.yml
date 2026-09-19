@@ -559,9 +559,11 @@ jobs:
             const jobs = await github.paginate(github.rest.actions.listJobsForWorkflowRun, {
               owner, repo, run_id: runId, per_page: 100,
             });
+            let matched = 0;
             for (const variant of Object.keys(TAG_BASE)) {
               const job = jobs.find(j => j.name === `Build, verify, and release image (${variant})`);
               if (!job || !job.conclusion || job.conclusion === 'skipped') continue;
+              matched++;
               const label = `ci-failure-${variant}`;
               if (job.conclusion === 'success') {
                 const open = await github.rest.issues.listForRepo({ owner, repo, state: 'open', labels: label });
@@ -598,4 +600,11 @@ jobs:
               } else {
                 await github.rest.issues.create({ owner, repo, title: `🚨 Image build/smoke gate failing (${variant})`, labels: [label], body });
               }
+            }
+            // A silent no-op here would defeat the whole point of this job:
+            // if neither variant's job name matched (e.g. `release`'s
+            // `name:` or matrix variants drifted out of sync with this
+            // hardcoded lookup), fail loudly instead of reporting nothing.
+            if (matched === 0) {
+              core.setFailed(`notify: found no release-leg jobs matching the expected names for variants [${Object.keys(TAG_BASE).join(', ')}] in this run — the job-name lookup is out of sync with the release job.`);
             }

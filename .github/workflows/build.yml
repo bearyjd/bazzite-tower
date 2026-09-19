@@ -136,7 +136,6 @@ jobs:
       contents: read
       packages: write
       id-token: write
-      issues: write   # open/close a tracking issue when the gate fails
 
     # Exposed as env so step `if:` guards can test for its presence — the
     # `secrets` context is not available directly inside `if:` expressions.
@@ -510,54 +509,79 @@ jobs:
           CANDIDATE_DIGEST: ${{ steps.push_candidate.outputs.digest }}
           PROMOTED_DIGEST: ${{ steps.promote.outputs.digest }}
 
-      # ── Notification: open/refresh a tracking issue when the gate fails ───────
-      # PR failures already show as a red check on the PR, so only file an issue
-      # for push/schedule runs on the default branch. Deduplicated by the
-      # `ci-failure` label: comment on the existing open issue instead of opening
-      # a second one. (GitHub also emails the cron's last editor on a scheduled
-      # failure, so this is the tracked, in-repo complement to that.)
-      - name: Open tracking issue on failure
-        if: failure() && github.event_name != 'pull_request'
-        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
-        with:
-          # Labelled per matrix leg: with two independent legs (fail-fast:
-          # false), one leg's success must never auto-close an issue the
-          # OTHER leg opened — a shared label would do exactly that.
-          script: |
-            const label = 'ci-failure-${{ matrix.variant }}';
-            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
-            const tagBase = '${{ matrix.tag_base }}';
-            const body = [
-              `The **${context.workflow}** workflow failed on \`${context.ref}\` (commit \`${context.sha.slice(0,7)}\`, event \`${context.eventName}\`, matrix leg \`${{ matrix.variant }}\`).`,
-              ``,
-              `Run: ${runUrl}`,
-              ``,
-              `This usually means an upstream Bazzite change broke the build or release verification (smoke/runtime gate, signature, SBOM, or provenance). The public \`:${tagBase}\` tag was **not** promoted and stays on the last-good image.`,
-              ``,
-              `See \`docs/downstream-change-tracking.md\` for the failure model and which area each check maps to.`,
-            ].join('\n');
-            const { owner, repo } = context.repo;
-            const existing = await github.rest.issues.listForRepo({ owner, repo, state: 'open', labels: label });
-            if (existing.data.length > 0) {
-              await github.rest.issues.createComment({ owner, repo, issue_number: existing.data[0].number, body });
-            } else {
-              await github.rest.issues.create({ owner, repo, title: `🚨 Image build/smoke gate failing (${tagBase})`, labels: [label], body });
-            }
+  # ── Notification: open/refresh a tracking issue when a release leg's gate
+  # result isn't success ─────────────────────────────────────────────────────
+  # Deliberately a separate job (not steps in `release` gated on `failure()`)
+  # because a step guarded by `if: failure()` only runs if the JOB continues
+  # executing its own remaining steps — it does not run if that job is instead
+  # cancelled/killed mid-step (observed 2026-09-14: three release runs died
+  # partway through the SBOM step, well under any of its configured timeouts,
+  # and every subsequent step — including the `if: failure()` notifier —
+  # was skipped rather than evaluated, so no issue was ever filed for any of
+  # them). A separate job keyed on `needs: release` with `if: always()` is
+  # scheduled independently of how `release` ends, so it still runs even when
+  # a leg is cancelled outright, and only misses genuinely if the whole
+  # workflow run itself is cancelled (an explicit, visible user action).
+  notify:
+    name: Report release gate result
+    needs: release
+    if: always() && github.event_name != 'pull_request' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    runs-on: ubuntu-24.04
 
-      # Close the tracking issue once the gate is green again on the default
-      # branch, so an open `ci-failure-<variant>` issue always means "that
-      # variant is currently broken" — scoped per leg for the same reason
-      # the open step above is.
-      - name: Close tracking issue on success
-        if: success() && github.event_name != 'pull_request' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    permissions:
+      issues: write   # open/close a tracking issue per release leg
+
+    steps:
+      # PR failures already show as a red check on the PR, so this job only
+      # runs for push/schedule on the default branch (see the job `if:`
+      # above). Deduplicated by the `ci-failure-<variant>` label: comment on
+      # the existing open issue instead of opening a second one. (GitHub also
+      # emails the cron's last editor on a scheduled failure, so this is the
+      # tracked, in-repo complement to that.)
+      #
+      # Reads each leg's actual conclusion from the Actions API instead of
+      # `needs.release.result` (which collapses a matrix job into one
+      # success/failure for the whole job) so a failure in one leg cannot
+      # auto-close, or get conflated with, the other leg's tracking issue.
+      - name: Sync tracking issue per release leg
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         with:
           script: |
-            const label = 'ci-failure-${{ matrix.variant }}';
-            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
             const { owner, repo } = context.repo;
-            const open = await github.rest.issues.listForRepo({ owner, repo, state: 'open', labels: label });
-            for (const issue of open.data) {
-              await github.rest.issues.createComment({ owner, repo, issue_number: issue.number, body: `Gate is green again on \`${context.ref}\` (${runUrl}). Closing.` });
-              await github.rest.issues.update({ owner, repo, issue_number: issue.number, state: 'closed' });
+            const runId = context.runId;
+            const runUrl = `${context.serverUrl}/${owner}/${repo}/actions/runs/${runId}`;
+            // tag_base mirrors the `release` job's matrix, purely for the
+            // human-readable message below — not a build input, so drifting
+            // is cosmetic, not a correctness risk.
+            const TAG_BASE = { 'safe-pin': 'latest', 'latest-kernel': 'latest-kernel' };
+            const jobs = await github.paginate(github.rest.actions.listJobsForWorkflowRun, {
+              owner, repo, run_id: runId, per_page: 100,
+            });
+            for (const variant of Object.keys(TAG_BASE)) {
+              const job = jobs.find(j => j.name === `Build, verify, and release image (${variant})`);
+              if (!job || !job.conclusion || job.conclusion === 'skipped') continue;
+              const label = `ci-failure-${variant}`;
+              if (job.conclusion === 'success') {
+                const open = await github.rest.issues.listForRepo({ owner, repo, state: 'open', labels: label });
+                for (const issue of open.data) {
+                  await github.rest.issues.createComment({ owner, repo, issue_number: issue.number, body: `Gate is green again on \`${context.ref}\` (${runUrl}). Closing.` });
+                  await github.rest.issues.update({ owner, repo, issue_number: issue.number, state: 'closed' });
+                }
+                continue;
+              }
+              const body = [
+                `The **${context.workflow}** workflow's \`${variant}\` release leg finished as \`${job.conclusion}\` on \`${context.ref}\` (commit \`${context.sha.slice(0,7)}\`, event \`${context.eventName}\`).`,
+                ``,
+                `Run: ${runUrl}`,
+                ``,
+                `This usually means an upstream Bazzite change broke the build or release verification (smoke/runtime gate, signature, SBOM, or provenance) — or the job was cancelled/interrupted before finishing. The public \`:${TAG_BASE[variant]}\` tag was **not** promoted and stays on the last-good image.`,
+                ``,
+                `See \`docs/downstream-change-tracking.md\` for the failure model and which area each check maps to.`,
+              ].join('\n');
+              const existing = await github.rest.issues.listForRepo({ owner, repo, state: 'open', labels: label });
+              if (existing.data.length > 0) {
+                await github.rest.issues.createComment({ owner, repo, issue_number: existing.data[0].number, body });
+              } else {
+                await github.rest.issues.create({ owner, repo, title: `🚨 Image build/smoke gate failing (${variant})`, labels: [label], body });
+              }
             }

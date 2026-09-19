@@ -90,8 +90,20 @@ jobs:
           set -euo pipefail
           printf '[storage]\ndriver = "overlay"\nrunroot = "/run/containers/storage"\ngraphroot = "/var/lib/containers/storage"\n' \
             | sudo tee /etc/containers/storage.conf
-          # Clear any state the bundle's fuse-overlayfs config already wrote so
-          # the store isn't mixed-format. Ignore errors: an empty/fresh store is fine.
+          # `podman system reset` reads the store's own recorded graph driver
+          # before it can clear it, so it can fail for the exact same reason
+          # it's meant to fix: observed 2026-09-06/2026-09-13 (issue #52), the
+          # runner-provisioned store's driver record had gone empty ("")
+          # instead of the expected prior fuse-overlayfs config, `system
+          # reset -f` silently failed on that same mismatch (swallowed by
+          # `2>/dev/null || true` below), and the following `podman info`
+          # hit the identical "database graph driver \"\" does not match our
+          # graph driver \"overlay\"" error. Wipe the state directories
+          # directly first so there's nothing left for either command to
+          # find inconsistent.
+          sudo rm -rf /var/lib/containers/storage /run/containers/storage
+          # Now a no-op/no-error path in the common case; kept as a fallback
+          # in case podman also tracks state elsewhere on a future runner image.
           sudo podman system reset -f 2>/dev/null || true
           sudo podman info --format 'driver={{.Store.GraphDriverName}} options={{.Store.GraphOptions}}'
           # Fail loudly if the mount_program override somehow survived -- a

@@ -100,6 +100,10 @@ enable-ssh:
 enable-docker:
     #!/usr/bin/bash
     set -euo pipefail
+    # A heredoc's content/terminator lines sitting at column 0 break `just`'s
+    # recipe-body indentation contract (`just check` failed here until this
+    # was replaced) -- pipe the one line in instead of reaching for a heredoc
+    # again if this ever needs more than a single line of content.
     echo "iptable_nat" | sudo install -Dm644 /dev/stdin /etc/modules-load.d/iptable_nat.conf
     sudo modprobe iptable_nat
     sudo systemctl enable --now docker.socket

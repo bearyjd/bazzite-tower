@@ -28,4 +28,8 @@ jq \
      | ."image-tag" = $tag
      | ."image-branch" = $branch' \
     "${image_info}" >"${image_info}.new"
+# `> file.new` creates it at the build umask, not the original's mode --
+# preserve it explicitly rather than silently changing image-info.json's
+# permissions as a side effect of rebranding its content.
+chmod --reference="${image_info}" "${image_info}.new"
 mv "${image_info}.new" "${image_info}"

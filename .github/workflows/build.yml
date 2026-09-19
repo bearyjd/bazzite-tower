@@ -573,41 +573,49 @@ jobs:
               const job = jobs.find(j => j.name === `Build, verify, and release image (${variant})`);
               if (!job || !job.conclusion || job.conclusion === 'skipped') continue;
               matched++;
-              const label = `ci-failure-${variant}`;
-              if (job.conclusion === 'success') {
-                const open = await github.rest.issues.listForRepo({ owner, repo, state: 'open', labels: label });
-                for (const issue of open.data) {
-                  await github.rest.issues.createComment({ owner, repo, issue_number: issue.number, body: `Gate is green again on \`${context.ref}\` (${runUrl}). Closing.` });
-                  await github.rest.issues.update({ owner, repo, issue_number: issue.number, state: 'closed' });
+              // One variant's GitHub API call failing (rate limit, transient
+              // 5xx) must never abort the loop before the other variant is
+              // even looked at -- that's a second leg's failure going
+              // unreported for a reason that has nothing to do with it.
+              try {
+                const label = `ci-failure-${variant}`;
+                if (job.conclusion === 'success') {
+                  const open = await github.rest.issues.listForRepo({ owner, repo, state: 'open', labels: label });
+                  for (const issue of open.data) {
+                    await github.rest.issues.createComment({ owner, repo, issue_number: issue.number, body: `Gate is green again on \`${context.ref}\` (${runUrl}). Closing.` });
+                    await github.rest.issues.update({ owner, repo, issue_number: issue.number, state: 'closed' });
+                  }
+                  continue;
                 }
-                continue;
-              }
-              // `cancelled` is ambiguous: it covers both a routine supersede
-              // (this repo's own `concurrency: cancel-in-progress: true`
-              // killing a stale in-progress run once a newer push lands —
-              // expected, not a failure — observed 2026-09-19, issues #60/#61)
-              // and a genuinely interrupted run. GitHub already reports the
-              // 2026-09-14 incident this job exists for (steps silently
-              // skipped past a real step failure) as `failure`, not
-              // `cancelled`, so only alert on outcomes that are unambiguously
-              // bad — a `cancelled` leg here just means "superseded or
-              // manually stopped," which the next push's own run will report
-              // on if it's still actually broken.
-              if (job.conclusion !== 'failure' && job.conclusion !== 'timed_out') continue;
-              const body = [
-                `The **${context.workflow}** workflow's \`${variant}\` release leg finished as \`${job.conclusion}\` on \`${context.ref}\` (commit \`${context.sha.slice(0,7)}\`, event \`${context.eventName}\`).`,
-                ``,
-                `Run: ${runUrl}`,
-                ``,
-                `This usually means an upstream Bazzite change broke the build or release verification (smoke/runtime gate, signature, SBOM, or provenance) — or the job was cancelled/interrupted before finishing. The public \`:${TAG_BASE[variant]}\` tag was **not** promoted and stays on the last-good image.`,
-                ``,
-                `See \`docs/downstream-change-tracking.md\` for the failure model and which area each check maps to.`,
-              ].join('\n');
-              const existing = await github.rest.issues.listForRepo({ owner, repo, state: 'open', labels: label });
-              if (existing.data.length > 0) {
-                await github.rest.issues.createComment({ owner, repo, issue_number: existing.data[0].number, body });
-              } else {
-                await github.rest.issues.create({ owner, repo, title: `🚨 Image build/smoke gate failing (${variant})`, labels: [label], body });
+                // `cancelled` is ambiguous: it covers both a routine supersede
+                // (this repo's own `concurrency: cancel-in-progress: true`
+                // killing a stale in-progress run once a newer push lands —
+                // expected, not a failure — observed 2026-09-19, issues #60/#61)
+                // and a genuinely interrupted run. GitHub already reports the
+                // 2026-09-14 incident this job exists for (steps silently
+                // skipped past a real step failure) as `failure`, not
+                // `cancelled`, so only alert on outcomes that are unambiguously
+                // bad — a `cancelled` leg here just means "superseded or
+                // manually stopped," which the next push's own run will report
+                // on if it's still actually broken.
+                if (job.conclusion !== 'failure' && job.conclusion !== 'timed_out') continue;
+                const body = [
+                  `The **${context.workflow}** workflow's \`${variant}\` release leg finished as \`${job.conclusion}\` on \`${context.ref}\` (commit \`${context.sha.slice(0,7)}\`, event \`${context.eventName}\`).`,
+                  ``,
+                  `Run: ${runUrl}`,
+                  ``,
+                  `This usually means an upstream Bazzite change broke the build or release verification (smoke/runtime gate, signature, SBOM, or provenance) — or the job was cancelled/interrupted before finishing. The public \`:${TAG_BASE[variant]}\` tag was **not** promoted and stays on the last-good image.`,
+                  ``,
+                  `See \`docs/downstream-change-tracking.md\` for the failure model and which area each check maps to.`,
+                ].join('\n');
+                const existing = await github.rest.issues.listForRepo({ owner, repo, state: 'open', labels: label });
+                if (existing.data.length > 0) {
+                  await github.rest.issues.createComment({ owner, repo, issue_number: existing.data[0].number, body });
+                } else {
+                  await github.rest.issues.create({ owner, repo, title: `🚨 Image build/smoke gate failing (${variant})`, labels: [label], body });
+                }
+              } catch (err) {
+                core.warning(`notify: failed to sync tracking issue for variant '${variant}': ${err.message}`);
               }
             }
             // A silent no-op here would defeat the whole point of this job:

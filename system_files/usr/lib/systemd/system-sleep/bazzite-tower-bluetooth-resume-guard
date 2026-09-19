@@ -90,7 +90,11 @@ if [[ "${1:-}" != "post" ]]; then
     exit 0
 fi
 
-systemctl restart bluetooth.service
+# Not bare: under set -e, a failed restart here (masked unit, D-Bus not up,
+# job timeout) would exit the whole script immediately -- skipping the health
+# check and the escalation that exists for exactly this kind of failure.
+systemctl restart bluetooth.service \
+    || logger -t "${LOG_TAG}" "initial bluetooth.service restart failed; continuing to health check"
 
 # Give bluetoothd time to bring the adapter back up before judging it -- long
 # enough to clear the field, not just the fast case: a documented self-recovery

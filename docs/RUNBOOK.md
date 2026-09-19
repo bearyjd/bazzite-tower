@@ -282,8 +282,10 @@ journalctl -u bluetooth --no-pager | grep -i "restart\|deactivat"
 
 # Manual equivalents if you need them before the next suspend/resume cycle
 sudo systemctl restart bluetooth.service
-echo 3-10 | sudo tee /sys/bus/usb/drivers/btusb/unbind   # bus path varies; see lsusb
-echo 3-10 | sudo tee /sys/bus/usb/drivers/btusb/bind
+# `btusb` binds the device's interfaces, not the device itself -- the device
+# binds to the generic `usb` driver. Use that, not `drivers/btusb`:
+echo 3-10 | sudo tee /sys/bus/usb/drivers/usb/unbind   # bus path varies; see lsusb
+echo 3-10 | sudo tee /sys/bus/usb/drivers/usb/bind
 ```
 
 This is a separate mechanism from `…/modprobe.d/btusb-no-autosuspend.conf`

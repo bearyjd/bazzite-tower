@@ -404,6 +404,8 @@ check "MOTD image-info rebranded to bazzite-tower" \
 echo "== Bluetooth =="
 check "bluetooth resume guard is executable" \
     test -x /usr/lib/systemd/system-sleep/bazzite-tower-bluetooth-resume-guard
+check "bluetooth.service fast-timeout drop-in present" \
+    test -f /etc/systemd/system/bluetooth.service.d/10-fast-timeout.conf
 
 echo
 if [[ "${fail}" -ne 0 ]]; then

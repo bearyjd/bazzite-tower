@@ -40,7 +40,14 @@ readonly BT_USB_PRODUCT="0036"
 readonly LOG_TAG="bazzite-tower-bluetooth-resume-guard"
 
 adapter_healthy() {
-    timeout 2 bluetoothctl show 2>/dev/null | grep -q 'Powered: yes'
+    # Not bluetoothctl: fed via a non-tty pipe before D-Bus is fully up, it
+    # can SIGABRT on a dbus_connection_get_object_path_data() assertion
+    # (observed exit 134, systemd-coredump) instead of just failing cleanly
+    # -- up to one coredump per poll iteration below. busctl is the same
+    # kind of scripted D-Bus query without that crash.
+    systemctl is-active --quiet bluetooth.service || return 1
+    timeout 2 busctl --system get-property org.bluez /org/bluez/hci0 \
+        org.bluez.Adapter1 Powered 2>/dev/null | grep -q true
 }
 
 find_bt_usb_syspath() {
@@ -85,8 +92,11 @@ fi
 
 systemctl restart bluetooth.service
 
-# Give bluetoothd a few seconds to bring the adapter back up before judging it.
-for _ in 1 2 3 4 5; do
+# Give bluetoothd time to bring the adapter back up before judging it -- long
+# enough to clear the field, not just the fast case: a documented self-recovery
+# on this machine took 23s, so anything shorter than that risks escalating
+# (and unbinding a perfectly fine adapter) on an ordinary slow-but-healthy wake.
+for _ in $(seq 1 30); do
     adapter_healthy && exit 0
     sleep 1
 done

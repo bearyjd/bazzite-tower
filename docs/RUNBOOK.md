@@ -269,11 +269,19 @@ socket and re-initializes the adapter — the userspace-layer equivalent of what
 a full reboot also does. A plain daemon restart does **not** reload the
 btusb/btintel kernel driver or reset the USB device itself, and no incident
 has yet confirmed whether that's actually necessary (only a full reboot was
-ever tried on the aggravated case above) — so the guard escalates: if
-`bluetoothctl show` doesn't report `Powered: yes` within ~5s of the restart,
-it unbind/rebinds the BE200 Bluetooth USB device (`8087:0036`, distinct from
-the BE200 Wi-Fi PCI device — resetting it doesn't touch Wi-Fi) to force a
-closer equivalent of what reboot provides, then restarts the daemon again.
+ever tried on the aggravated case above) — so the guard escalates: if the
+adapter doesn't report itself powered within 30s of the restart (the
+documented 23s self-recovery above sets the floor — escalating sooner would
+unbind a perfectly healthy adapter on an ordinary slow wake), it unbind/rebinds
+the BE200 Bluetooth USB device (`8087:0036`, distinct from the BE200 Wi-Fi PCI
+device — resetting it doesn't touch Wi-Fi) to force a closer equivalent of
+what reboot provides, then restarts the daemon again. The health check itself
+uses `busctl get-property`, not `bluetoothctl show` — the latter can SIGABRT
+(observed, systemd-coredump) if queried before D-Bus is fully back up.
+`etc/systemd/system/bluetooth.service.d/10-fast-timeout.conf` caps each
+restart at 10s start / 10s stop, since this can restart the service twice in
+a row and systemd-sleep blocks the whole system's resume until the script
+exits — without it, a wedged restart could hold resume open for minutes.
 
 ```bash
 # Confirm it ran on the last resume, and whether it had to escalate

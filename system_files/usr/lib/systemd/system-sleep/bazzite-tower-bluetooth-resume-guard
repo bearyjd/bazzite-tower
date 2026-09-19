@@ -101,7 +101,10 @@ systemctl restart bluetooth.service \
 # on this machine took 23s, so anything shorter than that risks escalating
 # (and unbinding a perfectly fine adapter) on an ordinary slow-but-healthy wake.
 for _ in $(seq 1 30); do
-    adapter_healthy && exit 0
+    if adapter_healthy; then
+        logger -t "${LOG_TAG}" "adapter healthy after bluetooth.service restart"
+        exit 0
+    fi
     sleep 1
 done
 
@@ -117,4 +120,5 @@ else
 fi
 
 sleep 2
-systemctl restart bluetooth.service
+systemctl restart bluetooth.service \
+    && logger -t "${LOG_TAG}" "bluetooth.service restarted after USB reset escalation"

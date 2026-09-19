@@ -522,8 +522,14 @@ jobs:
   # was skipped rather than evaluated, so no issue was ever filed for any of
   # them). A separate job keyed on `needs: release` with `if: always()` is
   # scheduled independently of how `release` ends, so it still runs even when
-  # a leg is cancelled outright, and only misses genuinely if the whole
-  # workflow run itself is cancelled (an explicit, visible user action).
+  # a leg is cancelled outright -- confirmed empirically 2026-09-19: this
+  # repo's own `concurrency: cancel-in-progress: true` cancelled an in-flight
+  # `release` while `notify` hadn't started yet, and `notify` still ran to
+  # completion (issues #60/#61 got filed from it, then closed once the
+  # cancelled-conclusion exclusion below was added). Only misses if the
+  # workflow run is torn down before this job is even scheduled -- e.g. a
+  # manual cancel hit early enough, or a concurrency supersede that lands
+  # before `notify` gets queued at all.
   notify:
     name: Report release gate result
     needs: release
@@ -531,7 +537,10 @@ jobs:
     runs-on: ubuntu-24.04
 
     permissions:
-      issues: write   # open/close a tracking issue per release leg
+      issues: write    # open/close a tracking issue per release leg
+      actions: read    # listJobsForWorkflowRun -- works today only because
+                        # the repo is public; explicit so it keeps working
+                        # if that ever changes
 
     steps:
       # PR failures already show as a red check on the PR, so this job only

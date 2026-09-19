@@ -15,11 +15,14 @@
 # Kept as its own fragment, separate from the i915 display flags, because suspend
 # mode is an independent concern and so it can be changed or removed on its own.
 #
-# CAVEAT (confirmed 2026-09-19, see docs/RUNBOOK.md "Common issues"): bootc's own
-# docs mark it undefined behavior for a kargs.d value to change across versions of
-# the same fragment (this one shipped `deep` before being corrected to `s2idle`).
-# An already-deployed machine can keep carrying the old value forward through
+# CAVEAT (confirmed 2026-09-19, see docs/RUNBOOK.md "Common issues"):
+# https://bootc.dev/bootc/building/kernel-arguments.html marks it undefined
+# behavior for a kargs.d value to change across versions of the same fragment
+# (this one shipped `deep` before being corrected to `s2idle`). An
+# already-deployed machine can keep carrying the old value forward through
 # every later `bootc upgrade` instead of picking up the fix. If you ever change
 # an EXISTING kargs.d key's value (not just add a new one), verify it actually
 # took on a real machine after upgrading -- don't trust this comment alone.
+# (On THIS hardware the drift is harmless in practice: the firmware exposes no
+# `deep` mem_sleep state at all, so the stale value has nothing to select.)
 kargs = ["mem_sleep_default=s2idle"]

@@ -98,13 +98,20 @@ jobs:
           # reset -f` silently failed on that same mismatch (swallowed by
           # `2>/dev/null || true` below), and the following `podman info`
           # hit the identical "database graph driver \"\" does not match our
-          # graph driver \"overlay\"" error. Wipe the state directories
-          # directly first so there's nothing left for either command to
-          # find inconsistent.
-          sudo rm -rf /var/lib/containers/storage /run/containers/storage
-          # Now a no-op/no-error path in the common case; kept as a fallback
-          # in case podman also tracks state elsewhere on a future runner image.
+          # graph driver \"overlay\"" error.
+          #
+          # Try the clean path first -- `system reset` unmounts properly when
+          # it can, costs nothing extra since it's already `|| true`-guarded --
+          # then guarantee the wipe: an explicit recursive unmount in case
+          # anything is still mounted under the graphroot/runroot (an
+          # unguarded `rm -rf` over a live mount can fail partway through,
+          # leaving a half-deleted store, which is worse than what this
+          # replaces), and only then `rm -rf` so nothing is left for the
+          # `podman info` below to find inconsistent regardless of what state
+          # `system reset` left behind.
           sudo podman system reset -f 2>/dev/null || true
+          sudo umount -R /var/lib/containers/storage /run/containers/storage 2>/dev/null || true
+          sudo rm -rf /var/lib/containers/storage /run/containers/storage
           sudo podman info --format 'driver={{.Store.GraphDriverName}} options={{.Store.GraphOptions}}'
           # Fail loudly if the mount_program override somehow survived -- a
           # silent fallback would reintroduce the exact failure this step exists

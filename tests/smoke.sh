@@ -401,6 +401,10 @@ check "MOTD image-info rebranded to bazzite-tower" \
     jq -e '."image-name" == "bazzite-tower" and ."image-ref" == "ostree-image-signed:docker://ghcr.io/bearyjd/bazzite-tower"' \
     /usr/share/ublue-os/image-info.json
 
+echo "== Bluetooth =="
+check "bluetooth resume guard is executable" \
+    test -x /usr/lib/systemd/system-sleep/bazzite-tower-bluetooth-resume-guard
+
 echo
 if [[ "${fail}" -ne 0 ]]; then
     echo "SMOKE TESTS FAILED"

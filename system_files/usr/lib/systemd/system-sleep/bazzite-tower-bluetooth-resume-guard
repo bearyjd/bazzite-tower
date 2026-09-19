@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# bazzite-tower-bluetooth-resume-guard — restart bluetoothd after resume.
+#
+# Symptom (reported on this machine): a previously-connected Bluetooth mouse
+# does not reconnect after the system wakes from suspend; only a full reboot
+# fixes it. bluetoothd itself stays "active" across the suspend cycle (no
+# crash, nothing logged) and there is no BE200-style firmware NMI/hard-reset
+# signature for hci0 the way there is for the Wi-Fi radio on this same combo
+# card (see .../modprobe.d/iwlwifi-be200-stability.conf, docs/RUNBOOK.md) — so
+# it is the adapter's HCI/link state, not the firmware, that does not come
+# back cleanly across resume. Same general class of bug already documented on
+# this exact hardware for i915 display resume and the BE200 Wi-Fi radio: this
+# platform does not reinitialize every subsystem cleanly across suspend.
+#
+# Restarting bluetooth.service re-opens the HCI socket and re-initializes the
+# adapter — the same recovery a full reboot provides, without the reboot.
+#
+# systemd-sleep contract: every executable in this directory is invoked by
+# systemd-suspend(-then-hibernate)/-hibernate/-hybrid-sleep.service as
+# "$0 $1 $2", where $1 is "pre" or "post" and $2 is the sleep operation
+# ("suspend", "hibernate", "hybrid-sleep", "suspend-then-hibernate"). Only
+# act after resuming; there is nothing to do before suspending.
+set -euo pipefail
+
+if [[ "${1:-}" == "post" ]]; then
+    systemctl restart bluetooth.service
+fi

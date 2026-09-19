@@ -246,6 +246,36 @@ hotspot** (every observation to date was on a tethered hotspot), and after that 
 wired uplink, which is also the only way to stop Wi-Fi being a single point of
 failure for the entire desktop.
 
+## Bluetooth: paired device won't reconnect after suspend
+
+Symptom: a previously-connected Bluetooth device (observed: a mouse) does not
+reconnect after the system wakes from suspend. `bluetoothd` stays "active" the
+whole time (no crash, nothing logged), and `journalctl -k` shows no BE200-style
+firmware NMI/reset signature for `hci0` the way it does for the Wi-Fi radio
+above — so the adapter's HCI/link state, not firmware, is what doesn't come
+back cleanly across a suspend/resume cycle. Same underlying class of issue as
+the i915 display resume regression and the BE200 Wi-Fi asserts: this platform
+doesn't reinitialize every subsystem cleanly across s2idle.
+
+Mitigation: `…/system-sleep/bazzite-tower-bluetooth-resume-guard` restarts
+`bluetooth.service` on every resume (`systemd-sleep` invokes every executable
+in that directory automatically; no unit/enable step). This re-opens the HCI
+socket and re-initializes the adapter — what a full reboot also does, without
+the reboot.
+
+```bash
+# Confirm it ran on the last resume
+journalctl -u bluetooth --no-pager | grep -i "restart\|deactivat"
+
+# Manual equivalent if you need it before the next suspend/resume cycle
+sudo systemctl restart bluetooth.service
+```
+
+This is a separate mechanism from `…/modprobe.d/btusb-no-autosuspend.conf`
+(`btusb enable_autosuspend=0`), which prevents the USB layer from
+runtime-suspending the controller during active use — that guards against a
+different trigger (USB autosuspend) than a full system suspend/resume cycle.
+
 ## Freezes with no kernel trace (i915 GuC / stall detector)
 
 Some stalls on this machine leave **no kernel message at all**. The soft-lockup

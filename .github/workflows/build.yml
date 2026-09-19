@@ -158,7 +158,7 @@ jobs:
           # not receive the i915 cx0 s2idle-resume fix; see the Containerfile
           # comment and docs/research/i915-bug-report/UPSTREAM-FIX-STATUS-2026-08-28.md.
           - variant: safe-pin
-            build_args: ""
+            build_args: "IMAGE_TAG=latest"
             tag_base: latest
             tag_prefix: ""
           # Opt-in — tracks upstream bazzite-nvidia-open:stable's current
@@ -167,7 +167,9 @@ jobs:
           # every tag this leg produces is namespaced under tag_prefix so it
           # can never collide with the safe-pin leg's pushed tags.
           - variant: latest-kernel
-            build_args: "BASE_IMAGE=ghcr.io/ublue-os/bazzite-nvidia-open:stable"
+            build_args: |
+              BASE_IMAGE=ghcr.io/ublue-os/bazzite-nvidia-open:stable
+              IMAGE_TAG=latest-kernel
             tag_base: latest-kernel
             tag_prefix: "latest-kernel-"
 
@@ -520,8 +522,14 @@ jobs:
   # was skipped rather than evaluated, so no issue was ever filed for any of
   # them). A separate job keyed on `needs: release` with `if: always()` is
   # scheduled independently of how `release` ends, so it still runs even when
-  # a leg is cancelled outright, and only misses genuinely if the whole
-  # workflow run itself is cancelled (an explicit, visible user action).
+  # a leg is cancelled outright -- confirmed empirically 2026-09-19: this
+  # repo's own `concurrency: cancel-in-progress: true` cancelled an in-flight
+  # `release` while `notify` hadn't started yet, and `notify` still ran to
+  # completion (issues #60/#61 got filed from it, then closed once the
+  # cancelled-conclusion exclusion below was added). Only misses if the
+  # workflow run is torn down before this job is even scheduled -- e.g. a
+  # manual cancel hit early enough, or a concurrency supersede that lands
+  # before `notify` gets queued at all.
   notify:
     name: Report release gate result
     needs: release
@@ -529,7 +537,10 @@ jobs:
     runs-on: ubuntu-24.04
 
     permissions:
-      issues: write   # open/close a tracking issue per release leg
+      issues: write    # open/close a tracking issue per release leg
+      actions: read    # listJobsForWorkflowRun -- works today only because
+                        # the repo is public; explicit so it keeps working
+                        # if that ever changes
 
     steps:
       # PR failures already show as a red check on the PR, so this job only
@@ -557,43 +568,60 @@ jobs:
             const jobs = await github.paginate(github.rest.actions.listJobsForWorkflowRun, {
               owner, repo, run_id: runId, per_page: 100,
             });
+            let matched = 0;
             for (const variant of Object.keys(TAG_BASE)) {
               const job = jobs.find(j => j.name === `Build, verify, and release image (${variant})`);
               if (!job || !job.conclusion || job.conclusion === 'skipped') continue;
-              const label = `ci-failure-${variant}`;
-              if (job.conclusion === 'success') {
-                const open = await github.rest.issues.listForRepo({ owner, repo, state: 'open', labels: label });
-                for (const issue of open.data) {
-                  await github.rest.issues.createComment({ owner, repo, issue_number: issue.number, body: `Gate is green again on \`${context.ref}\` (${runUrl}). Closing.` });
-                  await github.rest.issues.update({ owner, repo, issue_number: issue.number, state: 'closed' });
+              matched++;
+              // One variant's GitHub API call failing (rate limit, transient
+              // 5xx) must never abort the loop before the other variant is
+              // even looked at -- that's a second leg's failure going
+              // unreported for a reason that has nothing to do with it.
+              try {
+                const label = `ci-failure-${variant}`;
+                if (job.conclusion === 'success') {
+                  const open = await github.rest.issues.listForRepo({ owner, repo, state: 'open', labels: label });
+                  for (const issue of open.data) {
+                    await github.rest.issues.createComment({ owner, repo, issue_number: issue.number, body: `Gate is green again on \`${context.ref}\` (${runUrl}). Closing.` });
+                    await github.rest.issues.update({ owner, repo, issue_number: issue.number, state: 'closed' });
+                  }
+                  continue;
                 }
-                continue;
+                // `cancelled` is ambiguous: it covers both a routine supersede
+                // (this repo's own `concurrency: cancel-in-progress: true`
+                // killing a stale in-progress run once a newer push lands —
+                // expected, not a failure — observed 2026-09-19, issues #60/#61)
+                // and a genuinely interrupted run. GitHub already reports the
+                // 2026-09-14 incident this job exists for (steps silently
+                // skipped past a real step failure) as `failure`, not
+                // `cancelled`, so only alert on outcomes that are unambiguously
+                // bad — a `cancelled` leg here just means "superseded or
+                // manually stopped," which the next push's own run will report
+                // on if it's still actually broken.
+                if (job.conclusion !== 'failure' && job.conclusion !== 'timed_out') continue;
+                const body = [
+                  `The **${context.workflow}** workflow's \`${variant}\` release leg finished as \`${job.conclusion}\` on \`${context.ref}\` (commit \`${context.sha.slice(0,7)}\`, event \`${context.eventName}\`).`,
+                  ``,
+                  `Run: ${runUrl}`,
+                  ``,
+                  `This usually means an upstream Bazzite change broke the build or release verification (smoke/runtime gate, signature, SBOM, or provenance) — or the job was cancelled/interrupted before finishing. The public \`:${TAG_BASE[variant]}\` tag was **not** promoted and stays on the last-good image.`,
+                  ``,
+                  `See \`docs/downstream-change-tracking.md\` for the failure model and which area each check maps to.`,
+                ].join('\n');
+                const existing = await github.rest.issues.listForRepo({ owner, repo, state: 'open', labels: label });
+                if (existing.data.length > 0) {
+                  await github.rest.issues.createComment({ owner, repo, issue_number: existing.data[0].number, body });
+                } else {
+                  await github.rest.issues.create({ owner, repo, title: `🚨 Image build/smoke gate failing (${variant})`, labels: [label], body });
+                }
+              } catch (err) {
+                core.warning(`notify: failed to sync tracking issue for variant '${variant}': ${err.message}`);
               }
-              // `cancelled` is ambiguous: it covers both a routine supersede
-              // (this repo's own `concurrency: cancel-in-progress: true`
-              // killing a stale in-progress run once a newer push lands —
-              // expected, not a failure — observed 2026-09-19, issues #60/#61)
-              // and a genuinely interrupted run. GitHub already reports the
-              // 2026-09-14 incident this job exists for (steps silently
-              // skipped past a real step failure) as `failure`, not
-              // `cancelled`, so only alert on outcomes that are unambiguously
-              // bad — a `cancelled` leg here just means "superseded or
-              // manually stopped," which the next push's own run will report
-              // on if it's still actually broken.
-              if (job.conclusion !== 'failure' && job.conclusion !== 'timed_out') continue;
-              const body = [
-                `The **${context.workflow}** workflow's \`${variant}\` release leg finished as \`${job.conclusion}\` on \`${context.ref}\` (commit \`${context.sha.slice(0,7)}\`, event \`${context.eventName}\`).`,
-                ``,
-                `Run: ${runUrl}`,
-                ``,
-                `This usually means an upstream Bazzite change broke the build or release verification (smoke/runtime gate, signature, SBOM, or provenance) — or the job was cancelled/interrupted before finishing. The public \`:${TAG_BASE[variant]}\` tag was **not** promoted and stays on the last-good image.`,
-                ``,
-                `See \`docs/downstream-change-tracking.md\` for the failure model and which area each check maps to.`,
-              ].join('\n');
-              const existing = await github.rest.issues.listForRepo({ owner, repo, state: 'open', labels: label });
-              if (existing.data.length > 0) {
-                await github.rest.issues.createComment({ owner, repo, issue_number: existing.data[0].number, body });
-              } else {
-                await github.rest.issues.create({ owner, repo, title: `🚨 Image build/smoke gate failing (${variant})`, labels: [label], body });
-              }
+            }
+            // A silent no-op here would defeat the whole point of this job:
+            // if neither variant's job name matched (e.g. `release`'s
+            // `name:` or matrix variants drifted out of sync with this
+            // hardcoded lookup), fail loudly instead of reporting nothing.
+            if (matched === 0) {
+              core.setFailed(`notify: found no release-leg jobs matching the expected names for variants [${Object.keys(TAG_BASE).join(', ')}] in this run — the job-name lookup is out of sync with the release job.`);
             }

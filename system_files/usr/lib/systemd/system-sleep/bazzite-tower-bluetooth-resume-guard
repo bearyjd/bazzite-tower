@@ -40,7 +40,14 @@ readonly BT_USB_PRODUCT="0036"
 readonly LOG_TAG="bazzite-tower-bluetooth-resume-guard"
 
 adapter_healthy() {
-    bluetoothctl show 2>/dev/null | grep -q 'Powered: yes'
+    # Not bluetoothctl: fed via a non-tty pipe before D-Bus is fully up, it
+    # can SIGABRT on a dbus_connection_get_object_path_data() assertion
+    # (observed exit 134, systemd-coredump) instead of just failing cleanly
+    # -- up to one coredump per poll iteration below. busctl is the same
+    # kind of scripted D-Bus query without that crash.
+    systemctl is-active --quiet bluetooth.service || return 1
+    timeout 2 busctl --system get-property org.bluez /org/bluez/hci0 \
+        org.bluez.Adapter1 Powered 2>/dev/null | grep -q true
 }
 
 find_bt_usb_syspath() {
@@ -57,36 +64,61 @@ find_bt_usb_syspath() {
 }
 
 reset_bt_usb_device() {
-    local syspath="$1" bus_id driver_path
+    local syspath="$1" bus_id driver_dir
     bus_id="$(basename "${syspath}")"
-    driver_path="${syspath}/driver"
-    if [[ ! -e "${driver_path}" ]]; then
+    # Check the driver symlink's existence BEFORE resolving/using it: the
+    # kernel removes `${syspath}/driver` itself as part of a successful
+    # unbind, so reading it again afterwards to find where to write `bind`
+    # returns nothing -- the rebind write then silently no-ops (if left
+    # `|| true`-guarded) and the adapter stays unbound. On the *next* resume
+    # this same device has no `driver` symlink to find at all, so treat that
+    # as "already unbound, nothing to reset" rather than an error worth
+    # aborting on. (`readlink -f` alone can't distinguish these cases: it
+    # happily constructs a path for a symlink that was never there.)
+    if [[ ! -e "${syspath}/driver" ]]; then
         logger -t "${LOG_TAG}" "BT USB device ${bus_id} has no bound driver to reset"
         return 1
     fi
-    echo "${bus_id}" >"${driver_path}/unbind" 2>/dev/null || true
+    driver_dir="$(readlink -f "${syspath}/driver")"
+    echo "${bus_id}" >"${driver_dir}/unbind"
     sleep 1
-    echo "${bus_id}" >"${driver_path}/bind" 2>/dev/null || true
+    echo "${bus_id}" >"${driver_dir}/bind" \
+        || logger -t "${LOG_TAG}" "rebind of ${bus_id} to ${driver_dir} FAILED -- adapter left unbound; recover with: echo ${bus_id} | sudo tee ${driver_dir}/bind"
 }
 
 if [[ "${1:-}" != "post" ]]; then
     exit 0
 fi
 
-systemctl restart bluetooth.service
+# Not bare: under set -e, a failed restart here (masked unit, D-Bus not up,
+# job timeout) would exit the whole script immediately -- skipping the health
+# check and the escalation that exists for exactly this kind of failure.
+systemctl restart bluetooth.service \
+    || logger -t "${LOG_TAG}" "initial bluetooth.service restart failed; continuing to health check"
 
-# Give bluetoothd a few seconds to bring the adapter back up before judging it.
-for _ in 1 2 3 4 5; do
-    adapter_healthy && exit 0
+# Give bluetoothd time to bring the adapter back up before judging it -- long
+# enough to clear the field, not just the fast case: a documented self-recovery
+# on this machine took 23s, so anything shorter than that risks escalating
+# (and unbinding a perfectly fine adapter) on an ordinary slow-but-healthy wake.
+for _ in $(seq 1 30); do
+    if adapter_healthy; then
+        logger -t "${LOG_TAG}" "adapter healthy after bluetooth.service restart"
+        exit 0
+    fi
     sleep 1
 done
 
 logger -t "${LOG_TAG}" "adapter not healthy after bluetooth.service restart; escalating to USB reset"
 
+# A reset that can't find or can't rebind the device must never prevent this
+# final restart attempt -- that dependency is exactly what turned one failed
+# reset into Bluetooth staying dead through every later resume.
 if syspath="$(find_bt_usb_syspath)"; then
-    reset_bt_usb_device "${syspath}"
-    sleep 2
-    systemctl restart bluetooth.service
+    reset_bt_usb_device "${syspath}" || true
 else
     logger -t "${LOG_TAG}" "could not locate BT USB device (${BT_USB_VENDOR}:${BT_USB_PRODUCT}) to reset"
 fi
+
+sleep 2
+systemctl restart bluetooth.service \
+    && logger -t "${LOG_TAG}" "bluetooth.service restarted after USB reset escalation"

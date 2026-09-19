@@ -20,6 +20,11 @@
 ARG BASE_IMAGE=ghcr.io/ublue-os/bazzite-nvidia-open@sha256:010616ed07152c36c6fbe2a4116d20c038ca5eb2a83a3fa3997d545ed75de51d
 ARG FIREWALL_DAEMON=opensnitch
 ARG VM_GATE_SSH=0
+# Which published tag this build represents (`latest` or `latest-kernel`) --
+# purely descriptive, consumed by 98-rebrand-motd.sh so the login MOTD on a
+# :latest-kernel machine doesn't claim to be :latest. CI passes this via
+# --build-arg per matrix leg (see build.yml); does not affect what gets built.
+ARG IMAGE_TAG=latest
 
 # Allow build scripts to be referenced without being copied into the final image
 FROM scratch AS ctx
@@ -98,6 +103,8 @@ ARG FIREWALL_DAEMON
 # docs/research/portmaster-bootc-spike.md's "VM-gate SSH" section.
 ARG VM_GATE_SSH
 
+ARG IMAGE_TAG
+
 # OCI image labels. These are baked into the image for local `podman build`;
 # CI additionally layers ArtifactHub/metadata labels via docker/metadata-action.
 LABEL org.opencontainers.image.title="bazzite-tower"
@@ -118,7 +125,7 @@ RUN --mount=type=bind,from=ctx,source=/,target=/ctx \
     --mount=type=cache,dst=/var/cache \
     --mount=type=cache,dst=/var/log \
     --mount=type=tmpfs,dst=/tmp \
-    FIREWALL_DAEMON="${FIREWALL_DAEMON}" VM_GATE_SSH="${VM_GATE_SSH}" /ctx/build.sh
+    FIREWALL_DAEMON="${FIREWALL_DAEMON}" VM_GATE_SSH="${VM_GATE_SSH}" IMAGE_TAG="${IMAGE_TAG}" /ctx/build.sh
 
 ### LINTING
 RUN bootc container lint

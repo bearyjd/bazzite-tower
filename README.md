@@ -76,7 +76,7 @@ generated pair has a deterministic helper-owned comment. When a NAT network,
 bridge address, default route, VPN state, or NetworkManager connection
 configuration changes, reconciliation removes only stale rules with that
 comment prefix; it never flushes or changes unowned `DOCKER-USER` rules.
-Libvirt network start/stop is detected by the systemd path unit
+Changes in libvirt's network state directory are detected by the systemd path unit
 `docker-libvirt-forwarding.path` (watching `/run/libvirt/network`), which runs
 `docker-libvirt-forwarding.service` only while Docker is active. It is a path
 unit rather than a libvirt network hook because libvirt's SELinux-confined

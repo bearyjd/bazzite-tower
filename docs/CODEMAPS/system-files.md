@@ -11,6 +11,9 @@
 | `bazzite-tower-wifi-backend-guard.service` | oneshot, RemainAfterExit | `After=local-fs`; `Before=NetworkManager` | `…/wifi-backend-guard` | force wpa_supplicant if `wifi.backend=iwd` is selected but iwd isn't enabled |
 | `bazzite-tower-power-tuning.service` | oneshot, RemainAfterExit | `After=basic.target` | `…/power-tuning` | set `platform_profile=balanced` + EPP=`balance_performance` on every core (was firmware low-power) |
 | `i915-resume-fix-check.service` | oneshot | `After=systemd-journald.service`; triggered by its `.timer` | `…/i915-resume-fix-check` | pre-7.0 kernel: no-op; 7.0+: grep this boot's journal for the cx0 DPLL s2idle-resume regression signature, warn if found |
+| `docker-libvirt-forwarding.path` | path, `WantedBy=multi-user.target` | `PathChanged=/run/libvirt/network` (any change in libvirt's network state dir); `TriggerLimitBurst=1000`/10s | activates the `.service` | libvirt-side reconciliation trigger |
+| `docker-libvirt-forwarding.service` | oneshot | `ExecCondition` docker.service and virtnetworkd.service active; `StartLimitIntervalSec=0`; sleep 1, helper, sleep 2, helper (second pass catches merged events); `UnsetEnvironment` of test overrides | `/usr/local/libexec/docker-libvirt-forwarding` | reconcile DOCKER-USER NAT rules |
+| `docker-libvirt-forwarding.timer` | timer, `WantedBy=timers.target` | `OnBootSec=2min`, `OnUnitInactiveSec=10min` | the `.service` | self-heal if an event was missed |
 | `portmaster.service` | simple, disabled VM spike | `After=network-online`; conflicts with OpenSnitch/firewalld; `StateDirectory=portmaster`; `BindReadOnlyPaths=` pins config from `/usr`; `StartLimitBurst=3`; `ExecStopPost=` recovers netfilter rules | `…/portmaster/portmaster-core --bin-dir … --data-dir … --log-stdout` | direct, pinned Portmaster core test; never enabled in an image. Both dir flags are load-bearing: without `--bin-dir` the daemon falls back to a hardcoded `/usr/lib/portmaster` and its updater exits 2 mkdir'ing it on read-only `/usr` |
 
 Docker, Cockpit, and Waydroid are explicitly disabled in the image; Tailscale
@@ -81,7 +84,7 @@ instead, `portmaster.service` enabled — see the systemd units table above and
 - `/etc/smartmontools/smartd.conf` → monitor `/dev/nvme0`+`/dev/nvme1` (health, media errors, weekly long test, temp); logs to journal
 - `/etc/systemd/system/cockpit.socket.d/10-loopback.conf` → clears Cockpit's wildcard listener and binds the opt-in socket only to `127.0.0.1` and `::1`
 - `/etc/systemd/system/docker.service.d/libvirt-forwarding.conf` → non-fatally runs `/usr/local/libexec/docker-libvirt-forwarding` after Docker creates `DOCKER-USER`; it does not alter Docker's FORWARD policy, Docker-managed chains, or nftables tables
-- `/usr/lib/systemd/system/docker-libvirt-forwarding.{path,service}` → path unit on `/run/libvirt/network` (libvirt network start/stop) runs the helper as a oneshot, skipped via `ExecCondition` unless Docker is active; replaces a libvirt network hook, which SELinux `virtnetworkd_t` cannot exec
+- `docker-libvirt-forwarding.{path,service,timer}` (table above) replace a libvirt network hook, which SELinux `virtnetworkd_t` cannot exec
 - `/etc/NetworkManager/dispatcher.d/90-docker-libvirt-forwarding` → asynchronously requests reconciliation on NetworkManager route, VPN, or reapply events; always returns success and invokes the helper only while Docker is active
 - `/usr/lib/bootc/install/50-signature-policy.toml` → asks bootc disk installation to enforce the image's container signature policy; it is image-owned rather than a disk-layout setting
 - `/etc/xdg/baloofilerc` → seed indexer `exclude filters` with build/cache trees (.gradle, target, language caches)

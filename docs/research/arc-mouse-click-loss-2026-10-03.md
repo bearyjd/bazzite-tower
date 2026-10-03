@@ -1,6 +1,16 @@
 # Left-click loss (Arc Touch BT mouse) — investigation notes
 
-*Started: 2026-10-03 · Status: **OPEN, experiment in progress** · Nothing in the image was changed; the one change made is machine-local (see "Experiment").*
+*Started: 2026-10-03 · Status: **ROOT CAUSE FOUND — the Arc Touch BT mouse itself (hardware/firmware/link); no image change needed** · Nothing in the image was changed; the one change made is machine-local (see "Experiment").*
+
+## Conclusion (same day)
+
+A different Bluetooth LE mouse (**Logitech Signature M650 L**, HID-over-GATT `0x1812`, same kernel Bluetooth bus as the Arc) was paired to this laptop **in the same kwin session** and works without issue. The laptop's kernel, libinput, kwin and Bluetooth LE stack therefore handle a LE HoG mouse correctly; the fault is in the Arc Touch BT Mouse (`045E:0804`) or its link. Supporting evidence below: about half of physical clicks never reached the kernel; a release/re-press 6-7 ms apart inside one press (button chatter at the source); weeks of reconnect churn. The "failed clicks missing from kwin's event list" finding is consistent with libinput's debouncing discarding the 6-8 ms pulses, though that step was not proven.
+
+**Action:** retire/replace the Arc mouse. The libinput `ModelBouncingKeys` quirk is not needed and can be reverted (see "Experiment"). The mouse was not tested on a second host, so "worn switch" vs "firmware/link fault" is not distinguished; either way the remedy is the same.
+
+**Touchpad:** the user's first report said it was "not just the touchpad". Every touchpad click reached the kernel in the captures, and with the Arc mouse out of the picture the user confirmed the touchpad is fine. No separate touchpad issue; the clickfinger setting and `AttrPalmSizeThreshold=6` were left untouched.
+
+**Cleanup done:** the libinput quirk experiment was reverted (`/etc/libinput/local-overrides.quirks` is back to its original touchpad-only stanza; verified).
 
 > Hardware: ThinkPad P1 Gen 7, Bazzite bootc (`latest.20260927`), kernel `7.2.0-ogc6.1`, KDE Plasma 6.7.4 (Wayland), libinput 1.31.3. Pointing devices: Sensel haptic touchpad `SNSL002D` (`event7`), TrackPoint (`event4`), **Microsoft Arc Touch BT Mouse** (`045E:0804`, Bluetooth **LE** HID-over-GATT, `event15`).
 
@@ -79,7 +89,7 @@ Verified applied: `libinput quirks list /dev/input/event15` → `ModelBouncingKe
 
 ## Open questions
 
-- When did it first fail — after the 2026-10-01 13:50 reboot, after a specific wake from sleep (resumes at 2026-10-02 ~20:25 and ~21:51), or earlier?
+- **Onset:** user first noticed it "about 2 or 3 days" before 2026-10-03, i.e. roughly the 2026-10-01 13:50 reboot onto `latest.20260927`. The journal does **not** show a clean onset: the Arc mouse's HID device was recreated (a reconnect) on most days since at least 2026-09-13 (e.g. 12 on 09-13, 14 on 09-20, 10 on 09-29, 16 on 10-01, 9 on 10-03), so the BLE connection has been churning for weeks. The Sep 19 resume guard was written for a "stuck mouse reconnect". No kernel-level Bluetooth timeouts or errors appear in the last 5 days. Click loss may be a worsening of longer-standing flakiness in the mouse or its link, not a new regression from the Oct 1 image (which changed only `containerd.io` and `selinux-policy`).
 - Does it start right after a resume, or come on mid-session?
 - Does the mouse behave the same paired to another device (phone/other PC)? Untested; would isolate the mouse itself.
 

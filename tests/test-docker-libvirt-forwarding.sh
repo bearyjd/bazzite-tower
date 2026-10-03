@@ -16,6 +16,7 @@ if [[ "$1" == net-list ]]; then
     case "${NAT_SCENARIO}" in
         default) printf 'default\n' ;;
         multi) printf 'default\nextra-nat\nnot-nat\n' ;;
+        plus) printf 'plus-nat\n' ;;
     esac
     exit 0
 fi
@@ -23,6 +24,7 @@ fi
 case "$2" in
     default) printf '%s\n' "<network><forward mode='nat'/><bridge name='virbr0'/></network>" ;;
     extra-nat) printf '%s\n' "<network><forward mode='nat'/><bridge name='virbr42'/></network>" ;;
+    plus-nat) printf '%s\n' "<network><forward mode='nat'/><bridge name='virbr+'/></network>" ;;
     not-nat) printf '%s\n' "<network><forward mode='route'/><bridge name='virbr99'/></network>" ;;
 esac
 EOF
@@ -77,6 +79,7 @@ case "${operation}" in
     -C) grep -Fqx -- "${rule}" "${state}" ;;
     -I) grep -Fqx -- "${rule}" "${state}" || printf '%s\n' "${rule}" >> "${state}" ;;
     -D)
+        [[ -z "${MOCK_IPTABLES_FAIL_DELETE:-}" || "${rule}" != *"${MOCK_IPTABLES_FAIL_DELETE}"* ]] || exit 66
         grep -Fqx -- "${rule}" "${state}"
         awk -v target="${rule}" '$0 != target' "${state}" > "${state}.next"
         mv "${state}.next" "${state}"
@@ -205,5 +208,67 @@ while IFS= read -r flags; do
     (( (8#${flags} & 3) == 0 )) || { echo "child inherited a writable fd 9" >&2; exit 1; }
 done < "${tmp}/fd.log"
 grep -qv '^none$' "${tmp}/fd.log" || { echo "fd 9 not inherited; probe is vacuous" >&2; exit 1; }
+
+# Production lock (no override): the lock target is the helper file itself.
+# Run a copy so the contention is on the copy, hold it, and require the helper
+# to wait instead of applying rules until the holder releases.
+helper_copy="${tmp}/helper-copy"
+install -m 0755 "${helper}" "${helper_copy}"
+: > "${tmp}/rules"
+: > "${tmp}/iptables.log"
+rm -f "${tmp}/prod-held"
+# shellcheck disable=SC2016 # The child shell expands its positional argument.
+flock "${helper_copy}" bash -c 'touch "$1"; sleep 1' _ "${tmp}/prod-held" &
+lock_holder=$!
+while [[ ! -e "${tmp}/prod-held" ]]; do sleep 0.01; done
+NAT_SCENARIO=default VIRSH_BIN="${tmp}/bin/virsh" IP_BIN="${tmp}/bin/ip" \
+    IPTABLES_BIN="${tmp}/bin/iptables" \
+    MOCK_IPTABLES_STATE="${tmp}/rules" MOCK_IPTABLES_LOG="${tmp}/iptables.log" "${helper_copy}" &
+waiter=$!
+sleep 0.3
+kill -0 "${waiter}" 2>/dev/null || { echo "helper did not wait for the production lock" >&2; exit 1; }
+[[ ! -s "${tmp}/rules" ]] || { echo "helper applied rules while the lock was held" >&2; exit 1; }
+wait "${lock_holder}"
+wait "${waiter}"
+grep -Fqx -- "${rule_outbound}" "${tmp}/rules" || { echo "rules missing after lock release" >&2; exit 1; }
+grep -Fqx -- "${rule_return}" "${tmp}/rules" || { echo "return rule missing after lock release" >&2; exit 1; }
+
+# A wildcard-looking bridge name must never reach iptables.
+: > "${tmp}/rules"
+: > "${tmp}/iptables.log"
+run_helper plus 2>"${tmp}/err.log"
+[[ ! -s "${tmp}/rules" ]] || { echo "wildcard bridge produced rules" >&2; exit 1; }
+grep -qF 'ignoring bridge with unexpected name' "${tmp}/err.log" || { echo "wildcard bridge not reported" >&2; exit 1; }
+
+# Stale pruning: a valid stale pair is removed; helper-prefixed rules with a
+# malformed comment shape are left alone and do not stop later deletions.
+stale_ok='bazzite-tower-libvirt-forwarding:virbr7:192.168.7.0/24:wlp9s0f0'
+stale_space='"bazzite-tower-libvirt-forwarding:virbr8:192.168.8.0/24:wlp9s0f0 extra"'
+stale_shape='bazzite-tower-libvirt-forwarding:virbr9:not-a-cidr!:wlp9s0f0'
+seed_stale() {
+    {
+        printf '%s\n' "-i virbr8 -o wlp9s0f0 -m comment --comment ${stale_space} -j ACCEPT"
+        printf '%s\n' "-i virbr9 -o wlp9s0f0 -m comment --comment ${stale_shape} -j ACCEPT"
+        printf '%s\n' "-i virbr7 -o wlp9s0f0 -s 192.168.7.0/24 -m comment --comment ${stale_ok} -j ACCEPT"
+        printf '%s\n' "-i virbr6 -o wlp9s0f0 -s 192.168.6.0/24 -m comment --comment bazzite-tower-libvirt-forwarding:virbr6:192.168.6.0/24:wlp9s0f0 -j ACCEPT"
+    } > "${tmp}/rules"
+    : > "${tmp}/iptables.log"
+}
+seed_stale
+run_helper default
+grep -qF -- "${stale_space}" "${tmp}/rules" || { echo "malformed (space) comment rule was deleted" >&2; exit 1; }
+grep -qF -- "${stale_shape}" "${tmp}/rules" || { echo "malformed (shape) comment rule was deleted" >&2; exit 1; }
+! grep -qF -- ":virbr7:" "${tmp}/rules" || { echo "valid stale rule was not pruned" >&2; exit 1; }
+! grep -qF -- ":virbr6:" "${tmp}/rules" || { echo "second valid stale rule was not pruned" >&2; exit 1; }
+grep -Fqx -- "${rule_outbound}" "${tmp}/rules" || { echo "desired rule missing after pruning" >&2; exit 1; }
+
+# One failing deletion is reported, later deletions still run, and the exit is 1.
+seed_stale
+rc=0
+MOCK_IPTABLES_FAIL_DELETE=virbr7 run_helper default 2>"${tmp}/err.log" || rc=$?
+[[ ${rc} -eq 1 ]] || { echo "failed deletion must exit 1 (got ${rc})" >&2; exit 1; }
+grep -qF 'failed to delete stale rule' "${tmp}/err.log" || { echo "failed deletion not reported" >&2; exit 1; }
+grep -qF -- ":virbr7:" "${tmp}/rules" || { echo "failing rule unexpectedly removed" >&2; exit 1; }
+! grep -qF -- ":virbr6:" "${tmp}/rules" || { echo "deletion loop aborted after one failure" >&2; exit 1; }
 
 echo "docker/libvirt forwarding mock contracts: pass"

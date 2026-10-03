@@ -8,14 +8,15 @@ ip_bin=${IP_BIN:-ip}
 iptables_bin=${IPTABLES_BIN:-iptables}
 python_bin=${PYTHON_BIN:-python3}
 comment_prefix=bazzite-tower-libvirt-forwarding
-lock_path=${DOCKER_LIBVIRT_FORWARDING_LOCK:-/run/docker-libvirt-forwarding.lock}
+lock_path=${DOCKER_LIBVIRT_FORWARDING_LOCK:-}
 
-# Docker start, libvirt lifecycle, and NetworkManager route events can overlap.
-# Hooks invoke this asynchronously, so wait briefly for the current complete
-# transaction rather than discarding a later event's desired-state update.
-# Without an explicit lock path, lock a read-only fd of this script so children
-# (iptables, ip) do not inherit a writable fd to a var_run_t lock file.
-if [[ -n "${DOCKER_LIBVIRT_FORWARDING_LOCK:-}" ]]; then
+# Docker start, libvirt state changes, and NetworkManager route events can
+# overlap, so wait briefly for the current complete transaction rather than
+# discarding a later event's desired-state update. By default the lock is a
+# read-only fd of this script itself, so children (iptables, ip) do not inherit
+# a writable fd to a var_run_t lock file. DOCKER_LIBVIRT_FORWARDING_LOCK is a
+# test-only override that uses a writable lock file instead.
+if [[ -n "${lock_path}" ]]; then
     exec 9>"${lock_path}"
 else
     exec 9<"${BASH_SOURCE[0]}"
@@ -51,6 +52,7 @@ ensure_rule() {
 }
 
 declare -A desired_comments=()
+delete_failed=0
 
 reconcile_stale_rules() {
     local chain_rules line comment_index comment
@@ -70,9 +72,13 @@ reconcile_stale_rules() {
             fi
         done
         [[ ${comment_index} -ge 0 ]] || continue
+        # A quoted comment containing spaces is split across fields; never ours.
+        [[ "${fields[comment_index]}" != \"* || "${fields[comment_index]}" == *\" ]] || continue
         comment=${fields[comment_index]#\"}
         comment=${comment%\"}
         [[ "${comment}" == "${comment_prefix}:"* ]] || continue
+        # Only delete rules whose comment has exactly the shape we generate.
+        [[ "${comment}" =~ ^${comment_prefix}:[A-Za-z0-9_.-]{1,15}:[0-9./]+:[A-Za-z0-9_.@-]{1,15}$ ]] || continue
         [[ -n "${desired_comments[${comment}]:-}" ]] && continue
         # The prefix is ours; only then translate this exact saved rule to -D.
         rule=("${fields[@]:2}")
@@ -80,8 +86,12 @@ reconcile_stale_rules() {
             rule[i]=${rule[i]#\"}
             rule[i]=${rule[i]%\"}
         done
-        "${iptables_bin}" -w -D DOCKER-USER "${rule[@]}"
+        if ! "${iptables_bin}" -w -D DOCKER-USER "${rule[@]}"; then
+            echo "docker-libvirt-forwarding: failed to delete stale rule: ${line}" >&2
+            delete_failed=1
+        fi
     done <<< "${chain_rules}"
+    [[ ${delete_failed} -eq 0 ]] || exit 1
 }
 
 # `net-list --name` contains active networks only. XML is the source of truth
@@ -112,6 +122,10 @@ if forward is not None and forward.get("mode") == "nat" and bridge is not None:
         exit 1
     fi
     [[ -n "${bridge}" ]] || continue
+    if ! [[ "${bridge}" =~ ^[A-Za-z0-9_.-]{1,15}$ ]]; then
+        echo "docker-libvirt-forwarding: ignoring bridge with unexpected name" >&2
+        continue
+    fi
 
     # A bridge without a live IPv4 address is not a usable forwarding target.
     if ! bridge_addresses=$("${ip_bin}" -4 -o addr show dev "${bridge}" scope global); then

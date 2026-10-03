@@ -78,7 +78,11 @@ configuration changes, reconciliation removes only stale rules with that
 comment prefix; it never flushes or changes unowned `DOCKER-USER` rules.
 Changes in libvirt's network state directory are detected by the systemd path unit
 `docker-libvirt-forwarding.path` (watching `/run/libvirt/network`), which runs
-`docker-libvirt-forwarding.service` only while Docker is active. It is a path
+`docker-libvirt-forwarding.service` only while both `docker.service` and
+`virtnetworkd.service` are active; it runs the helper twice about 2 s apart, and
+`docker-libvirt-forwarding.timer` re-runs it about every 10 minutes as a
+self-heal. The helper refuses a default-route interface whose name is not plain
+`[A-Za-z0-9_.-]{1,15}`. It is a path
 unit rather than a libvirt network hook because libvirt's SELinux-confined
 `virtnetworkd_t` cannot exec hooks, and a failing hook aborts network start.
 NetworkManager route/VPN/reapply events request reconciliation asynchronously

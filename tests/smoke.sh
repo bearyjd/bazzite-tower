@@ -241,7 +241,14 @@ check "Docker/libvirt forwarding tags owned rules" \
     grep -qx 'comment_prefix=bazzite-tower-libvirt-forwarding' /usr/local/libexec/docker-libvirt-forwarding
 check "Docker/libvirt forwarding uses a bounded whole-helper lock" \
     grep -qx 'if ! flock -w 30 9; then' /usr/local/libexec/docker-libvirt-forwarding
-check "libvirt lifecycle hook is executable" test -x /etc/libvirt/hooks/network
+# Intent changed (not weakened): the libvirt network hook was replaced by a
+# systemd path unit because virtnetworkd_t cannot exec hooks under SELinux.
+check_enabled "docker-libvirt-forwarding.path"
+check "Docker/libvirt forwarding path unit exists" test -f /usr/lib/systemd/system/docker-libvirt-forwarding.path
+check "Docker/libvirt forwarding service unit exists" test -f /usr/lib/systemd/system/docker-libvirt-forwarding.service
+check_enabled "docker-libvirt-forwarding.timer"
+check "Docker/libvirt forwarding timer unit exists" test -f /usr/lib/systemd/system/docker-libvirt-forwarding.timer
+check "libvirt network hook is absent" test ! -e /etc/libvirt/hooks/network
 check "NetworkManager route reconciliation hook is executable" \
     test -x /etc/NetworkManager/dispatcher.d/90-docker-libvirt-forwarding
 

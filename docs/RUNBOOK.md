@@ -82,6 +82,36 @@ again on a future kernel bump.
 | Default NAT network | `ujust vm-net-status` |
 | Wi-Fi diagnostics (offline) | `ujust wifi-debug` |
 
+**Docker/libvirt forwarding on libvirt network changes (manual, real hardware).**
+Reconciliation is triggered by the systemd path unit `docker-libvirt-forwarding.path`,
+not a libvirt network hook: libvirt's confined `virtnetworkd_t` cannot exec hooks
+under enforcing SELinux, and a failing hook aborts every network start. The path
+unit fires on *any* change in libvirt's network state directory
+(`/run/libvirt/network`), not only start/stop; `docker-libvirt-forwarding.timer`
+also re-runs it every ~10 minutes as a self-heal. Stale rules for a stopped network
+are harmless and are pruned at the next run. To verify, with Docker running:
+
+1. `systemctl is-active docker-libvirt-forwarding.path` (expect `active`) and
+   `sudo ls /etc/libvirt/hooks/` — a leftover or locally modified `network` or
+   `network.disabled` hook survives the `/etc` 3-way merge and would keep breaking
+   network start; delete it.
+2. `sudo virsh net-list --all`; pick a NAT network `<name>`.
+3. `sudo virsh net-start <name>` (or `net-destroy` then `net-start` if active), wait ~4s,
+   then `sudo iptables -S DOCKER-USER | grep bazzite-tower-libvirt-forwarding:` should
+   show the pair for its bridge.
+4. `sudo virsh net-destroy <name>`, wait ~4s; those rules should be gone.
+5. `sudo ausearch -m avc -ts recent | grep -i virt` — expect nothing about the helper.
+
+Logs: `journalctl -u docker-libvirt-forwarding.service -b`. An existing machine may
+have a leftover `/etc/libvirt/hooks/network.disabled` from the earlier workaround.
+
+Known limits:
+- The default lock is the helper script file itself, so any local user who can open it
+  can hold the lock (equivalent to the old `/run` lock file).
+- The service is not sandboxed; hardening directives need real-host testing
+  (`NoNewPrivileges` may break SELinux transitions).
+- The service shows `failed` when offline (the helper exits 1 with no default route).
+
 **One-shot sweep:** [`scripts/tower-diagnostic.sh`](../scripts/tower-diagnostic.sh)
 runs all of the above (SOF/ABI, MCE/RAS, i915 resume, thermals, SMART, rpm-ostree)
 in one pass. Run with `sudo` for the root-only checks:
@@ -130,7 +160,7 @@ Known-good: `18.1.18.2644` and above.
 | `virtqemud` won't start | upstream change dropped the `qemu` system user | rebuilt/guarded in `build.sh`; the smoke + boot tests catch regressions |
 | Can't manage VMs as your user | user not yet in `kvm`/`libvirt` | `ujust fix-vm-groups`, then re-login (the first-boot oneshot adds the first user automatically) |
 | Docker command cannot connect | Docker is intentionally disabled by default | Run `ujust enable-docker`, acknowledge that the Docker group is root-equivalent, then re-login |
-| Libvirt NAT guests cannot reach the default uplink after Docker starts | Docker's `DOCKER-USER` chain was not created or the active NAT bridge lacks an IPv4 address | `sudo systemctl restart docker.service`; inspect `journalctl -u docker.service -b`; the post-start helper refuses to create a missing Docker chain but does not fail Docker itself. Libvirt lifecycle and NetworkManager route/VPN/reapply events retry it. From a repository checkout, run `just test-docker-libvirt-forwarding` on a suitable host. |
+| Libvirt NAT guests cannot reach the default uplink after Docker starts | Docker's `DOCKER-USER` chain was not created or the active NAT bridge lacks an IPv4 address | `sudo systemctl restart docker.service`; inspect `journalctl -u docker.service -b`; the post-start helper refuses to create a missing Docker chain but does not fail Docker itself. Changes in libvirt's network state directory (path unit) and the 10-minute self-heal timer and NetworkManager route/VPN/reapply events retry it. From a repository checkout, run `just test-docker-libvirt-forwarding` on a suitable host. |
 | `docker.socket` fails at boot (`Failed to resolve group 'docker'`) | the `docker` group wasn't baked into the image (stale gshadow orphan made `systemd-sysusers` abort, so the group got created late) | `build.sh` now strips all shadow/gshadow orphans and bakes `groupadd -r docker`; the smoke test asserts the group exists |
 | Display flicker / ~30s sluggish wake | i915 PSR/DC or `deep` suspend on Meteor Lake | baked kargs disable PSR/DC and pin `s2idle`; verify `cat /sys/power/mem_sleep` |
 | `cat /proc/cmdline` shows `mem_sleep_default=deep` despite `20-suspend.toml` declaring `s2idle` | [`bootc` docs](https://bootc.dev/bootc/building/kernel-arguments.html) mark it **undefined behavior** when a kargs.d value changes across versions of the same fragment (this one shipped `deep` before PR #16 corrected it to `s2idle`) — once a value like this is baked into a deployment's persisted kernelopts, later `bootc upgrade`s can keep carrying the old value forward instead of reconciling to the fragment's current content. Confirmed on this machine 2026-09-19: `rpm-ostree kargs` showed `deep` on a deployment built long after the `s2idle` fix landed. **Harmless in practice on this hardware**: `cat /sys/power/mem_sleep` reports only `s2idle` — the firmware exposes no `deep` state at all, so the stale karg has nothing to select and resume is not currently degraded by it. Worth fixing for hygiene (declared intent should match reality) and because a future firmware/BIOS update could theoretically add a `deep` state this karg would then actually select, not because anything is broken today | one-time local correction, which then persists correctly across future upgrades the same way the wrong value did. Run `rpm-ostree kargs` bare first to confirm the deployment actually carries `deep` — `--delete` fails if it doesn't: `sudo rpm-ostree kargs --delete=mem_sleep_default=deep --append=mem_sleep_default=s2idle`, then reboot. Re-check any OTHER kargs.d fragment you edit after its first deploy — this isn't specific to suspend, it's a general bootc kargs.d gotcha |

@@ -1,0 +1,10 @@
+[Unit]
+Description=Periodic Docker/libvirt NAT forwarding reconciliation (self-heal)
+
+[Timer]
+OnBootSec=2min
+OnUnitInactiveSec=10min
+Unit=docker-libvirt-forwarding.service
+
+[Install]
+WantedBy=timers.target

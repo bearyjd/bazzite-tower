@@ -41,6 +41,8 @@ hard "virtnetworkd.socket active"      systemctl is-active --quiet virtnetworkd.
 # if the qemu user is unresolvable (regression #8). Bounded so it can't wedge.
 hard "virsh -c qemu:///system connects" timeout 60 virsh -c qemu:///system list --all
 hard "virtqemud.service not failed"     not_failed virtqemud.service
+soft "docker-libvirt-forwarding.path active" systemctl is-active --quiet docker-libvirt-forwarding.path
+soft "docker-libvirt-forwarding.timer active" systemctl is-active --quiet docker-libvirt-forwarding.timer
 
 say "== Wi-Fi backend guard runtime =="
 # The guard is a oneshot (RemainAfterExit) ordered Before=NetworkManager. Active

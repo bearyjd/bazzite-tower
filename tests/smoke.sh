@@ -246,6 +246,8 @@ check "Docker/libvirt forwarding uses a bounded whole-helper lock" \
 check_enabled "docker-libvirt-forwarding.path"
 check "Docker/libvirt forwarding path unit exists" test -f /usr/lib/systemd/system/docker-libvirt-forwarding.path
 check "Docker/libvirt forwarding service unit exists" test -f /usr/lib/systemd/system/docker-libvirt-forwarding.service
+check_enabled "docker-libvirt-forwarding.timer"
+check "Docker/libvirt forwarding timer unit exists" test -f /usr/lib/systemd/system/docker-libvirt-forwarding.timer
 check "libvirt network hook is absent" test ! -e /etc/libvirt/hooks/network
 check "NetworkManager route reconciliation hook is executable" \
     test -x /etc/NetworkManager/dispatcher.d/90-docker-libvirt-forwarding

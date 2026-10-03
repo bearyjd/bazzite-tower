@@ -1,10 +1,13 @@
 [Unit]
-Description=Reconcile Docker/libvirt NAT forwarding on libvirt network changes
+Description=Reconcile Docker/libvirt NAT forwarding on libvirt network state changes
 
 [Path]
 # libvirt creates/removes per-network state files here on network start/stop.
 PathChanged=/run/libvirt/network
 Unit=docker-libvirt-forwarding.service
+# A noisy writer must not trip the default trigger limit and disable the watch.
+TriggerLimitIntervalSec=10s
+TriggerLimitBurst=1000
 
 [Install]
 WantedBy=multi-user.target

@@ -62,3 +62,6 @@ systemctl enable bazzite-tower-firstboot.service
 # virtnetworkd_t cannot exec hooks under enforcing SELinux, and a failing hook
 # aborts every network start.
 systemctl enable docker-libvirt-forwarding.path
+# Self-heal: reconcile periodically in case an edge event was missed or the
+# path unit stopped watching.
+systemctl enable docker-libvirt-forwarding.timer

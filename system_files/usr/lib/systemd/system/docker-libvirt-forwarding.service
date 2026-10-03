@@ -7,6 +7,16 @@ StartLimitIntervalSec=0
 Type=oneshot
 # Docker is socket-activated here: skip (not fail) when it is not running.
 ExecCondition=/usr/bin/systemctl is-active --quiet docker.service
+# Do not wake the socket-activated virtnetworkd: its idle-timeout churn in
+# /run/libvirt/network would re-trigger this unit, and `virsh net-list` would
+# activate it again. No network can be active without the daemon.
+ExecCondition=/usr/bin/systemctl is-active --quiet virtnetworkd.service
 # The stop trigger fires while the bridge still exists; let it settle first.
 ExecStartPre=/usr/bin/sleep 1
 ExecStart=/usr/local/libexec/docker-libvirt-forwarding
+# systemd merges a start request into a running oneshot, so events landing
+# during the first pass would be lost. Run a second pass after a short delay.
+ExecStartPost=/usr/bin/sleep 2
+ExecStartPost=/usr/local/libexec/docker-libvirt-forwarding
+# Test-only overrides must never reach the production helper.
+UnsetEnvironment=VIRSH_BIN IP_BIN IPTABLES_BIN PYTHON_BIN DOCKER_LIBVIRT_FORWARDING_LOCK

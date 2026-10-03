@@ -185,4 +185,25 @@ if NAT_SCENARIO=default MOCK_DOCKER_USER_AVAILABLE=0 \
     exit 1
 fi
 [[ ! -s "${tmp}/rules" ]]
+# Production locking (no lock-path override) must not leak a writable fd 9 to
+# children such as iptables/ip; the lock is a read-only fd of the helper itself.
+install -m 0755 /dev/stdin "${tmp}/bin/iptables-fdprobe" <<'EOF2'
+#!/usr/bin/env bash
+flags=$(awk '/^flags:/ { print $2 }' /proc/self/fdinfo/9 2>/dev/null || true)
+printf '%s\n' "${flags:-none}" >> "${MOCK_FD_LOG:?}"
+exec "$(dirname "$0")/iptables" "$@"
+EOF2
+: > "${tmp}/rules"
+: > "${tmp}/iptables.log"
+: > "${tmp}/fd.log"
+NAT_SCENARIO=default VIRSH_BIN="${tmp}/bin/virsh" IP_BIN="${tmp}/bin/ip" \
+    IPTABLES_BIN="${tmp}/bin/iptables-fdprobe" MOCK_FD_LOG="${tmp}/fd.log" \
+    MOCK_IPTABLES_STATE="${tmp}/rules" MOCK_IPTABLES_LOG="${tmp}/iptables.log" "${helper}"
+[[ -s "${tmp}/fd.log" ]]
+while IFS= read -r flags; do
+    [[ "${flags}" != none ]] || continue
+    (( (8#${flags} & 3) == 0 )) || { echo "child inherited a writable fd 9" >&2; exit 1; }
+done < "${tmp}/fd.log"
+grep -qv '^none$' "${tmp}/fd.log" || { echo "fd 9 not inherited; probe is vacuous" >&2; exit 1; }
+
 echo "docker/libvirt forwarding mock contracts: pass"

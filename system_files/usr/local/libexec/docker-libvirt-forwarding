@@ -13,7 +13,13 @@ lock_path=${DOCKER_LIBVIRT_FORWARDING_LOCK:-/run/docker-libvirt-forwarding.lock}
 # Docker start, libvirt lifecycle, and NetworkManager route events can overlap.
 # Hooks invoke this asynchronously, so wait briefly for the current complete
 # transaction rather than discarding a later event's desired-state update.
-exec 9>"${lock_path}"
+# Without an explicit lock path, lock a read-only fd of this script so children
+# (iptables, ip) do not inherit a writable fd to a var_run_t lock file.
+if [[ -n "${DOCKER_LIBVIRT_FORWARDING_LOCK:-}" ]]; then
+    exec 9>"${lock_path}"
+else
+    exec 9<"${BASH_SOURCE[0]}"
+fi
 if ! flock -w 30 9; then
     echo "docker-libvirt-forwarding: timed out acquiring reconciliation lock" >&2
     exit 1

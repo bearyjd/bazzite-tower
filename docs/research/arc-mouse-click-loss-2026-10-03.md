@@ -2,7 +2,7 @@
 
 *Started: 2026-10-03 · Status: **OPEN, experiment in progress** · Nothing in the image was changed; the one change made is machine-local (see "Experiment").*
 
-> Hardware: ThinkPad P1 Gen 7, Bazzite bootc (`latest.20260927`), kernel `7.2.0-ogc6.1`, KDE Plasma 6.7.4 (Wayland), libinput 1.31.3. Pointing devices: Sensel haptic touchpad `SNSL002D` (`event7`), TrackPoint (`event4`), **Microsoft Arc Touch BT Mouse** (`045E:0804`, Bluetooth, `event15`).
+> Hardware: ThinkPad P1 Gen 7, Bazzite bootc (`latest.20260927`), kernel `7.2.0-ogc6.1`, KDE Plasma 6.7.4 (Wayland), libinput 1.31.3. Pointing devices: Sensel haptic touchpad `SNSL002D` (`event7`), TrackPoint (`event4`), **Microsoft Arc Touch BT Mouse** (`045E:0804`, Bluetooth **LE** HID-over-GATT, `event15`).
 
 ## Symptom
 
@@ -20,6 +20,21 @@ Left click (maybe right) sometimes does nothing and needs several tries. Movemen
 | `libinput quirks list` for the Arc mouse was **empty**; libinput ships `ModelBouncingKeys=1` for the sibling Microsoft Nano Transceiver (`045E:0800`) but nothing for `0804` | `/usr/share/libinput/30-vendor-microsoft.quirks` |
 | While failing, kwin_wayland: 0.2 % CPU, all threads idle; plasmashell idle in `poll`; GPU P3 / 10 % | live snapshot |
 
+### Bluetooth capture (`btmon`, 45 s, taken while the failure was present, before logout)
+
+The mouse is **BLE HID-over-GATT**: reports are `ATT Handle Value Notification` (handle `0x0021`, 9-byte report, byte 0 = buttons) at roughly a 7.5 ms cadence. Decoding the button byte over the air:
+
+| Click | Seen over the air |
+|---|---|
+| 1 | LEFT down and LEFT up in the **same connection event** (packets #247/#248, 0.0 ms apart) |
+| 2 | LEFT down, up after 29 ms |
+| 3 | LEFT down, up after 90 ms |
+
+- Only **3 left-click presses** appear in the 45 s capture. The user's physical click count for that window was not recorded, so over-the-air loss is **unproven**.
+- 19 of 414 connection events carried 2-3 notifications at once, i.e. the link batches reports. A press+release delivered together would reach the host with a near-zero gap, which is the same signature as the 6-8 ms pulses libinput logged. So the short pulses can come from **link-level batching**, not necessarily switch chatter. This weakens the "chattering switch" reading and reopens the transport as a contributor.
+- The LE connection parameters in `/etc/bluetooth/main.conf` (`MinConnectionInterval=12`, `MaxConnectionInterval=15`, `ConnectionLatency=0`, `FastConnectable=true`) come from Bazzite's bluez package, not this repo. The live connection interval was not captured (needs root debugfs).
+- `libinput record` (45 s, `sudo timeout 45 libinput record /dev/input/event15 -o $HOME/arc-record.yml`; the standalone `libinput-record` name is not on PATH) captured **5 left clicks**: holds 21, 35, 8, 45, 45 ms. The last two are a **release at 7.208 s, re-press at 7.215 s (6-7 ms gap)**, i.e. a contact dropout inside what was probably one ~100 ms press. Apps see two clicks. The mouse firmware sent that release, so this is **button chatter at the source**, not just link batching. Both effects exist: chatter (record) and batching (btmon). The user's intended click count for these captures was not recorded.
+
 Capture used (run in a normal terminal; `sudo` is needed, and `--show-keycodes` logs key names, so do not type secrets while it runs):
 
 ```
@@ -35,7 +50,7 @@ timeout 40 sudo libinput debug-events --show-keycodes 2>&1 | grep -E 'KEYBOARD_K
 - **Accessibility / sticky keys / XKB option** — no `kaccessrc`; `kxkbrc` is plain `us`; no modifier-only shortcuts.
 - **Terminal mouse-reporting leftovers** — it fails on the desktop too, not only in terminals.
 - **Recent package upgrade** — `rpm-ostree db diff` `latest.20260920` → `latest.20260927` changed only `containerd.io` and `selinux-policy` (44.9→44.10). Input stack (kernel, kwin, libinput, bluez, Xwayland) identical. No SELinux denials touching input/bluetooth/kwin.
-- **Interference** — considered (Wi-Fi on 2.4 GHz ch 9 / 40 MHz next to a classic-BT mouse); disfavoured because movement/scroll are unaffected and the failure is inside kwin. Not directly tested.
+- **Interference** — considered (Wi-Fi on 2.4 GHz ch 9 / 40 MHz next to a BLE mouse; an earlier note here wrongly called it classic BT); disfavoured because movement/scroll are unaffected and the failure is inside kwin. Not directly tested.
 
 ## Working hypothesis (UNCONFIRMED)
 

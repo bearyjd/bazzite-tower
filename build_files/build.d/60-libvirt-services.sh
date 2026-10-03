@@ -55,3 +55,10 @@ EOF
 # ship in system_files/; the unit retries every boot until a regular user exists,
 # then drops a marker so it stops running.
 systemctl enable bazzite-tower-firstboot.service
+
+# ── Docker/libvirt NAT forwarding: path-activated reconciliation ──────────────
+# Re-run the forwarding helper whenever libvirt starts/stops a network. This is
+# a systemd path unit, not a libvirt network hook: libvirt's confined
+# virtnetworkd_t cannot exec hooks under enforcing SELinux, and a failing hook
+# aborts every network start.
+systemctl enable docker-libvirt-forwarding.path

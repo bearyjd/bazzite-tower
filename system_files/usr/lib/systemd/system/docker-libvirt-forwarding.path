@@ -1,0 +1,10 @@
+[Unit]
+Description=Reconcile Docker/libvirt NAT forwarding on libvirt network changes
+
+[Path]
+# libvirt creates/removes per-network state files here on network start/stop.
+PathChanged=/run/libvirt/network
+Unit=docker-libvirt-forwarding.service
+
+[Install]
+WantedBy=multi-user.target

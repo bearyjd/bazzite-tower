@@ -43,6 +43,12 @@ if [[ -z "${default_interface}" ]]; then
     echo "docker-libvirt-forwarding: no default-route interface found" >&2
     exit 1
 fi
+# Same character class as the bridge guard and the ownership regex below, so a
+# rule is never created that stale pruning would not recognize as ours.
+if ! [[ "${default_interface}" =~ ^[A-Za-z0-9_.-]{1,15}$ ]]; then
+    echo "docker-libvirt-forwarding: default-route interface has an unexpected name" >&2
+    exit 1
+fi
 
 ensure_rule() {
     local -a rule=("$@")
@@ -55,7 +61,7 @@ declare -A desired_comments=()
 delete_failed=0
 
 reconcile_stale_rules() {
-    local chain_rules line comment_index comment
+    local chain_rules line comment_index comment i
     local -a fields rule
     if ! chain_rules=$("${iptables_bin}" -w -S DOCKER-USER); then
         echo "docker-libvirt-forwarding: unable to list DOCKER-USER rules" >&2
@@ -78,7 +84,7 @@ reconcile_stale_rules() {
         comment=${comment%\"}
         [[ "${comment}" == "${comment_prefix}:"* ]] || continue
         # Only delete rules whose comment has exactly the shape we generate.
-        [[ "${comment}" =~ ^${comment_prefix}:[A-Za-z0-9_.-]{1,15}:[0-9./]+:[A-Za-z0-9_.@-]{1,15}$ ]] || continue
+        [[ "${comment}" =~ ^${comment_prefix}:[A-Za-z0-9_.-]{1,15}:[0-9./]+:[A-Za-z0-9_.-]{1,15}$ ]] || continue
         [[ -n "${desired_comments[${comment}]:-}" ]] && continue
         # The prefix is ours; only then translate this exact saved rule to -D.
         rule=("${fields[@]:2}")

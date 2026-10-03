@@ -34,12 +34,13 @@ install -m 0755 /dev/stdin "${tmp}/bin/ip" <<'EOF'
 set -euo pipefail
 if [[ "$*" == '-o route show default' ]]; then
     [[ "${MOCK_IP_ROUTE_FAIL:-0}" != 1 ]] || exit 9
-    printf '%s\n' 'default via 192.0.2.1 dev wlp9s0f0 proto dhcp metric 600'
+    printf '%s\n' "default via 192.0.2.1 dev ${MOCK_IP_ROUTE_DEV:-wlp9s0f0} proto dhcp metric 600"
     exit 0
 fi
 case "$*" in
     *'dev virbr0 '*) [[ "${MOCK_IP_ADDRESS_FAIL:-0}" != 1 ]] || exit 10; printf '%s\n' '7: virbr0    inet 192.168.122.1/24 brd 192.168.122.255 scope global virbr0' ;;
     *'dev virbr42 '*) printf '%s\n' '8: virbr42   inet 192.168.42.1/24 brd 192.168.42.255 scope global virbr42' ;;
+    *'dev virbr+ '*) printf '%s\n' '10: virbr+    inet 192.168.77.1/24 brd 192.168.77.255 scope global virbr+' ;;
     *'dev virbr99 '*) printf '%s\n' '9: virbr99   inet 10.99.0.1/24 brd 10.99.0.255 scope global virbr99' ;;
 esac
 EOF
@@ -59,7 +60,10 @@ if [[ "${operation}" == -S ]]; then
     [[ "${MOCK_DOCKER_USER_AVAILABLE:-1}" == 1 ]]
     printf '%s\n' '-N DOCKER-USER'
     while IFS= read -r rule; do
-        [[ -n "${rule}" ]] && printf '%s\n' "-A DOCKER-USER ${rule}"
+        [[ -n "${rule}" ]] || continue
+        # Real iptables -S always quotes comments; mimic it on request.
+        [[ "${MOCK_IPTABLES_QUOTE:-0}" != 1 ]] || rule=$(sed -E 's/--comment ([^" ]+)/--comment "\1"/' <<< "${rule}")
+        printf '%s\n' "-A DOCKER-USER ${rule}"
     done < "${state}"
     exit
 fi
@@ -217,17 +221,23 @@ install -m 0755 "${helper}" "${helper_copy}"
 : > "${tmp}/rules"
 : > "${tmp}/iptables.log"
 rm -f "${tmp}/prod-held"
-# shellcheck disable=SC2016 # The child shell expands its positional argument.
-flock "${helper_copy}" bash -c 'touch "$1"; sleep 1' _ "${tmp}/prod-held" &
+sentinel="${tmp}/prod-release"
+: > "${sentinel}"
+# The holder keeps the lock until the sentinel file is removed (no timing).
+# shellcheck disable=SC2016 # The child shell expands its positional arguments.
+flock "${helper_copy}" bash -c 'touch "$1"; while [[ -e "$2" ]]; do sleep 0.05; done' _ "${tmp}/prod-held" "${sentinel}" &
 lock_holder=$!
 while [[ ! -e "${tmp}/prod-held" ]]; do sleep 0.01; done
 NAT_SCENARIO=default VIRSH_BIN="${tmp}/bin/virsh" IP_BIN="${tmp}/bin/ip" \
     IPTABLES_BIN="${tmp}/bin/iptables" \
     MOCK_IPTABLES_STATE="${tmp}/rules" MOCK_IPTABLES_LOG="${tmp}/iptables.log" "${helper_copy}" &
 waiter=$!
-sleep 0.3
-kill -0 "${waiter}" 2>/dev/null || { echo "helper did not wait for the production lock" >&2; exit 1; }
-[[ ! -s "${tmp}/rules" ]] || { echo "helper applied rules while the lock was held" >&2; exit 1; }
+for _ in $(seq 20); do
+    kill -0 "${waiter}" 2>/dev/null || { echo "helper did not wait for the production lock" >&2; exit 1; }
+    [[ ! -s "${tmp}/rules" ]] || { echo "helper applied rules while the lock was held" >&2; exit 1; }
+    sleep 0.05
+done
+rm -f "${sentinel}"
 wait "${lock_holder}"
 wait "${waiter}"
 grep -Fqx -- "${rule_outbound}" "${tmp}/rules" || { echo "rules missing after lock release" >&2; exit 1; }
@@ -270,5 +280,25 @@ MOCK_IPTABLES_FAIL_DELETE=virbr7 run_helper default 2>"${tmp}/err.log" || rc=$?
 grep -qF 'failed to delete stale rule' "${tmp}/err.log" || { echo "failed deletion not reported" >&2; exit 1; }
 grep -qF -- ":virbr7:" "${tmp}/rules" || { echo "failing rule unexpectedly removed" >&2; exit 1; }
 ! grep -qF -- ":virbr6:" "${tmp}/rules" || { echo "deletion loop aborted after one failure" >&2; exit 1; }
+
+# Real iptables -S quotes comments: a legitimately stale quoted rule is pruned.
+printf '%s\n' "-i virbr7 -o wlp9s0f0 -s 192.168.7.0/24 -m comment --comment ${stale_ok} -j ACCEPT" > "${tmp}/rules"
+: > "${tmp}/iptables.log"
+MOCK_IPTABLES_QUOTE=1 run_helper default
+! grep -qF -- ":virbr7:" "${tmp}/rules" || { echo "quoted stale rule was not pruned" >&2; exit 1; }
+grep -Fqx -- "${rule_outbound}" "${tmp}/rules" || { echo "desired rule missing with quoted -S output" >&2; exit 1; }
+
+# A default-route interface with a disallowed name aborts before any rule.
+: > "${tmp}/rules"
+: > "${tmp}/iptables.log"
+rc=0
+MOCK_IP_ROUTE_DEV='wan+' run_helper default 2>"${tmp}/err.log" || rc=$?
+[[ ${rc} -eq 1 ]] || { echo "wildcard uplink must exit 1 (got ${rc})" >&2; exit 1; }
+grep -qF 'default-route interface has an unexpected name' "${tmp}/err.log" || { echo "wildcard uplink not reported" >&2; exit 1; }
+[[ ! -s "${tmp}/rules" ]] || { echo "wildcard uplink created rules" >&2; exit 1; }
+# An allowed, unusual-but-valid uplink name still works.
+: > "${tmp}/rules"
+MOCK_IP_ROUTE_DEV='eth0.100' run_helper default
+grep -qF -- 'bazzite-tower-libvirt-forwarding:virbr0:192.168.122.0/24:eth0.100' "${tmp}/rules" || { echo "valid uplink name produced no rules" >&2; exit 1; }
 
 echo "docker/libvirt forwarding mock contracts: pass"

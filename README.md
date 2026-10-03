@@ -70,14 +70,19 @@ only `NEW,ESTABLISHED,RELATED` guest-originated traffic toward that uplink plus
 `RELATED,ESTABLISHED` reply traffic. It neither broadens source-RFC1918 or bridge-wildcard access nor changes Docker's FORWARD policy,
 Docker-managed chains, or nftables tables. If Docker did not create
 `DOCKER-USER`, the post-start helper reports the failure but does not prevent
-Docker from starting; later libvirt and NetworkManager hooks retry reconciliation.
+Docker from starting; later libvirt and NetworkManager events retry reconciliation.
 Every
 generated pair has a deterministic helper-owned comment. When a NAT network,
 bridge address, default route, VPN state, or NetworkManager connection
 configuration changes, reconciliation removes only stale rules with that
 comment prefix; it never flushes or changes unowned `DOCKER-USER` rules.
-Libvirt network lifecycle and NetworkManager route/VPN/reapply events request
-reconciliation asynchronously, without blocking either event.
+Libvirt network start/stop is detected by the systemd path unit
+`docker-libvirt-forwarding.path` (watching `/run/libvirt/network`), which runs
+`docker-libvirt-forwarding.service` only while Docker is active. It is a path
+unit rather than a libvirt network hook because libvirt's SELinux-confined
+`virtnetworkd_t` cannot exec hooks, and a failing hook aborts network start.
+NetworkManager route/VPN/reapply events request reconciliation asynchronously
+via a dispatcher script, without blocking the event.
 
 Run the privileged host check after opting in with
 `just test-docker-libvirt-forwarding`; it restarts Docker, verifies those exact

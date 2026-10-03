@@ -38,7 +38,7 @@ expect "${path_unit}" -qx 'WantedBy=multi-user.target' "path unit must be Wanted
 expect "${service}" -qx 'Type=oneshot' "service must be Type=oneshot"
 expect "${service}" -qx 'StartLimitIntervalSec=0' "service must disable the start rate limit"
 expect "${service}" -qx 'ExecCondition=/usr/bin/systemctl is-active --quiet docker.service' "service must be conditioned on docker.service"
-expect "${service}" -qx 'ExecCondition=/usr/bin/systemctl is-active --quiet virtnetworkd.service' "service must be conditioned on virtnetworkd.service"
+expect "${service}" -qF "ExecCondition=/bin/sh -c 'case \"\$(/usr/bin/systemctl show -P ActiveState virtnetworkd.service)\" in active|activating|reloading) exit 0;; *) exit 1;; esac'" "service must be conditioned on virtnetworkd ActiveState active|activating|reloading"
 expect "${service}" -qx 'ExecStartPre=/usr/bin/sleep 1' "service must settle with ExecStartPre sleep 1"
 expect "${service}" -qx "ExecStart=${helper_path}" "service ExecStart must be the helper"
 expect "${service}" -qx 'ExecStartPost=/usr/bin/sleep 2' "service needs ExecStartPost sleep 2"

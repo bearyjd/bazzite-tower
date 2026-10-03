@@ -9,13 +9,15 @@ Type=oneshot
 ExecCondition=/usr/bin/systemctl is-active --quiet docker.service
 # Do not wake the socket-activated virtnetworkd: its idle-timeout churn in
 # /run/libvirt/network would re-trigger this unit, and `virsh net-list` would
-# activate it again. No network can be active without the daemon.
-ExecCondition=/usr/bin/systemctl is-active --quiet virtnetworkd.service
+# activate it again. No network can be active without the daemon. Accept
+# activating/reloading too: virtnetworkd is Type=notify and libvirt may write the
+# autostart network's state before READY, which must not be skipped.
+ExecCondition=/bin/sh -c 'case "$(/usr/bin/systemctl show -P ActiveState virtnetworkd.service)" in active|activating|reloading) exit 0;; *) exit 1;; esac'
 # The stop trigger fires while the bridge still exists; let it settle first.
 ExecStartPre=/usr/bin/sleep 1
 ExecStart=/usr/local/libexec/docker-libvirt-forwarding
-# systemd merges a start request into a running oneshot, so events landing
-# during the first pass would be lost. Run a second pass after a short delay.
+# Events arriving while this unit runs may not retrigger it, so run a second
+# pass after a short delay; the timer is the backstop.
 ExecStartPost=/usr/bin/sleep 2
 ExecStartPost=/usr/local/libexec/docker-libvirt-forwarding
 # Test-only overrides must never reach the production helper.

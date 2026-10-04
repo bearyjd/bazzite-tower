@@ -69,6 +69,7 @@ jobs:
           tests/test-rpm-inventory-spdx.sh
           tests/test-firstboot-no-docker.sh
           tests/test-tower-health.sh
+          tests/test-opensnitch-readiness.sh
           tests/test-container-templates.sh
           tests/test-docker-libvirt-forwarding.sh
           tests/test-docker-libvirt-forwarding-hooks.sh
@@ -197,6 +198,7 @@ jobs:
           tests/test-rpm-inventory-spdx.sh
           tests/test-firstboot-no-docker.sh
           tests/test-tower-health.sh
+          tests/test-opensnitch-readiness.sh
           tests/test-container-templates.sh
           tests/test-docker-libvirt-forwarding.sh
           tests/test-docker-libvirt-forwarding-hooks.sh

@@ -109,10 +109,12 @@ The image ships a Snitchwatch-tuned `/etc/opensnitchd/default-config.json` with 
 
 **Flipping to `deny` is order-sensitive.** The config change and the bridge install are two separate manual steps, and doing them in the wrong order costs you the network:
 
-1. Install and enable `snitchwatch-bridge.service`, then confirm it is actually listening: `ss -ltn 'sport = :50051'` must show a socket.
-2. Only then change `DefaultAction` to `deny` — in **both** `system_files/usr/share/bazzite-tower/opensnitchd-default-config.json` and the matching assertion in `tests/smoke.sh` — and rebuild.
+1. Install and enable the released `snitchwatch-bridge.service`, then run `ujust opensnitch-readiness`. It is read-only and succeeds only when OpenSnitch is active, remains configured `DefaultAction: allow`, and the enabled active user service's `MainPID` resolves to the released bridge binary and owns `127.0.0.1:50051`. This rejects a stale debug bridge merely occupying the port.
+   The release-install contract is intentionally fixed: install the executable at `~/.local/bin/snitchwatch-bridge-cli` and a verified one-line release manifest at `~/.local/share/snitchwatch/bridge.sha256`, formatted as `<sha256>  snitchwatch-bridge-cli`. The preflight hashes the executable and refuses a missing, malformed, or mismatched manifest. Do not substitute an arbitrary path or manifest through environment variables.
+2. While still fail-open, trigger and answer a controlled Snitchwatch prompt in the active graphical session. The readiness command cannot prove the decision client will answer prompts; a listening gRPC socket alone is insufficient.
+3. Only after both checks succeed should an operator consider a local deny-policy experiment. This image does not provide an enable-enforcement recipe and continues to ship `DefaultAction: allow`.
 
-Flip first and the next boot denies every new outbound connection with nothing listening to approve them. Recovery is `rpm-ostree rollback`, or from a TTY set `DefaultAction` back to `allow` in `/etc/opensnitchd/default-config.json` and `systemctl restart opensnitch.service`.
+If a local deny experiment leaves a host unable to connect, recover from a TTY by setting `DefaultAction` back to `allow` in `/etc/opensnitchd/default-config.json` and running `systemctl restart opensnitch.service`, or use `rpm-ostree rollback`.
 
 The pristine image-intent copy lives at `/usr/share/bazzite-tower/opensnitchd-default-config.json`. Because `/etc` is 3-way merged across bootc upgrades, a locally edited `/etc/opensnitchd/default-config.json` stops tracking the image — `diff` the two to see exactly what drifted.
 
@@ -133,6 +135,7 @@ Not available in Fedora or RPM Fusion (the one Fedora-44 COPR has zero builds), 
 | `ujust fix-vm-groups` | Add the current user to `kvm`, `libvirt` (then log out/in) |
 | `ujust wifi-debug` | Dump Wi-Fi diagnostics (rfkill, `lspci`, `iwlwifi`/`DMAR` dmesg, modules, NetworkManager, firmware, kernel cmdline) — read-only, works offline |
 | `ujust tower-health` | Read-only summary of optional services, monitoring, firmware, and security-tool availability |
+| `ujust opensnitch-readiness` | Read-only fail-open preflight: OpenSnitch active plus the released user bridge service owning `127.0.0.1:50051`; it never enables enforcement |
 | `ujust enable-docker` | Opt in to Docker socket activation and the root-equivalent Docker group (then log out/in) |
 | `ujust enable-cockpit` | Opt in to Cockpit bound only to loopback; prints the reviewed Tailscale Serve command to run separately |
 | `ujust enable-waydroid` | Opt in to the Waydroid service; Android initialisation remains separate |

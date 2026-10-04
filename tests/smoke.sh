@@ -330,6 +330,10 @@ check "opensnitch Server.Address is the Snitchwatch bridge" \
 # The GUI is Snitchwatch; upstream's opensnitch-ui conflicts with it.
 check "opensnitch-ui NOT installed (conflicts with Snitchwatch)" \
     bash -c '! test -e /usr/bin/opensnitch-ui'
+check "opensnitch readiness helper is executable" \
+    test -x /usr/libexec/bazzite-tower-opensnitch-readiness
+check "opensnitch readiness ujust recipe present" \
+    grep -q '^opensnitch-readiness:' /usr/share/ublue-os/just/60-custom.just
 check_masked "portmaster.service"
 ;;
 portmaster)

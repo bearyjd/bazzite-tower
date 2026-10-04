@@ -141,6 +141,13 @@ enable-waydroid:
 tower-health:
     @/usr/libexec/bazzite-tower-health
 
+# Check that OpenSnitch is active, remains fail-open, and can reach the local
+# Snitchwatch bridge endpoint. This is read-only and deliberately never changes
+# policy or enables enforcement; see README.md for the required prompt test.
+[group('Diagnostics')]
+opensnitch-readiness:
+    @/usr/libexec/bazzite-tower-opensnitch-readiness
+
 # Summarise desktop stalls and the kernel events around them.
 #
 # bazzite-tower-stall-detect records freezes that no kernel watchdog reports:

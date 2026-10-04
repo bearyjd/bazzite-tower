@@ -1,0 +1,93 @@
+#!/usr/bin/env bash
+# bazzite-tower-opensnitch-readiness — read-only Snitchwatch preflight.
+#
+# This proves only the local prerequisites for a safe, fail-open rollout.  It
+# intentionally does not start services, change DefaultAction, or send a test
+# prompt: a listening gRPC socket alone cannot prove a user will answer one.
+set -euo pipefail
+
+config=/etc/opensnitchd/default-config.json
+bridge_address=127.0.0.1:50051
+bridge_unit=snitchwatch-bridge.service
+# Release-install contract: the installer puts the executable and a one-entry
+# release manifest at these paths. The manifest must be exactly:
+#   <64 lowercase SHA-256 hex chars><two spaces>snitchwatch-bridge-cli
+# Keeping the expected paths fixed avoids an environment override silently
+# substituting an unreviewed binary or manifest during a readiness check.
+bridge_executable="${HOME}/.local/bin/snitchwatch-bridge-cli"
+bridge_manifest="${HOME}/.local/share/snitchwatch/bridge.sha256"
+
+fail() {
+    printf 'NOT READY: %s\n' "$*" >&2
+    exit 1
+}
+
+printf '%s\n' '== OpenSnitch / Snitchwatch safe-readiness preflight (read-only) =='
+
+for command in jq readlink sha256sum ss; do
+    command -v "${command}" >/dev/null 2>&1 || fail "${command} is unavailable"
+done
+test -r "${config}" || fail "missing ${config}"
+
+if ! systemctl is-active --quiet opensnitch.service; then
+    fail 'opensnitch.service is not active'
+fi
+printf '%s\n' 'ok: opensnitch.service is active'
+
+jq -e '.Server.Address == "127.0.0.1:50051"' "${config}" >/dev/null \
+    || fail 'OpenSnitch is not configured to use the local Snitchwatch bridge'
+printf 'ok: OpenSnitch Server.Address is %s\n' "${bridge_address}"
+
+# Keep the image policy fail-open until an operator has independently observed
+# a real prompt/decision round-trip in their graphical session.
+jq -e '.DefaultAction == "allow"' "${config}" >/dev/null \
+    || fail 'DefaultAction is not allow; refuse this safe-readiness check'
+printf '%s\n' 'ok: DefaultAction is allow (fail-open)'
+
+# A stray debug bridge can bind this port even while the released bridge is not
+# serving it. Require an enabled, active per-user unit, a locally recorded
+# release hash, and ownership of the exact loopback listener by that unit's main
+# process.
+bridge_enabled=$(systemctl --user is-enabled "${bridge_unit}" 2>/dev/null || true)
+[[ "${bridge_enabled}" == "enabled" ]] \
+    || fail "${bridge_unit} is not permanently enabled (got: ${bridge_enabled:-unknown})"
+if ! systemctl --user is-active --quiet "${bridge_unit}"; then
+    fail "${bridge_unit} is not active in this user session"
+fi
+bridge_pid=$(systemctl --user show --property=MainPID --value "${bridge_unit}")
+[[ "${bridge_pid}" =~ ^[1-9][0-9]*$ ]] || fail "${bridge_unit} has no running MainPID"
+test -x "${bridge_executable}" \
+    || fail "expected bridge executable is not executable: ${bridge_executable}"
+test -f "${bridge_manifest}" \
+    || fail "missing bridge release manifest: ${bridge_manifest}"
+manifest_content=$(<"${bridge_manifest}")
+[[ "${manifest_content}" =~ ^[0-9a-f]{64}[[:space:]]{2}snitchwatch-bridge-cli$ ]] \
+    || fail "invalid bridge release manifest: ${bridge_manifest}"
+expected_bridge_hash="${manifest_content%%[[:space:]]*}"
+actual_bridge_hash=$(sha256sum -- "${bridge_executable}" | awk '{print $1}')
+[[ "${actual_bridge_hash}" == "${expected_bridge_hash}" ]] \
+    || fail "bridge executable hash does not match ${bridge_manifest}"
+expected_bridge_executable=$(readlink -f -- "${bridge_executable}") \
+    || fail "cannot resolve expected bridge executable: ${bridge_executable}"
+actual_bridge_executable=$(readlink -f -- "/proc/${bridge_pid}/exe") \
+    || fail "cannot resolve ${bridge_unit} MainPID executable"
+if [[ "${actual_bridge_executable}" != "${expected_bridge_executable}" ]]; then
+    fail "${bridge_unit} MainPID is ${actual_bridge_executable}, not ${expected_bridge_executable}"
+fi
+printf 'ok: %s is enabled; MainPID %s matches its release manifest\n' "${bridge_unit}" "${bridge_pid}"
+
+# `ss` reports the local address in column four with -H (no header). `-p` adds
+# the owning process; match the exact loopback endpoint and the service MainPID
+# so another process listening on the port cannot satisfy the preflight.
+ss -H -ltnp 'sport = :50051' 2>/dev/null \
+    | awk -v pid="${bridge_pid}" '$4 == "127.0.0.1:50051" && index($0, "pid=" pid ",") { found = 1 } END { exit !found }' \
+    || fail "${bridge_unit} MainPID is not listening at ${bridge_address}"
+printf 'ok: %s owns %s\n' "${bridge_unit}" "${bridge_address}"
+
+cat <<'EOF'
+
+Local prerequisites pass. This did not verify that a graphical Snitchwatch
+client can answer prompts. Keep DefaultAction=allow, trigger and answer a
+controlled prompt in the active desktop session, then re-run this preflight.
+This command never enables enforcement or changes host state.
+EOF

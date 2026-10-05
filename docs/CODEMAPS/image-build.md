@@ -1,4 +1,5 @@
 <!-- Generated: 2026-08-08 | Files scanned: 3 | Token estimate: ~850 -->
+<!-- Targeted update: 2026-10-04 | Snitchwatch image-consumer gate; not a full regeneration -->
 # Image Build Pipeline
 
 `Containerfile` → `build_files/build.sh` (runs inside the build, `set -euo pipefail`).
@@ -42,6 +43,20 @@ carry, because line ranges drift and filenames do not.
 as inherited environment variables — the Containerfile sets them as a
 command-prefix on the `RUN`, so the runner's shell has them and every child
 `bash` inherits them.
+
+## Snitchwatch image-consumer gate
+
+`95-firewall.sh` enables only the extracted OpenSnitch daemon and installs the
+staged `/usr/share/bazzite-tower/opensnitchd-default-config.json` over its live
+`/etc` counterpart. It retains `127.0.0.1:50051` and `DefaultAction: allow`;
+neither Snitchwatch bridge profile is installed by this build.
+
+The [October 4 system-bridge VM validation](../research/snitchwatch-system-bridge.md)
+used a guest binary in `/usr/local/bin` and repaired Flatpak packaging, so it
+does not prove immutable image installation. Resolve the remaining gates, then
+consume a published, pinned Snitchwatch release rather than copying its service
+definitions here. System-profile readiness and matching smoke assertions are
+future migration work; current checks enforce the legacy contract.
 
 ## Verified by
 

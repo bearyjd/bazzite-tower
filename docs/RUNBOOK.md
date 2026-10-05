@@ -76,6 +76,7 @@ again on a future kernel bump.
 | CPU power baseline | `cat /sys/devices/system/cpu/cpu0/cpufreq/energy_performance_preference` (expect `balance_performance`); `cat /sys/firmware/acpi/platform_profile` (expect `balanced`); `systemctl is-active thermald` |
 | Virt stack up | `systemctl is-active virtqemud.socket` · `virsh -c qemu:///system list --all` |
 | Read-only image/host summary | `ujust tower-health` — optional-service states, SMART/RAS/timers, firmware and security-tool availability |
+| OpenSnitch legacy bridge readiness | `ujust opensnitch-readiness` — read-only check of the active daemon, fail-open config and verified user bridge at `127.0.0.1:50051`; see the OpenSnitch section below |
 | Cockpit web management (opt-in) | `ujust enable-cockpit`; it binds only to loopback. Review Tailnet ACLs, then separately run `tailscale serve --https=443 http://127.0.0.1:9090`; do not expose :9090 directly without explicit firewall policy. |
 | Docker/libvirt NAT forwarding (opt-in Docker) | `just test-docker-libvirt-forwarding` (from a repository checkout) — restarts Docker, checks its `DOCKER-USER` NAT-bridge/uplink pair rules, then probes Docker bridge networking. Rules are only for active libvirt XML `forward mode='nat'` bridges; no broad source-RFC1918 or bridge-wildcard policy is added. A post-start reconciliation failure is non-fatal to Docker and later libvirt/NetworkManager events retry it. |
 | Looking Glass client | kvmfr host module is baked (`ls /dev/kvmfr0`); install the version-coupled client on demand with `ujust install-looking-glass-client`, then `looking-glass-client` (match its B-version to the Windows host app) |
@@ -151,6 +152,26 @@ fwupdmgr get-updates               # ME appears as "Intel Management Engine"
 
 Known-bad: `18.0.5.2141` (factory), `18.0.15.2515` (insufficient).
 Known-good: `18.1.18.2644` and above.
+
+## OpenSnitch / Snitchwatch deployment status
+
+The image configures OpenSnitch for `127.0.0.1:50051`, `ProcMonitorMethod: proc`
+and `DefaultAction: allow`. The released Snitchwatch user bridge is installed
+separately. Run `ujust opensnitch-readiness` after installing it using the
+[README release-install contract](../README.md#opensnitch-application-firewall).
+That command checks the user service, binary hash and listener ownership; it
+cannot prove that a GUI answers decisions or validate the proposed system profile.
+
+The system bridge passed October 4 disposable-VM GUI, authorization, token
+rotation and headless-startup tests with SELinux enforcing. It is awaiting
+upstream packaging, unattended Ask handling and daemon-shutdown investigation,
+then a published/pinned release, image installation and new readiness checks.
+See [evidence and rollout gates](research/snitchwatch-system-bridge.md) before
+planning a migration; these results do not establish deployment on this host.
+
+Keep `DefaultAction: allow` during rollout. For a local deny experiment that
+blocks networking, restore `allow` in `/etc/opensnitchd/default-config.json` from
+a TTY and restart `opensnitch.service`, or roll back the deployment.
 
 ## Common issues
 

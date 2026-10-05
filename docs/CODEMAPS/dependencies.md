@@ -1,4 +1,5 @@
 <!-- Generated: 2026-08-08 | Files scanned: 6 | Token estimate: ~700 -->
+<!-- Targeted update: 2026-10-04 | OpenSnitch/Snitchwatch release boundaries; not a full regeneration -->
 # Dependencies & External Surfaces
 
 ## Base image
@@ -25,6 +26,19 @@ rclone, restic, zsh), the hardware/health additions (**smartmontools**,
 and the firewall selector (default **OpenSnitch** v1.8.0, pinned RPM extraction +
 Snitchwatch config; disabled **Portmaster** VM spike behind
 `FIREWALL_DAEMON=portmaster`, see `docs/research/portmaster-bootc-spike.md`).
+
+## OpenSnitch and Snitchwatch
+
+`build_files/build.d/95-firewall.sh` pins and SHA-256 verifies the upstream
+OpenSnitch 1.8.0 RPM before extraction. It installs `libnetfilter_queue` and
+`nftables` explicitly; extraction neither resolves dependencies nor registers
+the daemon in the RPM database. Snitchwatch's user bridge/GUI remain external.
+
+System-bridge VM tests used Snitchwatch source `1def745` and a KDE 6.9 Flatpak
+with local packaging repairs. This test revision is not an image-consumed
+release pin. OpenSnitch's grpc-go 1.32.0 path requires the documented relative
+Unix address workaround; packaging, unattended Ask handling and daemon shutdown
+remain release gates. See [system bridge research](../research/snitchwatch-system-bridge.md).
 
 ## KDE Plasma package-family pin
 

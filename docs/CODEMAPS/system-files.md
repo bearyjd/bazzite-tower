@@ -1,4 +1,5 @@
 <!-- Generated: 2026-08-08 | Files scanned: 21 | Token estimate: ~1050 -->
+<!-- Targeted update: 2026-10-04 | OpenSnitch readiness and system-bridge boundary; not a full regeneration -->
 # System Files (baked-in runtime surface)
 
 `system_files/` is `COPY`ed verbatim to `/`. Paths below are image-absolute.
@@ -38,6 +39,7 @@ build.sh except the disabled `portmaster.service` VM spike.
 - `bazzite-tower-wifi-backend-guard` — NM iwd-backend guard, idempotent
 - `bazzite-tower-wifi-debug` — read-only Wi-Fi diagnostics (offline)
 - `bazzite-tower-health` — reporting-only optional-service, monitoring, firmware, and security-tool summary (no sudo or state changes)
+- `bazzite-tower-opensnitch-readiness` — read-only legacy preflight: active daemon, `allow`, enabled user `snitchwatch-bridge.service`, fixed release binary/hash manifest and `MainPID` ownership of `127.0.0.1:50051`; it does not validate GUI decisions or the system bridge
 - `docker-libvirt-forwarding` — Docker `ExecStartPost` helper: takes a bounded-wait `/run` lock, discovers only active libvirt XML NAT bridges, derives each live IPv4 network and default uplink, and idempotently adds tagged `NEW,ESTABLISHED,RELATED` / `RELATED,ESTABLISHED` `DOCKER-USER` pairs; removes only stale rules bearing its own prefix and fails if Docker did not create that chain
 - `bazzite-tower-power-tuning` — write platform_profile + per-CPU EPP; skips absent/read-only knobs
 - `i915-resume-fix-check` — kernel-version-gated check for the Meteor Lake cx0 DPLL s2idle-resume regression signature in the current boot's journal
@@ -51,6 +53,13 @@ enabled, config staged at
 `/usr/share/bazzite-tower/opensnitchd-default-config.json` (see below).
 `portmaster.service` is symlinked to `/dev/null` (masked) in this default build.
 
+Snitchwatch's proposed `snitchwatch-system-bridge.service` and two socket units,
+sysusers/tmpfiles and system GUI profile belong to its release; they are not
+shipped under `system_files/`. The October 4 VM used protected sockets at
+`/run/snitchwatch/{opensnitchd,bridge}.sock` and a separate auth token, with a
+guest-only binary/drop-in. See [VM evidence and migration gates](../research/snitchwatch-system-bridge.md)
+for listener modes, daemon address compatibility and remaining rollout work.
+
 `FIREWALL_DAEMON=portmaster` (never a default/published tag — build with
 `just build-portmaster-spike`, validate in a VM first): OpenSnitch masked
 instead, `portmaster.service` enabled — see the systemd units table above and
@@ -59,7 +68,7 @@ instead, `portmaster.service` enabled — see the systemd units table above and
 ## ujust recipes (`/usr/share/ublue-os/just/60-custom.just`)
 
 - **Virtualization**: `vm-start`, `vm-stop`, `vm-list`, `vm-net-status`, `fix-vm-groups`, `install-looking-glass-client` (installs the version-coupled LG client into a Fedora distrobox from the pgaskin COPR → `~/.local/bin`; kvmfr module is base-provided)
-- **Diagnostics**: `wifi-debug`, `tower-health`
+- **Diagnostics**: `wifi-debug`, `tower-health`, `opensnitch-readiness` (legacy fail-open preflight)
 - **Host opt-ins**: `enable-docker` (root-equivalent group warning), `enable-cockpit` (loopback-only socket; prints a separate Tailscale Serve command), `enable-waydroid` (does not initialise Android)
 
 ## bootc kargs (`/usr/lib/bootc/kargs.d/`, applied at install + every upgrade)
@@ -89,4 +98,4 @@ instead, `portmaster.service` enabled — see the systemd units table above and
 - `/usr/lib/bootc/install/50-signature-policy.toml` → asks bootc disk installation to enforce the image's container signature policy; it is image-owned rather than a disk-layout setting
 - `/etc/xdg/baloofilerc` → seed indexer `exclude filters` with build/cache trees (.gradle, target, language caches)
 - `/usr/libexec/bazzite-tower-stall-detect` + `/usr/lib/systemd/system/bazzite-tower-stall-detect.service` → samples CLOCK_MONOTONIC and records D-state workers on a stall. Catches freezes no kernel watchdog reports (soft lockup needs a spinning CPU; hung_task needs 120s). Built for the i915 GuC TLB invalidation timeout, drm/i915 #14469. Logs to the journal; query with `ujust freeze-report`
-- `/usr/share/bazzite-tower/opensnitchd-default-config.json` → Snitchwatch-tuned opensnitchd config. **Staged, not live**: build.sh `install`s it over `/etc/opensnitchd/default-config.json` *after* the OpenSnitch RPM extraction (which writes that path itself), so it can't live at the real path here. Doubles as the pristine image-intent copy to diff a 3-way-merged `/etc` against. Deltas from the RPM default: `Server.Address` `127.0.0.1:50051` (Snitchwatch bridge), `ProcMonitorMethod` `proc` (bundled eBPF won't load on 6.19/7.x), `DefaultAction` `allow` (fail open during rollout)
+- `/usr/share/bazzite-tower/opensnitchd-default-config.json` → Snitchwatch-tuned opensnitchd config. **Staged, not live**: `95-firewall.sh` `install`s it over `/etc/opensnitchd/default-config.json` *after* the OpenSnitch RPM extraction (which writes that path itself), so it can't live at the real path here. Doubles as the pristine image-intent copy to diff a 3-way-merged `/etc` against. Deltas from the RPM default: `Server.Address` `127.0.0.1:50051` (Snitchwatch bridge), `ProcMonitorMethod` `proc` (bundled eBPF won't load on 6.19/7.x), `DefaultAction` `allow` (fail open during rollout)

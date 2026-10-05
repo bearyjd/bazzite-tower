@@ -1,7 +1,8 @@
 <!-- Generated: 2026-08-08 | Files scanned: 8 | Token estimate: ~800 -->
+<!-- Targeted update: 2026-10-04 | OpenSnitch readiness test and VM evidence scope; not a full regeneration -->
 # CI / CD
 
-5 workflows + 4 highlighted test scripts + 1 diff filter. Full failure model:
+5 workflows + highlighted test scripts + 1 diff filter. Full failure model:
 [`../downstream-change-tracking.md`](../downstream-change-tracking.md).
 
 ## Workflows (`.github/workflows/`)
@@ -40,7 +41,18 @@ auto-closes — each leg's labelled tracking issue, independently of whether
 - `smoke.sh` — offline, `podman run -i <img> bash -s <`. Asserts the virtualisation and monitoring intent plus Docker/Cockpit/Waydroid disabled by default, a baked Docker group without user membership, Cockpit's loopback drop-in, and the reporting-only health helper. It retains the existing firewall, kernel-argument, firmware, and desktop contracts; reports every failure, not just the first.
 - `boot-check.sh` — runtime, inside the booted image. HARD = qemu user resolves, virtqemud/virtnetworkd active, `virsh -c qemu:///system` connects, wifi-guard active + not-failed, optional Docker/Cockpit/Waydroid services disabled, and no SOF storm in the boot journal. SOFT (container limits) = NetworkManager and firstboot.
 - `test-rpm-inventory-spdx.sh` — fixture contract for the standard-library SPDX generator: deterministic ordering and valid EVRA/SPDX structure, while malformed, empty, and duplicate RPM inventories fail closed.
+- `test-opensnitch-readiness.sh` — static safety contract for `system_files/usr/libexec/bazzite-tower-opensnitch-readiness`; both `build.yml` verify/release jobs run it. Checks read-only fail-open behavior, fixed user-service/release-hash paths and exact TCP listener ownership; does not exercise a GUI or system bridge.
 - `test-docker-libvirt-forwarding.sh` — hard mocked contract: exact `virbr0` `192.168.122.0/24` / `wlp9s0f0` stateful tagged rule pair, multi-NAT discovery, idempotence, discovery failures, and safe stale-rule pruning that leaves unowned rules untouched. `test-docker-libvirt-forwarding-hooks.sh` verifies the trigger contracts (libvirt path unit + service, no libvirt hook, NetworkManager dispatcher, Docker drop-in). `test-docker-libvirt-forwarding-integration.sh` is a separate privileged, opt-in host probe because nested Docker firewall support is runner-dependent.
+
+## Snitchwatch VM evidence scope
+
+The [October 4 system-bridge validation](../research/snitchwatch-system-bridge.md)
+is a manual disposable-VM result, separate from these image release gates.
+It proved real GUI decisions, authorization, token rotation and headless startup
+with SELinux enforcing using a guest-only bridge install and repaired Flatpak.
+It does not validate the original production manifest or immutable image
+installation. CI still asserts legacy TCP `127.0.0.1:50051`/`allow`; release
+publication/pinning, integration and system-profile readiness remain future work.
 
 ## Diff filter (`ci/base-diff.py`)
 

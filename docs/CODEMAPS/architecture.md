@@ -1,4 +1,5 @@
 <!-- Generated: 2026-08-08 | Files scanned: 45 | Token estimate: ~650 -->
+<!-- Targeted update: 2026-10-04 | Snitchwatch deployment boundary; not a full regeneration -->
 # Architecture
 
 **Type:** bootc OS-image repo — a declarative Fedora/Bazzite derivative. There is
@@ -46,6 +47,19 @@ build_files/build.d/ ─RUN────┘        │
 - `installer/` — separate payload builder for the live/installer ISO (titanoboa input)
 - `Justfile` — local build / VM / test recipes
 - `.github/workflows/build.yml` — CI build + gate + push + sign
+
+## Application firewall boundary
+
+`build_files/build.d/95-firewall.sh` installs OpenSnitch 1.8.0 and the config in
+`system_files/usr/share/bazzite-tower/opensnitchd-default-config.json`: loopback
+TCP `127.0.0.1:50051`, `proc`, fail-open `allow`. The Snitchwatch user bridge and
+GUI are installed separately; its proposed system bridge is not in this image.
+
+Snitchwatch owns the alternative bridge, socket/service units, identities and
+GUI profile. October 4 VM tests validated real GUI decisions and enforcing
+headless startup; packaging, unattended Ask handling, shutdown investigation
+and release/image integration remain gated. See
+[system bridge research](../research/snitchwatch-system-bridge.md).
 
 ## Codemap index
 

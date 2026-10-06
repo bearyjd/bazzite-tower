@@ -29,7 +29,9 @@ def load(name, path):
 common = load("common_test", LIBEXEC/"bazzite-tower-snitchwatch-common.py")
 migration = load("migration_test", LIBEXEC/"bazzite-tower-snitchwatch-migrate")
 migration.common = common
+BASE_GLOBAL_CONTENT = '[Context]\nfilesystems=xdg-config/gtk-3.0:ro;xdg-config/gtk-4.0:ro;xdg-config/MangoHud:create;xdg-config/vkBasalt:create;\n'
 REAL_READLINK = os.readlink
+VENDOR_CONTENT = '# This file is part of the systemd package.\n# See https://fedoraproject.org/wiki/Changes/Shorter_Shutdown_Timer.\n#\n# To facilitate debugging when a service fails to stop cleanly,\n# TimeoutStopFailureMode=abort is set to "crash" services that fail to stop in\n# the time allotted. This will cause the service to be terminated with SIGABRT\n# and a coredump to be generated.\n#\n# To undo this configuration change, create a mask file:\n#   sudo mkdir -p /etc/systemd/system/service.d\n#   sudo ln -sv /dev/null /etc/systemd/system/service.d/10-timeout-abort.conf\n\n[Service]\nTimeoutStopFailureMode=abort\n'
 
 
 class Fixture(common.Context):
@@ -182,7 +184,8 @@ org.kde.StatusNotifierWatcher=talk
             out = f"snitchwatch:x:{self.gid}:\n" if argv[2] == "snitchwatch" else f"snitchwatch-ui:x:{self.ui_gid}:gate\n"
         elif argv[:2] == ["systemctl", "show"]:
             names = argv[-1].split("=",1)[1].split(",")
-            out = "".join(name+"="+self.properties[argv[2]].get(name, "")+"\n" for name in names)
+            out = "".join(name+"="+self.properties[argv[2]][name]+"\n" for name in names
+                          if name in self.properties[argv[2]] and ("--all" in argv or self.properties[argv[2]][name] != ""))
         elif argv[:3] == ["systemctl", "--global", "is-enabled"]:
             out = self.global_legacy+"\n";code = 1 if self.global_legacy == "masked" else 0
         elif argv[:2] == ["systemctl", "is-enabled"]:
@@ -224,6 +227,107 @@ class SystemBehavior(unittest.TestCase):
             common.runtime_readiness(self.ctx)
         self.assertFalse(any(cmd[:2] in (["systemctl","start"], ["systemctl","stop"]) for cmd in self.ctx.commands))
 
+    def test_known_missing_structured_arrays_require_typed_empty_dbus(self):
+        for name, signature in common.TYPED_EMPTY_PROPERTIES.items():
+            commands = []
+            def runner(argv, **kwargs):
+                commands.append(argv)
+                if argv[0] == "systemctl":
+                    output = ""
+                elif "GetUnit" in argv:
+                    output = json.dumps(dict(type="o", data=["/org/freedesktop/systemd1/unit/bridge"]))
+                else:
+                    self.assertEqual(argv[-1], name)
+                    output = json.dumps(dict(type=signature, data=[]))
+                return SimpleNamespace(returncode=0, stderr="", stdout=output)
+            with self.subTest(name=name):
+                ctx = common.Context(runner=runner)
+                self.assertEqual(ctx.props(common.SERVICE, [name]), {name: ""})
+                self.assertIn("--all", commands[0])
+                self.assertEqual(commands[1][-3:], ["GetUnit", "s", common.SERVICE])
+                self.assertIn("--system", commands[2])
+
+    def test_structured_fallback_wrong_type_nonempty_malformed_or_error_refuses(self):
+        for name, signature in common.TYPED_EMPTY_PROPERTIES.items():
+            for invalid in [dict(type="as", data=[]), dict(type=signature, data=[["/tmp/unsafe"]]),
+                            dict(type=signature, data=None), {}, dict(type=signature, data=[], extra=True), "invalid-json", "bus-error"]:
+                def runner(argv, **kwargs):
+                    if argv[0] == "systemctl":
+                        value = ""
+                    elif "GetUnit" in argv:
+                        value = json.dumps(dict(type="o", data=["/org/freedesktop/systemd1/unit/bridge"]))
+                    else:
+                        value = invalid if isinstance(invalid, str) else json.dumps(invalid)
+                    return SimpleNamespace(returncode=1 if value == "bus-error" else 0, stderr="failed" if value == "bus-error" else "", stdout=value)
+                with self.subTest(name=name, invalid=invalid):
+                    with self.assertRaises(common.Refusal):
+                        common.Context(runner=runner).props(common.SERVICE, [name])
+
+    def test_typed_getunit_invalid_identity_or_error_refuses(self):
+        for invalid in [dict(type="s", data=["/org/freedesktop/systemd1/unit/bridge"]), dict(type="o", data="/org/freedesktop/systemd1/unit/bridge"),
+                        dict(type="o", data=[]), dict(type="o", data=["/wrong/object"]), dict(type="o", data=["/org/freedesktop/systemd1/unit/a", "/org/freedesktop/systemd1/unit/b"]), "invalid-json", "bus-error"]:
+            def runner(argv, **kwargs):
+                value = "" if argv[0] == "systemctl" else invalid if isinstance(invalid, str) else json.dumps(invalid)
+                return SimpleNamespace(returncode=1 if value == "bus-error" else 0, stderr="failure" if value == "bus-error" else "", stdout=value)
+            with self.subTest(invalid=invalid):
+                with self.assertRaises(common.Refusal):
+                    common.Context(runner=runner).props(common.SERVICE, ["ExecCondition"])
+
+    def test_unknown_missing_property_never_gets_typed_empty_fallback(self):
+        commands = []
+        def runner(argv, **kwargs):
+            commands.append(argv)
+            return SimpleNamespace(returncode=0, stderr="", stdout="")
+        for unit, names in [(common.SERVICE, ["CapabilityBoundingSet"]), (common.SERVICE, ["ExecStartPre", "User"]), ("unreviewed.service", ["ExecStop"])]:
+            with self.subTest(unit=unit, names=names), self.assertRaises(common.Refusal):
+                common.Context(runner=runner).props(unit, names)
+        self.assertTrue(all(argv[0] == "systemctl" for argv in commands))
+
+    def test_pinned_fedora_vendor_dropin_accepted(self):
+        self.ctx.write(common.VENDOR_DROPIN, VENDOR_CONTENT)
+        self.assertEqual(common.digest(self.ctx.path(common.VENDOR_DROPIN)), common.VENDOR_DROPIN_SHA256)
+        self.ctx.properties[common.SERVICE]["DropInPaths"] = common.VENDOR_DROPIN
+        common.unit_contract(self.ctx)
+
+    def test_vendor_dropin_mutable_bytes_owner_symlink_and_extra_paths_refuse(self):
+        for fault in ["bytes", "owner", "group", "writable", "symlink", "duplicate", "extra", "different"]:
+            with self.subTest(fault=fault):
+                path = self.ctx.write(common.VENDOR_DROPIN, VENDOR_CONTENT)
+                self.ctx.owners[common.VENDOR_DROPIN] = (0, 0)
+                self.ctx.properties[common.SERVICE]["DropInPaths"] = common.VENDOR_DROPIN
+                if fault == "bytes": path.write_text(VENDOR_CONTENT+"# changed\n")
+                elif fault == "owner": self.ctx.owners[common.VENDOR_DROPIN] = (1000, 0)
+                elif fault == "group": self.ctx.owners[common.VENDOR_DROPIN] = (0, 1000)
+                elif fault == "writable": path.chmod(0o664)
+                elif fault == "symlink":
+                    other = self.ctx.write("/tmp/vendor-copy", VENDOR_CONTENT);path.unlink();path.symlink_to(other)
+                elif fault == "duplicate": self.ctx.properties[common.SERVICE]["DropInPaths"] += " "+common.VENDOR_DROPIN
+                elif fault == "extra": self.ctx.properties[common.SERVICE]["DropInPaths"] += " /etc/systemd/system/service.d/unsafe.conf"
+                elif fault == "different": self.ctx.properties[common.SERVICE]["DropInPaths"] = "/usr/lib/systemd/system/service.d/unreviewed.conf"
+                with self.assertRaises(common.Refusal): common.unit_contract(self.ctx)
+                if path.is_symlink():path.unlink()
+
+    def test_typewide_local_service_overrides_refuse(self):
+        for directory in ["/etc/systemd/system/service.d", "/run/systemd/system/service.d", "/usr/local/lib/systemd/system/service.d"]:
+            with self.subTest(directory=directory):
+                self.ctx.path(directory).mkdir(parents=True)
+                with self.assertRaises(common.Refusal):common.local_conflicts(self.ctx)
+                self.ctx.path(directory).rmdir()
+
+    def test_native_property_request_keeps_explicit_empty_values(self):
+        commands = []
+        def actual_serialization(argv, **kwargs):
+            commands.append(argv)
+            return SimpleNamespace(returncode=0, stderr="", stdout="CapabilityBoundingSet=\n" if "--all" in argv else "")
+        ctx = common.Context(runner=actual_serialization)
+        self.assertEqual(ctx.props(common.SERVICE, ["CapabilityBoundingSet"]), {"CapabilityBoundingSet": ""})
+        self.assertIn("--all", commands[0])
+
+    def test_missing_property_still_refuses_even_with_all(self):
+        ctx = common.Context(runner=lambda argv, **kwargs: SimpleNamespace(returncode=0, stderr="", stdout=""))
+        with self.assertRaisesRegex(common.Refusal, "missing effective systemd properties"):
+            ctx.props(common.SERVICE, ["CapabilityBoundingSet"])
+
     def test_valid_live_state_is_read_only_and_named_ids(self):
         self.ctx.system_config();self.ctx.flatpak()
         report = common.runtime_readiness(self.ctx)
@@ -262,7 +366,7 @@ class SystemBehavior(unittest.TestCase):
 
     def test_hardening_and_socket_properties(self):
         self.ctx.system_config()
-        for property,value in (("NoNewPrivileges","no"),("ProtectSystem","full"),("ReadWritePaths","/run /etc"),("EnvironmentFiles","/tmp/override"),("DropInPaths","/run/systemd/system/unsafe.conf")):
+        for property,value in (("CapabilityBoundingSet","cap_net_admin"),("AmbientCapabilities","cap_net_raw"),("NoNewPrivileges","no"),("ProtectSystem","full"),("ReadWritePaths","/run /etc"),("EnvironmentFiles","/tmp/override"),("DropInPaths","/run/systemd/system/unsafe.conf")):
             saved = self.ctx.properties[common.SERVICE][property]
             self.ctx.properties[common.SERVICE][property]=value
             self.refuse_readiness("property drift")
@@ -328,6 +432,43 @@ class SystemBehavior(unittest.TestCase):
                 planted = self.ctx.write(directory+"/"+common.SERVICE, "[Service]\nExecStart=/unsafe\n")
                 self.refuse_readiness("local unit override")
                 planted.unlink()
+
+    def test_exact_bazzite_base_global_override_without_or_with_gui(self):
+        path = self.ctx.write(common.BASE_GLOBAL_OVERRIDE, BASE_GLOBAL_CONTENT)
+        self.assertEqual(common.digest(path), common.BASE_GLOBAL_OVERRIDE_SHA256)
+        common.flatpak_profiles(self.ctx)
+        self.ctx.system_config();self.ctx.flatpak()
+        common.runtime_readiness(self.ctx)
+
+    def test_base_global_override_drift_symlink_owner_mode_and_scope_refuse(self):
+        for fault in ("network", "socket", "token-env", "bytes", "symlink", "writable", "owner", "group", "user-global", "app", "other-store", "empty-user"):
+            with self.subTest(fault=fault):
+                path = self.ctx.write(common.BASE_GLOBAL_OVERRIDE, BASE_GLOBAL_CONTENT)
+                self.ctx.owners[common.BASE_GLOBAL_OVERRIDE] = (0, 0)
+                other = None;original_runner=self.ctx.runner
+                if fault == "network":path.write_text(BASE_GLOBAL_CONTENT+"shared=network;\n")
+                elif fault == "socket":path.write_text(BASE_GLOBAL_CONTENT+"filesystems=/run/snitchwatch:rw;\n")
+                elif fault == "token-env":path.write_text(BASE_GLOBAL_CONTENT+"\n[Environment]\nSNITCHWATCH_WS_TOKEN_PATH=/tmp/token\n")
+                elif fault == "bytes":path.write_text(BASE_GLOBAL_CONTENT+"\n")
+                elif fault == "symlink":
+                    other=self.ctx.write("/tmp/base-global-copy", BASE_GLOBAL_CONTENT);path.unlink();path.symlink_to(other)
+                elif fault == "writable":path.chmod(0o666)
+                elif fault == "owner":self.ctx.owners[common.BASE_GLOBAL_OVERRIDE]=(1000,0)
+                elif fault == "group":self.ctx.owners[common.BASE_GLOBAL_OVERRIDE]=(0,1000)
+                elif fault in ("user-global", "empty-user"):
+                    other=self.ctx.write("/var/home/gate/.local/share/flatpak/overrides/global", "" if fault=="empty-user" else BASE_GLOBAL_CONTENT)
+                elif fault == "app":other=self.ctx.write("/var/lib/flatpak/overrides/"+common.APP, BASE_GLOBAL_CONTENT)
+                elif fault == "other-store":
+                    other=self.ctx.write("/srv/extra-flatpak/overrides/global", BASE_GLOBAL_CONTENT)
+                    def installations(argv, **kwargs):
+                        if argv == ["flatpak", "--installations"]:
+                            return SimpleNamespace(returncode=0, stderr="", stdout="/var/lib/flatpak\n/srv/extra-flatpak\n")
+                        return original_runner(argv, **kwargs)
+                    self.ctx.runner=installations
+                with self.assertRaises(common.Refusal):common.flatpak_profiles(self.ctx)
+                self.ctx.runner=original_runner
+                if other is not None:other.unlink()
+                if path.is_symlink():path.unlink()
 
     def test_flatpak_mismatch_and_overrides(self):
         self.ctx.system_config();path=self.ctx.flatpak()

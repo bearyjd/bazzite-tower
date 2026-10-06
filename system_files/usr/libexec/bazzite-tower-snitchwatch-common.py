@@ -26,6 +26,11 @@ SERVICE = "snitchwatch-system-bridge.service"
 SOCKETS = ("snitchwatch-system-bridge-grpc.socket", "snitchwatch-system-bridge-gui.socket")
 UNITS = (*SOCKETS, SERVICE, "opensnitch.service")
 APP = "org.snitchwatch.Snitchwatch"
+VENDOR_DROPIN = "/usr/lib/systemd/system/service.d/10-timeout-abort.conf"
+BASE_GLOBAL_OVERRIDE = "/var/lib/flatpak/overrides/global"
+BASE_GLOBAL_OVERRIDE_SHA256 = "85e2bf73515c8da8950f1afbbfaedfeca453777eeb0be0ea869f4db6c779bd80"
+VENDOR_DROPIN_SHA256 = "ae6b234f92bc22f1201a7572b59b454c9809f33c80d13f361b9674e1801acc37"
+TYPED_EMPTY_PROPERTIES = {"EnvironmentFiles": "a(sb)", **{name: "a(sasbttttuii)" for name in ("ExecStartPre", "ExecStartPost", "ExecStop", "ExecStopPost", "ExecCondition")}}
 
 
 class Refusal(RuntimeError):
@@ -52,8 +57,28 @@ class Context:
         return result
 
     def props(self, unit, names):
-        output = self.command(["systemctl", "show", unit, "--no-pager", "--property="+",".join(names)]).stdout
+        output = self.command(["systemctl", "show", unit, "--no-pager", "--all", "--property="+",".join(names)]).stdout
         values = dict(line.split("=", 1) for line in output.splitlines() if "=" in line)
+        missing = [name for name in names if name not in values]
+        if missing:
+            require(unit == SERVICE and all(name in TYPED_EMPTY_PROPERTIES for name in missing), "missing effective systemd properties for "+unit)
+            # systemctl omits these empty structured arrays even with --all.
+            # Never infer absence: ask the typed, read-only system D-Bus API.
+            bus = ["busctl", "--system", "--json=short"]
+            def reply(argv):
+                try:
+                    value = json.loads(self.command(argv).stdout)
+                except (ValueError, TypeError) as error:
+                    raise Refusal("invalid typed systemd property reply") from error
+                require(isinstance(value, dict) and set(value) == {"type", "data"}, "invalid typed systemd property reply shape")
+                return value
+            loaded = reply(bus+["call", "org.freedesktop.systemd1", "/org/freedesktop/systemd1", "org.freedesktop.systemd1.Manager", "GetUnit", "s", unit])
+            require(loaded["type"] == "o" and isinstance(loaded["data"], list) and len(loaded["data"]) == 1
+                    and isinstance(loaded["data"][0], str) and re.fullmatch(r"/org/freedesktop/systemd1/unit/[A-Za-z0-9_]+", loaded["data"][0]), "invalid typed GetUnit object path")
+            for name in missing:
+                actual = reply(bus+["get-property", "org.freedesktop.systemd1", loaded["data"][0], "org.freedesktop.systemd1.Service", name])
+                require(actual["type"] == TYPED_EMPTY_PROPERTIES[name] and actual["data"] == [], "effective structured property must be typed empty: "+name)
+                values[name] = ""
         require(all(name in values for name in names), "missing effective systemd properties for "+unit)
         return values
 
@@ -142,7 +167,10 @@ def unit_contract(ctx):
                     BindPaths="", BindReadOnlyPaths="", FragmentPath="/usr/lib/systemd/system/"+SERVICE, DropInPaths="", ExecStartPre="", ExecStartPost="", ExecStop="", ExecStopPost="", ExecCondition="")
     names = [*expected, "ExecStart", "Environment", "TriggeredBy", "RestrictAddressFamilies", "MainPID"]
     actual = ctx.props(SERVICE, names)
+    vendor_dropin_contract(ctx, actual["DropInPaths"])
     for name, value in expected.items():
+        if name == "DropInPaths":
+            continue
         require(actual[name] == value, "effective bridge property drift: "+name)
     require(re.findall(r"(?:^|[ {])path=([^ ;}]+)", actual["ExecStart"]) == [BINARY]
             and re.findall(r"argv\[\]=([^;]+)", actual["ExecStart"]) == [BINARY+" "], "effective bridge ExecStart must be only "+BINARY)
@@ -158,6 +186,18 @@ def unit_contract(ctx):
     daemon_exec_contract(daemon["ExecStart"])
     require(daemon["WorkingDirectory"] == "/run/snitchwatch" and SOCKETS[0] in daemon["Requires"].split() and SOCKETS[0] in daemon["After"].split(), "OpenSnitch effective Unix socket CWD/dependencies drift")
     return actual
+
+
+def vendor_dropin_contract(ctx, value):
+    require(value in ("", VENDOR_DROPIN), "effective bridge property drift: DropInPaths")
+    if not value:
+        return
+    path = ctx.path(VENDOR_DROPIN)
+    require(path.resolve() == ctx.root.resolve()/VENDOR_DROPIN.lstrip("/"), "vendor drop-in must be canonical without symlinks")
+    info = ctx.stat(VENDOR_DROPIN)
+    require(stat.S_ISREG(info.st_mode) and info.st_uid == 0 and info.st_gid == 0 and not info.st_mode & 0o022,
+            "vendor drop-in must be root-owned immutable regular file")
+    require(digest(path) == VENDOR_DROPIN_SHA256, "vendor drop-in byte identity drift")
 
 
 def daemon_exec_contract(value):
@@ -180,6 +220,7 @@ def local_conflicts(ctx):
                    "/run/systemd/generator.early", "/etc/systemd/system", "/run/systemd/system",
                    "/run/systemd/generator", "/usr/local/lib/systemd/system", "/run/systemd/generator.late")
     paths = [directory+"/"+unit+suffix for directory in system_dirs for unit in UNITS for suffix in ("", ".d")]
+    paths.extend(directory+"/service.d" for directory in system_dirs)
     user_dirs = {"/etc/systemd/user", "/run/systemd/user", "/etc/xdg/systemd/user",
                  "/usr/local/lib/systemd/user", "/usr/local/share/systemd/user", "/usr/share/systemd/user"}
     records = ctx.command(["getent", "passwd"]).stdout.splitlines()
@@ -231,7 +272,14 @@ def flatpak_profiles(ctx):
     for store in stores:
         for override in ("global", APP):
             path = ctx.path(store+"/overrides/"+override)
-            require(not path.exists() or not path.read_text().strip(), "same-ID/global Flatpak overrides require explicit review: "+str(path))
+            if not path.exists() and not path.is_symlink():
+                continue
+            require(store+"/overrides/"+override == BASE_GLOBAL_OVERRIDE, "same-ID/global Flatpak overrides require explicit review: "+str(path))
+            require(path.resolve() == ctx.root.resolve()/BASE_GLOBAL_OVERRIDE.lstrip("/"), "base global Flatpak override must be canonical without symlinks")
+            info = ctx.stat(BASE_GLOBAL_OVERRIDE)
+            require(stat.S_ISREG(info.st_mode) and info.st_uid == 0 and info.st_gid == 0 and not info.st_mode & 0o022,
+                    "base global Flatpak override must be root-owned non-writable regular file")
+            require(digest(path) == BASE_GLOBAL_OVERRIDE_SHA256, "base global Flatpak override byte identity drift")
         appdir = ctx.path(store+"/app/"+APP)
         if not appdir.exists():
             continue

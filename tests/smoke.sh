@@ -457,13 +457,17 @@ echo "== MOTD rebrand =="
 # Guards against the upstream image-info.json (which the login MOTD reads
 # image-ref/image-branch from) reverting to the base image's own identity.
 # image-tag/image-branch vary by matrix leg (IMAGE_TAG build-arg: "latest" for
-# safe-pin, "latest-kernel" for that leg) so this accepts either real
-# published tag rather than hardcoding one — a mismatch there is what let a
-# :latest-kernel machine's MOTD wrongly claim :latest (see docs/RUNBOOK.md).
+# safe-pin, "latest-kernel" for that leg). The exact local candidate tag is
+# accepted only when the immutable bridge profile selects system mode.
+# A mismatch here let a :latest-kernel machine's MOTD wrongly claim :latest
+# (see docs/RUNBOOK.md).
+# shellcheck disable=SC2016 # jq interprets $bridge_profile in its own language.
 check "MOTD image-info rebranded to bazzite-tower" \
-    jq -e '."image-name" == "bazzite-tower"
+    jq --arg bridge_profile "$(< /usr/share/bazzite-tower/snitchwatch-bridge-profile)" \
+        -e '."image-name" == "bazzite-tower"
         and ."image-ref" == "ostree-image-signed:docker://ghcr.io/bearyjd/bazzite-tower"
-        and (."image-tag" == "latest" or ."image-tag" == "latest-kernel")
+        and (."image-tag" == "latest" or ."image-tag" == "latest-kernel"
+            or ($bridge_profile == "system" and ."image-tag" == "snitchwatch-system-candidate"))
         and ."image-tag" == ."image-branch"' \
     /usr/share/ublue-os/image-info.json
 

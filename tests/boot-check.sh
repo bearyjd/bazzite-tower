@@ -20,7 +20,17 @@ set -uo pipefail
 fail=0
 say()  { echo "$*"; }
 # hard <desc> <cmd...> — a failure fails the boot test.
-hard() { local d="$1"; shift; if "$@" >/dev/null 2>&1; then say "  ok   ${d}"; else say "  FAIL ${d}"; fail=1; fi; }
+hard() {
+    local d="$1" diagnostic
+    shift
+    if diagnostic="$("$@" 2>&1)"; then
+        say "  ok   ${d}"
+    else
+        say "  FAIL ${d}"
+        [[ -z "${diagnostic}" ]] || printf '%s\n' "${diagnostic}"
+        fail=1
+    fi
+}
 # soft <desc> <cmd...> — reported, but never fails the boot test (container limits).
 soft() { local d="$1"; shift; if "$@" >/dev/null 2>&1; then say "  ok   ${d}"; else say "  warn ${d} (non-fatal in a container)"; fi; }
 
@@ -136,7 +146,7 @@ for path,mode in [("/run/snitchwatch-auth",0o2750),("/run/snitchwatch-auth/token
  s=os.stat(path); assert stat.S_IMODE(s.st_mode)==mode and (s.st_uid,s.st_gid)==(uid,gid), path'
     hard "resolved bridge hardening and activation are intact" python3 -c '
 import subprocess
-p=dict(line.split("=",1) for line in subprocess.check_output(["systemctl","show","snitchwatch-system-bridge.service"],text=True).splitlines() if "=" in line)
+p=dict(line.split("=",1) for line in subprocess.check_output(["systemctl","show","--all","snitchwatch-system-bridge.service"],text=True).splitlines() if "=" in line)
 for key,value in {"User":"snitchwatch","Group":"snitchwatch","NoNewPrivileges":"yes","CapabilityBoundingSet":"","ProtectSystem":"strict","ProtectHome":"yes","PrivateTmp":"yes","PrivateDevices":"yes"}.items():
  assert p.get(key)==value,(key,p.get(key))
 assert "SNITCHWATCH_SYSTEM_BRIDGE=1" in p.get("Environment","")

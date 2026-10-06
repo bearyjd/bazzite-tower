@@ -1,5 +1,5 @@
 <!-- Generated: 2026-08-08 | Files scanned: 21 | Token estimate: ~1050 -->
-<!-- Targeted update: 2026-10-04 | OpenSnitch readiness and system-bridge boundary; not a full regeneration -->
+<!-- Targeted update: 2026-10-05 | OpenSnitch readiness and system-bridge boundary; not a full regeneration -->
 # System Files (baked-in runtime surface)
 
 `system_files/` is `COPY`ed verbatim to `/`. Paths below are image-absolute.
@@ -57,8 +57,11 @@ Snitchwatch's proposed `snitchwatch-system-bridge.service` and two socket units,
 sysusers/tmpfiles and system GUI profile belong to its release; they are not
 shipped under `system_files/`. The October 4 VM used protected sockets at
 `/run/snitchwatch/{opensnitchd,bridge}.sock` and a separate auth token, with a
-guest-only binary/drop-in. See [VM evidence and migration gates](../research/snitchwatch-system-bridge.md)
-for listener modes, daemon address compatibility and remaining rollout work.
+guest-only binary/drop-in. October 5 reviewed source adds authenticated-client
+tracking and abandoned-request cleanup; its clean GUI build and initial runtime
+checks do not add system assets to this image. See
+[VM evidence and migration gates](../research/snitchwatch-system-bridge.md) for
+listener modes, daemon compatibility, conditional runtime evidence and rollout gates.
 
 `FIREWALL_DAEMON=portmaster` (never a default/published tag — build with
 `just build-portmaster-spike`, validate in a VM first): OpenSnitch masked

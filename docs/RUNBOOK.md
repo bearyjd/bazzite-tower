@@ -163,9 +163,12 @@ That command checks the user service, binary hash and listener ownership; it
 cannot prove that a GUI answers decisions or validate the proposed system profile.
 
 The system bridge passed October 4 disposable-VM GUI, authorization, token
-rotation and headless-startup tests with SELinux enforcing. It is awaiting
-upstream packaging, unattended Ask handling and daemon-shutdown investigation,
-then a published/pinned release, image installation and new readiness checks.
+rotation and headless-startup tests with SELinux enforcing. October 5 reviewed
+changes passed a clean GUI source build, bounded request cleanup checks and
+conditional rendered-GUI Allow, disconnect and re-authentication. The default
+KDE GUI startup failure and OpenSnitch 1.8.0 shutdown
+finding remain open, followed by a published/pinned release, image installation and
+new readiness checks.
 See [evidence and rollout gates](research/snitchwatch-system-bridge.md) before
 planning a migration; these results do not establish deployment on this host.
 

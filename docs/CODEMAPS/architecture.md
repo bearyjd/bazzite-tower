@@ -1,5 +1,5 @@
 <!-- Generated: 2026-08-08 | Files scanned: 45 | Token estimate: ~650 -->
-<!-- Targeted update: 2026-10-04 | Snitchwatch deployment boundary; not a full regeneration -->
+<!-- Targeted update: 2026-10-05 | Snitchwatch deployment boundary; not a full regeneration -->
 # Architecture
 
 **Type:** bootc OS-image repo — a declarative Fedora/Bazzite derivative. There is
@@ -57,8 +57,11 @@ GUI are installed separately; its proposed system bridge is not in this image.
 
 Snitchwatch owns the alternative bridge, socket/service units, identities and
 GUI profile. October 4 VM tests validated real GUI decisions and enforcing
-headless startup; packaging, unattended Ask handling, shutdown investigation
-and release/image integration remain gated. See
+headless startup. October 5 reviewed changes track authenticated external
+clients, cancel abandoned requests and passed a clean GUI source build plus
+bounded request cleanup checks. Conditional rendered-GUI decisions, disconnect
+and re-authentication also passed. Default KDE GUI startup, daemon shutdown,
+runtime lifecycle and release/image integration remain gated. See
 [system bridge research](../research/snitchwatch-system-bridge.md).
 
 ## Codemap index

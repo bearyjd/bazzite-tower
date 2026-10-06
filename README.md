@@ -105,14 +105,16 @@ The image ships a Snitchwatch-tuned `/etc/opensnitchd/default-config.json` with 
 | `ProcMonitorMethod` | `proc` | **Not `ebpf`.** The v1.8.0 RPM's bundled eBPF module fails to load on this image's 6.19/7.x kernels (`unable to load eBPF module (opensnitch.o)`, [snitchwatch#6](https://github.com/bearyjd/snitchwatch/issues/6)) and the daemon degrades badly. Revisit only when an opensnitch release ships an eBPF module built for this kernel. |
 | `DefaultAction` | `allow` | Fail open. See below. |
 
-`DefaultAction: deny` is the designed end state, but it denies **every new outbound connection on any boot where no UI or bridge is answering prompts** — and the Snitchwatch bridge is a per-user systemd service (`snitchwatch-bridge.service`), installed by hand, not baked into this image. So the image ships `allow` during rollout: unruled connections fail open rather than block, and libvirt/Docker/Cockpit traffic keeps working headless.
+`DefaultAction: deny` is the designed end state, but it denies **every new unruled outbound connection on any boot where no UI or bridge is answering prompts** — and the Snitchwatch bridge is a per-user systemd service (`snitchwatch-bridge.service`), installed by hand, not baked into this image. So the image ships `allow` during rollout: unruled connections fail open rather than block, and libvirt/Docker/Cockpit traffic keeps working headless.
 
 An alternative system bridge passed disposable-VM tests on October 4: a real
 GUI Allow decision completed a request, authorization and token rotation passed,
-and the daemon connected after a headless reboot with SELinux enforcing. That
-profile is awaiting packaging, unattended-request and daemon-shutdown fixes,
-then release publication, pinning and image integration. The shipped TCP/user
-profile and `opensnitch-readiness` contract remain unchanged. See
+and the daemon connected after a headless reboot with SELinux enforcing.
+October 5 follow-up passed a clean GUI source build, bounded request cleanup
+checks, and conditional rendered-GUI Allow, disconnect and re-authentication.
+A default KDE GUI startup failure and the daemon shutdown
+finding remain open, followed by release publication, pinning and image integration.
+The shipped TCP/user profile and `opensnitch-readiness` contract remain unchanged. See
 [system bridge evidence and migration gates](docs/research/snitchwatch-system-bridge.md).
 
 **Flipping to `deny` is order-sensitive.** The config change and the bridge install are two separate manual steps, and doing them in the wrong order costs you the network:

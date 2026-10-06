@@ -1,5 +1,5 @@
 <!-- Generated: 2026-08-08 | Files scanned: 8 | Token estimate: ~800 -->
-<!-- Targeted update: 2026-10-04 | OpenSnitch readiness test and VM evidence scope; not a full regeneration -->
+<!-- Targeted update: 2026-10-05 | OpenSnitch readiness test and VM evidence scope; not a full regeneration -->
 # CI / CD
 
 5 workflows + highlighted test scripts + 1 diff filter. Full failure model:
@@ -50,9 +50,13 @@ The [October 4 system-bridge validation](../research/snitchwatch-system-bridge.m
 is a manual disposable-VM result, separate from these image release gates.
 It proved real GUI decisions, authorization, token rotation and headless startup
 with SELinux enforcing using a guest-only bridge install and repaired Flatpak.
-It does not validate the original production manifest or immutable image
-installation. CI still asserts legacy TCP `127.0.0.1:50051`/`allow`; release
-publication/pinning, integration and system-profile readiness remain future work.
+October 5 follow-up also passed an isolated clean source build of the corrected
+system manifest, bounded request cleanup and conditional rendered-GUI tests.
+Default KDE startup, daemon shutdown and runtime lifecycle remain gates; these
+results do not establish immutable image installation or an automated image
+release gate. CI still asserts legacy TCP
+`127.0.0.1:50051`/`allow`; publication/pinning, integration and system-profile
+readiness remain future work.
 
 ## Diff filter (`ci/base-diff.py`)
 

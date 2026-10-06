@@ -1,5 +1,5 @@
 <!-- Generated: 2026-08-08 | Files scanned: 6 | Token estimate: ~700 -->
-<!-- Targeted update: 2026-10-04 | OpenSnitch/Snitchwatch release boundaries; not a full regeneration -->
+<!-- Targeted update: 2026-10-05 | OpenSnitch/Snitchwatch release boundaries; not a full regeneration -->
 # Dependencies & External Surfaces
 
 ## Base image
@@ -34,11 +34,15 @@ OpenSnitch 1.8.0 RPM before extraction. It installs `libnetfilter_queue` and
 `nftables` explicitly; extraction neither resolves dependencies nor registers
 the daemon in the RPM database. Snitchwatch's user bridge/GUI remain external.
 
-System-bridge VM tests used Snitchwatch source `1def745` and a KDE 6.9 Flatpak
-with local packaging repairs. This test revision is not an image-consumed
-release pin. OpenSnitch's grpc-go 1.32.0 path requires the documented relative
-Unix address workaround; packaging, unattended Ask handling and daemon shutdown
-remain release gates. See [system bridge research](../research/snitchwatch-system-bridge.md).
+October 4 VM tests used Snitchwatch `1def745`. October 5 follow-up used base
+`2690109` plus reviewed uncommitted changes, source snapshot `851f3a`. Its clean
+x86_64 GUI build used pinned KDE/Qt 6.9.3 and Rust 1.89.0, declared protoc 29.3
+and mold 2.40.4, and 657 lockfile-verified crate inputs. These test artifacts are
+not image-consumed release pins; guest installation reported KDE 6.9 as
+end-of-life, so a supported SDK/runtime needs release validation. OpenSnitch's
+grpc-go 1.32.0 path still requires
+the relative Unix address workaround; default KDE startup, daemon shutdown
+and release/image integration remain gated. See [system bridge research](../research/snitchwatch-system-bridge.md).
 
 ## KDE Plasma package-family pin
 

@@ -6,6 +6,16 @@
 # prompt: a listening gRPC socket alone cannot prove a user will answer one.
 set -euo pipefail
 
+profile=legacy
+if [[ -r /usr/share/bazzite-tower/snitchwatch-bridge-profile ]]; then
+    profile=$(</usr/share/bazzite-tower/snitchwatch-bridge-profile)
+fi
+case "${profile}" in
+    legacy) ;;
+    system) exec /usr/libexec/bazzite-tower-snitchwatch-readiness "$@" ;;
+    *) printf 'NOT READY: invalid image Snitchwatch profile: %s\n' "${profile}" >&2; exit 1 ;;
+esac
+
 config=/etc/opensnitchd/default-config.json
 bridge_address=127.0.0.1:50051
 bridge_unit=snitchwatch-bridge.service

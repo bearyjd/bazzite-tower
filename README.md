@@ -107,15 +107,32 @@ The image ships a Snitchwatch-tuned `/etc/opensnitchd/default-config.json` with 
 
 `DefaultAction: deny` is the designed end state, but it denies **every new unruled outbound connection on any boot where no UI or bridge is answering prompts** — and the Snitchwatch bridge is a per-user systemd service (`snitchwatch-bridge.service`), installed by hand, not baked into this image. So the image ships `allow` during rollout: unruled connections fail open rather than block, and libvirt/Docker/Cockpit traffic keeps working headless.
 
-An alternative system bridge passed disposable-VM tests on October 4: a real
-GUI Allow decision completed a request, authorization and token rotation passed,
-and the daemon connected after a headless reboot with SELinux enforcing.
-October 5 follow-up passed a clean GUI source build, bounded request cleanup
-checks, and conditional rendered-GUI Allow, disconnect and re-authentication.
-A default KDE GUI startup failure and the daemon shutdown
-finding remain open, followed by release publication, pinning and image integration.
-The shipped TCP/user profile and `opensnitch-readiness` contract remain unchanged. See
-[system bridge evidence and migration gates](docs/research/snitchwatch-system-bridge.md).
+The opt-in image candidate selects `SNITCHWATCH_BRIDGE=system` with
+`FIREWALL_DAEMON=opensnitch`; the default remains `legacy`. The candidate installs
+the pinned native bridge version 0.1.1, system socket/service units and immutable provenance.
+It also builds OpenSnitch 1.8.0 from the reviewed upstream pin plus the downstream
+queue-shutdown and NFT policy-ownership repair. A separate daemon manifest
+verifies the installed executable, repair patch, build inputs and licenses.
+OpenSnitch uses `unix:opensnitchd.sock` from `/run/snitchwatch`, preserving
+`DefaultAction: allow` and `ProcMonitorMethod: proc`. GUI installation and GUI
+group enrollment remain explicit operator steps.
+
+Build locally with `just build-snitchwatch-system`. For a disposable SSH test
+image, use `just build-snitchwatch-system-vm`, then `just run-vm-ssh
+localhost/bazzite-tower snitchwatch-system-vm <unused-port>`; `VM_GATE_SSH=1`
+belongs only to this test image. Pull-request CI builds a local
+`verify-snitchwatch-system` candidate with read-only publishing permissions;
+release tags continue to use the two legacy variants.
+
+October 4–5 disposable-VM results cover the reviewed bridge/GUI artifacts,
+including conditional rendered-GUI decisions and bounded request cleanup.
+Fresh native bridge reproducibility and the clean GUI release build from
+`5c2b44a` passed. The GUI uses KDE 6.11 / Qt 6.11.2 and Rust 1.98.1; its
+crate version remains 0.1.0. The accompanying archive supplies full project
+and dependency sources and license texts. Candidate image/first-boot, default
+KDE GUI decisions and repaired daemon shutdown/NFT behavior under enforcing
+SELinux still require fresh VM evidence. See the [candidate migration runbook](docs/RUNBOOK.md#opensnitch--snitchwatch-deployment-status)
+and [system bridge evidence](docs/research/snitchwatch-system-bridge.md).
 
 **Flipping to `deny` is order-sensitive.** The config change and the bridge install are two separate manual steps, and doing them in the wrong order costs you the network:
 

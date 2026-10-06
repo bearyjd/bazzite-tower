@@ -308,9 +308,7 @@ check "opensnitch staged config present" \
 # but DefaultAction=allow below matches the RPM's shipped default, so a silently
 # skipped install would still satisfy that value check. Only a byte comparison
 # proves the overwrite actually happened.
-check "staged config actually overwrote the RPM's" \
-    cmp -s /usr/share/bazzite-tower/opensnitchd-default-config.json \
-        /etc/opensnitchd/default-config.json
+# Compare against the selected profile's reference inside the dispatch below.
 # Structural validity: the value checks below read individual keys, so a trailing
 # comma or unbalanced brace would leave them passing while opensnitchd fails to
 # parse the file at startup.
@@ -324,9 +322,55 @@ check "opensnitch DefaultAction is allow (fail-open headless)" \
 # mandatory here. Flipping this back to "ebpf" needs a newer opensnitch release.
 check "opensnitch ProcMonitorMethod is proc (eBPF broken on this kernel)" \
     jq -e '.ProcMonitorMethod == "proc"' /etc/opensnitchd/default-config.json
-# Points at the Snitchwatch bridge's gRPC listener, not opensnitch-ui's socket.
-check "opensnitch Server.Address is the Snitchwatch bridge" \
-    jq -e '.Server.Address == "127.0.0.1:50051"' /etc/opensnitchd/default-config.json
+# The image selector is immutable; a missing marker is not a legacy default.
+bridge_profile="$(< /usr/share/bazzite-tower/snitchwatch-bridge-profile)"
+case "${bridge_profile}" in
+legacy)
+    check "legacy staged config actually overwrote the RPM's" \
+        cmp -s /usr/share/bazzite-tower/opensnitchd-default-config.json \
+            /etc/opensnitchd/default-config.json
+    check "legacy OpenSnitch address is TCP" \
+        jq -e '.Server.Address == "127.0.0.1:50051"' /etc/opensnitchd/default-config.json
+    check "legacy image has no native system bridge" test ! -e /usr/bin/snitchwatch-bridge-cli
+    check "legacy image has no downstream system daemon manifest" \
+        test ! -e /usr/share/snitchwatch/system-daemon-manifest.json
+    check "legacy image has no system bridge service" \
+        test ! -e /usr/lib/systemd/system/snitchwatch-system-bridge.service
+    ;;
+system)
+    check "system staged config actually overwrote the RPM's" \
+        cmp -s /usr/share/bazzite-tower/opensnitchd-system-bridge-config.json \
+            /etc/opensnitchd/default-config.json
+    check "system OpenSnitch address is relative Unix" \
+        jq -e '.Server.Address == "unix:opensnitchd.sock"' /etc/opensnitchd/default-config.json
+    check "installed system manifest and immutable overlay verify" \
+        /usr/libexec/snitchwatch/verify-system-manifest.py --root /
+    check "downstream daemon source, patch, binary and licenses verify" \
+        /usr/libexec/snitchwatch/verify-system-daemon.py --root /
+    check "native bridge is executable" test -x /usr/bin/snitchwatch-bridge-cli
+    check "native bridge is an ELF executable" \
+        bash -c 'file /usr/bin/snitchwatch-bridge-cli | grep -q "ELF 64-bit.*executable"'
+    check "native bridge dynamic dependencies resolve" \
+        bash -c 'ldd /usr/bin/snitchwatch-bridge-cli >/dev/null 2>&1 && ! ldd /usr/bin/snitchwatch-bridge-cli 2>&1 | grep -q "not found"'
+    check "native bridge loader executes pinned version 0.1.1" \
+        bash -c '/usr/bin/snitchwatch-bridge-cli --version | grep -qx "snitchwatch-bridge-cli 0.1.1"'
+    check "system bridge licenses shipped" test -d /usr/share/licenses/snitchwatch-bridge
+    check "system bridge account present" getent passwd snitchwatch
+    check "system GUI group present" getent group snitchwatch-ui
+    for unit in snitchwatch-system-bridge-grpc.socket snitchwatch-system-bridge-gui.socket; do
+        check_enabled "${unit}"
+    done
+    check "system bridge units parse" \
+        systemd-analyze verify --man=no --recursive-errors=no \
+        /usr/lib/systemd/system/snitchwatch-system-bridge.service \
+        /usr/lib/systemd/system/snitchwatch-system-bridge-grpc.socket \
+        /usr/lib/systemd/system/snitchwatch-system-bridge-gui.socket
+    # shellcheck disable=SC2016 # Expanded by the inner shell.
+    check "system mode masks the image legacy user bridge unit" \
+        bash -c '[[ "$(readlink /usr/lib/systemd/user/snitchwatch-bridge.service)" == /dev/null ]]'
+    ;;
+*) bad "known Snitchwatch bridge profile (got '${bridge_profile:-missing}')" ;;
+esac
 # The GUI is Snitchwatch; upstream's opensnitch-ui conflicts with it.
 check "opensnitch-ui NOT installed (conflicts with Snitchwatch)" \
     bash -c '! test -e /usr/bin/opensnitch-ui'
@@ -338,6 +382,10 @@ check_masked "portmaster.service"
 ;;
 portmaster)
 echo "== Portmaster (disabled VM spike) =="
+ # shellcheck disable=SC2016 # Expanded by the inner shell.
+check "Portmaster selects legacy bridge profile" \
+    bash -c '[[ "$(< /usr/share/bazzite-tower/snitchwatch-bridge-profile)" == legacy ]]'
+check "Portmaster has no native system bridge" test ! -e /usr/bin/snitchwatch-bridge-cli
 check "portmaster binary present" test -x /usr/libexec/portmaster/portmaster-core
 check "portmaster reports pinned version 2.2.1" \
     bash -c '/usr/libexec/portmaster/portmaster-core version 2>/dev/null | grep -q "Portmaster 2.2.1"'

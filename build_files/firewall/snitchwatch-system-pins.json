@@ -1,0 +1,41 @@
+{
+  "bridgeVersion": "0.1.1",
+  "builderImage": "registry.fedoraproject.org/fedora:44@sha256:e1656bc110fc33e855f7a02e4420c21066428bc7a0277160d40ee125ef8a1c65",
+  "flatpakFinishArgs": [
+    "--socket=wayland",
+    "--socket=fallback-x11",
+    "--share=ipc",
+    "--device=dri",
+    "--talk-name=org.freedesktop.Notifications",
+    "--talk-name=org.kde.StatusNotifierWatcher",
+    "--filesystem=/run/snitchwatch:ro",
+    "--filesystem=/run/snitchwatch-auth:ro",
+    "--env=SNITCHWATCH_SYSTEM_BRIDGE=1",
+    "--persist=.local/share/snitchwatch",
+    "--filesystem=xdg-config/snitchwatch:create",
+    "--persist=.local/state/snitchwatch"
+  ],
+  "flatpakRuntimeRef": "org.kde.Platform/x86_64/6.11",
+  "legacyConfigSha256": "4df22dca00a0c08d5b843946bbc50154f0e0529724840b12df623f565768fe3d",
+  "protocVersion": "3.19.6",
+  "rustVersion": "1.98.1",
+  "schemaVersion": 1,
+  "sourceCommit": "5c2b44adece96008e973947a9551b700b8d8a15b",
+  "sourceFiles": {
+    "packaging/flatpak/org.snitchwatch.Snitchwatch.system.yml": "a170b2ecb6ef191cca2b4571ea1f6b4a8bf09cd58bd5ad4c7ec9db57100da8ae",
+    "packaging/release/bridge_artifact.py": "6a82d12348772446d57ca0163d0b31fadf268db2345b6de3db485896d279d3e2",
+    "packaging/release/build-bridge.sh": "b752941d3fd9c2ab7d986006eed7398c1a73110707df133fdec5ac1c241b2006",
+    "packaging/release/install-deps.sh": "247a396c0f3d504023f001c33bb1211f5f0f9bfd2c6685077d4bd312ac95f8cb",
+    "packaging/release/pins.env": "e3d1ab2f0da4d7ad262934ee44ec78ae8e38ec516f0573b2ecb52a2ffe725058",
+    "packaging/release/repro-check.sh": "b915ac388d28dce593bc652a07ff7d9a1fcef33e4a4434e03502d2e28cfe767e",
+    "packaging/system/snitchwatch-system-bridge-grpc.socket": "f5615767da14b522607a36f4ebad141f2e8a85aaf3aeaafbb7b42a62cfa3877d",
+    "packaging/system/snitchwatch-system-bridge-gui.socket": "c4c1fd622cb73ef25c113054249a4b9628ffcec5d961dfd98961164b24426129",
+    "packaging/system/snitchwatch-system-bridge.service": "d03dc021e0cecdf7b88a3e98b1820fd667ea79903f790705da3506d9c821be39",
+    "packaging/system/snitchwatch.conf": "a7597bd4ab25fef970d71eb290106b5689711d0d2d7ecf1a34ee73848dd88654",
+    "packaging/system/snitchwatch.conf.sysusers": "3747ec8123d0428a847032530605f979f399ceaa790cfb67a93278ad26665ebd",
+    "packaging/system/stage.sh": "f08d84df9c3b9022e65cdcb19a0596c74d6182171bc4f983878af8f703b142a6"
+  },
+  "sourceRepository": "https://github.com/bearyjd/snitchwatch.git",
+  "sourceTree": "fa952a8c2547160e928c1ee9b81be80370ef822e",
+  "submoduleCommit": "b404c4c6316760fa7bc415509d3f8d747f7dc9cc"
+}

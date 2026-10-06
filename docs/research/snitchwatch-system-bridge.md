@@ -231,27 +231,72 @@ These conditional runtime and authorization checks apply to the exact new
 artifacts. They leave default KDE startup, daemon queue shutdown, runtime
 lifecycle and release/image integration unresolved.
 
+## Opt-in image integration candidate
+
+The initial image plan used reviewed Snitchwatch commit `d09defc`. The
+reconciled candidate now pins `5c2b44adece96008e973947a9551b700b8d8a15b`, tree
+`fa952a8c2547160e928c1ee9b81be80370ef822e`, and OpenSnitch submodule
+`b404c4c6316760fa7bc415509d3f8d747f7dc9cc`. A fresh Fedora 44 native factory
+build produced actual CLI version 0.1.1; a second fresh source/target build
+reproduced the artifact bytes. The Fedora 43 binary used by the October 5
+disposable VM and the divergent published v0.1.1 user-service release are
+not image deployment inputs. Original schema1 artifact evidence and the
+installed system-overlay provenance remain separate.
+
+`SNITCHWATCH_BRIDGE=legacy` remains the default. The explicit `system` candidate
+requires `FIREWALL_DAEMON=opensnitch`, installs the native bridge and system
+units, and selects `unix:opensnitchd.sock` with OpenSnitch's working directory
+set to `/run/snitchwatch`. Both profiles preserve `allow`/`proc`. GUI delivery
+remains per user with explicit system-profile selection and group enrollment.
+CI's third PR verification leg uses only a local `verify-snitchwatch-system`
+tag and a read-only token; the two publishing release variants remain legacy.
+
+October 6 build evidence at the exact reconciled source:
+
+- Native bridge artifact SHA256: `5b1c89864985b862c2782dd7ac340aeefe7ba29f71de7bed3ede1b0e8039c2d1`; actual 0.1.1 binary SHA256: `cce18095907a0364abcae6f0be7c3e3b3554c982827ac2b3e9a11fe48e016370`. Artifact, checksum sidecar, licenses, source/tree/gitlink and 20 immutable overlay files passed independent inspection.
+- Fresh system-profile GUI bundle SHA256: `ab7d6ee8aefc195178a7914d343780a3a01b5c1b7512ba363a5ecf025d696ae0`. Its clean release build used supported KDE 6.11 / Qt 6.11.2, Rust 1.98.1, mold 2.42.0, declared protoc 29.3 and 657 lockfile-verified crate inputs. The GUI crate version remains 0.1.0. A separate archive supplies the full committed workspace, exact upstream vendor source, complete crate source archives and license texts.
+- The reviewed downstream OpenSnitch repair applies to upstream 1.8.0 at `b404c4c`. The current 16-file patch SHA256 is `6e48804a65df87cb794f98dd50590464114267b46ecdf9a05669606b82be5d8e`; its two isolated build outputs are byte-identical at `3ea27d30c837c7c3c5f9ffee4eb3c16943dc31c8832b62a2f70da8e31311cd6f`. It cancels UI requests, joins both queue readers and callbacks while firewall hooks remain valid, then removes the hooks and releases the queues. Independent targeted race tests, the actual C callback fixture, full normal package tests, NFT ownership cases and a real watchdog child exiting nonzero passed. The final image factory still needs its own clean compile, reproduction and installed artifact evidence; its resulting binary hash is not assumed equal to the isolated diagnostic build.
+- The earlier patch `4b53c88c390a0e85cb17067532bf6232034bd5f3f2e0843e5dc1a988dcc88043` and binary `2e6daa72db1e14b7ef3b82b7a04ef1ca4acd3f441c934ec4b9c4ae0c7310899b` are retained historical diagnostics. Fast stops still logged `nfq_destroy_queue() not closed: -1` and canceled-Ask invalid-rule errors. Bounded, nonconsuming instrumentation identified a stale negative ACK for a VERDICT preceding the successful UNBIND configuration ACK. Those instrumented binaries are excluded from shipping and do not prove the new uninstrumented repair passes on a VM.
+- A broader full-package race run failed in UI configuration watcher/global state paths. The same failure reproduced on unchanged upstream `b404c4c` with identical tools and generated protocol inputs; existing tests create successive clients without watcher cleanup. The scoped shutdown regressions passed independently. This does not establish production configuration reload paths are race-free; both failure logs and the unchanged source archive are retained.
+
+Source/artifact approval and causal observations are retained under
+`output/snitchwatch-daemon-diagnostic.qljb0f1g/`, including
+`INDEPENDENT-FOLLOWUP-FINAL-REVIEW.json` and
+`INDEPENDENT-UPSTREAM-RACE-BASELINE-RETENTION.json`. The image factory and
+installed daemon inventory have a separate manifest from the Rust bridge.
+
+Candidate image smoke/boot, cold named-account/tmpfiles creation, default KDE
+GUI decisions and actual NFQUEUE/shutdown/NFT behavior on the exact target
+image with enforcing SELinux remain pending evidence. The October 4–5
+measurements above remain historical artifact results.
+
 ## Consumer rollout gate
 
-The repository config selects the legacy user-bridge endpoint and `DefaultAction: allow`.
-Do not change the image address until a system bridge artifact is published,
-pinned and installed. Existing readiness checks verify only the legacy deployment.
+Default rollout requires the following, even if the opt-in image candidate
+passes its scoped integration checks:
 
-Before changing consumer configuration, verify on a Bazzite VM with SELinux enforcing:
+1. Repair default KDE GUI startup and repeat GUI authorization/decision checks
+   without the four documented conditional overrides.
+2. Resolve OpenSnitch queue teardown and NFT warning behavior, then validate
+   the GUI on a supported Qt SDK/runtime.
+3. Review the new native release/source/toolchain/license and installed-overlay
+   provenance; validate cold first boot and exact novel unmatched Ask fallback
+   on the target Bazzite image with SELinux enforcing.
+4. Preserve a recorded legacy baseline during transactional migration and
+   rollback. Reject live `/etc` policy/address drift, user-unit overrides,
+   conflicting legacy listeners and incompatible same-ID Flatpak profiles or
+   overrides. Keep `allow` and a console recovery path throughout.
+   Serialize policy writers with the helper's migration lock. An unexpected
+   config displaced at publication is retained in the protected journal for
+   manual recovery; the daemon stays stopped and automatic rollback refuses.
+   Arbitrary uncoordinated root writes cannot be strictly compare-and-replaced.
+5. Verify selected-profile readiness and controlled GUI Allow, authorization,
+   read-only mounts, token rotation, reconnection and stop/rollback evidence.
+   Account IDs must come from the target image's named accounts rather than
+   the earlier VM's numeric IDs. No user receives GUI membership implicitly.
 
-1. Resolve default KDE GUI startup and repeat the runtime/authorization
-   regression without the guest rendering/style workarounds. Preserve the
-   successful conditional tests separately.
-2. Resolve the daemon shutdown finding, rebuild/retest with a supported
-   SDK/runtime, then publish and pin the reviewed bridge/GUI release and verify
-   installation/provenance through the image build.
-3. Repeat real GUI decisions, authorization, read-only mounts, token rotation
-   and reconnection using that release on the target image with SELinux enforcing.
-4. Stop/disable the legacy user bridge during migration and select the system
-   GUI profile explicitly. Preserve a fail-open configuration and console
-   rollback path throughout migration.
-5. Update readiness checks for the system sockets, system service, root-owned
-   release binary and provenance. Cross-account process inspection may require
-   a read-only privileged check rather than the legacy per-user check.
-
-Deny-by-default is a separate policy change after those deployment checks.
+The fixed target-image acceptance limits are 5 seconds for no-GUI fallback,
+2 seconds for pending cleanup and 15 seconds for daemon stop. Preserve the
+shutdown warnings even when exit status and stop timing pass. A container
+boot cannot establish NFQUEUE interception or enforcing-SELinux VM behavior.
+Deny-by-default remains a separate policy change after these deployment gates.

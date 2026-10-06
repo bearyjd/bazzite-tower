@@ -1,0 +1,30 @@
+#!/usr/bin/python3
+"""Privileged read-only all-UID system bridge preflight; never starts a service."""
+import importlib.util
+import json
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+sys.dont_write_bytecode = True
+spec = importlib.util.spec_from_file_location("snitchwatch_common", Path(__file__).with_name("bazzite-tower-snitchwatch-common.py"))
+common = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(common)
+
+
+def main():
+    if len(sys.argv) != 1:
+        raise common.Refusal("this live preflight accepts no path/environment overrides")
+    common.require(os.geteuid() == 0, "all-UID inspection requires explicit root invocation: sudo /usr/libexec/bazzite-tower-snitchwatch-readiness (read-only)")
+    result = common.runtime_readiness(common.Context())
+    print(json.dumps(result, sort_keys=True))
+    print("Local system prerequisites pass; graphical prompt/decision behavior is not checked. DefaultAction remains allow. No state changed and no GUI user enrolled.")
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except (common.Refusal, OSError, ValueError, KeyError, subprocess.TimeoutExpired) as error:
+        print("NOT READY: "+str(error), file=sys.stderr)
+        sys.exit(1)

@@ -1,0 +1,1826 @@
+diff --git a/daemon/firewall/nftables/chains.go b/daemon/firewall/nftables/chains.go
+index eb234342..5d4a3ced 100644
+--- a/daemon/firewall/nftables/chains.go
++++ b/daemon/firewall/nftables/chains.go
+@@ -50,8 +50,12 @@ func (n *Nft) AddChain(name, table, family string, priority *nftables.ChainPrior
+ 		if _, exists := sysChains.Load(key); exists {
+ 			sysChains.Delete(key)
+ 		}
++		n.policyChanges.Lock()
++		before := copyChain(chain)
+ 		chain.Policy = &policy
+ 		n.Conn.AddChain(chain)
++		n.policyChanges.queued(before, chain)
++		n.policyChanges.Unlock()
+ 	} else {
+ 		// nft list chains
+ 		chain = n.Conn.AddChain(&nftables.Chain{
+@@ -163,25 +167,13 @@ func (n *Nft) DelChain(chain *nftables.Chain) error {
+ 	return nil
+ }
+ 
+-// backupExistingChains saves chains with Accept policy.
+-// If the user configures the chain policy to Drop, we need to set it back to Accept,
+-// in order not to block incoming connections.
+-func (n *Nft) backupExistingChains() {
+-	if chains, err := n.Conn.ListChains(); err == nil {
+-		for _, c := range chains {
+-			if c.Policy != nil && *c.Policy == nftables.ChainPolicyAccept {
+-				log.Debug("%s backing up existing chain with policy ACCEPT: %s, %s", logTag, c.Name, c.Table.Name)
+-				origSysChains[getChainKey(c.Name, c.Table)] = c
+-			}
+-		}
+-	}
+-}
+-
++// Restore only policy changes successfully committed by this daemon. Unrelated
++// ACCEPT chains (including protected firewalld tables) are never rewritten.
+ func (n *Nft) restoreBackupChains() {
+-	for _, c := range origSysChains {
+-		log.Debug("%s Restoring chain policy to accept: %s, %s", logTag, c.Name, c.Table.Name)
+-		*c.Policy = nftables.ChainPolicyAccept
+-		n.Conn.AddChain(c)
++	n.policyChanges.Lock()
++	defer n.policyChanges.Unlock()
++	err := n.policyChanges.restore(n.Conn.ListChains, func(c *nftables.Chain) { n.Conn.AddChain(c) }, n.Conn.Flush)
++	if err != nil {
++		log.Warning("%s error restoring changed chain policies: %s", logTag, err)
+ 	}
+-	n.Commit()
+ }
+diff --git a/daemon/firewall/nftables/nftables.go b/daemon/firewall/nftables/nftables.go
+index a16fc9c9..5885dcba 100644
+--- a/daemon/firewall/nftables/nftables.go
++++ b/daemon/firewall/nftables/nftables.go
+@@ -28,9 +28,10 @@ const (
+ 
+ // Nft holds the fields of our nftables firewall
+ type Nft struct {
+-	Conn        *nftables.Conn
+-	chains      iptables.SystemChains
+-	bypassQueue bool
++	Conn          *nftables.Conn
++	chains        iptables.SystemChains
++	bypassQueue   bool
++	policyChanges policyJournal
+ 
+ 	common.Common
+ 	config.Config
+@@ -138,7 +139,11 @@ func (n *Nft) CleanRules(logErrors bool) {
+ // You add rules, chains or tables, and after calling to Flush() they're added to the system.
+ // NOTE: it's very important not to call Flush() without queued tasks.
+ func (n *Nft) Commit() bool {
+-	if err := n.Conn.Flush(); err != nil {
++	n.policyChanges.Lock()
++	defer n.policyChanges.Unlock()
++	err := n.Conn.Flush()
++	n.policyChanges.committed(err == nil)
++	if err != nil {
+ 		log.Warning("%s error applying changes: %s", logTag, err)
+ 		return false
+ 	}
+diff --git a/daemon/firewall/nftables/system.go b/daemon/firewall/nftables/system.go
+index 08c08a2e..54e7a06a 100644
+--- a/daemon/firewall/nftables/system.go
++++ b/daemon/firewall/nftables/system.go
+@@ -45,11 +45,10 @@ func (t *sysTablesT) Del(name string) {
+ }
+ 
+ var (
+-	logTag        = "nftables:"
+-	sysTables     *sysTablesT
+-	sysChains     *sync.Map
+-	origSysChains map[string]*nftables.Chain
+-	sysSets       []*nftables.Set
++	logTag    = "nftables:"
++	sysTables *sysTablesT
++	sysChains *sync.Map
++	sysSets   []*nftables.Set
+ )
+ 
+ // InitMapsStore initializes internal stores of chains and maps.
+@@ -58,7 +57,6 @@ func InitMapsStore() {
+ 		tables: make(map[string]*nftables.Table),
+ 	}
+ 	sysChains = &sync.Map{}
+-	origSysChains = make(map[string]*nftables.Chain)
+ }
+ 
+ // CreateSystemRule create the custom firewall chains and adds them to system.
+@@ -100,7 +98,7 @@ func (n *Nft) CreateSystemRule(chain *config.FwChain, logErrors bool) bool {
+ }
+ 
+ // AddSystemRules creates the system firewall from configuration.
+-func (n *Nft) AddSystemRules(reload, backupExistingChains bool) {
++func (n *Nft) AddSystemRules(reload, _ bool) {
+ 	n.SysConfig.RLock()
+ 	defer n.SysConfig.RUnlock()
+ 
+@@ -108,9 +106,6 @@ func (n *Nft) AddSystemRules(reload, backupExistingChains bool) {
+ 		log.Important("[nftables] AddSystemRules() fw disabled")
+ 		return
+ 	}
+-	if backupExistingChains {
+-		n.backupExistingChains()
+-	}
+ 
+ 	for _, fwCfg := range n.SysConfig.SystemRules {
+ 		for _, chain := range fwCfg.Chains {
+diff --git a/daemon/main.go b/daemon/main.go
+index f6247623..95c99376 100644
+--- a/daemon/main.go
++++ b/daemon/main.go
+@@ -25,6 +25,7 @@ package main
+ import (
+ 	"bytes"
+ 	"context"
++	"errors"
+ 	"flag"
+ 	"fmt"
+ 	"io/ioutil"
+@@ -261,8 +262,8 @@ func setupSignals() {
+ 		log.Important("Got signal: %v", sig)
+ 		cancel()
+ 		time.AfterFunc(10*time.Second, func() {
+-			log.Error("[REVIEW] closing due to timeout")
+-			os.Exit(0)
++			log.Error("shutdown cleanup exceeded the 10-second deadline")
++			os.Exit(1)
+ 		})
+ 	}()
+ }
+@@ -368,11 +369,23 @@ func initSystemdResolvedMonitor() {
+ 	}()
+ }
+ 
++type shutdownQueue interface {
++	StopAndJoin()
++}
++
++// Removing hooks flushes kernel queued entries. Join held callbacks while
++// those entries still exist, then remove hooks before unbinding the queues.
++func quiesceQueuesBeforeFirewall(repeat, primary shutdownQueue, stopFirewall func()) {
++	repeat.StopAndJoin()
++	primary.StopAndJoin()
++	stopFirewall()
++}
++
+ func doCleanup(queue, repeatQueue *netfilter.Queue) {
+ 	log.Info("Cleaning up ...")
+-	firewall.Stop()
+-	monitor.End()
+ 	uiClient.Close()
++	quiesceQueuesBeforeFirewall(repeatQueue, queue, firewall.Stop)
++	monitor.End()
+ 	if resolvMonitor != nil {
+ 		resolvMonitor.Close()
+ 	}
+@@ -489,9 +502,12 @@ func acceptOrDeny(packet *netfilter.Packet, con *conman.Connection) *rule.Rule {
+ 			con.DstHost = dns.HostOr(con.DstIP, con.DstHost)
+ 		}
+ 
+-		r = uiClient.Ask(con)
++		var askErr error
++		r, askErr = uiClient.AskWithError(con)
+ 		if r == nil {
+-			log.Error("Invalid rule received, applying default action")
++			if !errors.Is(askErr, ui.ErrClientShutdown) {
++				log.Error("Invalid rule received, applying default action")
++			}
+ 			applyDefaultAction(packet, con)
+ 			return nil
+ 		}
+diff --git a/daemon/netfilter/packet.go b/daemon/netfilter/packet.go
+index 3795c2ca..6bae1a04 100644
+--- a/daemon/netfilter/packet.go
++++ b/daemon/netfilter/packet.go
+@@ -4,6 +4,7 @@ import "C"
+ 
+ import (
+ 	"github.com/google/gopacket"
++	"sync"
+ )
+ 
+ // packet consts
+@@ -26,6 +27,8 @@ type Packet struct {
+ 	Packet          gopacket.Packet
+ 	Mark            uint32
+ 	verdictChannel  chan VerdictContainer
++	verdictOnce     *sync.Once
++	queueDone       <-chan struct{}
+ 	UID             uint32
+ 	NetworkProtocol uint8
+ 	IfaceInIdx      int
+@@ -34,13 +37,13 @@ type Packet struct {
+ 
+ // SetVerdict emits a veredict on a packet
+ func (p *Packet) SetVerdict(v Verdict) {
+-	p.verdictChannel <- VerdictContainer{Verdict: v, Packet: nil, Mark: 0}
++	p.deliverVerdict(VerdictContainer{Verdict: v, Packet: nil, Mark: 0})
+ }
+ 
+ // SetVerdictAndMark emits a veredict on a packet and marks it in order to not
+ // analyze it again.
+ func (p *Packet) SetVerdictAndMark(v Verdict, mark uint32) {
+-	p.verdictChannel <- VerdictContainer{Verdict: v, Packet: nil, Mark: mark}
++	p.deliverVerdict(VerdictContainer{Verdict: v, Packet: nil, Mark: mark})
+ }
+ 
+ // SetRequeueVerdict apply a verdict on a requeued packet
+@@ -48,12 +51,28 @@ func (p *Packet) SetRequeueVerdict(newQueueID uint16) {
+ 	v := uint(NF_QUEUE)
+ 	q := (uint(newQueueID) << 16)
+ 	v = v | q
+-	p.verdictChannel <- VerdictContainer{Verdict: Verdict(v), Packet: nil, Mark: p.Mark}
++	p.deliverVerdict(VerdictContainer{Verdict: Verdict(v), Packet: nil, Mark: p.Mark})
+ }
+ 
+ // SetVerdictWithPacket apply a verdict, but with a new packet
+ func (p *Packet) SetVerdictWithPacket(v Verdict, packet []byte) {
+-	p.verdictChannel <- VerdictContainer{Verdict: v, Packet: packet, Mark: 0}
++	p.deliverVerdict(VerdictContainer{Verdict: v, Packet: packet, Mark: 0})
++}
++
++// A worker may complete after queue cancellation. A single buffered result
++// never blocks that worker or leaves a callback waiting for a second verdict.
++func (p *Packet) deliverVerdict(v VerdictContainer) {
++	p.verdictOnce.Do(func() {
++		select {
++		case <-p.queueDone:
++			return
++		default:
++		}
++		select {
++		case p.verdictChannel <- v:
++		case <-p.queueDone:
++		}
++	})
+ }
+ 
+ // IsIPv4 returns if the packet is IPv4
+diff --git a/daemon/netfilter/queue.go b/daemon/netfilter/queue.go
+index ac4cf7ae..227796b6 100644
+--- a/daemon/netfilter/queue.go
++++ b/daemon/netfilter/queue.go
+@@ -13,6 +13,7 @@ import (
+ 	"fmt"
+ 	"os"
+ 	"sync"
++	"sync/atomic"
+ 	"syscall"
+ 	"time"
+ 	"unsafe"
+@@ -39,7 +40,8 @@ const (
+ )
+ 
+ var (
+-	queueIndex     = make(map[uint32]*chan Packet, 0)
++	queueIndex     = make(map[uint32]*Queue)
++	nextQueueIndex uint32
+ 	queueIndexLock = sync.RWMutex{}
+ 
+ 	gopacketDecodeOptions = gopacket.DecodeOptions{Lazy: true, NoCopy: true}
+@@ -55,27 +57,36 @@ type VerdictContainerC C.verdictContainer
+ // A channel where the intercepted packets will be received.
+ // The ID of the queue.
+ type Queue struct {
+-	h       *C.struct_nfq_handle
+-	qh      *C.struct_nfq_q_handle
+-	packets chan Packet
+-	fd      C.int
+-	idx     uint32
++	h         *C.struct_nfq_handle
++	qh        *C.struct_nfq_q_handle
++	packets   chan Packet
++	fd        int
++	idx       uint32
++	lifetime  *queueLifetime
++	wakeRead  int
++	wakeWrite int
+ }
+ 
+ // NewQueue opens a new netfilter queue to receive packets marked with a mark.
+ func NewQueue(queueID uint16) (q *Queue, err error) {
+ 	q = &Queue{
+-		idx:     uint32(time.Now().UnixNano()),
+-		packets: make(chan Packet),
++		idx:     atomic.AddUint32(&nextQueueIndex, 1),
++		packets: make(chan Packet), lifetime: newQueueLifetime(), wakeRead: -1, wakeWrite: -1,
+ 	}
+-
+-	if err = q.create(queueID); err != nil {
+-		return nil, err
+-	} else if err = q.setup(); err != nil {
++	wake := []int{-1, -1}
++	if err = unix.Pipe2(wake, unix.O_CLOEXEC|unix.O_NONBLOCK); err == nil {
++		q.wakeRead, q.wakeWrite = wake[0], wake[1]
++		err = q.create(queueID)
++		if err == nil {
++			err = q.setup()
++		}
++	}
++	if err != nil {
++		close(q.lifetime.done) // no reader has started; Close owns all partial resources
++		q.Close()
+ 		return nil, err
+ 	}
+-
+-	go q.run()
++	q.lifetime.run(q.run)
+ 
+ 	return q, nil
+ }
+@@ -83,7 +94,7 @@ func NewQueue(queueID uint16) (q *Queue, err error) {
+ func (q *Queue) create(queueID uint16) (err error) {
+ 	var ret C.int
+ 
+-	if q.h, err = C.nfq_open(); err != nil {
++	if q.h, err = C.nfq_open(); q.h == nil {
+ 		return fmt.Errorf("Error opening Queue handle: %v", err)
+ 	} else if ret, err = C.nfq_unbind_pf(q.h, AF_INET); err != nil || ret < 0 {
+ 		errmsg := fmt.Errorf("Error %d unbinding existing q handler from AF_INET protocol family: %v", ret, err)
+@@ -98,12 +109,11 @@ func (q *Queue) create(queueID uint16) (err error) {
+ 	} else if ret, err := C.nfq_bind_pf(q.h, AF_INET6); err != nil || ret < 0 {
+ 		return fmt.Errorf("Error (%d) binding to AF_INET6 protocol family: %v", ret, err)
+ 	} else if q.qh, err = C.CreateQueue(q.h, C.uint16_t(queueID), C.uint32_t(q.idx)); err != nil || q.qh == nil {
+-		q.destroy()
+ 		return fmt.Errorf("Error binding to queue: %v", err)
+ 	}
+ 
+ 	queueIndexLock.Lock()
+-	queueIndex[q.idx] = &q.packets
++	queueIndex[q.idx] = q
+ 	queueIndexLock.Unlock()
+ 
+ 	return nil
+@@ -111,62 +121,77 @@ func (q *Queue) create(queueID uint16) (err error) {
+ 
+ func (q *Queue) setup() (err error) {
+ 	var ret C.int
++	var fd C.int
+ 
+ 	queueSize := C.uint32_t(NF_DEFAULT_QUEUE_SIZE)
+ 	bufferSize := C.uint(NF_DEFAULT_PACKET_SIZE)
+ 	totSize := C.uint(NF_DEFAULT_QUEUE_SIZE * NF_DEFAULT_PACKET_SIZE)
+ 
+ 	if ret, err = C.nfq_set_queue_maxlen(q.qh, queueSize); err != nil || ret < 0 {
+-		q.destroy()
+ 		return fmt.Errorf("Unable to set max packets in queue: %v", err)
+ 	} else if C.nfq_set_mode(q.qh, C.uint8_t(2), bufferSize) < 0 {
+-		q.destroy()
+ 		return fmt.Errorf("Unable to set packets copy mode: %v", err)
+-	} else if q.fd, err = C.nfq_fd(q.h); err != nil {
+-		q.destroy()
++	} else if fd, err = C.nfq_fd(q.h); err != nil {
+ 		return fmt.Errorf("Unable to get queue file-descriptor. %v", err)
+ 	} else if C.nfnl_rcvbufsiz(C.nfq_nfnlh(q.h), totSize) < 0 {
+-		q.destroy()
+ 		return fmt.Errorf("Unable to increase netfilter buffer space size")
+ 	}
+ 
++	q.fd = int(fd)
+ 	return nil
+ }
+ 
+ func (q *Queue) run() {
+-	if errno := C.Run(q.h, q.fd); errno != 0 {
++	if errno := C.Run(q.h, C.int(q.fd), C.int(q.wakeRead)); errno != 0 {
+ 		fmt.Fprintf(os.Stderr, "Terminating, unable to receive packet due to errno=%d", errno)
+ 	}
+ }
+ 
+-// Close ensures that nfqueue resources are freed and closed.
+-// C.stop_reading_packets() stops the reading packets loop, which causes
+-// go-subroutine run() to exit.
+-// After exit, listening queue is destroyed and closed.
+-// If for some reason any of the steps stucks while closing it, we'll exit by timeout.
+-func (q *Queue) Close() {
+-	C.stop_reading_packets()
+-	q.destroy()
+-	queueIndexLock.Lock()
+-	delete(queueIndex, q.idx)
+-	queueIndexLock.Unlock()
+-	close(q.packets)
++// StopAndJoin cancels callbacks and joins the sole reader without releasing
++// its kernel queue. Teardown must finish this phase before removing firewall
++// hooks, which flush the kernel entries that a held callback still owns.
++func (q *Queue) StopAndJoin() {
++	if q == nil {
++		return
++	}
++	q.lifetime.stopAndJoin(q.wakeReader)
++}
++func (q *Queue) wakeReader() {
++	if q.wakeWrite >= 0 {
++		_, _ = unix.Write(q.wakeWrite, []byte{1})
++	}
+ }
+ 
+-func (q *Queue) destroy() {
+-	// we'll try to exit cleanly, but sometimes nfqueue gets stuck
+-	time.AfterFunc(5*time.Second, func() {
+-		log.Warning("queue (%d) stuck, closing by timeout", q.idx)
+-		if q != nil {
+-			C.close(q.fd)
+-			q.closeNfq()
++// Close releases handles only after the reader and callbacks have joined.
++func (q *Queue) Close() {
++	if q == nil {
++		return
++	}
++	q.lifetime.close(q.wakeReader, func() {
++		// nfq_destroy_queue processes queued packet messages while waiting for
++		// its config ACK. Keep their index valid until that query completes.
++		q.destroy()
++		queueIndexLock.Lock()
++		delete(queueIndex, q.idx)
++		queueIndexLock.Unlock()
++		if q.wakeRead >= 0 {
++			_ = unix.Close(q.wakeRead)
++			q.wakeRead = -1
+ 		}
+-		os.Exit(0)
++		if q.wakeWrite >= 0 {
++			_ = unix.Close(q.wakeWrite)
++			q.wakeWrite = -1
++		}
++		close(q.packets)
+ 	})
++}
++
++func (q *Queue) destroy() {
+ 	if q.qh != nil {
+ 		if ret := C.nfq_destroy_queue(q.qh); ret != 0 {
+ 			log.Warning("Queue.destroy() idx=%d, nfq_destroy_queue() not closed: %d", q.idx, ret)
+ 		}
++		q.qh = nil
+ 	}
+ 
+ 	q.closeNfq()
+@@ -177,6 +202,7 @@ func (q *Queue) closeNfq() {
+ 		if ret := C.nfq_close(q.h); ret != 0 {
+ 			log.Warning("Queue.destroy() idx=%d, nfq_close() not closed: %d", q.idx, ret)
+ 		}
++		q.h = nil
+ 	}
+ }
+ 
+@@ -193,19 +219,34 @@ func go_callback(queueID C.int, data *C.uchar, length C.int, mark C.uint, idx ui
+ 	(*vc).data = nil
+ 	(*vc).mark_set = 0
+ 	(*vc).length = 0
++	(*vc).skip_verdict = 0
+ 
+ 	queueIndexLock.RLock()
+-	queueChannel, found := queueIndex[idx]
++	q, found := queueIndex[idx]
+ 	queueIndexLock.RUnlock()
+ 	if !found {
+ 		fmt.Fprintf(os.Stderr, "Unexpected queue idx %d\n", idx)
+ 		return
+ 	}
+ 
++	// Once the reader has joined, this is a queued notification dispatched by
++	// the config ACK query. Its kernel entry may already be flushed/unbound:
++	// consume the notification without another worker or verdict request.
++	select {
++	case <-q.lifetime.done:
++		(*vc).skip_verdict = 1
++		return
++	default:
++	}
++	if length <= 0 || data == nil {
++		return
++	}
+ 	xdata := C.GoBytes(unsafe.Pointer(data), length)
+ 
+ 	p := Packet{
+-		verdictChannel:  make(chan VerdictContainer),
++		verdictChannel:  make(chan VerdictContainer, 1),
++		verdictOnce:     new(sync.Once),
++		queueDone:       q.lifetime.stop,
+ 		Mark:            uint32(mark),
+ 		UID:             uid,
+ 		NetworkProtocol: xdata[0] >> 4, // first 4 bits is the version
+@@ -222,25 +263,40 @@ func go_callback(queueID C.int, data *C.uchar, length C.int, mark C.uint, idx ui
+ 
+ 	p.Packet = packet
+ 
++	v := q.deliverPacket(p)
++	(*vc).verdict = C.uint(v.Verdict)
++	if len(v.Packet) > 0 {
++		// C owns this copy until nf_callback sends the verdict and frees it.
++		(*vc).data = (*C.uchar)(C.CBytes(v.Packet))
++		(*vc).length = C.uint(len(v.Packet))
++	}
++	if v.Mark != 0 {
++		(*vc).mark_set = 1
++		(*vc).mark = C.uint(v.Mark)
++	}
++}
++
++func (q *Queue) deliverPacket(p Packet) VerdictContainer {
++	fallback := VerdictContainer{Verdict: NF_ACCEPT}
++	select {
++	case <-q.lifetime.stop:
++		return fallback
++	default:
++	}
++	timer := time.NewTimer(time.Millisecond)
++	defer timer.Stop()
+ 	select {
+-	case *queueChannel <- p:
++	case <-q.lifetime.stop:
++		return fallback
++	case q.packets <- p:
+ 		select {
++		case <-q.lifetime.stop:
++			return fallback
+ 		case v := <-p.verdictChannel:
+-			if v.Packet == nil {
+-				(*vc).verdict = C.uint(v.Verdict)
+-			} else {
+-				(*vc).verdict = C.uint(v.Verdict)
+-				(*vc).data = (*C.uchar)(unsafe.Pointer(&v.Packet[0]))
+-				(*vc).length = C.uint(len(v.Packet))
+-			}
+-
+-			if v.Mark != 0 {
+-				(*vc).mark_set = C.uint(1)
+-				(*vc).mark = C.uint(v.Mark)
+-			}
++			return v
+ 		}
+-
+-	case <-time.After(1 * time.Millisecond):
+-		fmt.Fprintf(os.Stderr, "Timed out while sending packet to queue channel %d\n", idx)
++	case <-timer.C:
++		fmt.Fprintf(os.Stderr, "Timed out while sending packet to queue channel %d\n", q.idx)
++		return fallback
+ 	}
+ }
+diff --git a/daemon/netfilter/queue.h b/daemon/netfilter/queue.h
+index 9c06aab7..021e6dc0 100644
+--- a/daemon/netfilter/queue.h
++++ b/daemon/netfilter/queue.h
+@@ -8,6 +8,8 @@
+ #include <math.h>
+ #include <unistd.h>
+ #include <dlfcn.h>
++#include <poll.h>
++#include <pthread.h>
+ #include <netinet/in.h>
+ #include <linux/types.h>
+ #include <linux/socket.h>
+@@ -18,17 +20,18 @@ typedef struct {
+     unsigned int verdict;
+     unsigned int mark;
+     unsigned int mark_set;
++    unsigned int skip_verdict;
+     unsigned int length;
+     unsigned char *data;
+ } verdictContainer;
+ 
+ static void *get_uid = NULL;
++static pthread_once_t uid_once = PTHREAD_ONCE_INIT;
+ 
+ extern void go_callback(int id, unsigned char* data, int len, unsigned int mark, uint32_t idx, verdictContainer *vc, uint32_t uid, uint32_t in_dev, uint32_t out_dev);
+ 
+-static uint8_t stop = 0;
+ 
+-static inline void configure_uid_if_available(struct nfq_q_handle *qh){
++static void load_uid_if_available(void){
+     void *hndl = dlopen("libnetfilter_queue.so.1", RTLD_LAZY);
+     if (!hndl) {
+         hndl = dlopen("libnetfilter_queue.so", RTLD_LAZY);
+@@ -42,6 +45,13 @@ static inline void configure_uid_if_available(struct nfq_q_handle *qh){
+         return;
+     }
+     printf("OK: libnetfiler_queue supports nfq_get_uid\n");
++}
++
++static inline void configure_uid_if_available(struct nfq_q_handle *qh){
++    // The first queue initializes this immutable function availability once;
++    // creating another queue must not race an existing reader's callback.
++    pthread_once(&uid_once, load_uid_if_available);
++    if (!get_uid) return;
+ #ifdef NFQA_CFG_F_UID_GID
+     if (qh != NULL && nfq_set_queue_flags(qh, NFQA_CFG_F_UID_GID, NFQA_CFG_F_UID_GID)){
+         printf("WARNING: UID not available on this kernel/libnetfilter_queue\n");
+@@ -50,9 +60,7 @@ static inline void configure_uid_if_available(struct nfq_q_handle *qh){
+ }
+ 
+ static int nf_callback(struct nfq_q_handle *qh, struct nfgenmsg *nfmsg, struct nfq_data *nfa, void *arg){
+-    if (stop) {
+-        return -1;
+-    }
++    (void)nfmsg;
+ 
+     uint32_t id = -1, idx = 0, mark = 0;
+     struct nfqnl_msg_packet_hdr *ph = NULL;
+@@ -67,6 +75,7 @@ static int nf_callback(struct nfq_q_handle *qh, struct nfgenmsg *nfmsg, struct n
+ 
+     mark = nfq_get_nfmark(nfa);
+     ph   = nfq_get_msg_packet_hdr(nfa);
++    if (ph == NULL) return -EINVAL;
+     id   = ntohl(ph->packet_id);
+     size = nfq_get_payload(nfa, &buffer);
+     idx  = (uint32_t)((uintptr_t)arg);
+@@ -78,10 +87,15 @@ static int nf_callback(struct nfq_q_handle *qh, struct nfgenmsg *nfmsg, struct n
+ 
+     go_callback(id, buffer, size, mark, idx, &vc, uid, in_dev, out_dev);
+ 
+-    if( vc.mark_set == 1 ) {
+-      return nfq_set_verdict2(qh, id, vc.verdict, vc.mark, vc.length, vc.data);
++    if (vc.skip_verdict) {
++        free(vc.data);
++        // This notification is retired, not a new verdict request. Continue
++        // the config query until its own successful/error ACK is processed.
++        return NFNL_CB_CONTINUE;
+     }
+-    return nfq_set_verdict2(qh, id, vc.verdict, vc.mark, vc.length, vc.data);
++    int ret = nfq_set_verdict2(qh, id, vc.verdict, vc.mark, vc.length, vc.data);
++    free(vc.data);
++    return ret;
+ }
+ 
+ static inline struct nfq_q_handle* CreateQueue(struct nfq_handle *h, uint16_t queue, uint32_t idx) {
+@@ -94,24 +108,31 @@ static inline struct nfq_q_handle* CreateQueue(struct nfq_handle *h, uint16_t qu
+     return qh;
+ }
+ 
+-static inline void stop_reading_packets() {
+-    stop = 1;
+-}
+-
+-static inline int Run(struct nfq_handle *h, int fd) {
++// Each queue has its own wake pipe. No other thread closes nfq handles while
++// this reader (and its synchronous callbacks) is using them.
++static inline int Run(struct nfq_handle *h, int fd, int wake_fd) {
+     char buf[4096] __attribute__ ((aligned));
+-    int rcvd, opt = 1;
+-
++    int opt = 1;
++    struct pollfd fds[2] = {{.fd = fd, .events = POLLIN}, {.fd = wake_fd, .events = POLLIN}};
+     setsockopt(fd, SOL_NETLINK, NETLINK_NO_ENOBUFS, &opt, sizeof(int));
+-
+-    while ((rcvd = recv(fd, buf, sizeof(buf), 0)) >= 0) {
+-        if (stop == 1) {
++    for (;;) {
++        int ready = poll(fds, 2, -1);
++        if (ready < 0) {
++            if (errno == EINTR) continue;
+             return errno;
+         }
+-        nfq_handle_packet(h, buf, rcvd);
++        if (fds[1].revents) return 0;
++        if (fds[0].revents & (POLLERR | POLLHUP | POLLNVAL)) return EIO;
++        if (fds[0].revents & POLLIN) {
++            int received = recv(fd, buf, sizeof(buf), MSG_DONTWAIT);
++            if (received < 0) {
++                if (errno == EINTR || errno == EAGAIN) continue;
++                return errno;
++            }
++            if (received == 0) return EIO;
++            if (nfq_handle_packet(h, buf, received) < 0) return EIO;
++        }
+     }
+-
+-    return errno;
+ }
+ 
+ #endif
+diff --git a/daemon/ui/client.go b/daemon/ui/client.go
+index b4d6845b..209aaf22 100644
+--- a/daemon/ui/client.go
++++ b/daemon/ui/client.go
+@@ -1,6 +1,7 @@
+ package ui
+ 
+ import (
++	"errors"
+ 	"fmt"
+ 	"net"
+ 	"sync"
+@@ -21,11 +22,15 @@ import (
+ 	"github.com/fsnotify/fsnotify"
+ 	"golang.org/x/net/context"
+ 	"google.golang.org/grpc"
++	"google.golang.org/grpc/codes"
+ 	"google.golang.org/grpc/connectivity"
+ 	"google.golang.org/grpc/keepalive"
++	"google.golang.org/grpc/status"
+ )
+ 
+ var (
++	// ErrClientShutdown distinguishes our Close from remote RPC cancellation.
++	ErrClientShutdown      = fmt.Errorf("UI client shutdown: %w", context.Canceled)
+ 	configFile             = "/etc/opensnitchd/default-config.json"
+ 	dummyOperator, _       = rule.NewOperator(rule.Simple, false, rule.OpTrue, "", make([]rule.Operator, 0))
+ 	clientDisconnectedRule = rule.Create("ui.client.disconnected", "", true, false, false, rule.Allow, rule.Once, dummyOperator)
+@@ -175,14 +180,14 @@ func (c *Client) Connected() bool {
+ 	return true
+ }
+ 
+-//GetIsAsking returns the isAsking flag
++// GetIsAsking returns the isAsking flag
+ func (c *Client) GetIsAsking() bool {
+ 	c.RLock()
+ 	defer c.RUnlock()
+ 	return c.isAsking
+ }
+ 
+-//SetIsAsking sets the isAsking flag
++// SetIsAsking sets the isAsking flag
+ func (c *Client) SetIsAsking(flag bool) {
+ 	c.Lock()
+ 	defer c.Unlock()
+@@ -358,24 +363,42 @@ func (c *Client) ping(ts time.Time) (err error) {
+ // Ask sends a request to the server, with the values of a connection to be
+ // allowed or denied.
+ func (c *Client) Ask(con *conman.Connection) *rule.Rule {
++	r, _ := c.AskWithError(con)
++	return r
++}
++
++// AskWithError preserves an expected local shutdown cancellation separately
++// from unavailable, malformed, and other failed UI replies.
++func (c *Client) AskWithError(con *conman.Connection) (*rule.Rule, error) {
++	if c.clientCtx.Err() == context.Canceled {
++		return nil, ErrClientShutdown
++	}
++	if c.clientCtx.Err() != nil {
++		return nil, c.clientCtx.Err()
++	}
+ 	if c.client == nil {
+-		return nil
++		return nil, fmt.Errorf("UI client unavailable")
+ 	}
+ 
+-	// FIXME: if timeout is fired, the rule is not added to the list in the GUI
+-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*120)
++	// The interactive deadline is daemon policy, not a shutdown timeout.
++	ctx, cancel := context.WithTimeout(c.clientCtx, time.Second*120)
+ 	defer cancel()
+ 	reply, err := c.client.AskRule(ctx, con.Serialize())
+ 	if err != nil {
++		if c.clientCtx.Err() == context.Canceled && (status.Code(err) == codes.Canceled || errors.Is(err, context.Canceled)) {
++			log.Debug("Rule request canceled during client shutdown")
++			return nil, ErrClientShutdown
++		}
+ 		log.Warning("Error while asking for rule: %s - %v", err, con)
+-		return nil
++		return nil, err
+ 	}
+ 
+ 	r, err := rule.Deserialize(reply)
+ 	if err != nil {
+-		return nil
++		log.Warning("Error while asking for rule: invalid reply: %s - %v", err, con)
++		return nil, err
+ 	}
+-	return r
++	return r, nil
+ }
+ 
+ // PostAlert queues a new message to be delivered to the server
+diff --git a/daemon/firewall/nftables/policy_journal.go b/daemon/firewall/nftables/policy_journal.go
+new file mode 100644
+index 00000000..c91bd683
+--- /dev/null
++++ b/daemon/firewall/nftables/policy_journal.go
+@@ -0,0 +1,127 @@
++package nftables
++
++import (
++	"reflect"
++	"sync"
++
++	"github.com/google/nftables"
++)
++
++type policyKey struct {
++	name, table string
++	family      nftables.TableFamily
++}
++
++func policyKeyFor(c *nftables.Chain) policyKey {
++	return policyKey{c.Name, c.Table.Name, c.Table.Family}
++}
++
++type policyChange struct{ before, applied *nftables.Chain }
++type policyJournal struct {
++	sync.Mutex
++	pending map[policyKey]policyChange
++	applied map[policyKey]policyChange
++}
++
++func copyChain(c *nftables.Chain) *nftables.Chain {
++	clone := *c
++	if c.Table != nil {
++		table := *c.Table
++		clone.Table = &table
++	}
++	if c.Policy != nil {
++		policy := *c.Policy
++		clone.Policy = &policy
++	}
++	if c.Hooknum != nil {
++		hook := *c.Hooknum
++		clone.Hooknum = &hook
++	}
++	if c.Priority != nil {
++		priority := *c.Priority
++		clone.Priority = &priority
++	}
++	return &clone
++}
++
++// Called under the journal lock, together with queueing the netlink update.
++func (j *policyJournal) queued(before, after *nftables.Chain) {
++	if before.Policy == nil || after.Policy == nil {
++		return
++	}
++	key := policyKeyFor(before)
++	previous, pending := j.pending[key]
++	change := policyChange{copyChain(before), copyChain(after)}
++	if pending {
++		// Even a no-op against the current kernel snapshot is an actual later
++		// netlink update: record the final queued value of this batch.
++		change.before = previous.before
++	} else if previous, owned := j.applied[key]; owned {
++		if reflect.DeepEqual(before, previous.applied) {
++			change.before = previous.before
++		} else {
++			// An administrator changed this definition/policy since our last update.
++			// Any new policy change now owns that new baseline, never the stale one.
++			delete(j.applied, key)
++		}
++	}
++	if !pending && *before.Policy == *after.Policy {
++		return
++	}
++	if j.pending == nil {
++		j.pending = make(map[policyKey]policyChange)
++	}
++	j.pending[key] = change
++}
++
++// A failed netlink batch never gives us ownership of the proposed policy.
++func (j *policyJournal) committed(success bool) {
++	if success {
++		if j.applied == nil {
++			j.applied = make(map[policyKey]policyChange)
++		}
++		for key, change := range j.pending {
++			j.applied[key] = change
++		}
++	}
++	j.pending = nil
++}
++
++// Caller holds the journal lock. The supplied operations are the real nftables
++// connection in production; tests can reject any write to a protected chain.
++func (j *policyJournal) restore(list func() ([]*nftables.Chain, error), add func(*nftables.Chain), flush func() error) error {
++	if len(j.applied) == 0 {
++		return nil
++	}
++	chains, err := list()
++	if err != nil {
++		return err
++	}
++	current := make(map[policyKey]*nftables.Chain)
++	for _, c := range chains {
++		current[policyKeyFor(c)] = c
++	}
++	queued := false
++	for key, change := range j.applied {
++		c := current[key]
++		// Missing chains and administrator policy/definition edits are not ours to
++		// recreate or overwrite. Compare a full value snapshot, not shared pointers.
++		if c == nil || !reflect.DeepEqual(c, change.applied) {
++			continue
++		}
++		restored := copyChain(c)
++		restored.Policy = copyChain(change.before).Policy
++		if reflect.DeepEqual(c.Policy, restored.Policy) {
++			continue
++		}
++		add(restored)
++		queued = true
++	}
++	if queued {
++		if err := flush(); err != nil {
++			return err
++		}
++	}
++	j.applied = nil
++	return nil
++}
+diff --git a/daemon/firewall/nftables/policy_journal_test.go b/daemon/firewall/nftables/policy_journal_test.go
+new file mode 100644
+index 00000000..a15b6b96
+--- /dev/null
++++ b/daemon/firewall/nftables/policy_journal_test.go
+@@ -0,0 +1,194 @@
++package nftables
++
++import (
++	"errors"
++	"github.com/google/nftables"
++	"testing"
++)
++
++func policyChain(table, name string, policy nftables.ChainPolicy) *nftables.Chain {
++	return &nftables.Chain{Name: name, Table: &nftables.Table{Name: table, Family: nftables.TableFamilyINet}, Type: nftables.ChainTypeFilter, Hooknum: nftables.ChainHookInput, Priority: nftables.ChainPriorityFilter, Policy: &policy}
++}
++
++func TestPolicyJournalDoesNotTouchUnmodifiedProtectedForeignChains(t *testing.T) {
++	j := &policyJournal{}
++	foreign := policyChain("firewalld", "filter_INPUT", nftables.ChainPolicyAccept)
++	j.queued(foreign, copyChain(foreign))
++	j.committed(true)
++	if err := j.restore(func() ([]*nftables.Chain, error) {
++		t.Fatal("unowned journal should not even list foreign chains")
++		return nil, nil
++	}, func(*nftables.Chain) { t.Fatal("wrote protected foreign chain") }, func() error { t.Fatal("empty commit"); return nil }); err != nil {
++		t.Fatal(err)
++	}
++}
++
++func TestPolicyJournalRestoresOnlyActuallyCommittedChange(t *testing.T) {
++	j := &policyJournal{}
++	original := policyChain("custom", "input", nftables.ChainPolicyAccept)
++	applied := copyChain(original)
++	*applied.Policy = nftables.ChainPolicyDrop
++	j.queued(original, applied)
++	j.committed(true)
++	*original.Policy = nftables.ChainPolicyDrop // prove saved snapshot owns policy value
++	foreign := policyChain("firewalld", "owner,persist", nftables.ChainPolicyAccept)
++	writes, commits := 0, 0
++	err := j.restore(func() ([]*nftables.Chain, error) { return []*nftables.Chain{foreign, applied}, nil }, func(c *nftables.Chain) {
++		writes++
++		if c.Table.Name != "custom" || *c.Policy != nftables.ChainPolicyAccept {
++			t.Fatal("wrong restoration")
++		}
++	}, func() error { commits++; return nil })
++	if err != nil || writes != 1 || commits != 1 {
++		t.Fatalf("err=%v writes=%d commits=%d", err, writes, commits)
++	}
++	if len(j.applied) != 0 {
++		t.Fatal("restoration not consumed")
++	}
++}
++
++func TestPolicyJournalPreservesAdministratorChangesAndDeletedChains(t *testing.T) {
++	for _, change := range []string{"policy", "definition", "deleted"} {
++		t.Run(change, func(t *testing.T) {
++			j := &policyJournal{}
++			before := policyChain("custom", "input", nftables.ChainPolicyAccept)
++			after := copyChain(before)
++			*after.Policy = nftables.ChainPolicyDrop
++			j.queued(before, after)
++			j.committed(true)
++			current := copyChain(after)
++			switch change {
++			case "policy":
++				*current.Policy = nftables.ChainPolicyAccept
++			case "definition":
++				current.Type = nftables.ChainTypeRoute
++			case "deleted":
++				current = nil
++			}
++			err := j.restore(func() ([]*nftables.Chain, error) {
++				if current == nil {
++					return nil, nil
++				}
++				return []*nftables.Chain{current}, nil
++			}, func(*nftables.Chain) { t.Fatal("overwrote administrator change") }, func() error { t.Fatal("empty flush"); return nil })
++			if err != nil {
++				t.Fatal(err)
++			}
++		})
++	}
++}
++
++func TestPolicyJournalFailedCommitDoesNotAcquireOwnership(t *testing.T) {
++	j := &policyJournal{}
++	before := policyChain("custom", "input", nftables.ChainPolicyAccept)
++	after := copyChain(before)
++	*after.Policy = nftables.ChainPolicyDrop
++	j.queued(before, after)
++	j.committed(false)
++	if len(j.applied) != 0 || len(j.pending) != 0 {
++		t.Fatal("failed batch became owned")
++	}
++}
++
++func TestPolicyJournalRestorationFailureRetainsOwnership(t *testing.T) {
++	j := &policyJournal{}
++	before := policyChain("custom", "input", nftables.ChainPolicyAccept)
++	after := copyChain(before)
++	*after.Policy = nftables.ChainPolicyDrop
++	j.queued(before, after)
++	j.committed(true)
++	failure := errors.New("permission denied")
++	if err := j.restore(func() ([]*nftables.Chain, error) { return nil, failure }, func(*nftables.Chain) { t.Fatal("write after read failure") }, func() error { t.Fatal("flush after read failure"); return nil }); err != failure || len(j.applied) != 1 {
++		t.Fatal("read failure lost restoration")
++	}
++	if err := j.restore(func() ([]*nftables.Chain, error) { return []*nftables.Chain{after}, nil }, func(*nftables.Chain) {}, func() error { return failure }); err != failure || len(j.applied) != 1 {
++		t.Fatal("flush failure lost restoration")
++	}
++}
++
++func TestPolicyJournalRepeatedChangesKeepFirstOriginal(t *testing.T) {
++	j := &policyJournal{}
++	before := policyChain("custom", "input", nftables.ChainPolicyAccept)
++	drop := copyChain(before)
++	*drop.Policy = nftables.ChainPolicyDrop
++	j.queued(before, drop)
++	j.committed(true)
++	j.queued(drop, before)
++	j.committed(true)
++	if len(j.applied) != 1 {
++		t.Fatal("missing journal")
++	}
++	writes := 0
++	if err := j.restore(func() ([]*nftables.Chain, error) { return []*nftables.Chain{before}, nil }, func(*nftables.Chain) { writes++ }, func() error { t.Fatal("already restored policy flushed"); return nil }); err != nil || writes != 0 {
++		t.Fatal("wrong repeated-change restoration")
++	}
++}
++
++func TestPolicyJournalTracksFinalSameChainUpdateInOneBatch(t *testing.T) {
++	j := &policyJournal{}
++	accept := policyChain("custom", "input", nftables.ChainPolicyAccept)
++	drop := copyChain(accept)
++	*drop.Policy = nftables.ChainPolicyDrop
++	j.queued(accept, drop)
++	j.committed(true)      // owns Accept baseline, kernel now Drop
++	j.queued(drop, accept) // pending proposal to Accept
++	j.queued(drop, drop)   // final update is a no-op against the kernel, but wins batch
++	j.committed(true)
++	writes := 0
++	if err := j.restore(func() ([]*nftables.Chain, error) { return []*nftables.Chain{drop}, nil }, func(c *nftables.Chain) {
++		writes++
++		if *c.Policy != nftables.ChainPolicyAccept {
++			t.Fatal("lost first baseline")
++		}
++	}, func() error { return nil }); err != nil || writes != 1 {
++		t.Fatal("final batch update not restored")
++	}
++}
++
++func TestPolicyJournalNoOpFinalUpdateCancelsPendingPolicyChange(t *testing.T) {
++	j := &policyJournal{}
++	accept := policyChain("custom", "input", nftables.ChainPolicyAccept)
++	drop := copyChain(accept)
++	*drop.Policy = nftables.ChainPolicyDrop
++	j.queued(accept, drop)
++	j.queued(accept, accept)
++	j.committed(true)
++	if err := j.restore(func() ([]*nftables.Chain, error) { return []*nftables.Chain{accept}, nil }, func(*nftables.Chain) { t.Fatal("unnecessary restore") }, func() error { t.Fatal("empty flush"); return nil }); err != nil {
++		t.Fatal(err)
++	}
++}
++
++func TestPolicyJournalTypedKeyCannotAliasHyphenatedNames(t *testing.T) {
++	j := &policyJournal{}
++	a := policyChain("c", "a-b", nftables.ChainPolicyAccept)
++	b := policyChain("b-c", "a", nftables.ChainPolicyAccept)
++	ad, bd := copyChain(a), copyChain(b)
++	*ad.Policy = nftables.ChainPolicyDrop
++	*bd.Policy = nftables.ChainPolicyDrop
++	j.queued(a, ad)
++	j.queued(b, bd)
++	j.committed(true)
++	if len(j.applied) != 2 {
++		t.Fatal("distinct identities collided")
++	}
++	writes := 0
++	if err := j.restore(func() ([]*nftables.Chain, error) { return []*nftables.Chain{ad, bd}, nil }, func(*nftables.Chain) { writes++ }, func() error { return nil }); err != nil || writes != 2 {
++		t.Fatal("missing independent restoration")
++	}
++}
++
++func TestPolicyJournalNewChangeAfterAdministratorEditUsesNewBaseline(t *testing.T) {
++	j := &policyJournal{}
++	drop := policyChain("custom", "input", nftables.ChainPolicyDrop)
++	accept := copyChain(drop)
++	*accept.Policy = nftables.ChainPolicyAccept
++	j.queued(drop, accept)
++	j.committed(true)
++	// Administrator changed back to Drop. A no-op Drop write cannot retain our
++	// stale original Drop→Accept ownership and later overwrite another edit.
++	j.queued(drop, drop)
++	j.committed(true)
++	if len(j.applied) != 0 {
++		t.Fatal("kept stale administrator ownership")
++	}
++}
+diff --git a/daemon/netfilter/queue_lifetime.go b/daemon/netfilter/queue_lifetime.go
+new file mode 100644
+index 00000000..6950091d
+--- /dev/null
++++ b/daemon/netfilter/queue_lifetime.go
+@@ -0,0 +1,27 @@
++package netfilter
++
++import "sync"
++
++// queueLifetime has one reader and one resource-release owner. Closing stop
++// unblocks callbacks; wake unblocks poll; done establishes the join before free.
++type queueLifetime struct {
++	stop     chan struct{}
++	done     chan struct{}
++	once     sync.Once
++	stopOnce sync.Once
++}
++
++func newQueueLifetime() *queueLifetime {
++	return &queueLifetime{stop: make(chan struct{}), done: make(chan struct{})}
++}
++func (l *queueLifetime) run(reader func()) {
++	go func() { defer close(l.done); reader() }()
++}
++func (l *queueLifetime) stopAndJoin(wake func()) {
++	l.stopOnce.Do(func() { close(l.stop); wake() })
++	<-l.done
++}
++func (l *queueLifetime) close(wake, release func()) {
++	l.stopAndJoin(wake)
++	l.once.Do(release)
++}
+diff --git a/daemon/netfilter/queue_shutdown_test.go b/daemon/netfilter/queue_shutdown_test.go
+new file mode 100644
+index 00000000..da803221
+--- /dev/null
++++ b/daemon/netfilter/queue_shutdown_test.go
+@@ -0,0 +1,297 @@
++package netfilter
++
++import (
++	"golang.org/x/sys/unix"
++	"os"
++	"os/exec"
++	"path/filepath"
++	"sync"
++	"sync/atomic"
++	"testing"
++	"time"
++)
++
++func waitShutdown(t *testing.T, done <-chan struct{}) {
++	t.Helper()
++	select {
++	case <-done:
++	case <-time.After(time.Second):
++		t.Fatal("shutdown blocked")
++	}
++}
++
++func TestQueueLifetimeJoinsBeforeSingleRelease(t *testing.T) {
++	l := newQueueLifetime()
++	entered, leave := make(chan struct{}), make(chan struct{})
++	var released, wakes int32
++	l.run(func() { close(entered); <-l.stop; <-leave })
++	<-entered
++	done := make(chan struct{})
++	go func() {
++		l.close(func() { atomic.AddInt32(&wakes, 1) }, func() { atomic.AddInt32(&released, 1) })
++		close(done)
++	}()
++	<-l.stop
++	if atomic.LoadInt32(&released) != 0 {
++		t.Fatal("freed before reader/callback join")
++	}
++	close(leave)
++	waitShutdown(t, done)
++	var callers sync.WaitGroup
++	for i := 0; i < 32; i++ {
++		callers.Add(1)
++		go func() {
++			defer callers.Done()
++			l.close(func() { atomic.AddInt32(&wakes, 1) }, func() { atomic.AddInt32(&released, 1) })
++		}()
++	}
++	callers.Wait()
++	if released != 1 || wakes != 1 {
++		t.Fatalf("release=%d wake=%d", released, wakes)
++	}
++}
++
++func TestQueueCloseWakesRealCPollIndependently(t *testing.T) {
++	makeQueue := func() (*Queue, []int) {
++		traffic, wake := []int{-1, -1}, []int{-1, -1}
++		if err := unix.Pipe2(traffic, unix.O_CLOEXEC); err != nil {
++			t.Fatal(err)
++		}
++		if err := unix.Pipe2(wake, unix.O_CLOEXEC|unix.O_NONBLOCK); err != nil {
++			t.Fatal(err)
++		}
++		q := &Queue{packets: make(chan Packet), lifetime: newQueueLifetime(), fd: 0, wakeRead: wake[0], wakeWrite: wake[1]}
++		q.fd = traffic[0]
++		q.lifetime.run(q.run)
++		return q, traffic
++	}
++	first, a := makeQueue()
++	second, b := makeQueue()
++	defer unix.Close(a[0])
++	defer unix.Close(a[1])
++	defer unix.Close(b[0])
++	defer unix.Close(b[1])
++	done := make(chan struct{})
++	go func() { first.Close(); close(done) }()
++	waitShutdown(t, done)
++	select {
++	case <-second.lifetime.done:
++		t.Fatal("closing one queue stopped another")
++	default:
++	}
++	done = make(chan struct{})
++	go func() { second.Close(); close(done) }()
++	waitShutdown(t, done)
++	if _, open := <-first.Packets(); open {
++		t.Fatal("packet channel not closed")
++	}
++	first.Close()
++	second.Close()
++}
++
++func TestQueuePartialInitializationCleanup(t *testing.T) {
++	wake := []int{-1, -1}
++	if err := unix.Pipe2(wake, unix.O_CLOEXEC|unix.O_NONBLOCK); err != nil {
++		t.Fatal(err)
++	}
++	q := &Queue{packets: make(chan Packet), lifetime: newQueueLifetime(), wakeRead: wake[0], wakeWrite: wake[1]}
++	close(q.lifetime.done) // constructor failure, no reader started
++	q.Close()
++	q.Close()
++	for _, fd := range wake {
++		if _, err := unix.Write(fd, []byte{1}); err != unix.EBADF {
++			t.Fatalf("partial fd not closed: %v", err)
++		}
++	}
++}
++
++func TestCallbackCancellationReleasesLateWorker(t *testing.T) {
++	q := &Queue{packets: make(chan Packet), lifetime: newQueueLifetime()}
++	p := Packet{verdictChannel: make(chan VerdictContainer, 1), verdictOnce: new(sync.Once), queueDone: q.lifetime.stop}
++	result := make(chan VerdictContainer, 1)
++	go func() { result <- q.deliverPacket(p) }()
++	var worker Packet
++	select {
++	case worker = <-q.packets:
++	case <-time.After(time.Second):
++		t.Fatal("callback did not reach worker")
++	}
++	close(q.lifetime.stop)
++	select {
++	case got := <-result:
++		if got.Verdict != NF_ACCEPT {
++			t.Fatal("shutdown changed fallback")
++		}
++	case <-time.After(time.Second):
++		t.Fatal("callback waited for verdict after cancellation")
++	}
++	done := make(chan struct{})
++	go func() { worker.SetVerdict(NF_DROP); worker.SetVerdict(NF_ACCEPT); close(done) }()
++	waitShutdown(t, done)
++}
++
++func TestVerdictDeliveryIsSingleShotAndCancellationSafe(t *testing.T) {
++	for i := 0; i < 100; i++ {
++		stop := make(chan struct{})
++		p := Packet{verdictChannel: make(chan VerdictContainer, 1), verdictOnce: new(sync.Once), queueDone: stop}
++		var workers sync.WaitGroup
++		for j := 0; j < 16; j++ {
++			workers.Add(1)
++			go func() { defer workers.Done(); p.SetVerdictAndMark(NF_DROP, 42) }()
++		}
++		workers.Wait()
++		if got := <-p.verdictChannel; got.Verdict != NF_DROP || got.Mark != 42 {
++			t.Fatal("wrong winning verdict")
++		}
++		select {
++		case <-p.verdictChannel:
++			t.Fatal("duplicate verdict")
++		default:
++		}
++		close(stop)
++		p.SetVerdictWithPacket(NF_ACCEPT, []byte{1})
++	}
++}
++
++func TestCallbackAlreadyCanceledDoesNotAdmitPacket(t *testing.T) {
++	q := &Queue{packets: make(chan Packet, 1), lifetime: newQueueLifetime()}
++	close(q.lifetime.stop)
++	if q.deliverPacket(Packet{}).Verdict != NF_ACCEPT {
++		t.Fatal("wrong fallback")
++	}
++	if len(q.packets) != 0 {
++		t.Fatal("packet admitted after stop")
++	}
++}
++
++func TestCallbackVerdictCancellationRaceNeverBlocksWorker(t *testing.T) {
++	for i := 0; i < 100; i++ {
++		q := &Queue{packets: make(chan Packet), lifetime: newQueueLifetime()}
++		p := Packet{verdictChannel: make(chan VerdictContainer, 1), verdictOnce: new(sync.Once), queueDone: q.lifetime.stop}
++		result := make(chan VerdictContainer, 1)
++		go func() { result <- q.deliverPacket(p) }()
++		var worker Packet
++		select {
++		case worker = <-q.packets:
++		case <-time.After(time.Second):
++			t.Fatal("packet not admitted")
++		}
++		gate, done := make(chan struct{}), make(chan struct{})
++		go func() { <-gate; worker.SetVerdict(NF_DROP); worker.SetVerdict(NF_ACCEPT); close(done) }()
++		close(gate)
++		close(q.lifetime.stop)
++		waitShutdown(t, done)
++		select {
++		case verdict := <-result:
++			if verdict.Verdict != NF_DROP && verdict.Verdict != NF_ACCEPT {
++				t.Fatal("invalid race result")
++			}
++		case <-time.After(time.Second):
++			t.Fatal("callback blocked in race")
++		}
++	}
++}
++
++func TestNewQueuePermissionFailureClosesPartialHandles(t *testing.T) {
++	header := unix.CapUserHeader{Version: unix.LINUX_CAPABILITY_VERSION_3}
++	capabilities := [2]unix.CapUserData{}
++	if err := unix.Capget(&header, &capabilities[0]); err != nil {
++		t.Fatal(err)
++	}
++	if capabilities[0].Effective&(1<<unix.CAP_NET_ADMIN) != 0 {
++		t.Skip("failure test must not have network administration privileges")
++	}
++	descriptors := func() int {
++		fds, err := os.ReadDir("/proc/self/fd")
++		if err != nil {
++			t.Fatal(err)
++		}
++		return len(fds)
++	}
++	// Warm Go runtime/netlink descriptors before measuring the rejected handles.
++	if q, err := NewQueue(65500); err == nil {
++		q.Close()
++		t.Fatal("unprivileged queue unexpectedly succeeded")
++	}
++	before := descriptors()
++	for i := 0; i < 16; i++ {
++		if q, err := NewQueue(65500); err == nil {
++			q.Close()
++			t.Fatal("unprivileged queue unexpectedly succeeded")
++		}
++	}
++	if after := descriptors(); after != before {
++		t.Fatalf("failed creation leaked descriptors: before%d after%d", before, after)
++	}
++}
++
++func TestStopAndJoinPreservesQueueOwnershipUntilClose(t *testing.T) {
++	traffic, wake := []int{-1, -1}, []int{-1, -1}
++	if err := unix.Pipe2(traffic, unix.O_CLOEXEC); err != nil {
++		t.Fatal(err)
++	}
++	defer unix.Close(traffic[0])
++	defer unix.Close(traffic[1])
++	if err := unix.Pipe2(wake, unix.O_CLOEXEC|unix.O_NONBLOCK); err != nil {
++		t.Fatal(err)
++	}
++	q := &Queue{idx: atomic.AddUint32(&nextQueueIndex, 1), packets: make(chan Packet), lifetime: newQueueLifetime(), fd: traffic[0], wakeRead: wake[0], wakeWrite: wake[1]}
++	queueIndexLock.Lock()
++	queueIndex[q.idx] = q
++	queueIndexLock.Unlock()
++	q.lifetime.run(q.run)
++	defer q.Close()
++	q.StopAndJoin()
++	select {
++	case <-q.lifetime.done:
++	default:
++		t.Fatal("StopAndJoin returned before reader finished")
++	}
++	queueIndexLock.RLock()
++	owned := queueIndex[q.idx] == q
++	queueIndexLock.RUnlock()
++	if !owned {
++		t.Fatal("queue index removed before config query")
++	}
++	for _, fd := range wake {
++		if _, err := unix.FcntlInt(uintptr(fd), unix.F_GETFD, 0); err != nil {
++			t.Fatal("owned wake descriptor freed before Close", err)
++		}
++	}
++	select {
++	case <-q.packets:
++		t.Fatal("packet channel closed before Close")
++	default:
++	}
++	var callers sync.WaitGroup
++	for i := 0; i < 32; i++ {
++		callers.Add(1)
++		go func() { defer callers.Done(); q.StopAndJoin(); q.Close() }()
++	}
++	callers.Wait()
++	queueIndexLock.RLock()
++	_, owned = queueIndex[q.idx]
++	queueIndexLock.RUnlock()
++	if owned {
++		t.Fatal("queue index retained after Close")
++	}
++	for _, fd := range wake {
++		if _, err := unix.FcntlInt(uintptr(fd), unix.F_GETFD, 0); err != unix.EBADF {
++			t.Fatalf("descriptor not closed once: %v", err)
++		}
++	}
++}
++
++func TestRetiredCConfigCallbackDoesNotSendVerdict(t *testing.T) {
++	binary := filepath.Join(t.TempDir(), "queue-callback-test")
++	args := []string{"-O2", "-Wall", "-Wextra", "-Werror", "-I.", "testdata/queue_callback.c", "-lnetfilter_queue", "-lnfnetlink", "-ldl", "-pthread", "-o", binary}
++	for _, name := range []string{"nfq_get_msg_packet_hdr", "nfq_get_payload", "nfq_get_indev", "nfq_get_outdev", "nfq_get_nfmark", "nfq_set_verdict2"} {
++		args = append(args, "-Wl,--wrap="+name)
++	}
++	if out, err := exec.Command("cc", args...).CombinedOutput(); err != nil {
++		t.Fatalf("Ccallback test build: %v\n%s", err, out)
++	}
++	if out, err := exec.Command(binary).CombinedOutput(); err != nil {
++		t.Fatalf("Ccallback test: %v\n%s", err, out)
++	}
++}
+diff --git a/daemon/netfilter/testdata/queue_callback.c b/daemon/netfilter/testdata/queue_callback.c
+new file mode 100644
+index 00000000..5e2b8217
+--- /dev/null
++++ b/daemon/netfilter/testdata/queue_callback.c
+@@ -0,0 +1,29 @@
++#include "queue.h"
++#include <assert.h>
++
++static int retired, verdicts;
++static unsigned char payload[]={0x45,0};
++static struct nfqnl_msg_packet_hdr packet={.packet_id=0};
++struct nfqnl_msg_packet_hdr *__wrap_nfq_get_msg_packet_hdr(struct nfq_data *data) { (void)data; return &packet; }
++int __wrap_nfq_get_payload(struct nfq_data *data,unsigned char **out) { (void)data; *out=payload; return sizeof(payload); }
++uint32_t __wrap_nfq_get_indev(struct nfq_data *data) { (void)data; return 0; }
++uint32_t __wrap_nfq_get_outdev(struct nfq_data *data) { (void)data; return 0; }
++uint32_t __wrap_nfq_get_nfmark(struct nfq_data *data) { (void)data; return 0; }
++int __wrap_nfq_set_verdict2(struct nfq_q_handle *qh,uint32_t id,uint32_t verdict,uint32_t mark,uint32_t len,const unsigned char *data) {
++    (void)qh;(void)id;(void)mark;(void)len;(void)data;
++    assert(verdict==NF_ACCEPT);verdicts++;return 24;
++}
++void go_callback(int id,unsigned char *data,int len,unsigned int mark,uint32_t idx,verdictContainer *vc,uint32_t uid,uint32_t in_dev,uint32_t out_dev) {
++    (void)id;(void)data;(void)len;(void)mark;(void)idx;(void)uid;(void)in_dev;(void)out_dev;
++    vc->verdict=NF_ACCEPT;vc->skip_verdict=retired;
++}
++int main(void) {
++    assert(nf_callback(NULL,NULL,NULL,(void *)(uintptr_t)1)==24);
++    assert(verdicts==1);
++    retired=1;
++    // nfnl_query must continue past retired queued packet notifications to ACK.
++    for(int i=0;i<32;i++)assert(nf_callback(NULL,NULL,NULL,(void *)(uintptr_t)1)==NFNL_CB_CONTINUE);
++    assert(verdicts==1);
++    puts("active Ccallback verdict preserved; retired config callbacks continue without verdict");
++    return 0;
++}
+diff --git a/daemon/queue_cleanup_order_test.go b/daemon/queue_cleanup_order_test.go
+new file mode 100644
+index 00000000..96b27a7d
+--- /dev/null
++++ b/daemon/queue_cleanup_order_test.go
+@@ -0,0 +1,61 @@
++package main
++
++import (
++	"testing"
++	"time"
++)
++
++type heldShutdownQueue struct {
++	entered      chan struct{}
++	callbackDone chan struct{}
++	joined       chan struct{}
++}
++
++func (q *heldShutdownQueue) StopAndJoin() {
++	close(q.entered)
++	<-q.callbackDone
++	close(q.joined)
++}
++func TestCleanupKeepsFirewallUntilBothCallbacksJoined(t *testing.T) {
++	repeat := &heldShutdownQueue{make(chan struct{}), make(chan struct{}), make(chan struct{})}
++	primary := &heldShutdownQueue{make(chan struct{}), make(chan struct{}), make(chan struct{})}
++	firewallRemoved := make(chan struct{})
++	done := make(chan struct{})
++	go func() { quiesceQueuesBeforeFirewall(repeat, primary, func() { close(firewallRemoved) }); close(done) }()
++	<-repeat.entered
++	select {
++	case <-firewallRemoved:
++		t.Fatal("hooks removed while repeat callback held")
++	default:
++	}
++	close(repeat.callbackDone)
++	<-primary.entered
++	select {
++	case <-repeat.joined:
++	default:
++		t.Fatal("primary quiesced before repeat joined")
++	}
++	select {
++	case <-firewallRemoved:
++		t.Fatal("hooks removed while primary callback held")
++	default:
++	}
++	close(primary.callbackDone)
++	select {
++	case <-done:
++	case <-time.After(time.Second):
++		t.Fatal("cleanup blocked")
++	}
++	select {
++	case <-primary.joined:
++	default:
++		t.Fatal("firewall removed before primary joined")
++	}
++	select {
++	case <-firewallRemoved:
++	default:
++		t.Fatal("firewall not removed after joins")
++	}
++}
++
++// No global services or kernel privileges are used.
+diff --git a/daemon/shutdown_signal_test.go b/daemon/shutdown_signal_test.go
+new file mode 100644
+index 00000000..2908c998
+--- /dev/null
++++ b/daemon/shutdown_signal_test.go
+@@ -0,0 +1,41 @@
++package main
++
++import (
++	"context"
++	"errors"
++	"os"
++	"os/exec"
++	"syscall"
++	"testing"
++	"time"
++)
++
++// Exercise the real signal handler and emergency timer in a separate process;
++// no privileged queues, firewall, or daemon services are started by this test.
++func TestShutdownWatchdogExitsNonzero(t *testing.T) {
++	if os.Getenv("OPENSNITCH_SHUTDOWN_WATCHDOG_CHILD") == "1" {
++		ctx, cancel = context.WithCancel(context.Background())
++		setupSignals()
++		sigChan <- syscall.SIGTERM
++		<-ctx.Done()
++		time.Sleep(12 * time.Second) // deliberately never complete cleanup
++		os.Exit(99)
++	}
++	executable, err := os.Executable()
++	if err != nil {
++		t.Fatal(err)
++	}
++	deadline, stop := context.WithTimeout(context.Background(), 14*time.Second)
++	defer stop()
++	command := exec.CommandContext(deadline, executable, "-test.run=^TestShutdownWatchdogExitsNonzero$")
++	command.Env = append(os.Environ(), "OPENSNITCH_SHUTDOWN_WATCHDOG_CHILD=1")
++	started := time.Now()
++	output, err := command.CombinedOutput()
++	var exited *exec.ExitError
++	if !errors.As(err, &exited) || exited.ExitCode() != 1 {
++		t.Fatalf("forced shutdown must fail, got %v; output%s", err, output)
++	}
++	if elapsed := time.Since(started); elapsed < 9*time.Second || elapsed > 13*time.Second {
++		t.Fatalf("unexpected watchdog bound%s", elapsed)
++	}
++}
+diff --git a/daemon/ui/client_shutdown_test.go b/daemon/ui/client_shutdown_test.go
+new file mode 100644
+index 00000000..225eb35d
+--- /dev/null
++++ b/daemon/ui/client_shutdown_test.go
+@@ -0,0 +1,216 @@
++package ui
++
++import (
++	"context"
++	"errors"
++	"fmt"
++	"github.com/evilsocket/opensnitch/daemon/conman"
++	"github.com/evilsocket/opensnitch/daemon/log"
++	"github.com/evilsocket/opensnitch/daemon/netstat"
++	"github.com/evilsocket/opensnitch/daemon/procmon"
++	"github.com/evilsocket/opensnitch/daemon/tasks"
++	"github.com/evilsocket/opensnitch/daemon/ui/protocol"
++	"google.golang.org/grpc"
++	"google.golang.org/grpc/codes"
++	"google.golang.org/grpc/status"
++	"google.golang.org/grpc/test/bufconn"
++	"net"
++	"os"
++	"strings"
++	"testing"
++	"time"
++)
++
++type shutdownUIServer struct {
++	protocol.UnimplementedUIServer
++	entered  chan time.Time
++	canceled chan struct{}
++}
++
++func (s *shutdownUIServer) AskRule(ctx context.Context, c *protocol.Connection) (*protocol.Rule, error) {
++	deadline, _ := ctx.Deadline()
++	s.entered <- deadline
++	<-ctx.Done()
++	close(s.canceled)
++	return nil, status.Error(codes.Canceled, "client shutdown")
++}
++func (s *shutdownUIServer) Ping(ctx context.Context, p *protocol.PingRequest) (*protocol.PingReply, error) {
++	return &protocol.PingReply{Id: p.Id}, nil
++}
++
++func TestClientCloseCancelsRealAskRPCWithOriginalInteractiveDeadline(t *testing.T) {
++	listener := bufconn.Listen(1024 * 1024)
++	defer listener.Close()
++	server := grpc.NewServer()
++	defer server.Stop()
++	service := &shutdownUIServer{entered: make(chan time.Time, 1), canceled: make(chan struct{})}
++	protocol.RegisterUIServer(server, service)
++	go server.Serve(listener)
++	dialctx, cancel := context.WithTimeout(context.Background(), time.Second)
++	defer cancel()
++	conn, err := grpc.DialContext(dialctx, "bufnet", grpc.WithContextDialer(func(context.Context, string) (net.Conn, error) { return listener.Dial() }), grpc.WithInsecure(), grpc.WithBlock())
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer conn.Close()
++	ctx, stop := context.WithCancel(context.Background())
++	defer stop()
++	client := &Client{client: protocol.NewUIClient(conn), clientCtx: ctx, clientCancel: stop}
++	previous := TaskMgr
++	TaskMgr = &tasks.TaskManager{}
++	defer func() { TaskMgr = previous }()
++	logs, createErr := os.Create(t.TempDir() + "/ask.log")
++	if createErr != nil {
++		t.Fatal(createErr)
++	}
++	defer logs.Close()
++	previousOutput := log.Output
++	log.Output = logs
++	defer func() { log.Output = previousOutput }()
++	done := make(chan struct{})
++	go func() {
++		defer close(done)
++		r, err := client.AskWithError(&conman.Connection{Entry: &netstat.Entry{}, Process: procmon.NewProcessEmpty(0, "shutdown-test")})
++		if r != nil || !errors.Is(err, ErrClientShutdown) {
++			t.Errorf("canceled Ask outcome: rule=%v error=%v", r, err)
++		}
++	}()
++	select {
++	case deadline := <-service.entered:
++		remaining := time.Until(deadline)
++		if remaining < 119*time.Second || remaining > 121*time.Second {
++			t.Fatalf("interactive deadline changed: %s", remaining)
++		}
++	case <-time.After(time.Second):
++		t.Fatal("real Ask never arrived")
++	}
++	client.Close()
++	select {
++	case <-done:
++	case <-time.After(time.Second):
++		t.Fatal("Close did not cancel Ask")
++	}
++	select {
++	case <-service.canceled:
++	case <-time.After(time.Second):
++		t.Fatal("server RPC context not canceled")
++	}
++	if strings.Contains(readAskLogs(t, logs), "Error while asking for rule") {
++		t.Fatalf("normal shutdown logged RPC error: %s", readAskLogs(t, logs))
++	}
++	// Retain transport and prove cancellation was per Ask, not whole-channel loss.
++	pingctx, pingcancel := context.WithTimeout(context.Background(), time.Second)
++	defer pingcancel()
++	if reply, err := protocol.NewUIClient(conn).Ping(pingctx, &protocol.PingRequest{Id: 42}); err != nil || reply.Id != 42 {
++		t.Fatalf("retained channel failed: %v", err)
++	}
++}
++
++// A remote cancellation while the local client remains open is not shutdown.
++// Unavailable and malformed replies still take the existing visible fallback.
++type shutdownReplyClient struct {
++	protocol.UIClient
++	err          error
++	reply        *protocol.Rule
++	beforeReturn func()
++}
++
++func (c shutdownReplyClient) AskRule(context.Context, *protocol.Connection, ...grpc.CallOption) (*protocol.Rule, error) {
++	if c.beforeReturn != nil {
++		c.beforeReturn()
++	}
++	return c.reply, c.err
++}
++func TestAskFailureIsShutdownOnlyWhenLocalContextCanceled(t *testing.T) {
++	for _, code := range []codes.Code{codes.Canceled, codes.Unavailable, codes.DeadlineExceeded, codes.Internal} {
++		t.Run(code.String(), func(t *testing.T) {
++			ctx, cancel := context.WithCancel(context.Background())
++			defer cancel()
++			c := &Client{clientCtx: ctx, client: shutdownReplyClient{err: status.Error(code, "genuine failure")}}
++			logs, createErr := os.Create(t.TempDir() + "/ask.log")
++			if createErr != nil {
++				t.Fatal(createErr)
++			}
++			defer logs.Close()
++			previous := log.Output
++			log.Output = logs
++			defer func() { log.Output = previous }()
++			r, err := c.AskWithError(&conman.Connection{Entry: &netstat.Entry{}, Process: procmon.NewProcessEmpty(0, "failure-test")})
++			if r != nil || errors.Is(err, ErrClientShutdown) || status.Code(err) != code {
++				t.Fatalf("genuine failure misclassified: %v %v", r, err)
++			}
++			if !strings.Contains(readAskLogs(t, logs), "Error while asking for rule") {
++				t.Fatal("genuine RPC error was hidden")
++			}
++		})
++	}
++}
++
++func readAskLogs(t *testing.T, file *os.File) string {
++	t.Helper()
++	data, err := os.ReadFile(file.Name())
++	if err != nil {
++		t.Fatal(err)
++	}
++	return string(data)
++}
++
++func TestPlainRemoteContextCancellationIsNotLocalShutdown(t *testing.T) {
++	ctx, cancel := context.WithCancel(context.Background())
++	defer cancel()
++	c := &Client{clientCtx: ctx, client: shutdownReplyClient{err: context.Canceled}}
++	logs, err := os.Create(t.TempDir() + "/plain-context.log")
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer logs.Close()
++	previous := log.Output
++	log.Output = logs
++	defer func() { log.Output = previous }()
++	_, err = c.AskWithError(&conman.Connection{Entry: &netstat.Entry{}, Process: procmon.NewProcessEmpty(0, "remote-context-test")})
++	if !errors.Is(err, context.Canceled) || errors.Is(err, ErrClientShutdown) {
++		t.Fatalf("remote context error misclassified: %v", err)
++	}
++	if !strings.Contains(readAskLogs(t, logs), "Error while asking for rule") {
++		t.Fatal("remote context error hidden")
++	}
++	cancel()
++	_, err = c.AskWithError(&conman.Connection{})
++	if !errors.Is(err, ErrClientShutdown) {
++		t.Fatalf("already closed client: %v", err)
++	}
++}
++
++func TestMalformedReplyAndNoncancelFailureSurviveConcurrentClose(t *testing.T) {
++	for _, closing := range []bool{false, true} {
++		for _, rpcError := range []bool{false, true} {
++			t.Run(fmt.Sprintf("closing=%v/rpcError=%v", closing, rpcError), func(t *testing.T) {
++				ctx, cancel := context.WithCancel(context.Background())
++				defer cancel()
++				rpc := shutdownReplyClient{reply: &protocol.Rule{Name: "malformed", Action: "allow", Duration: "once"}}
++				if rpcError {
++					rpc.err = status.Error(codes.Unavailable, "genuine service failure")
++				}
++				if closing {
++					rpc.beforeReturn = cancel
++				}
++				c := &Client{clientCtx: ctx, client: rpc}
++				logs, err := os.Create(t.TempDir() + "/malformed.log")
++				if err != nil {
++					t.Fatal(err)
++				}
++				defer logs.Close()
++				previous := log.Output
++				log.Output = logs
++				defer func() { log.Output = previous }()
++				r, err := c.AskWithError(&conman.Connection{Entry: &netstat.Entry{}, Process: procmon.NewProcessEmpty(0, "malformed-test")})
++				if r != nil || err == nil || errors.Is(err, ErrClientShutdown) {
++					t.Fatalf("noncancel failure hidden: rule=%v error=%v", r, err)
++				}
++				if !strings.Contains(readAskLogs(t, logs), "Error while asking for rule") {
++					t.Fatal("noncancel failure was not logged")
++				}
++			})
++		}
++	}
++}

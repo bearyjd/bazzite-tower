@@ -1,0 +1,321 @@
+#!/usr/bin/python3
+"""Explicit operator migration; no user enrollment or automatic legacy shutdown.
+Policy writers must hold /run/lock/bazzite-tower-snitchwatch-migration.lock for
+serialization. An uncoordinated writer is detected at atomic exchange; displaced
+bytes are retained for manual recovery and the daemon stays stopped. Linux rename
+cannot provide a strict conditional replacement against arbitrary root writers.
+"""
+import argparse
+import base64
+import ctypes
+import fcntl
+import hashlib
+import importlib.util
+import json
+import os
+import stat
+import subprocess
+import sys
+import tempfile
+import uuid
+from pathlib import Path
+
+sys.dont_write_bytecode = True
+spec = importlib.util.spec_from_file_location("snitchwatch_common", Path(__file__).with_name("bazzite-tower-snitchwatch-common.py"))
+common = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(common)
+STATE = "/var/lib/bazzite-tower/snitchwatch-migration"
+
+
+def encoded(data):
+    return base64.b64encode(data).decode("ascii")
+
+
+def metadata_at(ctx, path):
+    logical = "/"+str(path.relative_to(ctx.root))
+    info = ctx.stat(logical)
+    common.require(stat.S_ISREG(info.st_mode) and info.st_uid == 0 and not info.st_mode & 0o022, "live config must be a root-owned, non-writable regular file")
+    attributes = {name: encoded(os.getxattr(path, name)) for name in os.listxattr(path)}
+    return dict(uid=info.st_uid, gid=info.st_gid, mode=stat.S_IMODE(info.st_mode), xattrs=attributes)
+
+
+def config_metadata(ctx):
+    return metadata_at(ctx, ctx.path(common.CONFIG))
+
+
+def atomic_write(path, data, metadata=None):
+    fd, temporary = tempfile.mkstemp(prefix=".snitchwatch-", dir=path.parent)
+    try:
+        with os.fdopen(fd, "wb") as target:
+            target.write(data)
+            target.flush()
+            if metadata:
+                os.fchown(target.fileno(), metadata["uid"], metadata["gid"])
+                os.fchmod(target.fileno(), metadata["mode"])
+                for name, value in metadata["xattrs"].items():
+                    os.setxattr(temporary, name, base64.b64decode(value, validate=True))
+            else:
+                os.fchmod(target.fileno(), 0o600)
+            os.fsync(target.fileno())
+        os.replace(temporary, path)
+        directory = os.open(path.parent, os.O_DIRECTORY)
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+
+
+class PublicationDrift(common.Refusal):
+    def __init__(self, recovery_file):
+        self.recovery_file = str(recovery_file)
+        super().__init__("config changed at atomic publication; displaced config retained at "+str(recovery_file)+"; daemon remains stopped for manual recovery")
+
+
+def exchange_files(left, right):
+    # Fedora's Linux/glibc provides renameat2. Unsupported filesystems/platforms
+    # fail closed; do not fall back to an overwriting ordinary rename.
+    libc = ctypes.CDLL(None, use_errno=True)
+    operation = getattr(libc, "renameat2", None)
+    common.require(operation is not None, "atomic config exchange is unavailable")
+    operation.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint]
+    operation.restype = ctypes.c_int
+    if operation(-100, os.fsencode(left), -100, os.fsencode(right), 2) != 0:
+        code = ctypes.get_errno()
+        raise OSError(code, os.strerror(code))
+
+
+def sync_directory(path):
+    fd = os.open(path, os.O_DIRECTORY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def conditional_config_write(ctx, data, metadata, expected, recovery_dir):
+    path = ctx.path(common.CONFIG)
+    fd, temporary_name = tempfile.mkstemp(prefix=".snitchwatch-", dir=path.parent)
+    temporary = Path(temporary_name)
+    exchanged = False
+    try:
+        with os.fdopen(fd, "wb") as target:
+            target.write(data)
+            target.flush()
+            os.fchown(target.fileno(), metadata["uid"], metadata["gid"])
+            os.fchmod(target.fileno(), metadata["mode"])
+            for name, value in metadata["xattrs"].items():
+                os.setxattr(temporary, name, base64.b64decode(value, validate=True))
+            os.fsync(target.fileno())
+        exchange_files(temporary, path)
+        exchanged = True
+        sync_directory(path.parent)
+        # The displaced inode is the authoritative publication-boundary input.
+        # Never delete it unless both bytes and security metadata match baseline.
+        try:
+            matches = metadata_at(ctx, temporary) == metadata and temporary.read_bytes() == expected
+        except (OSError, common.Refusal):
+            matches = False
+        if not matches:
+            retained = recovery_dir/("displaced-config-"+uuid.uuid4().hex)
+            os.replace(temporary, retained)
+            sync_directory(recovery_dir)
+            sync_directory(path.parent)
+            raise PublicationDrift(retained)
+        # Detect an edit immediately after publication as well. Its live bytes
+        # remain untouched; recovery may not overwrite them with the baseline.
+        common.require(path.read_bytes() == data and config_metadata(ctx) == metadata, "config changed after publication; manual recovery required")
+        temporary.unlink()
+        sync_directory(path.parent)
+    finally:
+        if temporary.exists() or temporary.is_symlink():
+            if exchanged:
+                # On any unexpected validation/fsync failure preserve the old
+                # inode, including a symlink, rather than losing operator data.
+                retained = recovery_dir/("displaced-config-"+uuid.uuid4().hex)
+                os.replace(temporary, retained)
+                sync_directory(recovery_dir)
+                raise PublicationDrift(retained)
+            else:
+                temporary.unlink()
+
+
+
+class Migration:
+    def __init__(self, ctx):
+        self.ctx = ctx
+        self.directory = ctx.path(STATE)
+        self.current = self.directory/"current.json"
+
+    def check(self):
+        manifest = common.immutable(self.ctx)
+        common.account_ids(self.ctx)
+        props = common.unit_contract(self.ctx)
+        common.local_conflicts(self.ctx)
+        common.flatpak_profiles(self.ctx)
+        common.legacy_absent(self.ctx, int(props["MainPID"]))
+        config_metadata(self.ctx)
+        config = json.loads(self.ctx.path(common.CONFIG).read_text())
+        legacy = json.loads(self.ctx.path(common.LEGACY_REFERENCE).read_text())
+        system = json.loads(self.ctx.path(common.REFERENCE).read_text())
+        common.require(config in (legacy, system), "unexpected live config/policy/address drift; operator review required, nothing overwritten")
+        common.require(config["DefaultAction"] == "allow" and config["ProcMonitorMethod"] == "proc", "allow/proc policy required")
+        state = common.service_state(self.ctx)
+        common.require(all(state[unit]["enabled"] == "enabled" for unit in common.SOCKETS), "candidate image system sockets must already be enabled; helper does not change enablement")
+        return manifest, config, state
+
+    def journal(self, create=False):
+        for parent in reversed(self.directory.parents):
+            if parent == self.ctx.root or self.ctx.root not in parent.parents:
+                continue
+            if parent.exists() or parent.is_symlink():
+                logical = "/"+str(parent.relative_to(self.ctx.root))
+                info = self.ctx.stat(logical)
+                common.require(stat.S_ISDIR(info.st_mode) and info.st_uid == 0 and not info.st_mode & 0o022, "unsafe migration journal parent: "+logical)
+        if create:
+            self.directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+        info = self.ctx.stat(STATE)
+        common.require(stat.S_ISDIR(info.st_mode) and info.st_uid == 0 and stat.S_IMODE(info.st_mode) == 0o700, "migration journal directory must be root-owned mode0700")
+        if self.current.exists() or self.current.is_symlink():
+            info = self.ctx.stat(STATE+"/current.json")
+            common.require(stat.S_ISREG(info.st_mode) and info.st_uid == 0 and stat.S_IMODE(info.st_mode) == 0o600, "migration baseline must be a root-owned regular mode0600 file")
+
+    def save(self, record):
+        atomic_write(self.current, (json.dumps(record, indent=2, sort_keys=True)+"\n").encode())
+
+    def mutate(self, action, *units):
+        self.ctx.command(["systemctl", action, *units], timeout=20)
+
+    def restore(self, record):
+        # Stop new work before restoring the exact bytes, ownership, modes and label.
+        self.mutate("stop", "opensnitch.service", common.SERVICE, *common.SOCKETS)
+        expected = self.ctx.path(common.CONFIG).read_bytes()
+        common.require(hashlib.sha256(expected).hexdigest() in (record["configSha256"], record["appliedConfigSha256"]) and config_metadata(self.ctx) == record["configMetadata"], "config drift before restoration; manual recovery required")
+        conditional_config_write(self.ctx, base64.b64decode(record["configBytes"], validate=True), record["configMetadata"], expected, self.directory)
+        for unit in common.UNITS:
+            if record["services"][unit]["active"] == "active":
+                self.mutate("start", unit)
+        actual = common.service_state(self.ctx)
+        for unit, baseline in record["services"].items():
+            common.require(actual[unit]["enabled"] == baseline["enabled"] and (actual[unit]["active"] == "active") == (baseline["active"] == "active"), "baseline service state restoration failed: "+unit)
+
+    def apply(self):
+        manifest, config, states = self.check()
+        common.require(config["Server"]["Address"] == "127.0.0.1:50051", "already system-configured; use the read-only readiness helper")
+        original = self.ctx.path(common.CONFIG).read_bytes()
+        captured = json.loads(original)
+        metadata = config_metadata(self.ctx)
+        common.require(captured == config and self.ctx.path(common.CONFIG).read_bytes() == original and config_metadata(self.ctx) == metadata, "config changed between preflight and baseline capture; nothing overwritten")
+        # Replacement and rollback baseline come from the same verified snapshot.
+        target = json.loads(original)
+        target["Server"]["Address"] = "unix:opensnitchd.sock"
+        replacement = (json.dumps(target, indent=4)+"\n").encode()
+        self.journal(create=True)
+        if self.current.exists():
+            previous = json.loads(self.current.read_text())
+            common.require(previous.get("status") in ("rolled-back", "failed-restored"), "migration transaction already exists; inspect/rollback before retry")
+            archive = self.directory/(previous["id"]+".json")
+            common.require(not archive.exists(), "migration history already archived")
+            atomic_write(archive, self.current.read_bytes())
+        record = dict(schemaVersion=1, id=uuid.uuid4().hex, status="prepared", sourceCommit=manifest["source"]["commit"],
+                      manifestSha256=common.digest(self.ctx.path(common.MANIFEST)), configBytes=encoded(original),
+                      configMetadata=metadata, configSha256=hashlib.sha256(original).hexdigest(),
+                      appliedConfigSha256=hashlib.sha256(replacement).hexdigest(), services=states)
+        self.save(record)
+        try:
+            self.mutate("stop", "opensnitch.service")
+            # Repeat global absence after stopping the daemon, before any activation.
+            common.legacy_absent(self.ctx, int(common.unit_contract(self.ctx)["MainPID"]))
+            common.require(self.ctx.path(common.CONFIG).read_bytes() == original and config_metadata(self.ctx) == record["configMetadata"], "config changed during transaction; nothing overwritten")
+            conditional_config_write(self.ctx, replacement, record["configMetadata"], original, self.directory)
+            common.require(self.ctx.path(common.CONFIG).read_bytes() == replacement and config_metadata(self.ctx) == record["configMetadata"], "config changed before activation; manual recovery required")
+            self.mutate("start", *common.SOCKETS)
+            self.mutate("start", common.SERVICE)
+            self.mutate("start", "opensnitch.service")
+            common.runtime_readiness(self.ctx)
+            record["status"] = "applied"
+            self.save(record)
+        except BaseException as error:
+            # Refuse restoring a concurrent operator edit, including changes after write.
+            current_hash = common.digest(self.ctx.path(common.CONFIG))
+            try:
+                common.require(not isinstance(error, PublicationDrift), "publication displaced unexpected config; manual recovery required")
+                common.require(current_hash in (record["configSha256"], record["appliedConfigSha256"]) and config_metadata(self.ctx) == record["configMetadata"], "config drift during failed activation; manual recovery required")
+                self.restore(record)
+                record["status"] = "failed-restored"
+            except BaseException as recovery:
+                record["status"] = "recovery-required"
+                record["recoveryError"] = str(recovery)
+                if isinstance(recovery, PublicationDrift):
+                    record["recoveryFile"] = recovery.recovery_file
+            if isinstance(error, PublicationDrift):
+                record["recoveryFile"] = error.recovery_file
+            record["error"] = str(error)
+            self.save(record)
+            raise common.Refusal("migration failed; journal status="+record["status"]+": "+str(error)) from error
+        return record
+
+    def rollback(self):
+        self.journal()
+        common.require(self.current.is_file() and not self.current.is_symlink(), "no regular recorded migration baseline")
+        info = self.ctx.stat(STATE+"/current.json")
+        common.require(info.st_uid == 0 and stat.S_IMODE(info.st_mode) == 0o600, "migration baseline must be root-owned mode0600")
+        record = json.loads(self.current.read_text())
+        common.require(record.get("schemaVersion") == 1 and record.get("status") in ("applied", "prepared", "recovery-required"), "no active recorded transaction to roll back")
+        common.require(not record.get("recoveryFile"), "unexpected displaced operator config retained; manual recovery required before rollback")
+        original = base64.b64decode(record["configBytes"], validate=True)
+        common.require(hashlib.sha256(original).hexdigest() == record["configSha256"] and set(record["services"]) == set(common.UNITS), "corrupted migration baseline")
+        common.immutable(self.ctx)
+        common.require(common.digest(self.ctx.path(common.MANIFEST)) == record["manifestSha256"], "image changed after migration; baseline requires explicit recovery review")
+        common.require(common.digest(self.ctx.path(common.CONFIG)) in (record["appliedConfigSha256"], record["configSha256"]) and config_metadata(self.ctx) == record["configMetadata"], "live config changed after migration; rollback refuses to overwrite operator policy")
+        common.local_conflicts(self.ctx)
+        props = common.unit_contract(self.ctx)
+        common.legacy_absent(self.ctx, int(props["MainPID"]))
+        common.flatpak_profiles(self.ctx)
+        actual = common.service_state(self.ctx)
+        common.require(all(actual[unit]["enabled"] == saved["enabled"] for unit, saved in record["services"].items()), "unit enablement changed after migration; rollback requires explicit review")
+        try:
+            self.restore(record)
+        except BaseException as error:
+            record["status"] = "recovery-required"
+            record["recoveryError"] = str(error)
+            if isinstance(error, PublicationDrift):
+                record["recoveryFile"] = error.recovery_file
+            self.save(record)
+            raise
+        record["status"] = "rolled-back"
+        self.save(record)
+        return record
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("action", choices=("check", "apply", "rollback"))
+    args = parser.parse_args()
+    common.require(os.geteuid() == 0, "explicit root operator invocation required; helper never escalates itself")
+    ctx = common.Context()
+    migration = Migration(ctx)
+    if args.action == "check":
+        _, config, _ = migration.check()
+        print(json.dumps(dict(status="migration-check-pass", address=config["Server"]["Address"], policy="allow/proc", changes="none", guiEnrollment="explicit operator action only")))
+        return
+    lock_path = Path("/run/lock/bazzite-tower-snitchwatch-migration.lock")
+    fd = os.open(lock_path, os.O_CREAT|os.O_RDWR|os.O_NOFOLLOW, 0o600)
+    try:
+        lock_info = os.fstat(fd)
+        common.require(stat.S_ISREG(lock_info.st_mode) and lock_info.st_uid == 0 and stat.S_IMODE(lock_info.st_mode) == 0o600, "unsafe migration lock file")
+        fcntl.flock(fd, fcntl.LOCK_EX|fcntl.LOCK_NB)
+        record = migration.apply() if args.action == "apply" else migration.rollback()
+        print(json.dumps(dict(status=record["status"], transaction=record["id"], baseline=str(migration.current), defaultAction="allow", guiEnrollment="unchanged")))
+    finally:
+        os.close(fd)
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except (common.Refusal, OSError, ValueError, KeyError, subprocess.TimeoutExpired) as error:
+        print("REFUSED: "+str(error), file=sys.stderr)
+        sys.exit(1)

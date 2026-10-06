@@ -32,7 +32,7 @@ Snitchwatch config; disabled **Portmaster** VM spike behind
 `build_files/build.d/95-firewall.sh` pins and SHA-256 verifies the upstream
 OpenSnitch 1.8.0 RPM before extraction. It installs `libnetfilter_queue` and
 `nftables` explicitly; extraction neither resolves dependencies nor registers
-the daemon in the RPM database. Snitchwatch's user bridge/GUI remain external.
+the daemon in the RPM database. The default user bridge and both GUI profiles remain per-user installs. The opt-in system candidate adds a pinned native bridge and immutable source/toolchain/license provenance. It separately compiles the reviewed upstream OpenSnitch 1.8.0 plus a downstream queue-lifetime/NFT-ownership repair, retaining module locks, generated protocol hashes, Go/protoc/RPM inventory and license payloads. Default legacy builds retain the RPM binary and do not compile either native component.
 
 October 4 VM tests used Snitchwatch `1def745`. October 5 follow-up used base
 `2690109` plus reviewed uncommitted changes, source snapshot `851f3a`. Its clean
@@ -42,7 +42,10 @@ not image-consumed release pins; guest installation reported KDE 6.9 as
 end-of-life, so a supported SDK/runtime needs release validation. OpenSnitch's
 grpc-go 1.32.0 path still requires
 the relative Unix address workaround; default KDE startup, daemon shutdown
-and release/image integration remain gated. See [system bridge research](../research/snitchwatch-system-bridge.md).
+and release/image integration remain gated. A fresh candidate GUI release
+build at `5c2b44a` now passed on supported KDE 6.11 / Qt 6.11.2 with Rust
+1.98.1 and mold 2.42.0; actual default KDE behavior requires fresh VM proof.
+The GUI crate remains 0.1.0, separate from native bridge 0.1.1. See [system bridge research](../research/snitchwatch-system-bridge.md).
 
 ## KDE Plasma package-family pin
 

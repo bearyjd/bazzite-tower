@@ -84,6 +84,75 @@ hard "no eBPF module load failure" \
 # Interception needs NFQUEUE + NET_ADMIN, which a container does not have — the
 # daemon legitimately fails to come up here, so activeness is informational only.
 soft "opensnitch.service active" systemctl is-active --quiet opensnitch.service
+# System sockets, credentials and hardening need a running systemd but not
+# NFQUEUE. Actual interception and SELinux authorization remain VM gates.
+bridge_profile="$(< /usr/share/bazzite-tower/snitchwatch-bridge-profile)"
+case "${bridge_profile}" in
+legacy) ;;
+system)
+    say "== Snitchwatch system bridge runtime =="
+    hard "installed system provenance verifies" /usr/libexec/snitchwatch/verify-system-manifest.py --root /
+    hard "installed downstream daemon provenance verifies" /usr/libexec/snitchwatch/verify-system-daemon.py --root /
+    # A rootless boot container cannot start NFQUEUE. If the service is active,
+    # its executable must match the immutable manifest. VM acceptance separately
+    # requires daemon activeness and tests actual interception/shutdown.
+    hard "active daemon uses the verified installed executable" python3 -c '
+import hashlib, json, os, subprocess
+m=json.load(open("/usr/share/snitchwatch/system-daemon-manifest.json"))
+pid=int(subprocess.check_output(["systemctl","show","-p","MainPID","--value","opensnitch.service"],text=True,timeout=5).strip())
+if pid == 0:
+ print("No active daemon PID; NFQUEUE execution remains a VM gate")
+else:
+ executable="/proc/"+str(pid)+"/exe"
+ assert os.readlink(executable)==m["binary"]["path"]=="/usr/bin/opensnitchd"
+ assert hashlib.sha256(open(executable,"rb").read()).hexdigest()==m["binary"]["sha256"]
+ assert open("/proc/"+str(pid)+"/cmdline","rb").read()==b"/usr/bin/opensnitchd\0"
+ status=dict(line.split(":",1) for line in open("/proc/"+str(pid)+"/status") if ":" in line)
+ assert status.get("Uid","").split()==["0"]*4'
+    hard "system bridge user resolves" id snitchwatch
+    hard "system GUI group resolves" getent group snitchwatch-ui
+    hard "sysusers and tmpfiles setup completed" \
+        bash -c 'systemctl show -p Result --value systemd-sysusers.service | grep -qx success && systemctl show -p Result --value systemd-tmpfiles-setup.service | grep -qx success'
+    hard "no user implicitly enrolled in the GUI group" python3 -c '
+import grp, pwd
+g = grp.getgrnam("snitchwatch-ui")
+assert not g.gr_mem
+assert not any(p.pw_gid == g.gr_gid for p in pwd.getpwall())'
+    hard "gRPC socket active" systemctl is-active --quiet snitchwatch-system-bridge-grpc.socket
+    hard "GUI socket active" systemctl is-active --quiet snitchwatch-system-bridge-gui.socket
+    hard "both named sockets have expected DAC" python3 -c '
+import grp, os, stat
+gid = grp.getgrnam("snitchwatch-ui").gr_gid
+for path, mode, owner, group in [("/run/snitchwatch",0o711,0,0),("/run/snitchwatch/opensnitchd.sock",0o600,0,0),("/run/snitchwatch/bridge.sock",0o660,0,gid)]:
+ s=os.stat(path); assert stat.S_IMODE(s.st_mode)==mode and (s.st_uid,s.st_gid)==(owner,group), path
+ assert stat.S_ISDIR(s.st_mode) if path=="/run/snitchwatch" else stat.S_ISSOCK(s.st_mode)'
+    hard "bridge starts without NFQUEUE or a GUI" timeout 30 systemctl start snitchwatch-system-bridge.service
+    hard "bridge is active" systemctl is-active --quiet snitchwatch-system-bridge.service
+    hard "bridge publishes its token promptly" timeout 10 bash -c 'until [[ -f /run/snitchwatch-auth/token ]]; do sleep 0.1; done'
+    hard "bridge runtime token has named credentials and modes" python3 -c '
+import grp, os, pwd, stat
+uid=pwd.getpwnam("snitchwatch").pw_uid; gid=grp.getgrnam("snitchwatch-ui").gr_gid
+for path,mode in [("/run/snitchwatch-auth",0o2750),("/run/snitchwatch-auth/token",0o640)]:
+ s=os.stat(path); assert stat.S_IMODE(s.st_mode)==mode and (s.st_uid,s.st_gid)==(uid,gid), path'
+    hard "resolved bridge hardening and activation are intact" python3 -c '
+import subprocess
+p=dict(line.split("=",1) for line in subprocess.check_output(["systemctl","show","snitchwatch-system-bridge.service"],text=True).splitlines() if "=" in line)
+for key,value in {"User":"snitchwatch","Group":"snitchwatch","NoNewPrivileges":"yes","CapabilityBoundingSet":"","ProtectSystem":"strict","ProtectHome":"yes","PrivateTmp":"yes","PrivateDevices":"yes"}.items():
+ assert p.get(key)==value,(key,p.get(key))
+assert "SNITCHWATCH_SYSTEM_BRIDGE=1" in p.get("Environment","")
+assert "/usr/bin/snitchwatch-bridge-cli" in p.get("ExecStart","")
+assert set(p.get("TriggeredBy","").split())=={"snitchwatch-system-bridge-grpc.socket","snitchwatch-system-bridge-gui.socket"}'
+    hard "resolved daemon command, working directory and socket dependency" python3 -c '
+import re, subprocess
+p=dict(line.split("=",1) for line in subprocess.check_output(["systemctl","show","opensnitch.service"],text=True,timeout=5).splitlines() if "=" in line)
+assert p.get("WorkingDirectory")=="/run/snitchwatch"
+assert "snitchwatch-system-bridge-grpc.socket" in p.get("Requires","").split()
+assert "snitchwatch-system-bridge-grpc.socket" in p.get("After","").split()
+assert re.findall(r"(?:^|[ {])path=([^ ;}]+)",p.get("ExecStart",""))==["/usr/bin/opensnitchd"]
+assert re.findall(r"argv\[\]=([^;]+)",p.get("ExecStart",""))==["/usr/bin/opensnitchd "]'
+    ;;
+*) hard "known Snitchwatch bridge profile" false ;;
+esac
 # shellcheck disable=SC2016 # The inner shell, not this script, expands $().
 hard "portmaster is masked" \
     bash -c '[[ "$(systemctl is-enabled portmaster.service 2>/dev/null)" == "masked" ]]'

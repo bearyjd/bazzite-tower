@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Reject invalid combinations before any downloads or package transactions.
+bash "$(dirname "${BASH_SOURCE[0]}")/../firewall/snitchwatch-system-mode.sh"
+install -d -m 0755 /usr/share/bazzite-tower
+printf '%s\n' "${SNITCHWATCH_BRIDGE:-legacy}" > /usr/share/bazzite-tower/snitchwatch-bridge-profile
+
 # ── Application firewall ─────────────────────────────────────────────────────
 # The selector defaults to the proven OpenSnitch setup.  Portmaster is an
 # explicitly-built, disabled-by-default VM spike; its script must never make it
@@ -98,10 +103,26 @@ if [[ "${FIREWALL_DAEMON:-opensnitch}" == "opensnitch" ]]; then
     install -D -m 0644 /usr/share/bazzite-tower/opensnitchd-default-config.json \
         /etc/opensnitchd/default-config.json
 
+    if [[ "${SNITCHWATCH_BRIDGE:-legacy}" == system ]]; then
+        python3 /usr/libexec/snitchwatch/verify-system-manifest.py
+        # RPM payload extraction above must finish before replacing its daemon.
+        # The separate immutable Go receipt binds the candidate and installed
+        # executable to the reviewed downstream patch and reproducible build.
+        install -m 0755 /usr/share/snitchwatch/daemon/opensnitchd /usr/bin/opensnitchd
+        python3 /usr/libexec/snitchwatch/verify-system-daemon.py
+        install -m 0644 /usr/share/bazzite-tower/opensnitchd-system-bridge-config.json \
+            /etc/opensnitchd/default-config.json
+        # The overlay is copied before build.sh, but explicitly create these
+        # identities here too: 40-sysusers predates the firewall step and a later
+        # staging refactor must not make tmpfiles/socket startup race sysusers.
+        systemd-sysusers /usr/lib/sysusers.d/snitchwatch.conf
+        systemd-analyze verify snitchwatch-system-bridge.service \
+            snitchwatch-system-bridge-grpc.socket snitchwatch-system-bridge-gui.socket opensnitch.service
+        systemctl enable snitchwatch-system-bridge-grpc.socket snitchwatch-system-bridge-gui.socket
+    fi
     systemctl enable opensnitch.service
     printf '%s\n' opensnitch > /usr/share/bazzite-tower/firewall-daemon
     # Keep the unavailable alternative impossible to start without leaving a
     # rollback-persistent /etc mask behind.
     ln -sf /dev/null /usr/lib/systemd/system/portmaster.service
 fi
-

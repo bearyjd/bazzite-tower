@@ -47,6 +47,12 @@ jobs:
           - variant: latest-kernel
             build_args: "BASE_IMAGE=ghcr.io/ublue-os/bazzite-nvidia-open:stable"
             tag_base: verify-latest-kernel
+          # Opt-in system bridge: local PR candidate only, never a release leg.
+          - variant: snitchwatch-system
+            build_args: |
+              FIREWALL_DAEMON=opensnitch
+              SNITCHWATCH_BRIDGE=system
+            tag_base: verify-snitchwatch-system
 
     steps:
       - name: Prepare environment
@@ -70,6 +76,9 @@ jobs:
           tests/test-firstboot-no-docker.sh
           tests/test-tower-health.sh
           tests/test-opensnitch-readiness.sh
+          tests/test-snitchwatch-system.sh
+          python3 tests/test-snitchwatch-image-build.py
+          python3 tests/test-snitchwatch-image-build-daemon.py
           tests/test-container-templates.sh
           tests/test-docker-libvirt-forwarding.sh
           tests/test-docker-libvirt-forwarding-hooks.sh
@@ -199,6 +208,9 @@ jobs:
           tests/test-firstboot-no-docker.sh
           tests/test-tower-health.sh
           tests/test-opensnitch-readiness.sh
+          tests/test-snitchwatch-system.sh
+          python3 tests/test-snitchwatch-image-build.py
+          python3 tests/test-snitchwatch-image-build-daemon.py
           tests/test-container-templates.sh
           tests/test-docker-libvirt-forwarding.sh
           tests/test-docker-libvirt-forwarding-hooks.sh

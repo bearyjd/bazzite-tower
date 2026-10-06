@@ -155,22 +155,60 @@ Known-good: `18.1.18.2644` and above.
 
 ## OpenSnitch / Snitchwatch deployment status
 
-The image configures OpenSnitch for `127.0.0.1:50051`, `ProcMonitorMethod: proc`
-and `DefaultAction: allow`. The released Snitchwatch user bridge is installed
-separately. Run `ujust opensnitch-readiness` after installing it using the
-[README release-install contract](../README.md#opensnitch-application-firewall).
-That command checks the user service, binary hash and listener ownership; it
-cannot prove that a GUI answers decisions or validate the proposed system profile.
+The default image selects the legacy TCP user bridge at `127.0.0.1:50051`.
+`SNITCHWATCH_BRIDGE=system` is an explicit image build opt-in and requires
+`FIREWALL_DAEMON=opensnitch`. Both profiles retain `ProcMonitorMethod: proc`
+and `DefaultAction: allow`. The candidate supplies native system bridge version 0.1.1,
+its two socket units, named system accounts and immutable artifact provenance.
+The candidate also supplies the reviewed OpenSnitch 1.8.0 shutdown/NFT repair
+with its own `/usr/share/snitchwatch/system-daemon-manifest.json`;
+`/usr/libexec/snitchwatch/verify-system-daemon.py --root /` checks the actual
+installed `/usr/bin/opensnitchd` against the source, patch and license inventory;
+OpenSnitch uses a relative Unix socket from `/run/snitchwatch`.
 
-The system bridge passed October 4 disposable-VM GUI, authorization, token
-rotation and headless-startup tests with SELinux enforcing. October 5 reviewed
-changes passed a clean GUI source build, bounded request cleanup checks and
-conditional rendered-GUI Allow, disconnect and re-authentication. The default
-KDE GUI startup failure and OpenSnitch 1.8.0 shutdown
-finding remain open, followed by a published/pinned release, image installation and
-new readiness checks.
-See [evidence and rollout gates](research/snitchwatch-system-bridge.md) before
-planning a migration; these results do not establish deployment on this host.
+Build the local candidate with `just build-snitchwatch-system`. Use
+`just build-snitchwatch-system-vm` only for a disposable VM: it additionally
+enables SSH socket activation. Boot that image with
+`just run-vm-ssh localhost/bazzite-tower snitchwatch-system-vm <unused-port>`.
+This does not install a GUI or grant any user the GUI group. Install the reviewed
+system-profile Flatpak per user and inspect existing same-ID installations and
+overrides before selecting it.
+
+Run `ujust opensnitch-readiness` for the image's selected profile. The legacy
+profile retains the [release-install contract](../README.md#opensnitch-application-firewall).
+System readiness requires an explicit privileged read for cross-account
+process inspection: run `sudo ujust snitchwatch-system-readiness`.
+It verifies immutable provenance, service/socket ownership,
+permissions, token access, resolved service hardening and fail-open policy.
+It is read-only and cannot prove a GUI answers prompts. Migration and rollback
+must preserve the recorded legacy baseline and reject unexpected live `/etc`
+policy/address drift or user-unit/Flatpak overrides. Do not activate the system
+profile while a legacy bridge process or listener remains. Use
+`ujust snitchwatch-system-migrate check` to inspect the current deployment,
+`ujust snitchwatch-system-migrate apply` for the explicit transaction, and
+`ujust snitchwatch-system-migrate rollback` to restore its recorded baseline.
+The migration journal is protected at
+`/var/lib/bazzite-tower/snitchwatch-migration/current.json`; preserve it until
+rollback is no longer needed. These migration recipes request sudo explicitly.
+
+Policy writers must serialize edits with the migration helper using
+`/run/lock/bazzite-tower-snitchwatch-migration.lock`. Linux filesystem exchange
+cannot conditionally replace a file against arbitrary uncoordinated root
+writers. The helper verifies the displaced config's bytes and security metadata
+before activation. If they changed, it retains that inode under the root-owned
+mode-0700 migration journal directory, records `recovery-required`, and leaves
+OpenSnitch stopped. Automatic rollback refuses that retained unexpected config;
+review the journal and preserved file manually before restoring service.
+
+The [validation report](research/snitchwatch-system-bridge.md) preserves the
+October 4–5 artifact tests separately from fresh target-image validation.
+The clean GUI release build on supported KDE 6.11 / Qt 6.11.2 and native
+bridge 0.1.1 reproducibility passed at source `5c2b44a`. The GUI crate remains
+0.1.0 and ships a separate full source/license archive. Default KDE GUI
+authorization/decision behavior and actual repaired-daemon shutdown/NFT
+behavior remain fresh enforcing-SELinux VM gates; image build evidence alone
+does not establish them. Keep production deployment and deny-policy changes
+behind those checks.
 
 Keep `DefaultAction: allow` during rollout. For a local deny experiment that
 blocks networking, restore `allow` in `/etc/opensnitchd/default-config.json` from

@@ -127,7 +127,7 @@ index 08c08a2e..54e7a06a 100644
  	for _, fwCfg := range n.SysConfig.SystemRules {
  		for _, chain := range fwCfg.Chains {
 diff --git a/daemon/main.go b/daemon/main.go
-index f6247623..95c99376 100644
+index f6247623..82b1e67d 100644
 --- a/daemon/main.go
 +++ b/daemon/main.go
 @@ -25,6 +25,7 @@ package main
@@ -138,7 +138,23 @@ index f6247623..95c99376 100644
  	"flag"
  	"fmt"
  	"io/ioutil"
-@@ -261,8 +262,8 @@ func setupSignals() {
+@@ -35,6 +36,7 @@ import (
+ 	"runtime"
+ 	"runtime/pprof"
+ 	"runtime/trace"
++	"sync/atomic"
+ 	"syscall"
+ 	"time"
+ 
+@@ -98,6 +100,7 @@ var (
+ 	sigChan       = (chan os.Signal)(nil)
+ 	loggerMgr     *loggers.LoggerManager
+ 	resolvMonitor *systemd.ResolvedMonitor
++	readerFailed  atomic.Bool
+ )
+ 
+ func init() {
+@@ -261,8 +264,8 @@ func setupSignals() {
  		log.Important("Got signal: %v", sig)
  		cancel()
  		time.AfterFunc(10*time.Second, func() {
@@ -149,7 +165,7 @@ index f6247623..95c99376 100644
  		})
  	}()
  }
-@@ -368,11 +369,23 @@ func initSystemdResolvedMonitor() {
+@@ -368,11 +371,57 @@ func initSystemdResolvedMonitor() {
  	}()
  }
  
@@ -165,6 +181,40 @@ index f6247623..95c99376 100644
 +	stopFirewall()
 +}
 +
++type queueReader interface {
++	ReaderFailed() <-chan struct{}
++	ReaderErr() error
++}
++
++func watchQueueReaders(done <-chan struct{}, shutdown func(error), readers ...queueReader) {
++	for _, r := range readers {
++		go func(r queueReader) {
++			select {
++			case <-r.ReaderFailed():
++				select {
++				case <-done: // already stopping: that shutdown owns this reader
++				default:
++					shutdown(r.ReaderErr())
++				}
++			case <-done:
++			}
++		}(r)
++	}
++}
++
++// A reader that stops while its queue is still bound strands every later
++// packet: the kernel bypasses only a queue with no listener. Leave through the
++// normal cleanup so systemd restarts the daemon; the failing exit status
++// records why it stopped.
++func requestFailingShutdown(err error) {
++	log.Error("%v; shutting down so the service restarts", err)
++	readerFailed.Store(true)
++	select {
++	case sigChan <- syscall.SIGTERM:
++	default: // a signal is already pending; that shutdown proceeds
++	}
++}
++
  func doCleanup(queue, repeatQueue *netfilter.Queue) {
  	log.Info("Cleaning up ...")
 -	firewall.Stop()
@@ -175,7 +225,7 @@ index f6247623..95c99376 100644
  	if resolvMonitor != nil {
  		resolvMonitor.Close()
  	}
-@@ -489,9 +502,12 @@ func acceptOrDeny(packet *netfilter.Packet, con *conman.Connection) *rule.Rule {
+@@ -489,9 +538,12 @@ func acceptOrDeny(packet *netfilter.Packet, con *conman.Connection) *rule.Rule {
  			con.DstHost = dns.HostOr(con.DstIP, con.DstHost)
  		}
  
@@ -190,6 +240,23 @@ index f6247623..95c99376 100644
  			applyDefaultAction(packet, con)
  			return nil
  		}
+@@ -611,6 +663,7 @@ func main() {
+ 
+ 	setupWorkers()
+ 	setupQueues(qNum)
++	watchQueueReaders(ctx.Done(), requestFailingShutdown, queue, repeatQueue)
+ 
+ 	// queue and firewall rules should be ready by now
+ 
+@@ -679,5 +732,8 @@ func main() {
+ Exit:
+ 	close(wrkChan)
+ 	doCleanup(queue, repeatQueue)
++	if readerFailed.Load() {
++		os.Exit(1)
++	}
+ 	os.Exit(0)
+ }
 diff --git a/daemon/netfilter/packet.go b/daemon/netfilter/packet.go
 index 3795c2ca..6bae1a04 100644
 --- a/daemon/netfilter/packet.go
@@ -259,7 +326,7 @@ index 3795c2ca..6bae1a04 100644
  
  // IsIPv4 returns if the packet is IPv4
 diff --git a/daemon/netfilter/queue.go b/daemon/netfilter/queue.go
-index ac4cf7ae..227796b6 100644
+index ac4cf7ae..bc1a4bb2 100644
 --- a/daemon/netfilter/queue.go
 +++ b/daemon/netfilter/queue.go
 @@ -13,6 +13,7 @@ import (
@@ -353,7 +420,7 @@ index ac4cf7ae..227796b6 100644
  	queueIndexLock.Unlock()
  
  	return nil
-@@ -111,62 +121,77 @@ func (q *Queue) create(queueID uint16) (err error) {
+@@ -111,62 +121,97 @@ func (q *Queue) create(queueID uint16) (err error) {
  
  func (q *Queue) setup() (err error) {
  	var ret C.int
@@ -384,9 +451,17 @@ index ac4cf7ae..227796b6 100644
  
  func (q *Queue) run() {
 -	if errno := C.Run(q.h, q.fd); errno != 0 {
-+	if errno := C.Run(q.h, C.int(q.fd), C.int(q.wakeRead)); errno != 0 {
- 		fmt.Fprintf(os.Stderr, "Terminating, unable to receive packet due to errno=%d", errno)
+-		fmt.Fprintf(os.Stderr, "Terminating, unable to receive packet due to errno=%d", errno)
++	errno := C.Run(q.h, C.int(q.fd), C.int(q.wakeRead))
++	q.lifetime.readerExited(fmt.Errorf("netfilter queue reader %d stopped: %v (errno=%d)", q.idx, unix.Errno(errno), errno))
++}
++
++// ReaderFailed is closed if the reader stops while its queue is still bound.
++func (q *Queue) ReaderFailed() <-chan struct{} {
++	if q == nil {
++		return nil
  	}
++	return q.lifetime.failed
  }
  
 -// Close ensures that nfqueue resources are freed and closed.
@@ -401,6 +476,26 @@ index ac4cf7ae..227796b6 100644
 -	delete(queueIndex, q.idx)
 -	queueIndexLock.Unlock()
 -	close(q.packets)
++// ReaderErr describes why the reader stopped; nil while ReaderFailed is open.
++func (q *Queue) ReaderErr() error {
++	if q == nil {
++		return nil
++	}
++	select {
++	case <-q.lifetime.failed:
++		return q.lifetime.err
++	default:
++		return nil
++	}
+ }
+ 
+-func (q *Queue) destroy() {
+-	// we'll try to exit cleanly, but sometimes nfqueue gets stuck
+-	time.AfterFunc(5*time.Second, func() {
+-		log.Warning("queue (%d) stuck, closing by timeout", q.idx)
+-		if q != nil {
+-			C.close(q.fd)
+-			q.closeNfq()
 +// StopAndJoin cancels callbacks and joins the sole reader without releasing
 +// its kernel queue. Teardown must finish this phase before removing firewall
 +// hooks, which flush the kernel entries that a held callback still owns.
@@ -414,15 +509,8 @@ index ac4cf7ae..227796b6 100644
 +	if q.wakeWrite >= 0 {
 +		_, _ = unix.Write(q.wakeWrite, []byte{1})
 +	}
- }
- 
--func (q *Queue) destroy() {
--	// we'll try to exit cleanly, but sometimes nfqueue gets stuck
--	time.AfterFunc(5*time.Second, func() {
--		log.Warning("queue (%d) stuck, closing by timeout", q.idx)
--		if q != nil {
--			C.close(q.fd)
--			q.closeNfq()
++}
++
 +// Close releases handles only after the reader and callbacks have joined.
 +func (q *Queue) Close() {
 +	if q == nil {
@@ -457,7 +545,7 @@ index ac4cf7ae..227796b6 100644
  	}
  
  	q.closeNfq()
-@@ -177,6 +202,7 @@ func (q *Queue) closeNfq() {
+@@ -177,6 +222,7 @@ func (q *Queue) closeNfq() {
  		if ret := C.nfq_close(q.h); ret != 0 {
  			log.Warning("Queue.destroy() idx=%d, nfq_close() not closed: %d", q.idx, ret)
  		}
@@ -465,7 +553,7 @@ index ac4cf7ae..227796b6 100644
  	}
  }
  
-@@ -193,19 +219,34 @@ func go_callback(queueID C.int, data *C.uchar, length C.int, mark C.uint, idx ui
+@@ -193,19 +239,34 @@ func go_callback(queueID C.int, data *C.uchar, length C.int, mark C.uint, idx ui
  	(*vc).data = nil
  	(*vc).mark_set = 0
  	(*vc).length = 0
@@ -502,7 +590,7 @@ index ac4cf7ae..227796b6 100644
  		Mark:            uint32(mark),
  		UID:             uid,
  		NetworkProtocol: xdata[0] >> 4, // first 4 bits is the version
-@@ -222,25 +263,40 @@ func go_callback(queueID C.int, data *C.uchar, length C.int, mark C.uint, idx ui
+@@ -222,25 +283,40 @@ func go_callback(queueID C.int, data *C.uchar, length C.int, mark C.uint, idx ui
  
  	p.Packet = packet
  
@@ -521,15 +609,15 @@ index ac4cf7ae..227796b6 100644
 +
 +func (q *Queue) deliverPacket(p Packet) VerdictContainer {
 +	fallback := VerdictContainer{Verdict: NF_ACCEPT}
-+	select {
+ 	select {
+-	case *queueChannel <- p:
 +	case <-q.lifetime.stop:
 +		return fallback
 +	default:
 +	}
 +	timer := time.NewTimer(time.Millisecond)
 +	defer timer.Stop()
- 	select {
--	case *queueChannel <- p:
++	select {
 +	case <-q.lifetime.stop:
 +		return fallback
 +	case q.packets <- p:
@@ -560,7 +648,7 @@ index ac4cf7ae..227796b6 100644
  	}
  }
 diff --git a/daemon/netfilter/queue.h b/daemon/netfilter/queue.h
-index 9c06aab7..021e6dc0 100644
+index 9c06aab7..5547500e 100644
 --- a/daemon/netfilter/queue.h
 +++ b/daemon/netfilter/queue.h
 @@ -8,6 +8,8 @@
@@ -645,7 +733,7 @@ index 9c06aab7..021e6dc0 100644
  }
  
  static inline struct nfq_q_handle* CreateQueue(struct nfq_handle *h, uint16_t queue, uint32_t idx) {
-@@ -94,24 +108,31 @@ static inline struct nfq_q_handle* CreateQueue(struct nfq_handle *h, uint16_t qu
+@@ -94,24 +108,38 @@ static inline struct nfq_q_handle* CreateQueue(struct nfq_handle *h, uint16_t qu
      return qh;
  }
  
@@ -654,12 +742,16 @@ index 9c06aab7..021e6dc0 100644
 -}
 -
 -static inline int Run(struct nfq_handle *h, int fd) {
+-    char buf[4096] __attribute__ ((aligned));
+-    int rcvd, opt = 1;
+-
 +// Each queue has its own wake pipe. No other thread closes nfq handles while
 +// this reader (and its synchronous callbacks) is using them.
 +static inline int Run(struct nfq_handle *h, int fd, int wake_fd) {
-     char buf[4096] __attribute__ ((aligned));
--    int rcvd, opt = 1;
--
++    // A queued message is the 4096-byte copy range plus netlink/nfqueue
++    // headers. A smaller buffer truncates it, so that packet never gets a
++    // verdict and stays queued until the queue fills and the kernel drops.
++    char buf[8192] __attribute__ ((aligned));
 +    int opt = 1;
 +    struct pollfd fds[2] = {{.fd = fd, .events = POLLIN}, {.fd = wake_fd, .events = POLLIN}};
      setsockopt(fd, SOL_NETLINK, NETLINK_NO_ENOBUFS, &opt, sizeof(int));
@@ -682,7 +774,11 @@ index 9c06aab7..021e6dc0 100644
 +                return errno;
 +            }
 +            if (received == 0) return EIO;
-+            if (nfq_handle_packet(h, buf, received) < 0) return EIO;
++            // libnetfilter_queue returns -1 for every NLMSG_ERROR, including
++            // the reply to a verdict for an entry the kernel already flushed
++            // (another base chain was unregistered). Upstream ignores it: one
++            // stale message must not end the reader while the queue is bound.
++            nfq_handle_packet(h, buf, received);
 +        }
      }
 -
@@ -1119,28 +1215,42 @@ index 00000000..a15b6b96
 +}
 diff --git a/daemon/netfilter/queue_lifetime.go b/daemon/netfilter/queue_lifetime.go
 new file mode 100644
-index 00000000..6950091d
+index 00000000..898efa5a
 --- /dev/null
 +++ b/daemon/netfilter/queue_lifetime.go
-@@ -0,0 +1,27 @@
+@@ -0,0 +1,41 @@
 +package netfilter
 +
 +import "sync"
 +
 +// queueLifetime has one reader and one resource-release owner. Closing stop
 +// unblocks callbacks; wake unblocks poll; done establishes the join before free.
++// failed closes when the reader returns without a stop request: the queue is
++// still bound, so every later packet would wait for a verdict that never comes.
 +type queueLifetime struct {
 +	stop     chan struct{}
 +	done     chan struct{}
++	failed   chan struct{}
++	err      error // written once before failed closes
 +	once     sync.Once
 +	stopOnce sync.Once
 +}
 +
 +func newQueueLifetime() *queueLifetime {
-+	return &queueLifetime{stop: make(chan struct{}), done: make(chan struct{})}
++	return &queueLifetime{stop: make(chan struct{}), done: make(chan struct{}), failed: make(chan struct{})}
 +}
 +func (l *queueLifetime) run(reader func()) {
 +	go func() { defer close(l.done); reader() }()
++}
++
++// readerExited is called once, by the reader, as it returns.
++func (l *queueLifetime) readerExited(err error) {
++	select {
++	case <-l.stop:
++	default:
++		l.err = err
++		close(l.failed)
++	}
 +}
 +func (l *queueLifetime) stopAndJoin(wake func()) {
 +	l.stopOnce.Do(func() { close(l.stop); wake() })
@@ -1149,6 +1259,97 @@ index 00000000..6950091d
 +func (l *queueLifetime) close(wake, release func()) {
 +	l.stopAndJoin(wake)
 +	l.once.Do(release)
++}
+diff --git a/daemon/netfilter/queue_reader_failure_test.go b/daemon/netfilter/queue_reader_failure_test.go
+new file mode 100644
+index 00000000..8c66a252
+--- /dev/null
++++ b/daemon/netfilter/queue_reader_failure_test.go
+@@ -0,0 +1,85 @@
++package netfilter
++
++import (
++	"errors"
++	"os/exec"
++	"path/filepath"
++	"strings"
++	"testing"
++	"time"
++
++	"golang.org/x/sys/unix"
++)
++
++func TestRunContinuesPastFailedNetlinkMessage(t *testing.T) {
++	binary := filepath.Join(t.TempDir(), "queue-run-test")
++	args := []string{"-O2", "-Wall", "-Wextra", "-Werror", "-I.", "testdata/queue_run.c", "-lnetfilter_queue", "-lnfnetlink", "-ldl", "-pthread", "-Wl,--wrap=nfq_handle_packet", "-o", binary}
++	if out, err := exec.Command("cc", args...).CombinedOutput(); err != nil {
++		t.Fatalf("C Run test build: %v\n%s", err, out)
++	}
++	if out, err := exec.Command(binary).CombinedOutput(); err != nil {
++		t.Fatalf("C Run test: %v\n%s", err, out)
++	}
++}
++
++func TestReaderExitWithoutStopIsReported(t *testing.T) {
++	l := newQueueLifetime()
++	l.run(func() { l.readerExited(errors.New("errno=5")) })
++	select {
++	case <-l.failed:
++	case <-time.After(time.Second):
++		t.Fatal("reader exit without a stop request was not reported")
++	}
++	waitShutdown(t, l.done)
++	if l.err == nil || l.err.Error() != "errno=5" {
++		t.Fatalf("reader error not preserved: %v", l.err)
++	}
++}
++
++func TestRequestedStopIsNotReaderFailure(t *testing.T) {
++	l := newQueueLifetime()
++	release := make(chan struct{})
++	l.run(func() { <-release; l.readerExited(errors.New("woken")) })
++	l.stopAndJoin(func() { close(release) })
++	select {
++	case <-l.failed:
++		t.Fatal("requested stop reported as a reader failure")
++	default:
++	}
++}
++
++func TestQueueReaderDeathIsReported(t *testing.T) {
++	traffic, wake := []int{-1, -1}, []int{-1, -1}
++	if err := unix.Pipe2(traffic, unix.O_CLOEXEC); err != nil {
++		t.Fatal(err)
++	}
++	if err := unix.Pipe2(wake, unix.O_CLOEXEC|unix.O_NONBLOCK); err != nil {
++		t.Fatal(err)
++	}
++	defer unix.Close(traffic[0])
++	q := &Queue{packets: make(chan Packet), lifetime: newQueueLifetime(), fd: traffic[0], wakeRead: wake[0], wakeWrite: wake[1]}
++	q.lifetime.run(q.run)
++	// A hung-up descriptor makes the real C reader return EIO with no stop request.
++	unix.Close(traffic[1])
++	select {
++	case <-q.ReaderFailed():
++	case <-time.After(time.Second):
++		t.Fatal("real C reader death was not reported")
++	}
++	if err := q.ReaderErr(); err == nil || !strings.Contains(err.Error(), "errno=5") {
++		t.Fatalf("unexpected reader error: %v", err)
++	}
++	q.Close()
++}
++
++func TestNilQueueReaderNeverFails(t *testing.T) {
++	var q *Queue
++	select {
++	case <-q.ReaderFailed():
++		t.Fatal("absent queue reported a reader failure")
++	default:
++	}
++	if err := q.ReaderErr(); err != nil {
++		t.Fatalf("absent queue error: %v", err)
++	}
 +}
 diff --git a/daemon/netfilter/queue_shutdown_test.go b/daemon/netfilter/queue_shutdown_test.go
 new file mode 100644
@@ -1488,6 +1689,58 @@ index 00000000..5e2b8217
 +    puts("active Ccallback verdict preserved; retired config callbacks continue without verdict");
 +    return 0;
 +}
+diff --git a/daemon/netfilter/testdata/queue_run.c b/daemon/netfilter/testdata/queue_run.c
+new file mode 100644
+index 00000000..7621d2e5
+--- /dev/null
++++ b/daemon/netfilter/testdata/queue_run.c
+@@ -0,0 +1,46 @@
++#include "queue.h"
++#include <assert.h>
++#include <sys/socket.h>
++#include <time.h>
++
++// A queued packet message carries up to the 4096-byte copy range plus netlink
++// and nfqueue attribute headers, so it is larger than the copy range itself.
++#define QUEUED_MESSAGE_LEN (4096 + 400)
++
++static int handled, largest;
++int __wrap_nfq_handle_packet(struct nfq_handle *h,char *buf,int len) {
++    (void)h;(void)buf;
++    if (len > __atomic_load_n(&largest,__ATOMIC_SEQ_CST)) __atomic_store_n(&largest,len,__ATOMIC_SEQ_CST);
++    // libnetfilter_queue returns -1 for any NLMSG_ERROR, e.g. the kernel's
++    // reply to a verdict for an entry it already flushed when a base chain
++    // was unregistered. The first message models that stale error.
++    return __atomic_fetch_add(&handled,1,__ATOMIC_SEQ_CST)==0 ? -1 : 0;
++}
++void go_callback(int id,unsigned char *data,int len,unsigned int mark,uint32_t idx,verdictContainer *vc,uint32_t uid,uint32_t in_dev,uint32_t out_dev) {
++    (void)id;(void)data;(void)len;(void)mark;(void)idx;(void)vc;(void)uid;(void)in_dev;(void)out_dev;
++}
++static int traffic[2], wake[2], result=-1;
++static void *reader(void *arg) { (void)arg; result=Run(NULL,traffic[0],wake[0]); return NULL; }
++int main(void) {
++    static char large[QUEUED_MESSAGE_LEN];
++    pthread_t thread;
++    assert(socketpair(AF_UNIX,SOCK_DGRAM,0,traffic)==0);
++    assert(pipe(wake)==0);
++    assert(pthread_create(&thread,NULL,reader,NULL)==0);
++    assert(send(traffic[1],"stale",5,0)==5);
++    assert(send(traffic[1],"packet",6,0)==6);
++    assert(send(traffic[1],large,sizeof(large),0)==(ssize_t)sizeof(large));
++    // The reader must survive the failed message and handle the next ones.
++    for (int i=0;i<1000 && __atomic_load_n(&handled,__ATOMIC_SEQ_CST)<3;i++) {
++        struct timespec pause={0,5000000};
++        nanosleep(&pause,NULL);
++    }
++    assert(__atomic_load_n(&handled,__ATOMIC_SEQ_CST)==3);
++    // A truncated message cannot be parsed, so its packet would never get a verdict.
++    assert(__atomic_load_n(&largest,__ATOMIC_SEQ_CST)==QUEUED_MESSAGE_LEN);
++    assert(write(wake[1],"x",1)==1);
++    assert(pthread_join(thread,NULL)==0);
++    assert(result==0);
++    puts("reader kept the bound queue after a failed message and received a full-size queued message");
++    return 0;
++}
 diff --git a/daemon/queue_cleanup_order_test.go b/daemon/queue_cleanup_order_test.go
 new file mode 100644
 index 00000000..96b27a7d
@@ -1555,6 +1808,90 @@ index 00000000..96b27a7d
 +}
 +
 +// No global services or kernel privileges are used.
+diff --git a/daemon/reader_failure_test.go b/daemon/reader_failure_test.go
+new file mode 100644
+index 00000000..14f82e2a
+--- /dev/null
++++ b/daemon/reader_failure_test.go
+@@ -0,0 +1,78 @@
++package main
++
++import (
++	"errors"
++	"os"
++	"syscall"
++	"testing"
++	"time"
++)
++
++type failingReader struct {
++	failed chan struct{}
++	err    error
++}
++
++func (r *failingReader) ReaderFailed() <-chan struct{} { return r.failed }
++func (r *failingReader) ReaderErr() error              { return r.err }
++
++func TestReaderFailureRequestsShutdown(t *testing.T) {
++	healthy := &failingReader{failed: make(chan struct{})}
++	dead := &failingReader{failed: make(chan struct{}), err: errors.New("queue 1 reader stopped (errno=5)")}
++	got := make(chan error, 2)
++	watchQueueReaders(make(chan struct{}), func(err error) { got <- err }, healthy, dead)
++	close(dead.failed)
++	select {
++	case err := <-got:
++		if err != dead.err {
++			t.Fatalf("shutdown requested for the wrong reader: %v", err)
++		}
++	case <-time.After(time.Second):
++		t.Fatal("reader failure did not request shutdown")
++	}
++	select {
++	case err := <-got:
++		t.Fatalf("healthy reader requested shutdown: %v", err)
++	case <-time.After(50 * time.Millisecond):
++	}
++}
++
++func TestFailingShutdownUsesSignalPathAndFailsExit(t *testing.T) {
++	saved := sigChan
++	defer func() { sigChan = saved; readerFailed.Store(false) }()
++	sigChan = make(chan os.Signal, 1)
++	requestFailingShutdown(errors.New("queue 1 reader stopped"))
++	if sig := <-sigChan; sig != syscall.SIGTERM {
++		t.Fatalf("shutdown requested with %v", sig)
++	}
++	if !readerFailed.Load() {
++		t.Fatal("reader failure would exit 0")
++	}
++	// A pending signal already owns the shutdown; the request must not block.
++	sigChan <- syscall.SIGINT
++	done := make(chan struct{})
++	go func() { requestFailingShutdown(errors.New("repeat queue reader stopped")); close(done) }()
++	select {
++	case <-done:
++	case <-time.After(time.Second):
++		t.Fatal("failing shutdown blocked behind a pending signal")
++	}
++	if sig := <-sigChan; sig != syscall.SIGINT {
++		t.Fatalf("pending signal replaced by %v", sig)
++	}
++}
++
++func TestReaderWatchStopsWithDaemon(t *testing.T) {
++	reader := &failingReader{failed: make(chan struct{})}
++	done := make(chan struct{})
++	got := make(chan error, 1)
++	watchQueueReaders(done, func(err error) { got <- err }, reader)
++	// Both may be ready when the watcher selects; shutdown must still win.
++	close(done)
++	close(reader.failed)
++	select {
++	case err := <-got:
++		t.Fatalf("reader exit during daemon shutdown requested another shutdown: %v", err)
++	case <-time.After(50 * time.Millisecond):
++	}
++}
 diff --git a/daemon/shutdown_signal_test.go b/daemon/shutdown_signal_test.go
 new file mode 100644
 index 00000000..2908c998

@@ -11,7 +11,8 @@ prior worked example of an agent-driven hardware-bug investigation
 
 Ranked by **Human-Attention-Saved per Unit of Effort** (highest first).
 
-**Status (2026-08-07): 6 of 6 resolved. Nothing open.**
+**Status (2026-08-07): 6 of 6 resolved. Nothing open.** (2026-10-07: item 7
+added and open.)
 
 Every item in this audit is closed. Two things are worth carrying forward more
 than the individual fixes:
@@ -562,6 +563,27 @@ structural entanglement (item 4).
 `.git-blame-ignore-revs` (new).
 
 </details>
+
+---
+
+## 7. Run the downstream OpenSnitch patch's tests somewhere automatic — OPEN (2026-10-07)
+
+`build_files/firewall/snitchwatch-system-daemon-shutdown.patch` carries Go and
+C tests (`queue_shutdown_test.go`, `queue_reader_failure_test.go`,
+`testdata/queue_run.c`, `reader_failure_test.go`, …). The daemon factory and
+CI apply and build the patch but never run `go test`. The October 6 reader-exit
+stall shipped in a reviewed patch and was caught only by the VM's cold-boot
+gate; the tests that would have caught it were written afterwards and run only
+by hand in a cached offline builder.
+
+| Acceptance criterion | Status |
+|---|---|
+| A `just` recipe applies the pinned patch to upstream `b404c4c` and runs the targeted `-race` suites plus `go test ./netfilter ./firewall/nftables` offline | Open |
+| CI runs it on PRs that touch `build_files/firewall/snitchwatch-system-daemon-*` | Open |
+| The known upstream `ui` race failures (`TestClientReloadingConfig`, `TestClientInvalidProcMon`) are excluded explicitly, not silently | Open |
+
+See `docs/research/snitchwatch-system-bridge.md` (Target-image validation) for
+the failure and the other open daemon items.
 
 ---
 

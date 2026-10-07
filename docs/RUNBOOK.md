@@ -204,11 +204,31 @@ The [validation report](research/snitchwatch-system-bridge.md) preserves the
 October 4–5 artifact tests separately from fresh target-image validation.
 The clean GUI release build on supported KDE 6.11 / Qt 6.11.2 and native
 bridge 0.1.1 reproducibility passed at source `5c2b44a`. The GUI crate remains
-0.1.0 and ships a separate full source/license archive. Default KDE GUI
-authorization/decision behavior and actual repaired-daemon shutdown/NFT
-behavior remain fresh enforcing-SELinux VM gates; image build evidence alone
-does not establish them. Keep production deployment and deny-policy changes
-behind those checks.
+0.1.0 and ships a separate full source/license archive. On October 6–7 a fresh
+enforcing-SELinux VM of the candidate built from `d96a7a5` passed 15
+consecutive cold boots with no stalled queue, controlled daemon stops, the
+migration/refusal checks and default KDE GUI decisions (render, inline Allow,
+bridge-restart reconnect, last-GUI fallback, unenrolled-user refusal). The same
+gates caught and fixed a daemon queue-reader stall in the earlier `78be87b`
+candidate. Keep production deployment and deny-policy changes behind the
+remaining rollout gates in that report.
+
+Operating the system candidate:
+
+- OpenSnitch writes its main log to `/var/log/opensnitchd.log`; the journal
+  carries only its raw stderr lines.
+- If a netfilter queue reader stops while its queue is still bound, the daemon
+  logs `netfilter queue reader N stopped: …`, leaves through its normal
+  cleanup and exits 1. systemd restarts it after `RestartSec=30`; until then
+  `QueueBypass` lets traffic through unfiltered, consistent with
+  `DefaultAction: allow`. This path is unit-tested; it was not triggered on
+  the VM.
+- A daemon stop during reboot can log
+  `Queue.destroy() idx=1, nfq_destroy_queue() not closed: -1`. It is a known,
+  unresolved teardown warning and remains an open rollout item.
+- While one prompt is pending, opensnitchd applies the default action to other
+  new connections without asking; the GUI banner says so. Answer pending
+  prompts promptly.
 
 Keep `DefaultAction: allow` during rollout. For a local deny experiment that
 blocks networking, restore `allow` in `/etc/opensnitchd/default-config.json` from

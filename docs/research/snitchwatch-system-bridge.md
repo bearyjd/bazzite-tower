@@ -255,7 +255,7 @@ October 6 build evidence at the exact reconciled source:
 
 - Native bridge artifact SHA256: `5b1c89864985b862c2782dd7ac340aeefe7ba29f71de7bed3ede1b0e8039c2d1`; actual 0.1.1 binary SHA256: `cce18095907a0364abcae6f0be7c3e3b3554c982827ac2b3e9a11fe48e016370`. Artifact, checksum sidecar, licenses, source/tree/gitlink and 20 immutable overlay files passed independent inspection.
 - Fresh system-profile GUI bundle SHA256: `ab7d6ee8aefc195178a7914d343780a3a01b5c1b7512ba363a5ecf025d696ae0`. Its clean release build used supported KDE 6.11 / Qt 6.11.2, Rust 1.98.1, mold 2.42.0, declared protoc 29.3 and 657 lockfile-verified crate inputs. The GUI crate version remains 0.1.0. A separate archive supplies the full committed workspace, exact upstream vendor source, complete crate source archives and license texts.
-- The reviewed downstream OpenSnitch repair applies to upstream 1.8.0 at `b404c4c`. The current 16-file patch SHA256 is `6e48804a65df87cb794f98dd50590464114267b46ecdf9a05669606b82be5d8e`; its two isolated build outputs are byte-identical at `3ea27d30c837c7c3c5f9ffee4eb3c16943dc31c8832b62a2f70da8e31311cd6f`. It cancels UI requests, joins both queue readers and callbacks while firewall hooks remain valid, then removes the hooks and releases the queues. Independent targeted race tests, the actual C callback fixture, full normal package tests, NFT ownership cases and a real watchdog child exiting nonzero passed. The final image factory still needs its own clean compile, reproduction and installed artifact evidence; its resulting binary hash is not assumed equal to the isolated diagnostic build.
+- The reviewed downstream OpenSnitch repair applies to upstream 1.8.0 at `b404c4c`. It cancels UI requests, joins both queue readers and callbacks while firewall hooks remain valid, then removes the hooks and releases the queues. Independent targeted race tests, the actual C callback fixture, full normal package tests, NFT ownership cases and a real watchdog child exiting nonzero passed. The October 6 16-file revision (`6e48804a…`, binary `3ea27d30…`) silently lost a queue reader on some boots; see [Target-image validation](#target-image-validation-october-67). The current 19-file patch (commit `d96a7a5`) SHA256 is `8d68ad9e6175d17f55c0884208089fcc50d44b3e098de954d12e6fa62aa6173c`; the image factory's two builds and an independent local pair are byte-identical at `2cf22351d645d7843b487d31dfb431d38b449aa0d4eadb13e518932d7dee4d02`.
 - The earlier patch `4b53c88c390a0e85cb17067532bf6232034bd5f3f2e0843e5dc1a988dcc88043` and binary `2e6daa72db1e14b7ef3b82b7a04ef1ca4acd3f441c934ec4b9c4ae0c7310899b` are retained historical diagnostics. Fast stops still logged `nfq_destroy_queue() not closed: -1` and canceled-Ask invalid-rule errors. Bounded, nonconsuming instrumentation identified a stale negative ACK for a VERDICT preceding the successful UNBIND configuration ACK. Those instrumented binaries are excluded from shipping and do not prove the new uninstrumented repair passes on a VM.
 - A broader full-package race run failed in UI configuration watcher/global state paths. The same failure reproduced on unchanged upstream `b404c4c` with identical tools and generated protocol inputs; existing tests create successive clients without watcher cleanup. The scoped shutdown regressions passed independently. This does not establish production configuration reload paths are race-free; both failure logs and the unchanged source archive are retained.
 
@@ -265,10 +265,103 @@ Source/artifact approval and causal observations are retained under
 `INDEPENDENT-UPSTREAM-RACE-BASELINE-RETENTION.json`. The image factory and
 installed daemon inventory have a separate manifest from the Rust bridge.
 
-Candidate image smoke/boot, cold named-account/tmpfiles creation, default KDE
-GUI decisions and actual NFQUEUE/shutdown/NFT behavior on the exact target
-image with enforcing SELinux remain pending evidence. The October 4–5
-measurements above remain historical artifact results.
+The October 4–5 measurements above remain historical artifact results.
+
+## Target-image validation (October 6–7)
+
+Both candidates were built as clean, native rootful factory images (two Rust and
+two Go builds each, reproducible) and booted from fresh disposable qcow2 disks
+under enforcing SELinux. Local images `38851820`/`0793d4a4` were rejected
+earlier (the October 6 session recorded malformed RPM SQLite databases); neither
+rebuild shows that defect (SQLite integrity, `--verifydb` and the 2998-package
+inventory agree).
+
+**`78be87b` (image `5b6b9a7e`) failed.** First boot, the protocol probes and the
+warm no-GUI fallback passed, but the cold multi-user gate did not: in 2 of 7
+boot-time daemon starts opensnitchd stopped verdicting. The kernel kept queueing
+(`/proc/net/netfilter/nfnetlink_queue` backlog 77→107→113 in one stalled boot,
+65→68→71 in the other) while the daemon stayed bound, so `QueueBypass` never
+applied and new outbound connections hung. Goroutine dumps showed one of the
+two `netfilter._Cfunc_Run` readers missing and every worker idle, and the
+reader had exited with `EIO`. The patch's C `Run()` returned `EIO` whenever
+`nfq_handle_packet()` failed, which upstream ignores. The most likely trigger
+is an `NLMSG_ERROR` reply to a verdict for an entry the kernel flushed when
+another base chain was unregistered at boot (libnetfilter_queue reports any
+`NLMSG_ERROR` as a failure); that trigger was inferred, not reproduced on the
+unfixed daemon. The exit message had no newline, so journald surfaced it only
+at process exit, and nothing restarted the daemon.
+
+**`d96a7a5` repairs it**: `Run()` ignores per-message failures as upstream does,
+a reader that still stops without a stop request triggers the normal shutdown
+path with exit status 1 so systemd restarts the daemon, and the receive buffer
+holds a full 4096-byte copy-range message (a truncated message never gets a
+verdict and can fill the queue). The C reader fixture failed before each C
+change (retained red runs); independent code and security reviews approved the
+final patch.
+
+**`d96a7a5` (image `63da3c01`) passed** every gate run on the VM:
+
+- first boot: exact image identity, named accounts, empty UI group, 0 AVC;
+- probes: identity, DAC, fixture, warm and cold no-GUI fallback (HTTP 200 in
+  9 ms, pending 0), eight timed daemon stops (~0.2 s each, strict
+  warning-free predicate, foreign NFT and firewalld preserved), foreign-NFT,
+  migration, refusals and token rotation;
+- 15 consecutive cold multi-user boots with no stalled queue, and 5453 nft
+  base-chain register/unregister cycles under traffic with the same daemon
+  PID, 536/536 connections answered and no reader stop;
+- default KDE GUI with no Qt overrides (Wayland, ELF `eb2ad207…`, app commit
+  `eea1d608…`): a novel connection held as pending and released by its inline
+  Allow (HTTP 200 about 71 ms after the click); a bridge restart rotated the
+  token and the same GUI process reconnected and decided a new prompt; killing
+  the sole GUI instance fell back to the default action (HTTP 200 0.091 s after
+  the kill, exact `last authenticated GUI session disconnected`); an unenrolled
+  account got `EACCES` on the token and never authenticated; root-only gRPC
+  stayed `EACCES` after enrollment; 0 AVC on the GUI boot.
+
+The positive-Allow result holds on a quiet system only: four earlier attempts
+were default-allowed without a prompt because an unrelated avahi, chronyd or
+systemd-resolved prompt was already pending. The Allow and reconnect timings
+were observed during the session and transcribed (guest files stayed on the
+VM disk). Pending cleanup within 2 s after GUI loss is inferred from the
+`Unavailable` reply and curl completing 0.091 s after the kill; the
+authoritative pending-0 snapshot was taken later.
+
+Not exercised on the VM: the new reader-death fallback (unit-tested only; the
+VM shows the trigger no longer kills the reader, not the fallback itself), a
+late verdict for a removed row (the helper timed out before finding a pending
+row, so no verdict was sent), a GUI Deny, cold-boot stall checks on `graphical.target` beyond one
+GUI boot, and recorded identity of the unenrolled account's binary.
+
+VM-only fixture steps, recorded with the evidence: BIB writes the test user's
+home as `default_t`, so it was relabelled before key SSH; a refusals fixture
+left an empty `/etc/systemd/system/opensnitch.service.d` that readiness
+rejected, so the harness now removes it; for the GUI tests avahi, chronyd and
+tailscaled were stopped and one rule allowed only the VM DNS server
+`10.0.2.3`, because opensnitchd serializes prompts and an unrelated pending
+prompt makes it default-handle the test connection silently.
+
+Evidence: `output/snitchwatch-fresh-vm.u4luhx70/COLD-NO-GUI-GATE-FAIL.json`,
+`STALL-ROOT-CAUSE-EVIDENCE.json` and
+`output/snitchwatch-fresh-vm-r3.KLkez3/R3-VM-ACCEPTANCE-RESULT.json`.
+
+Open items:
+
+- `nfq_destroy_queue() not closed: -1` appeared 3 times in the daemon log,
+  each in the stop just before a stall-loop reboot (observed, not exported);
+  the eight timed daemon stops were warning-free.
+- At first boot the patch's 1 ms `deliverPacket` timeout accepted one packet
+  without a decision (`Timed out while sending packet to queue channel 2`), a
+  pre-existing per-packet fail-open path.
+- A GUI Allow creates a destination-only rule (`allow if dest.ip is …`, no
+  process constraint); confirm that is the intended rule shape.
+- Readiness treats an empty `opensnitch.service.d` directory as a local
+  override.
+- The daemon factory and CI do not run the patch's Go tests.
+- Ignored per-message `nfq_handle_packet()` failures are not counted or
+  logged; the `NETLINK_NO_ENOBUFS` `setsockopt` result is unchecked; reader
+  errors name the internal queue index, not the queue number.
+- Serialized prompts are an upstream limitation with a real desktop cost:
+  background services can hold the only prompt slot.
 
 ## Consumer rollout gate
 
@@ -294,6 +387,15 @@ passes its scoped integration checks:
    read-only mounts, token rotation, reconnection and stop/rollback evidence.
    Account IDs must come from the target image's named accounts rather than
    the earlier VM's numeric IDs. No user receives GUI membership implicitly.
+
+Status for the `d96a7a5` candidate in the disposable VM: gate 1 is met for
+default KDE startup and Allow decisions without overrides on the supported KDE
+6.11 runtime; a GUI Deny was not exercised. Gate 2 is partly open: controlled stops are warning-free and the
+reader stall is fixed, but reboot-time stops can still log the
+`nfq_destroy_queue` warning. Gates 3–5 passed for this image, including
+independent provenance review, cold first boot, fallback, migration/refusal,
+token rotation and reconnection. A host trial and the open items above remain
+before any default rollout.
 
 The fixed target-image acceptance limits are 5 seconds for no-GUI fallback,
 2 seconds for pending cleanup and 15 seconds for daemon stop. Preserve the

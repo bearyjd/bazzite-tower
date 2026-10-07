@@ -1,0 +1,4 @@
+# A dedicated non-login bridge account and a deliberately opt-in GUI group.
+g snitchwatch -
+g snitchwatch-ui -
+u snitchwatch -:snitchwatch "Snitchwatch bridge service account" /var/lib/snitchwatch

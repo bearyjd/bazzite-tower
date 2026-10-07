@@ -1,0 +1,17 @@
+[Unit]
+Description=Snitchwatch bridge OpenSnitch gRPC socket
+Requires=systemd-tmpfiles-setup.service
+After=systemd-tmpfiles-setup.service
+
+[Socket]
+ListenStream=/run/snitchwatch/opensnitchd.sock
+SocketUser=root
+SocketGroup=root
+SocketMode=0600
+FileDescriptorName=grpc
+Service=snitchwatch-system-bridge.service
+Accept=no
+
+[Install]
+WantedBy=sockets.target
+

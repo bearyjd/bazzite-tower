@@ -1,4 +1,5 @@
 <!-- Generated: 2026-08-08 | Files scanned: 3 | Token estimate: ~850 -->
+<!-- Targeted update: 2026-10-05 | Snitchwatch image-consumer gate; not a full regeneration -->
 # Image Build Pipeline
 
 `Containerfile` → `build_files/build.sh` (runs inside the build, `set -euo pipefail`).
@@ -33,15 +34,46 @@ carry, because line ranges drift and filenames do not.
 | `80-ras-microcode.sh` | dnf rasdaemon (enable); **mask `mcelog.service`**; dnf microcode_ctl (latest) |
 | `85-i915-watcher.sh` | enable `i915-resume-fix-check.timer` — kernel-version-gated check for the cx0 DPLL s2idle-resume regression signature; the machine-checkable signal the Containerfile kernel-pin comment points at |
 | `90-power-thermal.sh` | dnf thermald (enable); enable `bazzite-tower-power-tuning.service` (balanced EPP + platform-profile). SOF audio: **no install** — bypassed via the `dsp_driver=1` karg |
-| `95-firewall.sh` | Firewall selector. Default `opensnitch`: pinned v1.8.0 RPM extraction, Snitchwatch config + enablement. `FIREWALL_DAEMON=portmaster` is a disabled VM spike, sourcing `../firewall/portmaster.sh`: source-build of the exact Portmaster v2.2.1 commit, direct core (no updater/bootstrapper), config pinned from `/usr` via `BindReadOnlyPaths=`, Go toolchain removed after build, OpenSnitch masked. Build with `just build-portmaster-spike`; never a default image |
+| `95-firewall.sh` | Firewall selector. Default `opensnitch`: pinned v1.8.0 RPM extraction, Snitchwatch config + enablement. `SNITCHWATCH_BRIDGE=system` opts into the pinned native bridge/system overlay; legacy remains default. `FIREWALL_DAEMON=portmaster` is a disabled VM spike, sourcing `../firewall/portmaster.sh`: source-build of the exact Portmaster v2.2.1 commit, direct core (no updater/bootstrapper), config pinned from `/usr` via `BindReadOnlyPaths=`, Go toolchain removed after build, OpenSnitch masked. Build with `just build-portmaster-spike`; never a default image |
 | `97-vm-gate-ssh.sh` | `VM_GATE_SSH=1` (off by default, `:latest` unaffected): enables `sshd.socket` so VM-gate testing (`just run-vm-ssh`) can SSH in instead of needing a GUI console. `build-portmaster-spike` already passes this build-arg |
 | `98-rebrand-motd.sh` | overwrites the identity fields (`image-name`/`image-vendor`/`image-ref`/`image-tag`/`image-branch`) in `/usr/share/ublue-os/image-info.json` from the upstream base's own identity to `bazzite-tower`'s — the login MOTD template reads this file directly, so left unmodified it always claims the machine is running the upstream base image. `image-tag`/`image-branch` come from the `IMAGE_TAG` build-arg (Containerfile `ARG IMAGE_TAG=latest`, CI passes `latest`/`latest-kernel` per matrix leg — a `:latest-kernel` machine's MOTD would otherwise wrongly claim `:latest`) |
 | `99-cleanup.sh` | `dnf clean all` |
 
-`FIREWALL_DAEMON` and `VM_GATE_SSH` reach `95-firewall.sh`/`97-vm-gate-ssh.sh`
+`FIREWALL_DAEMON`, `SNITCHWATCH_BRIDGE` and `VM_GATE_SSH` reach `95-firewall.sh`/`97-vm-gate-ssh.sh`
 as inherited environment variables — the Containerfile sets them as a
 command-prefix on the `RUN`, so the runner's shell has them and every child
 `bash` inherits them.
+
+## Snitchwatch image-consumer gate
+
+`SNITCHWATCH_BRIDGE=legacy` is the default and does not compile a native bridge.
+The opt-in `system` profile requires `FIREWALL_DAEMON=opensnitch` and consumes a
+native version 0.1.1 release built from an exact clean Git source/submodule checkout using the
+pinned Fedora 44 builder. Source, RPM toolchain inventory, licenses and binary
+identity accompany the original release artifact. The installer extracts only
+verified binary/licenses and stages system units from that same source; its
+separate installed-overlay manifest hashes immutable files and records their
+identity. No legacy release-install/global-user-enable script runs.
+
+The system candidate also builds the pinned OpenSnitch 1.8.0 source with its
+reviewed downstream repair. Separate daemon provenance binds the patch, module
+locks, generated protocol files, Go/protoc toolchain, RPM inventory, licenses
+and actual `/usr/bin/opensnitchd` hash. Both manifests are checked by smoke
+and boot tests; the boot check verifies the running daemon executable when
+NFQUEUE is available. Rootless container checks cannot replace the VM gate.
+Legacy builds retain upstream RPM extraction and incur no native compilation.
+
+Only the system candidate changes the image-intent OpenSnitch address to
+`unix:opensnitchd.sock`, with a system drop-in requiring the gRPC socket and
+`WorkingDirectory=/run/snitchwatch`. Sysusers are materialized before tmpfiles
+and socket startup. Existing live bootc `/etc` drift is a migration decision,
+not an implicit policy overwrite. Both profiles remain fail open.
+
+`just build-snitchwatch-system` builds the local candidate.
+`just build-snitchwatch-system-vm` additionally opts into `VM_GATE_SSH=1` for a
+disposable VM. Fresh build/first-boot/SELinux evidence remains distinct from
+the [historical bridge tests](../research/snitchwatch-system-bridge.md).
+
 
 ## Verified by
 

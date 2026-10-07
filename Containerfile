@@ -19,6 +19,7 @@
 # done here, just the pin).
 ARG BASE_IMAGE=ghcr.io/ublue-os/bazzite-nvidia-open@sha256:010616ed07152c36c6fbe2a4116d20c038ca5eb2a83a3fa3997d545ed75de51d
 ARG FIREWALL_DAEMON=opensnitch
+ARG SNITCHWATCH_BRIDGE=legacy
 ARG VM_GATE_SSH=0
 # Which published tag this build represents (`latest` or `latest-kernel`) --
 # purely descriptive, consumed by 98-rebrand-motd.sh so the login MOTD on a
@@ -29,6 +30,22 @@ ARG IMAGE_TAG=latest
 # Allow build scripts to be referenced without being copied into the final image
 FROM scratch AS ctx
 COPY build_files /
+
+# Select only the requested dependency stage. Podman skips unused stages by
+# default; legacy has no Fedora toolchain, Git fetch or native compilation.
+FROM scratch AS snitchwatch-legacy
+COPY build_files/firewall/snitchwatch-system-legacy-marker /out/usr/share/bazzite-tower/snitchwatch-bridge-profile
+
+FROM registry.fedoraproject.org/fedora:44@sha256:e1656bc110fc33e855f7a02e4420c21066428bc7a0277160d40ee125ef8a1c65 AS snitchwatch-system
+ARG FIREWALL_DAEMON
+COPY --from=ctx /firewall/snitchwatch-system* /factory/
+COPY system_files/usr/share/bazzite-tower/opensnitchd-default-config.json /candidate/legacy-config.json
+COPY system_files/usr/share/bazzite-tower/opensnitchd-system-bridge-config.json /candidate/system-config.json
+COPY system_files/usr/share/bazzite-tower/snitchwatch/opensnitch.service.d/20-system-bridge.conf /candidate/20-system-bridge.conf
+RUN SNITCHWATCH_BRIDGE=system FIREWALL_DAEMON="${FIREWALL_DAEMON}" bash /factory/snitchwatch-system-build.sh /out && \
+    SNITCHWATCH_BRIDGE=system FIREWALL_DAEMON="${FIREWALL_DAEMON}" bash /factory/snitchwatch-system-daemon-build.sh /out
+
+FROM snitchwatch-${SNITCHWATCH_BRIDGE} AS snitchwatch-selected
 
 # Base: bazzite KDE + NVIDIA **open** kernel modules, F44+, desktop variant
 # (not deck-based). This was proprietary (`bazzite-nvidia`) until 2026-08-28;
@@ -94,6 +111,7 @@ FROM ${BASE_IMAGE}
 # FIREWALL_DAEMON=portmaster and validate it in a VM before considering it for
 # a published/default tag.  See docs/research/portmaster-bootc-spike.md.
 ARG FIREWALL_DAEMON
+ARG SNITCHWATCH_BRIDGE
 
 # Off by default -- Bazzite does not enable sshd out of the box, and this
 # leaves that alone. Only a VM-gate build run with --build-arg VM_GATE_SSH=1
@@ -111,11 +129,16 @@ LABEL org.opencontainers.image.title="bazzite-tower"
 LABEL org.opencontainers.image.description="Bazzite desktop + QEMU/libvirt/Docker for ThinkPad P1"
 LABEL org.opencontainers.image.source="https://github.com/bearyjd/bazzite-tower"
 
+# Fail invalid bridge/firewall combinations before the customization packages.
+RUN --mount=type=bind,from=ctx,source=/,target=/ctx \
+    SNITCHWATCH_BRIDGE="${SNITCHWATCH_BRIDGE}" FIREWALL_DAEMON="${FIREWALL_DAEMON}" bash /ctx/firewall/snitchwatch-system-mode.sh
+
 ### SYSTEM FILES
 # Static content baked verbatim into the image: systemd units, ujust recipes,
 # and bootc kernel-argument fragments. Copied before build.sh runs so it can
 # enable the units that land here.
 COPY system_files/ /
+COPY --from=snitchwatch-selected /out/ /
 # Kept with the policy source under /usr/share and installed into /etc by the
 # build step, which merges rather than replacing any base policy entries.
 COPY cosign.pub /usr/share/bazzite-tower/containers/bazzite-tower-cosign.pub
@@ -125,7 +148,7 @@ RUN --mount=type=bind,from=ctx,source=/,target=/ctx \
     --mount=type=cache,dst=/var/cache \
     --mount=type=cache,dst=/var/log \
     --mount=type=tmpfs,dst=/tmp \
-    FIREWALL_DAEMON="${FIREWALL_DAEMON}" VM_GATE_SSH="${VM_GATE_SSH}" IMAGE_TAG="${IMAGE_TAG}" /ctx/build.sh
+    FIREWALL_DAEMON="${FIREWALL_DAEMON}" SNITCHWATCH_BRIDGE="${SNITCHWATCH_BRIDGE}" VM_GATE_SSH="${VM_GATE_SSH}" IMAGE_TAG="${IMAGE_TAG}" /ctx/build.sh
 
 ### LINTING
 RUN bootc container lint

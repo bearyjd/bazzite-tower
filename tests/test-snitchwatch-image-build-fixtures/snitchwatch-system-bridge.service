@@ -1,0 +1,43 @@
+[Unit]
+Description=Snitchwatch system bridge (OpenSnitch gRPC <-> GUI WebSocket)
+Documentation=https://github.com/bearyjd/snitchwatch
+# tmpfiles owns the runtime parents.  The bridge must never create either
+# directory: doing so would let its unprivileged account replace socket paths.
+Requires=snitchwatch-system-bridge-grpc.socket snitchwatch-system-bridge-gui.socket
+After=systemd-tmpfiles-setup.service snitchwatch-system-bridge-grpc.socket snitchwatch-system-bridge-gui.socket
+
+[Service]
+Type=simple
+User=snitchwatch
+Group=snitchwatch
+ExecStart=/usr/bin/snitchwatch-bridge-cli
+# Production is socket-activation only.  The CLI must reject this mode unless
+# it receives both named listeners, and must not bind TCP as a fallback.
+Environment=SNITCHWATCH_SYSTEM_BRIDGE=1
+Environment=SNITCHWATCH_WS_SOCKET=/run/snitchwatch/bridge.sock
+Environment=SNITCHWATCH_WS_TOKEN_PATH=/run/snitchwatch-auth/token
+Environment=HOME=/var/lib/snitchwatch
+Environment=XDG_STATE_HOME=/var/lib
+# Explicitly associate both units so manual starts get both descriptors too.
+Sockets=snitchwatch-system-bridge-grpc.socket snitchwatch-system-bridge-gui.socket
+Restart=on-failure
+RestartSec=2s
+KillSignal=SIGTERM
+TimeoutStopSec=10s
+NoNewPrivileges=true
+CapabilityBoundingSet=
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+# The bridge needs local Unix sockets and Internet sockets for DNS/blocklist
+# downloads, but no raw packet or netlink families.
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ReadWritePaths=/run/snitchwatch-auth
+# Persistent cache/state only.  Socket and token directories are deliberately
+# absent: tmpfiles owns their parents and systemd owns their socket entries.
+StateDirectory=snitchwatch
+StateDirectoryMode=0700

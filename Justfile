@@ -100,6 +100,25 @@ build $target_image=image_name $tag=default_tag:
         --tag "${target_image}:${tag}" \
         .
 
+# Build an opt-in system-bridge candidate; no registry publication or GUI install.
+[group('Build')]
+build-snitchwatch-system $target_image=("localhost/" + image_name) $tag="snitchwatch-system":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    BUILD_ARGS=("--build-arg" "FIREWALL_DAEMON=opensnitch" "--build-arg" "SNITCHWATCH_BRIDGE=system")
+    if [[ -z "$(git status -s)" ]]; then
+        BUILD_ARGS+=("--build-arg" "SHA_HEAD_SHORT=$(git rev-parse --short HEAD)")
+    fi
+    podman build "${BUILD_ARGS[@]}" --pull=newer --tag "${target_image}:${tag}" .
+
+# Disposable SSH gate only; VM_GATE_SSH is absent from the ordinary candidate.
+[group('Build')]
+build-snitchwatch-system-vm $target_image=("localhost/" + image_name) $tag="snitchwatch-system-vm":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    podman build --build-arg FIREWALL_DAEMON=opensnitch --build-arg SNITCHWATCH_BRIDGE=system \
+        --build-arg VM_GATE_SSH=1 --pull=newer --tag "${target_image}:${tag}" .
+
 # Build the Portmaster VM spike. It is deliberately not the default image and
 # its service stays disabled: boot only its qcow2 in a disposable VM first.
 [group('Build')]

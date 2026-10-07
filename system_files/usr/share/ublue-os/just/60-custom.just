@@ -148,6 +148,18 @@ tower-health:
 opensnitch-readiness:
     @/usr/libexec/bazzite-tower-opensnitch-readiness
 
+# Explicit privileged, read-only system-bridge check across all user processes.
+# This recipe does not escalate itself; invoke with an explicit root shell/sudo.
+[group('Diagnostics')]
+snitchwatch-system-readiness:
+    @/usr/libexec/bazzite-tower-snitchwatch-readiness
+
+# Explicit operator migration, refusing drift and preserving a rollback journal.
+# GUI group enrollment is separate. Check is read-only; apply/rollback mutate.
+[group('Host')]
+snitchwatch-system-migrate action="check":
+    @sudo /usr/libexec/bazzite-tower-snitchwatch-migrate {{ quote(action) }}
+
 # Summarise desktop stalls and the kernel events around them.
 #
 # bazzite-tower-stall-detect records freezes that no kernel watchdog reports:

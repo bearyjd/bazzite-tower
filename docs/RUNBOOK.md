@@ -76,6 +76,7 @@ again on a future kernel bump.
 | CPU power baseline | `cat /sys/devices/system/cpu/cpu0/cpufreq/energy_performance_preference` (expect `balance_performance`); `cat /sys/firmware/acpi/platform_profile` (expect `balanced`); `systemctl is-active thermald` |
 | Virt stack up | `systemctl is-active virtqemud.socket` · `virsh -c qemu:///system list --all` |
 | Read-only image/host summary | `ujust tower-health` — optional-service states, SMART/RAS/timers, firmware and security-tool availability |
+| OpenSnitch legacy bridge readiness | `ujust opensnitch-readiness` — read-only check of the active daemon, fail-open config and verified user bridge at `127.0.0.1:50051`; see the OpenSnitch section below |
 | Cockpit web management (opt-in) | `ujust enable-cockpit`; it binds only to loopback. Review Tailnet ACLs, then separately run `tailscale serve --https=443 http://127.0.0.1:9090`; do not expose :9090 directly without explicit firewall policy. |
 | Docker/libvirt NAT forwarding (opt-in Docker) | `just test-docker-libvirt-forwarding` (from a repository checkout) — restarts Docker, checks its `DOCKER-USER` NAT-bridge/uplink pair rules, then probes Docker bridge networking. Rules are only for active libvirt XML `forward mode='nat'` bridges; no broad source-RFC1918 or bridge-wildcard policy is added. A post-start reconciliation failure is non-fatal to Docker and later libvirt/NetworkManager events retry it. |
 | Looking Glass client | kvmfr host module is baked (`ls /dev/kvmfr0`); install the version-coupled client on demand with `ujust install-looking-glass-client`, then `looking-glass-client` (match its B-version to the Windows host app) |
@@ -151,6 +152,87 @@ fwupdmgr get-updates               # ME appears as "Intel Management Engine"
 
 Known-bad: `18.0.5.2141` (factory), `18.0.15.2515` (insufficient).
 Known-good: `18.1.18.2644` and above.
+
+## OpenSnitch / Snitchwatch deployment status
+
+The default image selects the legacy TCP user bridge at `127.0.0.1:50051`.
+`SNITCHWATCH_BRIDGE=system` is an explicit image build opt-in and requires
+`FIREWALL_DAEMON=opensnitch`. Both profiles retain `ProcMonitorMethod: proc`
+and `DefaultAction: allow`. The candidate supplies native system bridge version 0.1.1,
+its two socket units, named system accounts and immutable artifact provenance.
+The candidate also supplies the reviewed OpenSnitch 1.8.0 shutdown/NFT repair
+with its own `/usr/share/snitchwatch/system-daemon-manifest.json`;
+`/usr/libexec/snitchwatch/verify-system-daemon.py --root /` checks the actual
+installed `/usr/bin/opensnitchd` against the source, patch and license inventory;
+OpenSnitch uses a relative Unix socket from `/run/snitchwatch`.
+
+Build the local candidate with `just build-snitchwatch-system`. Use
+`just build-snitchwatch-system-vm` only for a disposable VM: it additionally
+enables SSH socket activation. Boot that image with
+`just run-vm-ssh localhost/bazzite-tower snitchwatch-system-vm <unused-port>`.
+This does not install a GUI or grant any user the GUI group. Install the reviewed
+system-profile Flatpak per user and inspect existing same-ID installations and
+overrides before selecting it.
+
+Run `ujust opensnitch-readiness` for the image's selected profile. The legacy
+profile retains the [release-install contract](../README.md#opensnitch-application-firewall).
+System readiness requires an explicit privileged read for cross-account
+process inspection: run `sudo ujust snitchwatch-system-readiness`.
+It verifies immutable provenance, service/socket ownership,
+permissions, token access, resolved service hardening and fail-open policy.
+It is read-only and cannot prove a GUI answers prompts. Migration and rollback
+must preserve the recorded legacy baseline and reject unexpected live `/etc`
+policy/address drift or user-unit/Flatpak overrides. Do not activate the system
+profile while a legacy bridge process or listener remains. Use
+`ujust snitchwatch-system-migrate check` to inspect the current deployment,
+`ujust snitchwatch-system-migrate apply` for the explicit transaction, and
+`ujust snitchwatch-system-migrate rollback` to restore its recorded baseline.
+The migration journal is protected at
+`/var/lib/bazzite-tower/snitchwatch-migration/current.json`; preserve it until
+rollback is no longer needed. These migration recipes request sudo explicitly.
+
+Policy writers must serialize edits with the migration helper using
+`/run/lock/bazzite-tower-snitchwatch-migration.lock`. Linux filesystem exchange
+cannot conditionally replace a file against arbitrary uncoordinated root
+writers. The helper verifies the displaced config's bytes and security metadata
+before activation. If they changed, it retains that inode under the root-owned
+mode-0700 migration journal directory, records `recovery-required`, and leaves
+OpenSnitch stopped. Automatic rollback refuses that retained unexpected config;
+review the journal and preserved file manually before restoring service.
+
+The [validation report](research/snitchwatch-system-bridge.md) preserves the
+October 4–5 artifact tests separately from fresh target-image validation.
+The clean GUI release build on supported KDE 6.11 / Qt 6.11.2 and native
+bridge 0.1.1 reproducibility passed at source `5c2b44a`. The GUI crate remains
+0.1.0 and ships a separate full source/license archive. On October 6–7 a fresh
+enforcing-SELinux VM of the candidate built from `d96a7a5` passed 15
+consecutive cold boots with no stalled queue, controlled daemon stops, the
+migration/refusal checks and default KDE GUI decisions (render, inline Allow,
+bridge-restart reconnect, last-GUI fallback, unenrolled-user refusal). The same
+gates caught and fixed a daemon queue-reader stall in the earlier `78be87b`
+candidate. Keep production deployment and deny-policy changes behind the
+remaining rollout gates in that report.
+
+Operating the system candidate:
+
+- OpenSnitch writes its main log to `/var/log/opensnitchd.log`; the journal
+  carries only its raw stderr lines.
+- If a netfilter queue reader stops while its queue is still bound, the daemon
+  logs `netfilter queue reader N stopped: …`, leaves through its normal
+  cleanup and exits 1. systemd restarts it after `RestartSec=30`; until then
+  `QueueBypass` lets traffic through unfiltered, consistent with
+  `DefaultAction: allow`. This path is unit-tested; it was not triggered on
+  the VM.
+- A daemon stop during reboot can log
+  `Queue.destroy() idx=1, nfq_destroy_queue() not closed: -1`. It is a known,
+  unresolved teardown warning and remains an open rollout item.
+- While one prompt is pending, opensnitchd applies the default action to other
+  new connections without asking; the GUI banner says so. Answer pending
+  prompts promptly.
+
+Keep `DefaultAction: allow` during rollout. For a local deny experiment that
+blocks networking, restore `allow` in `/etc/opensnitchd/default-config.json` from
+a TTY and restart `opensnitch.service`, or roll back the deployment.
 
 ## Common issues
 

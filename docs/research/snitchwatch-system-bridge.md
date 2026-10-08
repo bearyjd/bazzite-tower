@@ -454,11 +454,28 @@ Open items:
   `lists.*` operators make root read any directory. None is reachable through
   the bridge, which sends only `CHANGE_RULE`/`DELETE_RULE` (allowlisted at its
   send point). The daemon now accepts exactly those two notification actions
-  in the system variant (others get an error reply) and refuses `lists.*`
-  operands from the UI channel until Snitchwatch blocklists (#45 PR B) define
-  a confined directory under `/var/lib/snitchwatch/blocklists/`. The owner confirmed on
+  in the system variant (others get an error reply) and confines `lists.*`
+  operands from the UI channel to the Snitchwatch blocklist directory (below). The owner confirmed on
   2026-10-08 that this two-action allowlist is policy: any further action
   needs its own change, with validation and review.
+- Snitchwatch blocklists (#45 PR B) are in the 44-file patch. The UI channel
+  accepts a `lists.domains`/`lists.ips` operand only from `CHANGE_RULE`, only
+  for a `z00-blocklist:<list>` rule whose data is exactly
+  `/var/lib/snitchwatch/blocklists/<list>/<kind>`, and at most 64 such rules;
+  AskRule replies and every other lists operand are refused. The daemon reads
+  those files through a confined reader (component-wise `openat` with
+  `O_NOFOLLOW`, no FUSE, regular single-link files only, at most 80 MiB and
+  1M accepted entries per file) under a shared 640 MiB budget, which holds the
+  contract's 2M hosts plus one reload in flight. It also sets a soft Go memory
+  limit of 896 MiB unless `GOMEMLIMIT` is set. A list over budget is kept at
+  its last good version, retried with backoff and logged as an error; the
+  bridge is not told (owner decision 2026-10-08). Threat model: a malformed
+  list line (e.g. a bare `127.0.0.1`) used to panic upstream's parser; only a
+  compromised bridge, something running as `snitchwatch`, or an edited or
+  leftover file can produce one, because the honest bridge writes only
+  `0.0.0.0 <host>` or canonical IPv4 lines. Five security and code review
+  rounds; the daemon patch gate runs the confined tests and fails, rather
+  than skips, if no non-FUSE temporary directory is available.
 - ~~The daemon factory and CI do not run the patch's Go tests.~~ Fixed
   2026-10-07: `just test-snitchwatch-daemon-patch` and the path-filtered
   `snitchwatch-daemon-patch.yml` workflow run them, `-race` included.

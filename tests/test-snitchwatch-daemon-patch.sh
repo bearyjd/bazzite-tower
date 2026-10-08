@@ -158,6 +158,9 @@ run_tests() {
     install_toolchain
     export GOENV=off GOWORK=off GOTOOLCHAIN=local CGO_ENABLED=1 GOFLAGS=-mod=readonly
     export GOPROXY=off GOSUMDB=off GOMODCACHE=/work/gomod GOCACHE=/tmp/go-cache
+    # The confined blocklist reader refuses FUSE, and the tests fall back to
+    # /dev/shm when /tmp is one; fail rather than skip if neither is usable.
+    export SNITCHWATCH_REQUIRE_CONFINED_TESTS=1
     cd /work/src/daemon
     local -a patched_go
     readarray -t patched_go < /work/patched-go-files.txt

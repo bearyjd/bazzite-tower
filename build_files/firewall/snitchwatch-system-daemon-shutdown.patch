@@ -127,7 +127,7 @@ index 08c08a2e..54e7a06a 100644
  	for _, fwCfg := range n.SysConfig.SystemRules {
  		for _, chain := range fwCfg.Chains {
 diff --git a/daemon/main.go b/daemon/main.go
-index f6247623..5b5556a0 100644
+index f6247623..3752981a 100644
 --- a/daemon/main.go
 +++ b/daemon/main.go
 @@ -23,8 +23,8 @@
@@ -338,7 +338,15 @@ index f6247623..5b5556a0 100644
  			applyDefaultAction(packet, con)
  			return nil
  		}
-@@ -611,6 +678,12 @@ func main() {
+@@ -574,6 +641,7 @@ func main() {
+ 	setupLogging()
+ 	setupProfiling()
+ 	setupSignals()
++	rule.SetConfinedMemoryLimit()
+ 
+ 	log.Important("Starting %s v%s", core.Name, core.Version)
+ 
+@@ -611,6 +679,12 @@ func main() {
  
  	setupWorkers()
  	setupQueues(qNum)
@@ -351,7 +359,7 @@ index f6247623..5b5556a0 100644
  
  	// queue and firewall rules should be ready by now
  
-@@ -665,19 +738,11 @@ func main() {
+@@ -665,19 +739,11 @@ func main() {
  	initSystemdResolvedMonitor()
  
  	log.Info("Running on netfilter queue #%d ...", queueNum)
@@ -962,20 +970,33 @@ index 9c06aab7..d80761c8 100644
  
  #endif
 diff --git a/daemon/rule/loader.go b/daemon/rule/loader.go
-index 3d743556..1d4c4772 100644
+index 3d743556..d6d6e75b 100644
 --- a/daemon/rule/loader.go
 +++ b/daemon/rule/loader.go
-@@ -157,6 +157,9 @@ func (l *Loader) Load(path string) error {
+@@ -105,6 +105,8 @@ func (l *Loader) Reload(path string) error {
+ 	if l.watcher != nil {
+ 		l.watcher.Remove(l.Path)
+ 	}
++	// Lists are not handed over here (loadRule only hands over from the
++	// live rule set, which is emptied below), so confined lists reload.
+ 	for _, r := range l.rules {
+ 		l.cleanListsRule(r)
+ 	}
+@@ -157,7 +159,12 @@ func (l *Loader) Load(path string) error {
  
  // Add adds a rule to the list of rules, and optionally saves it to disk.
  func (l *Loader) Add(rule *Rule, saveToDisk bool) error {
+-	l.addUserRule(rule)
 +	if err := ValidName(rule.Name); err != nil {
 +		return err
 +	}
- 	l.addUserRule(rule)
++	if err := l.addUserRule(rule); err != nil {
++		return err
++	}
  	if saveToDisk {
  		fileName := filepath.Join(l.Path, fmt.Sprintf("%s.json", rule.Name))
-@@ -167,6 +170,9 @@ func (l *Loader) Add(rule *Rule, saveToDisk bool) error {
+ 		return l.Save(rule, fileName)
+@@ -167,6 +174,9 @@ func (l *Loader) Add(rule *Rule, saveToDisk bool) error {
  
  // Replace adds a rule to the list of rules, and optionally saves it to disk.
  func (l *Loader) Replace(rule *Rule, saveToDisk bool) error {
@@ -985,7 +1006,7 @@ index 3d743556..1d4c4772 100644
  	if err := l.replaceUserRule(rule); err != nil {
  		return err
  	}
-@@ -200,6 +206,9 @@ func (l *Loader) Save(rule *Rule, path string) error {
+@@ -200,6 +210,9 @@ func (l *Loader) Save(rule *Rule, path string) error {
  // If the duration is Always (i.e: saved on disk), it'll attempt to delete
  // it from disk.
  func (l *Loader) Delete(ruleName string) error {
@@ -995,7 +1016,48 @@ index 3d743556..1d4c4772 100644
  	l.Lock()
  	defer l.Unlock()
  
-@@ -291,8 +300,12 @@ func (l *Loader) deleteRule(filePath string) {
+@@ -235,10 +248,9 @@ func (l *Loader) loadRule(fileName string) error {
+ 	}
+ 	raw = nil
+ 
+-	if oldRule, found := l.rules[r.Name]; found {
+-		l.cleanListsRule(oldRule)
+-	}
+-
++	// Lists monitors start only once the rule is committed below, so a
++	// failed compile leaves the old rule (and its list) intact.
++	deferListsMonitors(&r)
+ 	if !r.Enabled {
+ 		// XXX: we only parse and load the Data field if the rule is disabled and the Data field is not empty
+ 		// the rule will remain disabled.
+@@ -260,15 +272,25 @@ func (l *Loader) loadRule(fileName string) error {
+ 		}
+ 	}
+ 	if oldRule, found := l.rules[r.Name]; found {
++		// the fsnotify echo of a rule whose first load is still running:
++		// keep it rather than parse the list twice.
++		if echoesFirstLoad(oldRule, &r) {
++			return nil
++		}
++		handOverRuleLists(oldRule, &r)
++		l.cleanListsRule(oldRule)
+ 		l.deleteOldRuleFromDisk(oldRule, &r)
+ 	}
+ 
+ 	log.Debug("Loaded rule from %s: %s", fileName, r.String())
+ 	l.rules[r.Name] = &r
+ 	l.sortRules()
++	if r.Enabled {
++		startListsMonitors(&r)
++	}
+ 
+ 	if r.Enabled && l.isTemporary(&r) {
+-		err = l.scheduleTemporaryRule(r)
++		err = l.scheduleTemporaryRule(r.Name, r.Duration)
+ 	}
+ 
+ 	return nil
+@@ -291,8 +313,12 @@ func (l *Loader) deleteRule(filePath string) {
  }
  
  func (l *Loader) deleteRuleFromDisk(ruleName string) error {
@@ -1010,15 +1072,472 @@ index 3d743556..1d4c4772 100644
  }
  
  // deleteOldRuleFromDisk deletes a rule from disk if the Duration changes
+@@ -306,15 +332,15 @@ func (l *Loader) deleteOldRuleFromDisk(oldRule, newRule *Rule) {
+ }
+ 
+ // cleanListsRule erases the lists loaded of an Operator of type Lists,
+-// and stops the workers monitoring the lists.
++// and stops the workers monitoring the lists. Stopping never blocks, so it is
++// safe under the loader lock.
+ func (l *Loader) cleanListsRule(oldRule *Rule) {
+ 	if oldRule.Operator.Type == Lists {
+-		oldRule.Operator.StopMonitoringLists()
++		oldRule.Operator.stopOrClearLists()
+ 	} else if oldRule.Operator.Type == List {
+ 		for i := 0; i < len(oldRule.Operator.List); i++ {
+ 			if oldRule.Operator.List[i].Type == Lists {
+-				oldRule.Operator.List[i].StopMonitoringLists()
+-				break
++				oldRule.Operator.List[i].stopOrClearLists()
+ 			}
+ 		}
+ 	}
+@@ -329,10 +355,9 @@ func (l *Loader) isUniqueName(name string) bool {
+ 	return !found
+ }
+ 
++// setUniqueName renames rule until no loaded rule has its name. The caller
++// holds the write lock.
+ func (l *Loader) setUniqueName(rule *Rule) {
+-	l.Lock()
+-	defer l.Unlock()
+-
+ 	idx := 1
+ 	base := rule.Name
+ 	for l.isUniqueName(rule.Name) == false {
+@@ -377,32 +402,27 @@ func (l *Loader) sortRules() {
+ 	sort.Strings(l.activeRules)
+ }
+ 
+-func (l *Loader) addUserRule(rule *Rule) {
++func (l *Loader) addUserRule(rule *Rule) error {
+ 	if rule.Duration == Once {
+-		return
++		return nil
+ 	}
+-
+-	l.setUniqueName(rule)
+-	l.replaceUserRule(rule)
++	return l.insertRule(rule, true)
+ }
+ 
+ func (l *Loader) replaceUserRule(rule *Rule) (err error) {
+-	l.Lock()
+-	oldRule, found := l.rules[rule.Name]
+-	l.Unlock()
+-
+-	if found {
+-		// If the rule has changed from Always (saved on disk) to !Always (temporary),
+-		// we need to delete the rule from disk and keep it in memory.
+-		l.deleteOldRuleFromDisk(oldRule, rule)
+-
+-		// delete loaded lists, if this is a rule of type Lists
+-		l.cleanListsRule(oldRule)
+-	}
++	return l.insertRule(rule, false)
++}
+ 
++// insertRule compiles rule and then, in one critical section, resolves a
++// unique name (Add), applies the blocklist cap, swaps the rule in (handing
++// over an unchanged confined list and stopping the displaced rule's
++// monitors) and only then starts the new rule's lists monitors, so a refused
++// or displaced rule never reads its list.
++func (l *Loader) insertRule(rule *Rule, unique bool) (err error) {
+ 	if err := l.unmarshalOperatorList(&rule.Operator); err != nil {
+ 		log.Error(err.Error())
+ 	}
++	deferListsMonitors(rule)
+ 
+ 	if rule.Enabled {
+ 		if err := rule.Operator.Compile(); err != nil {
+@@ -420,19 +440,44 @@ func (l *Loader) replaceUserRule(rule *Rule) (err error) {
+ 		}
+ 	}
+ 	l.Lock()
++	if unique {
++		l.setUniqueName(rule)
++		if err := ValidName(rule.Name); err != nil {
++			l.Unlock()
++			return err
++		}
++	}
++	if err := l.checkBlocklistCap(rule.Name); err != nil {
++		l.Unlock()
++		return err
++	}
++	oldRule, found := l.rules[rule.Name]
++	if found && oldRule != rule {
++		handOverRuleLists(oldRule, rule)
++		l.cleanListsRule(oldRule)
++	}
+ 	l.rules[rule.Name] = rule
+ 	l.sortRules()
++	if rule.Enabled {
++		startListsMonitors(rule)
++	}
+ 	l.Unlock()
+ 
++	if found {
++		// If the rule has changed from Always (saved on disk) to !Always (temporary),
++		// we need to delete the rule from disk and keep it in memory.
++		l.deleteOldRuleFromDisk(oldRule, rule)
++	}
++
+ 	if rule.Enabled && l.isTemporary(rule) {
+-		err = l.scheduleTemporaryRule(*rule)
++		err = l.scheduleTemporaryRule(rule.Name, rule.Duration)
+ 	}
+ 
+ 	return err
+ }
+ 
+-func (l *Loader) scheduleTemporaryRule(rule Rule) error {
+-	tTime, err := time.ParseDuration(string(rule.Duration))
++func (l *Loader) scheduleTemporaryRule(name string, duration Duration) error {
++	tTime, err := time.ParseDuration(string(duration))
+ 	if err != nil {
+ 		return err
+ 	}
+@@ -441,13 +486,14 @@ func (l *Loader) scheduleTemporaryRule(rule Rule) error {
+ 		l.Lock()
+ 		defer l.Unlock()
+ 
+-		log.Info("Temporary rule expired: %s - %s", rule.Name, rule.Duration)
+-		if newRule, found := l.rules[rule.Name]; found {
+-			if newRule.Duration != rule.Duration {
+-				log.Debug("%s temporary rule expired, but has new Duration, old: %s, new: %s", rule.Name, rule.Duration, newRule.Duration)
++		log.Info("Temporary rule expired: %q - %s", name, duration)
++		if newRule, found := l.rules[name]; found {
++			if newRule.Duration != duration {
++				log.Debug("%q temporary rule expired, but has new Duration, old: %s, new: %s", name, duration, newRule.Duration)
+ 				return
+ 			}
+-			delete(l.rules, rule.Name)
++			l.cleanListsRule(newRule)
++			delete(l.rules, name)
+ 			l.sortRules()
+ 		}
+ 	})
+diff --git a/daemon/rule/operator.go b/daemon/rule/operator.go
+index 3aeebe63..3bc3dbbf 100644
+--- a/daemon/rule/operator.go
++++ b/daemon/rule/operator.go
+@@ -75,20 +75,32 @@ const (
+ type opCallback func(value interface{}) bool
+ 
+ // Operator represents what we want to filter of a connection, and how.
++// An Operator is single-use: once compiled it may own a lists monitor and
++// budget bytes, so a copy must never call ClearLists or StopMonitoringLists.
+ type Operator struct {
+-	cb              opCallback
+-	re              *regexp.Regexp
+-	netMask         *net.IPNet
+-	lists           map[string]interface{}
+-	exitMonitorChan chan (bool)
+-
+-	Operand             Operand    `json:"operand"`
+-	Data                string     `json:"data"`
+-	Type                Type       `json:"type"`
+-	List                []Operator `json:"list"`
+-	Sensitive           Sensitive  `json:"sensitive"`
+-	isCompiled          bool
+-	listsMonitorRunning bool
++	cb          opCallback
++	re          *regexp.Regexp
++	netMask     *net.IPNet
++	lists       map[string]interface{}
++	stopMonitor chan struct{}
++	stopOnce    sync.Once
++	monitorDone chan struct{} // closed when the lists monitor has exited
++	// set by the loader so Compile doesn't start the lists monitor before
++	// the rule is committed
++	deferMonitor bool
++	// confined list bookkeeping, under the operator's lock: budget bytes
++	// held, the file state of the last completed load attempt, and whether
++	// the list was handed to a replacement operator
++	confinedBytes int64
++	confinedSeen  confinedListState
++	retired       bool
++
++	Operand    Operand    `json:"operand"`
++	Data       string     `json:"data"`
++	Type       Type       `json:"type"`
++	List       []Operator `json:"list"`
++	Sensitive  Sensitive  `json:"sensitive"`
++	isCompiled bool
+ 
+ 	sync.RWMutex
+ }
+@@ -218,7 +230,7 @@ func (o *Operator) String() string {
+ 	if o.Type == Regexp {
+ 		how = "matches"
+ 	}
+-	return fmt.Sprintf("%s %s '%s'", log.Bold(string(o.Operand)), how, log.Yellow(string(o.Data)))
++	return fmt.Sprintf("%s %s %s", log.Bold(string(o.Operand)), how, log.Yellow(strconv.Quote(o.Data)))
+ }
+ 
+ func (o *Operator) simpleCmp(v interface{}) bool {
+diff --git a/daemon/rule/operator_lists.go b/daemon/rule/operator_lists.go
+index 01838093..9e9ce522 100644
+--- a/daemon/rule/operator_lists.go
++++ b/daemon/rule/operator_lists.go
+@@ -14,9 +14,43 @@ import (
+ 	"github.com/evilsocket/opensnitch/daemon/log"
+ )
+ 
+-func (o *Operator) monitorLists() {
+-	log.Info("monitor lists started: %s", o.Data)
++// monitorLists reloads the operator's lists when they change, until stop is
++// closed. A panic (e.g. in a list parser) is logged, empties the list and
++// restarts the monitor after a backoff instead of taking down the root daemon.
++func (o *Operator) monitorLists(stop <-chan struct{}) {
++	log.Info("monitor lists started: %q", o.Data)
++	backoff := time.Second
++	for !o.runListsMonitor(stop) {
++		select {
++		case <-stop:
++		case <-time.After(backoff):
++			backoff = min(2*backoff, time.Minute)
++			continue
++		}
++		break
++	}
++	o.ClearLists()
++	log.Info("lists monitor stopped: %q", o.Data)
++}
+ 
++// runListsMonitor runs the monitor loop; false means it panicked.
++func (o *Operator) runListsMonitor(stop <-chan struct{}) (done bool) {
++	defer func() {
++		if r := recover(); r != nil {
++			log.Error("lists monitor %q: recovered from panic, list emptied, restarting: %v", o.Data, r)
++			o.ClearLists()
++			done = false
++		}
++	}()
++	if bridgeOwned(o.Data) {
++		o.monitorConfinedList(stop)
++	} else {
++		o.monitorUpstreamLists(stop)
++	}
++	return true
++}
++
++func (o *Operator) monitorUpstreamLists(stop <-chan struct{}) {
+ 	modTimes := make(map[string]time.Time)
+ 	totalFiles := 0
+ 	needReload := false
+@@ -25,13 +59,13 @@ func (o *Operator) monitorLists() {
+ 	expr := filepath.Join(o.Data, "/*.*")
+ 	for {
+ 		select {
+-		case <-o.exitMonitorChan:
+-			goto Exit
++		case <-stop:
++			return
+ 		default:
+ 			fileList, err := filepath.Glob(expr)
+ 			if err != nil {
+ 				log.Warning("Error reading directory of domains list: %s, %s", o.Data, err)
+-				goto Exit
++				return
+ 			}
+ 			numFiles = 0
+ 
+@@ -73,49 +107,50 @@ func (o *Operator) monitorLists() {
+ 				}
+ 				needReload = false
+ 			}
+-			time.Sleep(4 * time.Second)
++		}
++		select {
++		case <-stop:
++			return
++		case <-time.After(4 * time.Second):
+ 		}
+ 	}
+-
+-Exit:
+-	modTimes = nil
+-	o.ClearLists()
+-	log.Info("lists monitor stopped: %s", o.Data)
+ }
+ 
+ // ClearLists deletes all the entries of a list
+ func (o *Operator) ClearLists() {
++	if bridgeOwned(o.Data) {
++		o.clearConfinedList()
++		return
++	}
+ 	o.Lock()
+ 	defer o.Unlock()
+ 
+-	log.Info("clearing domains lists: %d - %s", len(o.lists), o.Data)
++	log.Info("clearing domains lists: %d - %q", len(o.lists), o.Data)
+ 	for k := range o.lists {
+ 		delete(o.lists, k)
+ 	}
+ 	debug.FreeOSMemory()
+ }
+ 
+-// StopMonitoringLists stops the monitoring lists goroutine.
++// StopMonitoringLists stops the monitoring lists goroutine. It never blocks
++// (callers hold the loader lock) and is safe to call more than once.
+ func (o *Operator) StopMonitoringLists() {
+-	if o.listsMonitorRunning == true {
+-		o.exitMonitorChan <- true
+-		o.exitMonitorChan = nil
+-		o.listsMonitorRunning = false
++	if o.stopMonitor != nil {
++		o.stopOnce.Do(func() { close(o.stopMonitor) })
+ 	}
+ }
+ 
++// filterDomains accepts hosts-file lines "0.0.0.0 host" / "127.0.0.1 host"
++// (space or tab separated); anything shorter or different is skipped.
+ func filterDomains(line, defValue string) (bool, string, string) {
+-	if len(line) < 9 {
+-		return true, line, defValue
+-	}
+-	// exclude not valid lines
+-	if line[:7] != "0.0.0.0" && line[:9] != "127.0.0.1" {
+-		return true, line, defValue
+-	}
+-	host := line[8:]
+-	// exclude localhost entries
+-	if line[:9] == "127.0.0.1" {
++	var host string
++	switch {
++	case len(line) > 8 && line[:7] == "0.0.0.0" && (line[7] == ' ' || line[7] == '\t'):
++		host = line[8:]
++	case len(line) > 10 && line[:9] == "127.0.0.1" && (line[9] == ' ' || line[9] == '\t'):
+ 		host = line[10:]
++	default:
++		return true, line, defValue
+ 	}
+ 	if host == "local" || host == "localhost" || host == "localhost.localdomain" || host == "broadcasthost" {
+ 		return true, line, defValue
+@@ -225,6 +260,11 @@ func (o *Operator) readSimpleList(raw, fileName string) (dups uint64) {
+ }
+ 
+ func (o *Operator) readLists() error {
++	// bridge-owned lists are built without o's lock and swapped in.
++	if bridgeOwned(o.Data) {
++		o.reloadConfinedList(nil, o.confinedListState())
++		return nil
++	}
+ 	o.ClearLists()
+ 
+ 	var dups uint64
+@@ -251,32 +291,48 @@ func (o *Operator) readLists() error {
+ 			log.Warning("Error reading list of IPs (%s): %s", fileName, err)
+ 			continue
+ 		}
+-
+-		if o.Operand == OpDomainsLists {
+-			dups += o.readTupleList(string(raw), fileName, filterDomains)
+-		} else if o.Operand == OpDomainsRegexpLists {
+-			dups += o.readRegexpList(string(raw), fileName)
+-		} else if o.Operand == OpNetLists {
+-			dups += o.readNetList(string(raw), fileName)
+-		} else if o.Operand == OpIPLists {
+-			dups += o.readSimpleList(string(raw), fileName)
+-		} else if o.Operand == OpHashMD5Lists {
+-			dups += o.readSimpleList(string(raw), fileName)
+-		} else {
+-			log.Warning("Unknown lists operand type: %s", o.Operand)
+-		}
++		dups += o.parseList(string(raw), fileName)
+ 	}
+ 	log.Info("%d lists loaded, %d domains, %d duplicated", len(fileList), len(o.lists), dups)
+ 	return nil
+ }
+ 
++// parseList feeds one list file to the parser of the operator's operand.
++func (o *Operator) parseList(raw, fileName string) uint64 {
++	switch o.Operand {
++	case OpDomainsLists:
++		return o.readTupleList(raw, fileName, filterDomains)
++	case OpDomainsRegexpLists:
++		return o.readRegexpList(raw, fileName)
++	case OpNetLists:
++		return o.readNetList(raw, fileName)
++	case OpIPLists, OpHashMD5Lists:
++		return o.readSimpleList(raw, fileName)
++	}
++	log.Warning("Unknown lists operand type: %s", o.Operand)
++	return 0
++}
++
+ func (o *Operator) loadLists() {
+-	log.Info("loading domains lists: %s, %s, %s", o.Type, o.Operand, o.Data)
++	log.Info("loading domains lists: %s, %s, %q", o.Type, o.Operand, o.Data)
++
++	// the loader starts it once the rule is committed (startListsMonitors)
++	if !o.deferMonitor {
++		o.startListsMonitor()
++	}
++}
+ 
++// startListsMonitor starts the lists monitor goroutine, once.
++func (o *Operator) startListsMonitor() {
+ 	// when loading from disk, we don't use the Operator's constructor, so we need to create this channel
+-	if o.exitMonitorChan == nil {
+-		o.exitMonitorChan = make(chan bool)
+-		o.listsMonitorRunning = true
+-		go o.monitorLists()
++	if o.stopMonitor == nil {
++		stop, done := make(chan struct{}), make(chan struct{})
++		o.stopMonitor, o.monitorDone = stop, done
++		liveListsMonitors.Add(1)
++		go func() {
++			defer close(done)
++			defer liveListsMonitors.Add(-1)
++			o.monitorLists(stop)
++		}()
+ 	}
+ }
 diff --git a/daemon/rule/rule.go b/daemon/rule/rule.go
-index 46d33629..5a0d97f3 100644
+index 46d33629..abff25e5 100644
 --- a/daemon/rule/rule.go
 +++ b/daemon/rule/rule.go
-@@ -87,6 +87,10 @@ func Deserialize(reply *protocol.Rule) (*Rule, error) {
+@@ -72,7 +72,7 @@ func (r *Rule) String() string {
+ 	if r.Enabled {
+ 		enabled = "Enabled"
+ 	}
+-	return fmt.Sprintf("[%s] %s: if(%s){ %s %s }", enabled, r.Name, r.Operator.String(), r.Action, r.Duration)
++	return fmt.Sprintf("[%s] %q: if(%s){ %s %s }", enabled, r.Name, r.Operator.String(), r.Action, r.Duration)
+ }
+ 
+ // Match performs on a connection the checks a Rule has, to determine if it
+@@ -81,12 +81,32 @@ func (r *Rule) Match(con *conman.Connection, hasChecksums bool) bool {
+ 	return r.Operator.Match(con, hasChecksums)
+ }
+ 
+-// Deserialize translates back the rule received to a Rule object
++// Deserialize translates back the rule received to a Rule object. It is for
++// AskRule replies, which come from packet workers and may never create a
++// lists rule; CHANGE_RULE notifications use DeserializeChange.
+ func Deserialize(reply *protocol.Rule) (*Rule, error) {
++	return deserialize(reply, false)
++}
++
++// DeserializeChange is Deserialize for CHANGE_RULE notifications, the only
++// path that may add a Snitchwatch blocklist (lists) rule.
++func DeserializeChange(reply *protocol.Rule) (*Rule, error) {
++	return deserialize(reply, true)
++}
++
++func deserialize(reply *protocol.Rule, allowBlocklist bool) (*Rule, error) {
++	if err := ValidName(reply.Name); err != nil {
++		log.Warning("Deserialize rule: %s", err)
++		return nil, err
++	}
+ 	if reply.Operator == nil {
  		log.Warning("Deserialize rule, Operator nil")
  		return nil, fmt.Errorf("invalid operator")
  	}
-+	if err := validateUIOperator(reply.Operator, 0); err != nil {
++	if err := validateUIRule(reply, allowBlocklist); err != nil {
 +		log.Warning("Deserialize rule %q: %s", reply.Name, err)
 +		return nil, err
 +	}
@@ -1132,10 +1651,59 @@ index b4d6845b..a88a6ee9 100644
  
  // PostAlert queues a new message to be delivered to the server
 diff --git a/daemon/ui/notifications.go b/daemon/ui/notifications.go
-index 16003bba..4b42b3ba 100644
+index 16003bba..9df3de39 100644
 --- a/daemon/ui/notifications.go
 +++ b/daemon/ui/notifications.go
-@@ -286,6 +286,11 @@ func (c *Client) handleActionReloadFw(stream protocol.UI_NotificationsClient, nt
+@@ -87,9 +87,13 @@ func (c *Client) handleActionChangeConfig(stream protocol.UI_NotificationsClient
+ func (c *Client) handleActionEnableRule(stream protocol.UI_NotificationsClient, ntf *protocol.Notification) {
+ 	var err error
+ 	for _, rul := range ntf.Rules {
+-		log.Info("[notification] enable rule: %s", rul.Name)
++		log.Info("[notification] enable rule: %q", rul.Name)
+ 		// protocol.Rule(protobuf) != rule.Rule(json)
+-		r, _ := rule.Deserialize(rul)
++		r, dErr := rule.Deserialize(rul)
++		if r == nil {
++			err = fmt.Errorf("Invalid rule, %s", dErr)
++			continue
++		}
+ 		r.Enabled = true
+ 		// save to disk only if the duration is rule.Always
+ 		err = c.rules.Replace(r, r.Duration == rule.Always)
+@@ -100,8 +104,12 @@ func (c *Client) handleActionEnableRule(stream protocol.UI_NotificationsClient,
+ func (c *Client) handleActionDisableRule(stream protocol.UI_NotificationsClient, ntf *protocol.Notification) {
+ 	var err error
+ 	for _, rul := range ntf.Rules {
+-		log.Info("[notification] disable rule: %s", rul)
+-		r, _ := rule.Deserialize(rul)
++		log.Info("[notification] disable rule: %q", rul.GetName())
++		r, dErr := rule.Deserialize(rul)
++		if r == nil {
++			err = fmt.Errorf("Invalid rule, %s", dErr)
++			continue
++		}
+ 		r.Enabled = false
+ 		err = c.rules.Replace(r, r.Duration == rule.Always)
+ 	}
+@@ -111,7 +119,7 @@ func (c *Client) handleActionDisableRule(stream protocol.UI_NotificationsClient,
+ func (c *Client) handleActionChangeRule(stream protocol.UI_NotificationsClient, ntf *protocol.Notification) {
+ 	var rErr error
+ 	for _, rul := range ntf.Rules {
+-		r, err := rule.Deserialize(rul)
++		r, err := rule.DeserializeChange(rul)
+ 		if r == nil {
+ 			rErr = fmt.Errorf("Invalid rule, %s", err)
+ 			continue
+@@ -128,7 +136,7 @@ func (c *Client) handleActionChangeRule(stream protocol.UI_NotificationsClient,
+ func (c *Client) handleActionDeleteRule(stream protocol.UI_NotificationsClient, ntf *protocol.Notification) {
+ 	var err error
+ 	for _, rul := range ntf.Rules {
+-		log.Info("[notification] delete rule: %s %d", rul.Name, ntf.Id)
++		log.Info("[notification] delete rule: %q %d", rul.Name, ntf.Id)
+ 		err = c.rules.Delete(rul.Name)
+ 		if err != nil {
+ 			log.Error("[notification] Error deleting rule: %s %s", err, rul)
+@@ -286,6 +294,11 @@ func (c *Client) handleActionReloadFw(stream protocol.UI_NotificationsClient, nt
  }
  
  func (c *Client) handleNotification(stream protocol.UI_NotificationsClient, ntf *protocol.Notification) {
@@ -2662,6 +3230,1934 @@ index 00000000..753b883d
 +	}
 +	return nil
 +}
+diff --git a/daemon/rule/operator_lists_confined.go b/daemon/rule/operator_lists_confined.go
+new file mode 100644
+index 00000000..087de5dc
+--- /dev/null
++++ b/daemon/rule/operator_lists_confined.go
+@@ -0,0 +1,466 @@
++package rule
++
++import (
++	"bytes"
++	"errors"
++	"fmt"
++	"io"
++	"os"
++	"path/filepath"
++	"strings"
++	"time"
++
++	"github.com/evilsocket/opensnitch/daemon/log"
++	"golang.org/x/sys/unix"
++)
++
++// The unprivileged Snitchwatch bridge owns everything under SnitchwatchRoot,
++// so lists there are read by the confined reader below. A blocklist dir is
++// <BlocklistsRoot>/<list>/<kind> holding exactly one file, <kind>.list.
++// Root-authored rules whose path points into that tree but is not clean
++// (a trailing slash, "//", "." or "..") load nothing. Vars so tests can
++// point them at a temp dir and shrink the limits.
++var (
++	SnitchwatchRoot = "/var/lib/snitchwatch"
++
++	maxBlocklistFileBytes int64 = 80 << 20
++	// raw lines (comments and blanks too); loose, as the byte cap bounds the file
++	maxBlocklistFileLines = 4000000
++	// accepted entries per file
++	maxBlocklistEntries = 1000000
++
++	confinedPollInterval      = 4 * time.Second
++	minConfinedReloadInterval = 30 * time.Second
++)
++
++const (
++	maxDomainBytes = 253
++	// a stopped load is noticed within this many lines of parsing
++	confinedStopCheckLines = 64 << 10
++)
++
++var (
++	confinedReadSem = make(chan struct{}, 1)
++
++	errBudget  = errors.New("over the byte budget for all blocklists")
++	errStopped = errors.New("stopped")
++	utf8BOM    = []byte("\xef\xbb\xbf")
++)
++
++func underSnitchwatchRoot(path string) bool {
++	return path == SnitchwatchRoot || strings.HasPrefix(path, SnitchwatchRoot+"/")
++}
++
++// bridgeOwned reports whether path names something in the bridge's tree,
++// literally, once cleaned or once made absolute, so it never reaches the
++// upstream reader.
++func bridgeOwned(path string) bool {
++	if underSnitchwatchRoot(path) || underSnitchwatchRoot(filepath.Clean(path)) {
++		return true
++	}
++	abs, err := filepath.Abs(path)
++	return err == nil && underSnitchwatchRoot(abs)
++}
++
++// confinedKind returns the list kind of a confined operator: the last path
++// component, which must be "domains" or "ips" and match the operand.
++func confinedKind(path string, operand Operand) (string, error) {
++	if filepath.Clean(path) != path {
++		return "", fmt.Errorf("path is not clean")
++	}
++	kind := filepath.Base(path)
++	if want, ok := blocklistKinds[kind]; !ok || want != operand {
++		return "", fmt.Errorf("needs a domains or ips dir with the matching operand, got %s", operand)
++	}
++	return kind, nil
++}
++
++func stopped(stop <-chan struct{}) bool {
++	select {
++	case <-stop:
++		return true
++	default:
++		return false
++	}
++}
++
++func refuseFUSE(fd int) error {
++	var fs unix.Statfs_t
++	if err := unix.Fstatfs(fd, &fs); err != nil {
++		return err
++	}
++	if fs.Type == unix.FUSE_SUPER_MAGIC {
++		return fmt.Errorf("on a FUSE filesystem")
++	}
++	return nil
++}
++
++// openConfinedDir opens an absolute directory one component at a time from
++// "/" with O_NOFOLLOW, so a symlink anywhere in the path (planted or swapped
++// in by the bridge) fails the walk instead of redirecting the root daemon.
++func openConfinedDir(path string) (int, error) {
++	if !strings.HasPrefix(path, "/") {
++		return -1, fmt.Errorf("not an absolute path")
++	}
++	const flags = unix.O_RDONLY | unix.O_DIRECTORY | unix.O_NOFOLLOW | unix.O_CLOEXEC
++	fd, err := unix.Open("/", flags, 0)
++	if err != nil {
++		return -1, err
++	}
++	for _, name := range strings.Split(path[1:], "/") {
++		if name == "" || name == "." || name == ".." {
++			unix.Close(fd)
++			return -1, fmt.Errorf("bad path component %q", name)
++		}
++		next, err := unix.Openat(fd, name, flags, 0)
++		unix.Close(fd)
++		if err != nil {
++			return -1, fmt.Errorf("%q: %w", name, err)
++		}
++		fd = next
++		if err := refuseFUSE(fd); err != nil {
++			unix.Close(fd)
++			return -1, fmt.Errorf("%q: %w", name, err)
++		}
++	}
++	return fd, nil
++}
++
++// readConfinedFile reads one regular, single-link, non-symlink, non-FUSE file
++// of at most maxBlocklistFileBytes from dirfd, reserving its size in the
++// budget before allocating. The caller releases the returned reservation; on
++// errBudget it is the size that did not fit. O_NONBLOCK keeps a fifo from
++// blocking the open; the type check keeps it from blocking the read; the
++// link count stops one file being charged once but loaded by many lists.
++func readConfinedFile(dirfd int, name string) ([]byte, int64, error) {
++	fd, err := unix.Openat(dirfd, name, unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_NONBLOCK|unix.O_CLOEXEC, 0)
++	if err != nil {
++		return nil, 0, err
++	}
++	f := os.NewFile(uintptr(fd), name)
++	defer f.Close()
++	var st unix.Stat_t
++	if err := unix.Fstat(fd, &st); err != nil {
++		return nil, 0, err
++	}
++	switch {
++	case st.Mode&unix.S_IFMT != unix.S_IFREG:
++		return nil, 0, fmt.Errorf("not a regular file")
++	case st.Nlink != 1:
++		return nil, 0, fmt.Errorf("has %d hard links", st.Nlink)
++	case st.Size > maxBlocklistFileBytes:
++		return nil, 0, fmt.Errorf("larger than %d bytes", maxBlocklistFileBytes)
++	}
++	if err := refuseFUSE(fd); err != nil {
++		return nil, 0, err
++	}
++	// One extra byte detects a file that grew after the fstat.
++	reserved := st.Size + 1
++	if !reserveBudget(reserved) {
++		return nil, reserved, errBudget
++	}
++	buf := make([]byte, reserved)
++	n, err := io.ReadFull(f, buf)
++	if err != nil && err != io.ErrUnexpectedEOF && err != io.EOF {
++		releaseBudget(reserved)
++		return nil, 0, err
++	}
++	if int64(n) > st.Size {
++		releaseBudget(reserved)
++		return nil, 0, fmt.Errorf("changed while reading")
++	}
++	return buf[:n], reserved, nil
++}
++
++type loadResult int
++
++const (
++	loadKept    loadResult = iota // failed: keep the current list
++	loadOK                        // a new list was read
++	loadCleared                   // the file is gone: empty the list
++	loadBudget                    // refused by the byte budget: retry later
++	loadStopped                   // the monitor was stopped: change nothing
++)
++
++// confinedLoad is the outcome of loadConfinedList: on loadOK or loadCleared
++// the new list and what it holds in the budget; on loadBudget the file's
++// size, the estimated need for a retry and whether it came from a parse.
++type confinedLoad struct {
++	res     loadResult
++	m       map[string]interface{}
++	charged int64
++	size    int64
++	need    int64
++	parsed  bool
++}
++
++// loadConfinedList reads and parses o's list file without holding o's lock,
++// giving up as soon as stop is closed.
++func (o *Operator) loadConfinedList(stop <-chan struct{}) (out confinedLoad) {
++	defer func() {
++		if r := recover(); r != nil {
++			log.Error("blocklist %q: recovered from panic, keeping the current list: %v", o.Data, r)
++			releaseBudget(out.charged)
++			out = confinedLoad{res: loadKept}
++		}
++	}()
++	kind, err := confinedKind(o.Data, o.Operand)
++	if err != nil {
++		log.Warning("blocklist dir %q refused: %s", o.Data, err)
++		return confinedLoad{res: loadKept}
++	}
++	select {
++	case confinedReadSem <- struct{}{}:
++	case <-stop:
++		return confinedLoad{res: loadStopped}
++	}
++	defer func() { <-confinedReadSem }()
++	if stopped(stop) {
++		return confinedLoad{res: loadStopped}
++	}
++	buf, reserved, out := o.readConfinedList(kind)
++	if buf == nil {
++		return out
++	}
++	defer releaseBudget(reserved)
++	if stopped(stop) {
++		return confinedLoad{res: loadStopped}
++	}
++	return o.parseConfinedFile(stop, buf, reserved, kind, &out.charged)
++}
++
++// readConfinedList reads o's <kind>.list into a buffer charged reserved
++// bytes, which the caller releases. Without a buffer, out says why.
++func (o *Operator) readConfinedList(kind string) (buf []byte, reserved int64, out confinedLoad) {
++	fd, err := openConfinedDir(o.Data)
++	if errors.Is(err, unix.ENOENT) {
++		return nil, 0, confinedLoad{res: loadCleared, m: map[string]interface{}{}}
++	} else if err != nil {
++		log.Warning("blocklist dir %q refused: %s", o.Data, err)
++		return nil, 0, confinedLoad{res: loadKept}
++	}
++	defer unix.Close(fd)
++	buf, reserved, err = readConfinedFile(fd, kind+".list")
++	switch {
++	case errors.Is(err, unix.ENOENT):
++		return nil, 0, confinedLoad{res: loadCleared, m: map[string]interface{}{}}
++	case err == errBudget:
++		return nil, 0, confinedLoad{res: loadBudget, size: reserved - 1, need: reserved}
++	case err != nil:
++		log.Warning("blocklist file %q skipped: %s", o.Data+"/"+kind+".list", err)
++		return nil, 0, confinedLoad{res: loadKept}
++	}
++	return buf, reserved, confinedLoad{}
++}
++
++// parseConfinedFile checks buf's raw line count and parses it. *charged
++// tracks the entries' budget so a panic can release it.
++func (o *Operator) parseConfinedFile(stop <-chan struct{}, buf []byte, reserved int64, kind string, charged *int64) confinedLoad {
++	fileName := o.Data + "/" + kind + ".list"
++	lines := bytes.Count(buf, []byte("\n"))
++	if len(buf) > 0 && buf[len(buf)-1] != '\n' {
++		lines++
++	}
++	if lines > maxBlocklistFileLines {
++		log.Warning("blocklist file %q skipped: more than %d lines", fileName, maxBlocklistFileLines)
++		return confinedLoad{res: loadKept}
++	}
++	m, st, err := parseConfinedList(stop, buf, fileName, kind, charged)
++	if err != nil {
++		releaseBudget(*charged)
++		*charged = 0
++	}
++	switch {
++	case err == errStopped:
++		return confinedLoad{res: loadStopped}
++	case err == errBudget:
++		// extrapolate the entries charged so far to the whole file
++		entries := (st.keyBytes + int64(st.accepted)*confinedEntryOverhead) * int64(len(buf)) / int64(max(st.consumed, 1))
++		return confinedLoad{res: loadBudget, size: reserved - 1, need: reserved + entries, parsed: true}
++	case err != nil:
++		log.Warning("blocklist file %q skipped: %s", fileName, err)
++		return confinedLoad{res: loadKept}
++	}
++	if len(m) == 0 && len(buf) > 0 {
++		log.Warning("blocklist file %q has no usable %s entries", fileName, kind)
++	} else {
++		log.Info("%d %s loaded, %d duplicated, %q", len(m), kind, st.dups, fileName)
++	}
++	return confinedLoad{res: loadOK, m: m, charged: *charged}
++}
++
++// reloadConfinedList loads o's list and, unless the load was stopped or o
++// handed its list to a replacement, swaps in the new list (or an empty one
++// if the file is gone) and records cur as seen. Any other failure keeps the
++// current list; a budget refusal records nothing, so it is retried.
++func (o *Operator) reloadConfinedList(stop <-chan struct{}, cur confinedListState) loadResult {
++	out := o.loadConfinedList(stop)
++	switch out.res {
++	case loadStopped:
++		return out.res
++	case loadBudget:
++		need := confinedLoadRefused(o.Data, out.size, out.need, out.parsed)
++		log.Error("blocklist %q refused by the byte budget: needs about %d bytes, %d of %d free",
++			o.Data, need, confinedBudgetRemaining(), maxConfinedTotalBytes)
++		return out.res
++	}
++	o.Lock()
++	if o.retired || stopped(stop) {
++		o.Unlock()
++		releaseBudget(out.charged)
++		return loadStopped
++	}
++	o.confinedSeen = cur
++	var old int64
++	if out.res == loadOK || out.res == loadCleared {
++		old = o.confinedBytes
++		o.lists, o.confinedBytes = out.m, out.charged
++	}
++	o.Unlock()
++	releaseBudget(old)
++	confinedLoadDone(o.Data, out.res == loadCleared)
++	if out.res == loadOK {
++		confinedLoads.Add(1)
++	}
++	return out.res
++}
++
++// clearConfinedList empties o's list and returns its bytes, without the
++// per-entry delete and GC of the upstream ClearLists.
++func (o *Operator) clearConfinedList() {
++	o.Lock()
++	defer o.Unlock()
++	o.lists = map[string]interface{}{}
++	o.releaseConfinedBytes()
++	o.confinedSeen = confinedListState{}
++}
++
++// handOverConfinedList moves old's loaded list to next when both read the
++// same bridge-owned list, so a replacement (or its fsnotify echo) is never
++// empty and costs no reload. old is retired so a late reload of it can't
++// swap a list in. The caller holds the loader lock; next's monitor has not
++// started.
++func handOverConfinedList(old, next *Operator) {
++	// only a compiled operator gets a monitor (disabled rules are not
++	// compiled); one without would hold the list and its bytes forever.
++	if old == next || !next.isCompiled || old.Type != Lists || next.Type != Lists ||
++		old.Operand != next.Operand || old.Data != next.Data || !bridgeOwned(next.Data) {
++		return
++	}
++	old.Lock()
++	next.Lock()
++	stale := next.confinedBytes
++	next.lists, next.confinedBytes, next.confinedSeen = old.lists, old.confinedBytes, old.confinedSeen
++	old.lists, old.confinedBytes, old.confinedSeen, old.retired = map[string]interface{}{}, 0, confinedListState{}, true
++	next.Unlock()
++	old.Unlock()
++	releaseBudget(stale)
++}
++
++// handOverRuleLists hands over every unchanged confined list of old to next.
++func handOverRuleLists(old, next *Rule) {
++	handOverConfinedList(&old.Operator, &next.Operator)
++	if old.Operator.Type == List && next.Operator.Type == List && len(old.Operator.List) == len(next.Operator.List) {
++		for i := range next.Operator.List {
++			handOverConfinedList(&old.Operator.List[i], &next.Operator.List[i])
++		}
++	}
++}
++
++// stopOrClearLists stops o's lists monitor, which clears the list as it
++// exits. A bridge-owned operator without a monitor (never started, e.g. a
++// disabled rule) is cleared here, as nothing else would release its bytes.
++func (o *Operator) stopOrClearLists() {
++	if o.stopMonitor == nil {
++		if bridgeOwned(o.Data) {
++			o.ClearLists()
++		}
++		return
++	}
++	o.StopMonitoringLists()
++}
++
++// echoesFirstLoad reports whether next, read back from disk, is the same
++// blocklist rule as old while old's monitor is still on its first load.
++// The caller holds the loader lock.
++func echoesFirstLoad(old, next *Rule) bool {
++	o, n := &old.Operator, &next.Operator
++	if o.Type != Lists || n.Type != Lists || o.stopMonitor == nil || !bridgeOwned(o.Data) ||
++		old.Enabled != next.Enabled || old.Action != next.Action || old.Duration != next.Duration ||
++		old.Precedence != next.Precedence || old.Nolog != next.Nolog || old.Description != next.Description ||
++		o.Operand != n.Operand || o.Data != n.Data || o.Sensitive != n.Sensitive {
++		return false
++	}
++	o.RLock()
++	defer o.RUnlock()
++	return !o.confinedSeen.ok
++}
++
++// deferListsMonitors makes Compile leave r's lists monitors to
++// startListsMonitors, which the loader calls once r is committed.
++func deferListsMonitors(r *Rule) {
++	r.Operator.deferMonitor = true
++	for i := range r.Operator.List {
++		r.Operator.List[i].deferMonitor = true
++	}
++}
++
++func startListsMonitors(r *Rule) {
++	if r.Operator.Type == Lists && r.Operator.isCompiled {
++		r.Operator.startListsMonitor()
++	}
++	for i := range r.Operator.List {
++		if r.Operator.List[i].Type == Lists && r.Operator.List[i].isCompiled {
++			r.Operator.List[i].startListsMonitor()
++		}
++	}
++}
++
++// confinedListState identifies the list file without opening it (no Glob,
++// no stat through symlinks); the zero value means "no usable file".
++type confinedListState struct {
++	mtime unix.Timespec
++	size  int64
++	ino   uint64
++	ok    bool
++}
++
++func (o *Operator) confinedListState() confinedListState {
++	kind, err := confinedKind(o.Data, o.Operand)
++	if err != nil {
++		return confinedListState{}
++	}
++	fd, err := openConfinedDir(o.Data)
++	if err != nil {
++		return confinedListState{}
++	}
++	defer unix.Close(fd)
++	var st unix.Stat_t
++	if unix.Fstatat(fd, kind+".list", &st, unix.AT_SYMLINK_NOFOLLOW) != nil || st.Mode&unix.S_IFMT != unix.S_IFREG {
++		return confinedListState{}
++	}
++	return confinedListState{mtime: st.Mtim, size: st.Size, ino: st.Ino, ok: true}
++}
++
++// monitorConfinedList reloads the list when its file appears, disappears or
++// changes (mtime, size or inode) from what o last loaded, as the per-path
++// limits in confinedLoadAllowed permit, until stop is closed.
++func (o *Operator) monitorConfinedList(stop <-chan struct{}) {
++	for {
++		if stopped(stop) {
++			return
++		}
++		cur := o.confinedListState()
++		o.RLock()
++		seen := o.confinedSeen
++		o.RUnlock()
++		if cur != seen && confinedLoadAllowed(o.Data, cur.size) {
++			o.reloadConfinedList(stop, cur)
++		}
++		select {
++		case <-stop:
++			return
++		case <-time.After(confinedPollInterval):
++		}
++	}
++}
+diff --git a/daemon/rule/operator_lists_confined_budget.go b/daemon/rule/operator_lists_confined_budget.go
+new file mode 100644
+index 00000000..b45b60f2
+--- /dev/null
++++ b/daemon/rule/operator_lists_confined_budget.go
+@@ -0,0 +1,215 @@
++package rule
++
++import (
++	"os"
++	"runtime/debug"
++	"sort"
++	"sync"
++	"sync/atomic"
++	"time"
++
++	"github.com/evilsocket/opensnitch/daemon/log"
++)
++
++// The byte budget covers what all confined lists hold: each stored entry is
++// charged len(key)+confinedEntryOverhead (the measured heap cost of a map
++// entry is len+84..99), and a file being read is charged its size while its
++// buffer lives; confinedReadSem keeps that to one file at a time. It is sized
++// for the contract (2M hosts in total, 1M per file) plus one full reload:
++// 2M×(67+100) + 80 MiB + 1M×(67+100) ≈ 558 MiB for 67-byte hosts.
++var (
++	maxConfinedTotalBytes int64 = 640 << 20
++
++	// confinedBudgetBackoff is the first wait after a repeated budget
++	// refusal; it doubles up to maxConfinedBackoff.
++	confinedBudgetBackoff = 30 * time.Second
++	maxConfinedBackoff    = 10 * time.Minute
++)
++
++const confinedEntryOverhead = 100
++
++// maxConfinedPathRecords caps the per-path load records: when the map
++// reaches twice this it is pruned back to it, oldest first. A var for tests.
++var maxConfinedPathRecords = 4096
++
++var (
++	confinedBytesMu   sync.Mutex
++	confinedBytesUsed int64
++
++	// liveListsMonitors counts running lists monitors; confinedLoads counts
++	// completed confined loads. Both are for tests and debugging.
++	liveListsMonitors atomic.Int64
++	confinedLoads     atomic.Int64
++)
++
++// SetConfinedMemoryLimit gives the runtime a soft memory limit of the
++// blocklist budget plus 256 MiB, so GC slack during a reload can't double
++// the root daemon's RSS. An explicit GOMEMLIMIT wins.
++func SetConfinedMemoryLimit() {
++	if _, set := os.LookupEnv("GOMEMLIMIT"); set {
++		return
++	}
++	debug.SetMemoryLimit(maxConfinedTotalBytes + 256<<20)
++}
++
++func reserveBudget(n int64) bool {
++	confinedBytesMu.Lock()
++	defer confinedBytesMu.Unlock()
++	if confinedBytesUsed+n > maxConfinedTotalBytes {
++		return false
++	}
++	confinedBytesUsed += n
++	return true
++}
++
++// releaseBudget returns n bytes; it never takes the total below zero.
++func releaseBudget(n int64) {
++	confinedBytesMu.Lock()
++	defer confinedBytesMu.Unlock()
++	if n > confinedBytesUsed {
++		log.Error("blocklist budget: releasing %d bytes but only %d are held; clamping to 0", n, confinedBytesUsed)
++		confinedBytesUsed = 0
++		return
++	}
++	confinedBytesUsed -= n
++}
++
++func confinedBudgetRemaining() int64 {
++	confinedBytesMu.Lock()
++	defer confinedBytesMu.Unlock()
++	return maxConfinedTotalBytes - confinedBytesUsed
++}
++
++// releaseConfinedBytes returns what o's list holds to the budget. The caller
++// holds o's lock.
++func (o *Operator) releaseConfinedBytes() {
++	releaseBudget(o.confinedBytes)
++	o.confinedBytes = 0
++}
++
++// confinedPathRecord rate-limits loads per list path, so a replacement
++// operator (a new monitor, or a rule deleted and re-added) inherits the
++// limit. A missing record, including an evicted or expired one, means "no
++// recent load".
++type confinedPathRecord struct {
++	lastDone    time.Time // last completed attempt
++	cleared     bool      // that attempt found the file gone
++	lastRefused time.Time // last budget refusal
++	refusals    int       // consecutive budget refusals
++	need        int64     // estimated budget needed, from the last refusal
++	size        int64     // file size at the last refusal
++}
++
++func (r *confinedPathRecord) last() time.Time {
++	if r.lastRefused.After(r.lastDone) {
++		return r.lastRefused
++	}
++	return r.lastDone
++}
++
++var confinedPaths = struct {
++	sync.Mutex
++	m map[string]*confinedPathRecord
++}{m: map[string]*confinedPathRecord{}}
++
++// confinedLoadAllowed reports whether a load of a size-byte file at path may
++// start now. Without a record, or after the last attempt found the file
++// gone, it may; otherwise it waits minConfinedReloadInterval after the last
++// completed attempt. After a budget refusal of an unchanged file it also
++// waits until the estimated need fits: at the next poll the first time,
++// then backing off from confinedBudgetBackoff to maxConfinedBackoff. A file
++// that is gone (size 0: the monitor's state for no usable file) skips that
++// backoff so it is cleared promptly; one whose size changed skips it too but
++// waits minConfinedReloadInterval since the last attempt, refusals included,
++// and has to fit its buffer.
++func confinedLoadAllowed(path string, size int64) bool {
++	confinedPaths.Lock()
++	defer confinedPaths.Unlock()
++	rec := confinedPaths.m[path]
++	if rec == nil {
++		return true
++	}
++	limited := !rec.cleared && time.Since(rec.lastDone) < minConfinedReloadInterval
++	if rec.refusals == 0 {
++		return !limited
++	}
++	if size == 0 {
++		return !limited
++	}
++	if size != rec.size {
++		return time.Since(rec.last()) >= minConfinedReloadInterval && size+1 <= confinedBudgetRemaining()
++	}
++	wait := time.Duration(0)
++	if rec.refusals > 1 {
++		wait = maxConfinedBackoff
++		if n := rec.refusals - 2; n < 16 && confinedBudgetBackoff<<n < maxConfinedBackoff {
++			wait = confinedBudgetBackoff << n
++		}
++	}
++	return time.Since(rec.lastRefused) >= wait && rec.need <= confinedBudgetRemaining()
++}
++
++// confinedPathRecordFor returns path's record, creating it. When the map
++// reaches twice maxConfinedPathRecords, expired records (completed, no
++// refusal pending, older than minConfinedReloadInterval) are dropped and,
++// if that is not enough, the oldest, down to maxConfinedPathRecords, those
++// with a pending budget refusal last (they carry its backoff).
++func confinedPathRecordFor(path string) *confinedPathRecord {
++	if rec := confinedPaths.m[path]; rec != nil {
++		return rec
++	}
++	if len(confinedPaths.m) >= 2*maxConfinedPathRecords {
++		pruneConfinedPathRecords()
++	}
++	rec := &confinedPathRecord{}
++	confinedPaths.m[path] = rec
++	return rec
++}
++
++func pruneConfinedPathRecords() {
++	for p, rec := range confinedPaths.m {
++		if rec.refusals == 0 && time.Since(rec.lastDone) >= minConfinedReloadInterval {
++			delete(confinedPaths.m, p)
++		}
++	}
++	if excess := len(confinedPaths.m) - maxConfinedPathRecords; excess > 0 {
++		paths := make([]string, 0, len(confinedPaths.m))
++		for p := range confinedPaths.m {
++			paths = append(paths, p)
++		}
++		sort.Slice(paths, func(i, j int) bool {
++			a, b := confinedPaths.m[paths[i]], confinedPaths.m[paths[j]]
++			if (a.refusals > 0) != (b.refusals > 0) {
++				return b.refusals > 0
++			}
++			return a.last().Before(b.last())
++		})
++		for _, p := range paths[:excess] {
++			delete(confinedPaths.m, p)
++		}
++	}
++}
++
++// confinedLoadDone records a completed (loaded, cleared or failed) attempt.
++func confinedLoadDone(path string, cleared bool) {
++	confinedPaths.Lock()
++	defer confinedPaths.Unlock()
++	rec := confinedPathRecordFor(path)
++	rec.lastDone, rec.cleared, rec.refusals, rec.need = time.Now(), cleared, 0, 0
++}
++
++// confinedLoadRefused records a budget refusal of a size-byte file and
++// returns the estimate to retry against. A refusal before parsing (parsed
++// false) only knows the file's own size, so for an unchanged file it keeps
++// a larger earlier estimate.
++func confinedLoadRefused(path string, size, need int64, parsed bool) int64 {
++	confinedPaths.Lock()
++	defer confinedPaths.Unlock()
++	rec := confinedPathRecordFor(path)
++	if !parsed && size == rec.size {
++		need = max(need, rec.need)
++	}
++	rec.refusals++
++	rec.lastRefused, rec.need, rec.size = time.Now(), need, size
++	return need
++}
+diff --git a/daemon/rule/operator_lists_confined_lifecycle_test.go b/daemon/rule/operator_lists_confined_lifecycle_test.go
+new file mode 100644
+index 00000000..257f13a3
+--- /dev/null
++++ b/daemon/rule/operator_lists_confined_lifecycle_test.go
+@@ -0,0 +1,275 @@
++package rule
++
++import (
++	"fmt"
++	"os"
++	"path/filepath"
++	"strings"
++	"testing"
++	"time"
++)
++
++func lifecycleRule(t *testing.T, dir string, enabled bool) *Rule {
++	t.Helper()
++	op, _ := NewOperator(Lists, false, OpDomainsLists, dir, nil)
++	return Create("z00-blocklist:ads:domains", "", enabled, false, false, Deny, Always, op)
++}
++
++func newTestLoader(t *testing.T, live bool, dir string) *Loader {
++	t.Helper()
++	l, err := NewLoader(live)
++	if err != nil {
++		t.Fatal(err)
++	}
++	if err := l.Load(dir); err != nil {
++		t.Fatal(err)
++	}
++	return l
++}
++
++func activeRule(l *Loader, name string) *Rule {
++	l.RLock()
++	defer l.RUnlock()
++	return l.rules[name]
++}
++
++// Disabling a loaded blocklist must not hand its list to the disabled rule,
++// which never gets a monitor; deleting it must leave nothing held.
++func TestDisabledBlocklistHoldsNothing(t *testing.T) {
++	blk := useSnitchwatchRoot(t)
++	useConfinedTimings(t, 10*time.Millisecond, 0)
++	writeFile(t, blk+"/ads/domains/domains.list", "0.0.0.0 a.example\n")
++	l := newTestLoader(t, false, t.TempDir())
++	const name = "z00-blocklist:ads:domains"
++	t.Cleanup(func() { l.Delete(name); waitSettled(t, "cleanup") })
++	if err := l.Replace(lifecycleRule(t, blk+"/ads/domains", true), false); err != nil {
++		t.Fatal(err)
++	}
++	waitFor(t, "list not loaded", func() bool { return numLists(&activeRule(l, name).Operator) == 1 })
++	if err := l.Replace(lifecycleRule(t, blk+"/ads/domains", false), false); err != nil {
++		t.Fatal(err)
++	}
++	waitSettled(t, "after disabling")
++	l.Delete(name)
++	waitSettled(t, "after deleting")
++}
++
++// The same through live reload: a disabled rule echoed from disk.
++func TestDisabledBlocklistEchoHoldsNothing(t *testing.T) {
++	blk := useSnitchwatchRoot(t)
++	useConfinedTimings(t, 10*time.Millisecond, 0)
++	writeFile(t, blk+"/ads/domains/domains.list", "0.0.0.0 a.example\n")
++	rules := filepath.Dir(blk) + "/rules"
++	if err := os.Mkdir(rules, 0700); err != nil {
++		t.Fatal(err)
++	}
++	l := newTestLoader(t, true, rules)
++	waitFor(t, "rules watcher not running", l.isLiveReloadRunning)
++	time.Sleep(100 * time.Millisecond)
++	const name = "z00-blocklist:ads:domains"
++	t.Cleanup(func() { l.Delete(name); waitSettled(t, "cleanup") })
++	if err := l.Replace(lifecycleRule(t, blk+"/ads/domains", true), true); err != nil {
++		t.Fatal(err)
++	}
++	waitFor(t, "list not loaded", func() bool { return numLists(&activeRule(l, name).Operator) == 1 })
++	sent := lifecycleRule(t, blk+"/ads/domains", false)
++	if err := l.Replace(sent, true); err != nil {
++		t.Fatal(err)
++	}
++	waitFor(t, "no fsnotify echo", func() bool { return activeRule(l, name) != sent })
++	waitSettled(t, "after the disabled echo")
++	l.Delete(name)
++	waitSettled(t, "after deleting")
++}
++
++// A bridge-owned operator without a monitor is cleared when its rule goes.
++func TestStopOrClearListsReleasesAnUnmonitoredList(t *testing.T) {
++	blk := useSnitchwatchRoot(t)
++	writeFile(t, blk+"/ads/domains/domains.list", "0.0.0.0 a.example\n")
++	o := readListsOnce(t, OpDomainsLists, blk+"/ads/domains")
++	if numLists(o) != 1 || budgetUsed() == 0 {
++		t.Fatal("list not loaded")
++	}
++	o.stopOrClearLists()
++	if numLists(o) != 0 || budgetUsed() != 0 {
++		t.Errorf("%d entries, %d budget bytes left", numLists(o), budgetUsed())
++	}
++}
++
++// Deleting and re-adding a rule does not reset the per-path reload limit.
++func TestDeleteAndReaddKeepsTheReloadLimit(t *testing.T) {
++	blk := useSnitchwatchRoot(t)
++	useConfinedTimings(t, 10*time.Millisecond, time.Hour)
++	writeFile(t, blk+"/ads/domains/domains.list", "0.0.0.0 a.example\n")
++	l := newTestLoader(t, false, t.TempDir())
++	const name = "z00-blocklist:ads:domains"
++	t.Cleanup(func() { l.Delete(name); waitSettled(t, "cleanup") })
++	if err := l.Replace(lifecycleRule(t, blk+"/ads/domains", true), false); err != nil {
++		t.Fatal(err)
++	}
++	waitFor(t, "list not loaded", func() bool { return numLists(&activeRule(l, name).Operator) == 1 })
++	loads := confinedLoads.Load()
++	for i := 0; i < 5; i++ {
++		l.Delete(name)
++		if err := l.Replace(lifecycleRule(t, blk+"/ads/domains", true), false); err != nil {
++			t.Fatal(err)
++		}
++		time.Sleep(5 * confinedPollInterval)
++	}
++	if d := confinedLoads.Load() - loads; d != 0 {
++		t.Errorf("%d loads within minConfinedReloadInterval", d)
++	}
++}
++
++// A rule echoed from disk while its first load runs keeps the loading rule.
++func TestEchoesFirstLoad(t *testing.T) {
++	blk := useSnitchwatchRoot(t)
++	dir := blk + "/ads/domains"
++	old, echo := lifecycleRule(t, dir, true), lifecycleRule(t, dir, true)
++	old.Operator.stopMonitor = make(chan struct{})
++	if !echoesFirstLoad(old, echo) {
++		t.Error("echo of a first-loading rule not recognised")
++	}
++	if echoesFirstLoad(old, lifecycleRule(t, dir, false)) {
++		t.Error("a changed rule treated as an echo")
++	}
++	old.Operator.confinedSeen.ok = true
++	if echoesFirstLoad(old, echo) {
++		t.Error("a loaded rule treated as first-loading")
++	}
++}
++
++// The path records are capped: at twice the cap they are pruned back to it,
++// expired ones first, then the oldest.
++func TestConfinedPathRecordsAreCapped(t *testing.T) {
++	useConfinedTimings(t, confinedPollInterval, time.Hour)
++	confinedPaths.Lock()
++	saved, savedCap := confinedPaths.m, maxConfinedPathRecords
++	confinedPaths.m, maxConfinedPathRecords = map[string]*confinedPathRecord{}, 4
++	confinedPaths.Unlock()
++	t.Cleanup(func() {
++		confinedPaths.Lock()
++		confinedPaths.m, maxConfinedPathRecords = saved, savedCap
++		confinedPaths.Unlock()
++	})
++	for i := 0; i < 9; i++ {
++		confinedLoadDone(fmt.Sprintf("/p%d", i), false)
++		confinedPaths.Lock()
++		confinedPaths.m[fmt.Sprintf("/p%d", i)].lastDone = time.Now().Add(time.Duration(i-10) * time.Minute)
++		if n := len(confinedPaths.m); n > 8 {
++			t.Errorf("%d records over twice the cap", n)
++		}
++		confinedPaths.Unlock()
++	}
++	confinedPaths.Lock()
++	defer confinedPaths.Unlock()
++	if len(confinedPaths.m) != 5 || confinedPaths.m["/p0"] != nil || confinedPaths.m["/p7"] == nil {
++		t.Errorf("after pruning: %d records, oldest kept %v, newest kept %v", len(confinedPaths.m), confinedPaths.m["/p0"] != nil, confinedPaths.m["/p7"] != nil)
++	}
++	minConfinedReloadInterval = 0
++	pruneConfinedPathRecords()
++	if len(confinedPaths.m) != 0 {
++		t.Errorf("%d expired records kept", len(confinedPaths.m))
++	}
++}
++
++// A list whose file was removed (and so cleared) loads again as soon as the
++// file is back, without waiting for the reload limit.
++func TestClearedListReloadsPromptly(t *testing.T) {
++	blk := useSnitchwatchRoot(t)
++	useConfinedTimings(t, 10*time.Millisecond, 2*time.Second)
++	file := blk + "/ads/domains/domains.list"
++	writeFile(t, file, "0.0.0.0 a.example\n")
++	o := &Operator{Type: Lists, Operand: OpDomainsLists, Data: blk + "/ads/domains"}
++	t.Cleanup(func() { stopAndWait(t, o) })
++	o.Compile()
++	waitFor(t, "list not loaded", func() bool { return numLists(o) == 1 })
++	os.Remove(file)
++	waitFor(t, "removed list not cleared", func() bool { return numLists(o) == 0 })
++	writeFile(t, file, "0.0.0.0 b.example\n")
++	start := time.Now()
++	waitFor(t, "list not reloaded", func() bool { return hasEntry(o, "b.example") })
++	if d := time.Since(start); d > time.Second {
++		t.Errorf("reload after a clear took %s", d)
++	}
++}
++
++// An over-budget list rewritten with a new size on every poll is retried at
++// most once per minConfinedReloadInterval, not on every change.
++func TestBudgetRefusalRetriesAreRateLimited(t *testing.T) {
++	blk := useSnitchwatchRoot(t)
++	useConfinedTimings(t, 20*time.Millisecond, time.Hour)
++	lines := func(n int) string {
++		var b strings.Builder
++		for i := 0; i < n; i++ {
++			fmt.Fprintf(&b, "0.0.0.0 b%06d.example\n", i)
++		}
++		return b.String()
++	}
++	file := blk + "/b/domains/domains.list"
++	writeFile(t, file, lines(1000))
++	useBudget(t, 50000) // the file fits, its entries don't
++	o := &Operator{Type: Lists, Operand: OpDomainsLists, Data: blk + "/b/domains"}
++	t.Cleanup(func() { stopAndWait(t, o) })
++	o.Compile()
++	refusals := func() int {
++		confinedPaths.Lock()
++		defer confinedPaths.Unlock()
++		if rec := confinedPaths.m[o.Data]; rec != nil {
++			return rec.refusals
++		}
++		return 0
++	}
++	waitFor(t, "never refused", func() bool { return refusals() > 0 })
++	for i := 1; i <= 20; i++ {
++		writeFile(t, file, lines(1000+i))
++		time.Sleep(2 * confinedPollInterval)
++	}
++	if n := refusals(); n != 1 {
++		t.Errorf("%d budget refusals within minConfinedReloadInterval, want 1", n)
++	}
++}
++
++// Pruning evicts records with a pending budget refusal last, so a flood of
++// fresh paths can't reset a refused list's backoff.
++func TestConfinedPathPruneKeepsPendingRefusals(t *testing.T) {
++	useConfinedTimings(t, confinedPollInterval, time.Hour)
++	useBudget(t, 1000)
++	confinedPaths.Lock()
++	saved, savedCap := confinedPaths.m, maxConfinedPathRecords
++	confinedPaths.m, maxConfinedPathRecords = map[string]*confinedPathRecord{}, 16
++	confinedPaths.Unlock()
++	t.Cleanup(func() {
++		confinedPaths.Lock()
++		confinedPaths.m, maxConfinedPathRecords = saved, savedCap
++		confinedPaths.Unlock()
++	})
++	const victim = "/v/domains"
++	confinedLoadRefused(victim, 10, 5000, true)
++	confinedLoadRefused(victim, 10, 5000, true)
++	time.Sleep(10 * time.Millisecond)
++	for i := 0; i < 2*16; i++ {
++		confinedLoadDone(fmt.Sprintf("/f%d/domains", i), false)
++	}
++	confinedPaths.Lock()
++	rec := confinedPaths.m[victim]
++	confinedPaths.Unlock()
++	if rec == nil || rec.refusals != 2 || confinedLoadAllowed(victim, 10) {
++		t.Errorf("refused record evicted or its backoff lost: %+v", rec)
++	}
++}
++
++// Right after a budget refusal a removed list (size 0) may load at once, to
++// clear it, while a changed but present one waits for the reload interval.
++func TestRemovedListBypassesARecentRefusal(t *testing.T) {
++	useConfinedTimings(t, confinedPollInterval, time.Hour)
++	useBudget(t, 1000)
++	path := "/test/removed-after-refusal/" + t.Name()
++	confinedLoadRefused(path, 10, 5000, true)
++	if !confinedLoadAllowed(path, 0) {
++		t.Error("removed list waited after a refusal")
++	}
++	if confinedLoadAllowed(path, 20) {
++		t.Error("changed list retried within the reload interval")
++	}
++}
+diff --git a/daemon/rule/operator_lists_confined_parse.go b/daemon/rule/operator_lists_confined_parse.go
+new file mode 100644
+index 00000000..7a7e00bd
+--- /dev/null
++++ b/daemon/rule/operator_lists_confined_parse.go
+@@ -0,0 +1,149 @@
++package rule
++
++import (
++	"bytes"
++	"fmt"
++	"net"
++)
++
++const confinedSpace = " \t\r\v\f"
++
++// confinedDomain returns the normalised host of a hosts-file line
++// ("0.0.0.0 host" / "127.0.0.1 host", as filterDomains accepts them), or nil.
++// The host is the first field, lowercased in place (line is the loader's own
++// buffer) with one trailing dot removed. Localhost names, anything outside
++// [a-z0-9._-], empty labels, labels starting or ending with '-' and hosts
++// longer than maxDomainBytes are dropped.
++func confinedDomain(line []byte) []byte {
++	line = bytes.TrimLeft(line, " \t")
++	var host []byte
++	switch {
++	case len(line) > 8 && string(line[:7]) == "0.0.0.0" && (line[7] == ' ' || line[7] == '\t'):
++		host = line[8:]
++	case len(line) > 10 && string(line[:9]) == "127.0.0.1" && (line[9] == ' ' || line[9] == '\t'):
++		host = line[10:]
++	default:
++		return nil
++	}
++	host = bytes.TrimLeft(host, confinedSpace)
++	if i := bytes.IndexAny(host, confinedSpace); i >= 0 {
++		host = host[:i]
++	}
++	host = bytes.TrimSuffix(host, []byte("."))
++	if len(host) == 0 || len(host) > maxDomainBytes {
++		return nil
++	}
++	label := 0 // length of the current label
++	for i, c := range host {
++		switch {
++		case c >= 'A' && c <= 'Z':
++			host[i] = c + 'a' - 'A'
++		case c >= 'a' && c <= 'z', c >= '0' && c <= '9', c == '_':
++		case c == '-':
++			if label == 0 {
++				return nil
++			}
++		case c == '.':
++			if label == 0 || host[i-1] == '-' {
++				return nil
++			}
++			label = 0
++			continue
++		default:
++			return nil
++		}
++		label++
++	}
++	if label == 0 || host[len(host)-1] == '-' {
++		return nil
++	}
++	switch string(host) {
++	case "local", "localhost", "localhost.localdomain", "broadcasthost":
++		return nil
++	}
++	return host
++}
++
++// confinedIP returns the canonical form of an ips-list line holding one IPv4
++// or IPv6 address (an optional "#" comment aside), or "". Lines with more
++// than one field (e.g. hosts-format lines) and loopback or unspecified
++// addresses are refused.
++func confinedIP(line []byte) string {
++	if i := bytes.IndexByte(line, '#'); i >= 0 {
++		line = line[:i]
++	}
++	line = bytes.Trim(line, confinedSpace)
++	if len(line) == 0 || len(line) > 64 || bytes.ContainsAny(line, confinedSpace) {
++		return ""
++	}
++	ip := net.ParseIP(string(line))
++	if ip == nil || ip.IsLoopback() || ip.IsUnspecified() {
++		return ""
++	}
++	return ip.String()
++}
++
++type confinedParseStats struct {
++	accepted int
++	dups     uint64
++	keyBytes int64
++	consumed int // bytes of buf parsed
++}
++
++// parseConfinedList parses a bridge-owned list straight from its read buffer.
++// Each stored entry is charged len(key)+confinedEntryOverhead to the budget
++// (in batches), accumulated in *charged, which the caller releases on any
++// error: errBudget (the budget ran out), errStopped (stop was closed) or more
++// than maxBlocklistEntries entries. All entries share one value.
++func parseConfinedList(stop <-chan struct{}, buf []byte, fileName, kind string, charged *int64) (map[string]interface{}, confinedParseStats, error) {
++	const batch = 64 << 10
++	var st confinedParseStats
++	m := make(map[string]interface{})
++	var value interface{} = fileName
++	var pending int64
++	total := len(buf)
++	buf = bytes.TrimPrefix(buf, utf8BOM)
++	for n := 1; len(buf) > 0; n++ {
++		if n%confinedStopCheckLines == 0 && stopped(stop) {
++			return nil, st, errStopped
++		}
++		line := buf
++		if i := bytes.IndexByte(buf, '\n'); i >= 0 {
++			line, buf = buf[:i], buf[i+1:]
++		} else {
++			buf = nil
++		}
++		st.consumed = total - len(buf)
++		var key string
++		if kind == "ips" {
++			key = confinedIP(line)
++		} else if host := confinedDomain(line); host != nil {
++			key = string(host)
++		}
++		if key == "" {
++			continue
++		}
++		if _, found := m[key]; found {
++			st.dups++
++			continue
++		}
++		if st.accepted == maxBlocklistEntries {
++			return nil, st, fmt.Errorf("more than %d entries", maxBlocklistEntries)
++		}
++		m[key] = value
++		st.accepted++
++		st.keyBytes += int64(len(key))
++		if pending += int64(len(key)) + confinedEntryOverhead; pending >= batch {
++			if !reserveBudget(pending) {
++				return nil, st, errBudget
++			}
++			*charged += pending
++			pending = 0
++		}
++	}
++	if !reserveBudget(pending) {
++		return nil, st, errBudget
++	}
++	*charged += pending
++	return m, st, nil
++}
+diff --git a/daemon/rule/operator_lists_confined_test.go b/daemon/rule/operator_lists_confined_test.go
+new file mode 100644
+index 00000000..7e8e0b2a
+--- /dev/null
++++ b/daemon/rule/operator_lists_confined_test.go
+@@ -0,0 +1,793 @@
++package rule
++
++import (
++	"fmt"
++	"os"
++	"path/filepath"
++	"strings"
++	"testing"
++	"time"
++
++	"golang.org/x/sys/unix"
++)
++
++// useSnitchwatchRoot points the bridge tree at a fresh temp dir and returns
++// its blocklists dir. The confined reader refuses FUSE (rootless podman's
++// /tmp) and symlinked ancestors, so it falls back to /dev/shm or skips.
++func useSnitchwatchRoot(t *testing.T) string {
++	root := ""
++	for _, base := range []string{"", "/dev/shm"} {
++		dir, err := os.MkdirTemp(base, "snitchwatch-test-")
++		if err != nil {
++			continue
++		}
++		t.Cleanup(func() { os.RemoveAll(dir) })
++		var fs unix.Statfs_t
++		if real, err := filepath.EvalSymlinks(dir); err == nil && real == dir &&
++			unix.Statfs(dir, &fs) == nil && fs.Type != unix.FUSE_SUPER_MAGIC {
++			root = dir
++			break
++		}
++	}
++	if root == "" {
++		if os.Getenv("SNITCHWATCH_REQUIRE_CONFINED_TESTS") == "1" {
++			t.Fatal("no temp dir off FUSE and without symlinked ancestors, and SNITCHWATCH_REQUIRE_CONFINED_TESTS=1")
++		}
++		t.Log("WARNING: confined blocklist tests NOT RUN: no temp dir off FUSE and without symlinked ancestors")
++		t.Skip("no usable temp dir for the confined reader")
++	}
++	old := SnitchwatchRoot
++	SnitchwatchRoot = root
++	t.Cleanup(func() { SnitchwatchRoot = old })
++	useBlocklistsRoot(t, root+"/blocklists")
++	if err := os.MkdirAll(root+"/blocklists", 0700); err != nil {
++		t.Fatal(err)
++	}
++	return root + "/blocklists"
++}
++
++func useBlocklistCaps(t *testing.T, bytes int64, lines, entries int, total int64) {
++	oldB, oldL, oldE, oldT := maxBlocklistFileBytes, maxBlocklistFileLines, maxBlocklistEntries, maxConfinedTotalBytes
++	maxBlocklistFileBytes, maxBlocklistFileLines, maxBlocklistEntries, maxConfinedTotalBytes = bytes, lines, entries, total
++	t.Cleanup(func() {
++		maxBlocklistFileBytes, maxBlocklistFileLines, maxBlocklistEntries, maxConfinedTotalBytes = oldB, oldL, oldE, oldT
++	})
++}
++
++// useBudget sets the total budget only.
++func useBudget(t *testing.T, total int64) {
++	useBlocklistCaps(t, maxBlocklistFileBytes, maxBlocklistFileLines, maxBlocklistEntries, total)
++}
++
++func useConfinedTimings(t *testing.T, poll, minReload time.Duration) {
++	oldP, oldM := confinedPollInterval, minConfinedReloadInterval
++	confinedPollInterval, minConfinedReloadInterval = poll, minReload
++	t.Cleanup(func() { confinedPollInterval, minConfinedReloadInterval = oldP, oldM })
++}
++
++func budgetUsed() int64 {
++	confinedBytesMu.Lock()
++	defer confinedBytesMu.Unlock()
++	return confinedBytesUsed
++}
++
++func writeFile(t *testing.T, path, content string) {
++	t.Helper()
++	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
++		t.Fatal(err)
++	}
++	if err := os.WriteFile(path, []byte(content), 0600); err != nil {
++		t.Fatal(err)
++	}
++}
++
++func symlink(t *testing.T, target, link string) {
++	t.Helper()
++	if err := os.MkdirAll(filepath.Dir(link), 0700); err != nil {
++		t.Fatal(err)
++	}
++	if err := os.Symlink(target, link); err != nil {
++		t.Fatal(err)
++	}
++}
++
++func mkfifo(t *testing.T, path string) {
++	t.Helper()
++	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
++		t.Fatal(err)
++	}
++	if err := unix.Mkfifo(path, 0600); err != nil {
++		t.Fatal(err)
++	}
++}
++
++// readListsOnce runs readLists without starting a monitor, failing instead
++// of hanging if a read blocks (e.g. on a fifo).
++func readListsOnce(t *testing.T, operand Operand, data string) *Operator {
++	t.Helper()
++	o := &Operator{Type: Lists, Operand: operand, Data: data}
++	t.Cleanup(o.ClearLists)
++	done := make(chan struct{})
++	go func() {
++		o.readLists()
++		close(done)
++	}()
++	select {
++	case <-done:
++	case <-time.After(5 * time.Second):
++		t.Fatal("readLists blocked")
++	}
++	return o
++}
++
++// stopAndWait stops o's monitor and waits for it to exit, so the test may
++// then restore the package vars the monitor reads.
++func stopAndWait(t *testing.T, o *Operator) {
++	o.StopMonitoringLists()
++	if o.monitorDone == nil {
++		return
++	}
++	select {
++	case <-o.monitorDone:
++	case <-time.After(5 * time.Second):
++		t.Error("lists monitor did not exit")
++	}
++}
++
++func numLists(o *Operator) int {
++	o.RLock()
++	defer o.RUnlock()
++	return len(o.lists)
++}
++
++func hasEntry(o *Operator, key string) bool {
++	o.RLock()
++	defer o.RUnlock()
++	_, ok := o.lists[key]
++	return ok
++}
++
++// waitFor polls cond for up to 5 s.
++func waitFor(t *testing.T, what string, cond func() bool) {
++	t.Helper()
++	for deadline := time.Now().Add(5 * time.Second); !cond(); time.Sleep(5 * time.Millisecond) {
++		if time.Now().After(deadline) {
++			t.Fatal(what)
++		}
++	}
++}
++
++func TestFilterDomainsIsBoundsSafe(t *testing.T) {
++	tests := map[string]string{ // line -> host, "" = skipped
++		"": "", "127.0.0.1": "", "0.0.0.0": "", "0.0.0.0 ": "", "127.0.0.1 ": "", "127.0.0.1\r": "",
++		"0.0.0.0x.example": "", "127.0.0.1x.example": "", "0.0.0.0 localhost": "",
++		"0.0.0.0 a.example": "a.example", "0.0.0.0\tb.example": "b.example", "127.0.0.1 c": "c",
++	}
++	for line, want := range tests {
++		skip, host, _ := filterDomains(line, "")
++		if (want == "") != skip || (!skip && host != want) {
++			t.Errorf("filterDomains(%q) = %v, %q; want %q", line, skip, host, want)
++		}
++	}
++}
++
++// Lists under SnitchwatchRoot are owned by the unprivileged bridge, so the
++// root daemon reads exactly <kind>.list there: no symlinks, fifos, hard
++// links, other names or unclean paths, and bounded, normalised content.
++func TestReadListsConfinedUnderSnitchwatchRoot(t *testing.T) {
++	const good = "0.0.0.0 good.example\n"
++	two := "0.0.0.0 a.example\n0.0.0.0 b.example\n"
++	host253 := strings.Repeat("a", 249) + ".com"
++	tests := []struct {
++		name       string
++		operand    Operand
++		data       string // relative to the blocklists dir
++		abs        func(blk string) string
++		bytes      int64
++		lines      int
++		entries    int
++		setup      func(t *testing.T, blk, out string)
++		want, deny []string
++	}{
++		{name: "domains file", setup: func(t *testing.T, blk, out string) { writeFile(t, blk+"/ads/domains/domains.list", good) },
++			want: []string{"good.example"}},
++		{name: "malformed hosts lines", setup: func(t *testing.T, blk, out string) {
++			writeFile(t, blk+"/ads/domains/domains.list", "127.0.0.1\n0.0.0.0\n0.0.0.0 \n127.0.0.1\r\n\n127.0.0.1 \n"+good)
++		}, want: []string{"good.example"}},
++		{name: "domain normalisation", setup: func(t *testing.T, blk, out string) {
++			writeFile(t, blk+"/ads/domains/domains.list", "\xef\xbb\xbf0.0.0.0 bom.example\n127.0.0.1 localhost\r\n0.0.0.0  localhost\n"+
++				"0.0.0.0 ads.example # c\n0.0.0.0 UPPER.Example\n  \t0.0.0.0 lead.example\n0.0.0.0 dot.example.\n"+
++				"0.0.0.0 under_score.example\n0.0.0.0 x-y.example\n0.0.0.0 LocalHost.\n0.0.0.0 bad/char.example\n"+
++				"0.0.0.0 ..\n0.0.0.0 a..b\n0.0.0.0 .a\n0.0.0.0 -a.example\n0.0.0.0 a-.example\n0.0.0.0 a.-b\n0.0.0.0 a.b-\n")
++		}, want: []string{"bom.example", "ads.example", "upper.example", "lead.example", "dot.example", "under_score.example", "x-y.example"},
++			deny: []string{"localhost", "localhost\r", "UPPER.Example", "dot.example.", "bad/char.example", "#", ".", "a..b", "-a.example"}},
++		{name: "domain length", setup: func(t *testing.T, blk, out string) {
++			writeFile(t, blk+"/ads/domains/domains.list", "0.0.0.0 "+host253+"\n0.0.0.0 a"+host253+"\n")
++		}, want: []string{host253}, deny: []string{"a" + host253}},
++		{name: "ips, canonical v4 and v6", operand: OpIPLists, data: "bad/ips", setup: func(t *testing.T, blk, out string) {
++			writeFile(t, blk+"/bad/ips/ips.list", "10.0.0.1\n::ffff:10.0.0.9\n2001:DB8:0::1\nbogus\n# 10.0.0.7\n 10.0.0.2\r\n10.0.0.3 # c\n"+
++				"0.0.0.0 host.example\n127.0.0.1 host.example\n10.0.0.4 10.0.0.5\n127.0.0.1\n0.0.0.0\n::1\n::\n127.1.2.3\n")
++		}, want: []string{"10.0.0.1", "10.0.0.9", "2001:db8::1", "10.0.0.2", "10.0.0.3"},
++			deny: []string{"::ffff:10.0.0.9", "2001:DB8:0::1", "bogus", "10.0.0.7", "0.0.0.0", "127.0.0.1", "10.0.0.4", "::1", "::", "127.1.2.3"}},
++		{name: "other names ignored", setup: func(t *testing.T, blk, out string) {
++			writeFile(t, blk+"/ads/domains/.domains.list.tmp", "0.0.0.0 hidden.example\n")
++			writeFile(t, blk+"/ads/domains/other.list", "0.0.0.0 other.example\n")
++		}},
++		{name: "symlinked file", setup: func(t *testing.T, blk, out string) {
++			writeFile(t, out+"/secret", "0.0.0.0 target.example\n")
++			symlink(t, out+"/secret", blk+"/ads/domains/domains.list")
++		}},
++		{name: "hard-linked file", setup: func(t *testing.T, blk, out string) {
++			writeFile(t, blk+"/ads/domains/domains.list", good)
++			if err := os.MkdirAll(blk+"/other", 0700); err != nil {
++				t.Fatal(err)
++			}
++			if err := os.Link(blk+"/ads/domains/domains.list", blk+"/other/domains.list"); err != nil {
++				t.Fatal(err)
++			}
++		}},
++		{name: "fifo without writer", setup: func(t *testing.T, blk, out string) { mkfifo(t, blk+"/ads/domains/domains.list") }},
++		{name: "fifo with writer", setup: func(t *testing.T, blk, out string) {
++			mkfifo(t, blk+"/ads/domains/domains.list")
++			w, err := os.OpenFile(blk+"/ads/domains/domains.list", os.O_RDWR, 0)
++			if err != nil {
++				t.Fatal(err)
++			}
++			t.Cleanup(func() { w.Close() })
++			if _, err := w.WriteString("0.0.0.0 fifo.example\n"); err != nil {
++				t.Fatal(err)
++			}
++		}},
++		{name: "fifo with idle writer", setup: func(t *testing.T, blk, out string) {
++			mkfifo(t, blk+"/ads/domains/domains.list")
++			w, err := os.OpenFile(blk+"/ads/domains/domains.list", os.O_RDWR, 0)
++			if err != nil {
++				t.Fatal(err)
++			}
++			t.Cleanup(func() { w.Close() })
++		}},
++		{name: "dir as list file", setup: func(t *testing.T, blk, out string) {
++			writeFile(t, blk+"/ads/domains/domains.list/x.list", good)
++		}},
++		{name: "symlinked kind dir", setup: func(t *testing.T, blk, out string) {
++			writeFile(t, out+"/real/domains.list", "0.0.0.0 target.example\n")
++			symlink(t, out+"/real", blk+"/ads/domains")
++		}},
++		{name: "symlinked list dir", setup: func(t *testing.T, blk, out string) {
++			writeFile(t, out+"/real/domains/domains.list", "0.0.0.0 target.example\n")
++			symlink(t, out+"/real", blk+"/ads")
++		}},
++		{name: "trailing slash", data: "ads/domains/", setup: func(t *testing.T, blk, out string) {
++			writeFile(t, blk+"/ads/domains/domains.list", good)
++		}},
++		{name: "double slash", data: "ads//domains", setup: func(t *testing.T, blk, out string) {
++			writeFile(t, blk+"/ads/domains/domains.list", good)
++		}},
++		{name: "dotdot", data: "x/../ads/domains", setup: func(t *testing.T, blk, out string) {
++			writeFile(t, blk+"/ads/domains/domains.list", good)
++		}},
++		{name: "dotdot out of the tree", data: "../../x/domains", setup: func(t *testing.T, blk, out string) {
++			writeFile(t, blk+"/../../x/domains/domains.list", good)
++		}},
++		{name: "unclean path into the tree", abs: func(blk string) string {
++			root := filepath.Dir(blk)
++			return filepath.Dir(root) + "/./" + filepath.Base(root) + "/blocklists/ads/domains"
++		}, setup: func(t *testing.T, blk, out string) { writeFile(t, blk+"/ads/domains/domains.list", good) }},
++		{name: "unknown kind dir", data: "ads/other", setup: func(t *testing.T, blk, out string) {
++			writeFile(t, blk+"/ads/other/other.list", good)
++			writeFile(t, blk+"/ads/other/domains.list", good)
++		}},
++		{name: "kind/operand mismatch", operand: OpIPLists, setup: func(t *testing.T, blk, out string) {
++			writeFile(t, blk+"/ads/domains/domains.list", good)
++			writeFile(t, blk+"/ads/domains/ips.list", "10.0.0.1\n")
++		}},
++		{name: "exactly the byte cap", bytes: int64(len(two)),
++			setup: func(t *testing.T, blk, out string) { writeFile(t, blk+"/ads/domains/domains.list", two) },
++			want:  []string{"a.example", "b.example"}},
++		{name: "one byte over the cap", bytes: int64(len(two)) - 1,
++			setup: func(t *testing.T, blk, out string) { writeFile(t, blk+"/ads/domains/domains.list", two) }},
++		{name: "exactly the line cap", lines: 2,
++			setup: func(t *testing.T, blk, out string) { writeFile(t, blk+"/ads/domains/domains.list", two) },
++			want:  []string{"a.example", "b.example"}},
++		{name: "exactly the line cap, no final newline", lines: 2,
++			setup: func(t *testing.T, blk, out string) {
++				writeFile(t, blk+"/ads/domains/domains.list", strings.TrimSuffix(two, "\n"))
++			},
++			want: []string{"a.example", "b.example"}},
++		{name: "one line over the cap", lines: 1,
++			setup: func(t *testing.T, blk, out string) { writeFile(t, blk+"/ads/domains/domains.list", two) }},
++		{name: "one line over the cap, no final newline", lines: 1,
++			setup: func(t *testing.T, blk, out string) {
++				writeFile(t, blk+"/ads/domains/domains.list", strings.TrimSuffix(two, "\n"))
++			}},
++		{name: "exactly the entries cap, comments not counted", entries: 2,
++			setup: func(t *testing.T, blk, out string) {
++				writeFile(t, blk+"/ads/domains/domains.list", "# header\n\n"+two+"0.0.0.0 a.example\n")
++			},
++			want: []string{"a.example", "b.example"}},
++		{name: "one entry over the cap", entries: 1,
++			setup: func(t *testing.T, blk, out string) { writeFile(t, blk+"/ads/domains/domains.list", two) }},
++	}
++	for _, tt := range tests {
++		t.Run(tt.name, func(t *testing.T) {
++			// out is on the same (non-FUSE) fs so the FUSE check can't mask
++			// a followed symlink.
++			blk := useSnitchwatchRoot(t)
++			out := filepath.Dir(blk) + "/out"
++			bytes, lines, entries, operand, data := maxBlocklistFileBytes, maxBlocklistFileLines, maxBlocklistEntries, OpDomainsLists, "ads/domains"
++			if tt.bytes != 0 {
++				bytes = tt.bytes
++			}
++			if tt.lines != 0 {
++				lines = tt.lines
++			}
++			if tt.entries != 0 {
++				entries = tt.entries
++			}
++			if tt.operand != "" {
++				operand = tt.operand
++			}
++			if tt.data != "" {
++				data = tt.data
++			}
++			useBlocklistCaps(t, bytes, lines, entries, maxConfinedTotalBytes)
++			tt.setup(t, blk, out)
++			path := blk + "/" + data
++			if tt.abs != nil {
++				path = tt.abs(blk)
++			}
++			lists := readListsOnce(t, operand, path).lists
++			for _, k := range tt.want {
++				if _, ok := lists[k]; !ok {
++					t.Errorf("%q not loaded: %v", k, lists)
++				}
++			}
++			if len(lists) != len(tt.want) {
++				t.Errorf("loaded %d entries %v, want %d", len(lists), lists, len(tt.want))
++			}
++			for _, k := range tt.deny {
++				if _, ok := lists[k]; ok {
++					t.Errorf("%q loaded", k)
++				}
++			}
++		})
++	}
++}
++
++// A failed reload keeps the current list; a removed file clears it.
++func TestConfinedReloadKeepsOrClears(t *testing.T) {
++	blk := useSnitchwatchRoot(t)
++	file := blk + "/ads/domains/domains.list"
++	writeFile(t, file, "0.0.0.0 a.example\n")
++	o := readListsOnce(t, OpDomainsLists, blk+"/ads/domains")
++	if !hasEntry(o, "a.example") {
++		t.Fatal("list not loaded")
++	}
++	os.Remove(file)
++	writeFile(t, filepath.Dir(blk)+"/secret", "0.0.0.0 target.example\n")
++	symlink(t, filepath.Dir(blk)+"/secret", file)
++	o.readLists()
++	if !hasEntry(o, "a.example") || hasEntry(o, "target.example") {
++		t.Errorf("failed reload did not keep the list: %v", o.lists)
++	}
++	os.Remove(file)
++	o.readLists()
++	if numLists(o) != 0 || budgetUsed() != 0 {
++		t.Errorf("removed file did not clear the list: %v, %d budget bytes", o.lists, budgetUsed())
++	}
++}
++
++// All confined operators share one budget: entries are charged
++// len(key)+confinedEntryOverhead, a file its size while it is being read.
++func TestConfinedListsShareAByteBudget(t *testing.T) {
++	blk := useSnitchwatchRoot(t)
++	const content = "0.0.0.0 good.example\n"
++	entry := int64(len("good.example") + confinedEntryOverhead)
++	useBudget(t, entry+int64(len(content))+1+entry-1)
++	writeFile(t, blk+"/a/domains/domains.list", content)
++	writeFile(t, blk+"/b/domains/domains.list", content)
++	if budgetUsed() != 0 {
++		t.Fatalf("budget already holds %d bytes", budgetUsed())
++	}
++	a := readListsOnce(t, OpDomainsLists, blk+"/a/domains")
++	if numLists(a) != 1 || budgetUsed() != entry {
++		t.Fatalf("a: %d entries, budget %d, want 1 and %d", numLists(a), budgetUsed(), entry)
++	}
++	b := readListsOnce(t, OpDomainsLists, blk+"/b/domains")
++	if numLists(b) != 0 || budgetUsed() != entry {
++		t.Fatalf("b loaded over the budget: %v, budget %d", b.lists, budgetUsed())
++	}
++	a.ClearLists()
++	if b.readLists(); numLists(b) != 1 {
++		t.Errorf("b not loaded after a released its bytes: %v", b.lists)
++	}
++}
++
++// A monitor refused by the budget retries once there is room, even though
++// its file never changed.
++func TestConfinedMonitorRetriesAfterBudgetRefusal(t *testing.T) {
++	blk := useSnitchwatchRoot(t)
++	useConfinedTimings(t, 20*time.Millisecond, 0)
++	const content = "0.0.0.0 good.example\n"
++	entry := int64(len("good.example") + confinedEntryOverhead)
++	useBudget(t, entry+int64(len(content))+1+entry-1)
++	writeFile(t, blk+"/a/domains/domains.list", content)
++	writeFile(t, blk+"/b/domains/domains.list", content)
++	a := &Operator{Type: Lists, Operand: OpDomainsLists, Data: blk + "/a/domains"}
++	b := &Operator{Type: Lists, Operand: OpDomainsLists, Data: blk + "/b/domains"}
++	t.Cleanup(func() { stopAndWait(t, a); stopAndWait(t, b) })
++	a.Compile()
++	waitFor(t, "a not loaded", func() bool { return numLists(a) == 1 })
++	b.Compile()
++	time.Sleep(3 * confinedPollInterval)
++	if numLists(b) != 0 {
++		t.Fatal("b loaded over the budget")
++	}
++	stopAndWait(t, a)
++	waitFor(t, "b not loaded after a was freed", func() bool { return numLists(b) == 1 })
++}
++
++// The monitor reloads a changed file and clears a removed one.
++func TestMonitorConfinedList(t *testing.T) {
++	blk := useSnitchwatchRoot(t)
++	useConfinedTimings(t, 10*time.Millisecond, 0)
++	file := blk + "/ads/domains/domains.list"
++	writeFile(t, file, "0.0.0.0 a.example\n")
++	o := &Operator{Type: Lists, Operand: OpDomainsLists, Data: blk + "/ads/domains"}
++	t.Cleanup(func() { stopAndWait(t, o) })
++	o.Compile()
++	waitFor(t, "list not loaded", func() bool { return hasEntry(o, "a.example") })
++	writeFile(t, file, "0.0.0.0 b.example\n0.0.0.0 c.example\n")
++	waitFor(t, "changed list not reloaded", func() bool { return hasEntry(o, "b.example") && !hasEntry(o, "a.example") })
++	os.Remove(file)
++	waitFor(t, "removed list not cleared", func() bool { return numLists(o) == 0 })
++}
++
++// After a load the monitor waits minConfinedReloadInterval before the next.
++func TestMonitorConfinedListMinReloadInterval(t *testing.T) {
++	blk := useSnitchwatchRoot(t)
++	useConfinedTimings(t, 10*time.Millisecond, time.Hour)
++	file := blk + "/ads/domains/domains.list"
++	writeFile(t, file, "0.0.0.0 a.example\n")
++	o := &Operator{Type: Lists, Operand: OpDomainsLists, Data: blk + "/ads/domains"}
++	t.Cleanup(func() { stopAndWait(t, o) })
++	o.Compile()
++	waitFor(t, "list not loaded", func() bool { return hasEntry(o, "a.example") })
++	writeFile(t, file, "0.0.0.0 b.example\n0.0.0.0 c.example\n")
++	time.Sleep(10 * confinedPollInterval)
++	if !hasEntry(o, "a.example") || hasEntry(o, "b.example") {
++		t.Error("reloaded within minConfinedReloadInterval")
++	}
++}
++
++// The monitor identifies the list file without opening or following it, so
++// a symlink, fifo or dir looks like "no file" and triggers no reload.
++func TestConfinedListStateIgnoresNonRegularFiles(t *testing.T) {
++	blk := useSnitchwatchRoot(t)
++	out := t.TempDir()
++	dir := blk + "/ads/domains"
++	file := dir + "/domains.list"
++	o := &Operator{Type: Lists, Operand: OpDomainsLists, Data: dir}
++	if err := os.MkdirAll(dir, 0700); err != nil {
++		t.Fatal(err)
++	}
++	writeFile(t, out+"/secret", "0.0.0.0 target.example\n")
++	for name, mk := range map[string]func(){
++		"symlink": func() { symlink(t, out+"/secret", file) },
++		"fifo":    func() { mkfifo(t, file) },
++		"dir":     func() { os.Mkdir(file, 0700) },
++	} {
++		mk()
++		if s := o.confinedListState(); s != (confinedListState{}) {
++			t.Errorf("%s counted as a list file: %+v", name, s)
++		}
++		os.Remove(file)
++	}
++	writeFile(t, file, "0.0.0.0 a.example\n")
++	first := o.confinedListState()
++	if !first.ok {
++		t.Fatal("regular list file not seen")
++	}
++	writeFile(t, file+".new", "0.0.0.0 a.example\n")
++	// Same size and mtime: only the inode tells the files apart.
++	if err := os.Chtimes(file+".new", time.Time{}, time.Unix(first.mtime.Unix())); err != nil {
++		t.Fatal(err)
++	}
++	if err := os.Rename(file+".new", file); err != nil {
++		t.Fatal(err)
++	}
++	if s := o.confinedListState(); s == first || s.mtime != first.mtime {
++		t.Errorf("replaced list file not detected (or mtime differs): %+v vs %+v", s, first)
++	}
++}
++
++// Each path check must hold on its own, not only behind the others.
++func TestConfinedPathChecks(t *testing.T) {
++	blk := useSnitchwatchRoot(t)
++	if err := os.MkdirAll(blk+"/ads/domains", 0700); err != nil {
++		t.Fatal(err)
++	}
++	for _, p := range []string{blk + "/ads/../ads/domains", blk + "/ads/./domains", blk + "/ads//domains", "ads/domains"} {
++		if fd, err := openConfinedDir(p); err == nil {
++			unix.Close(fd)
++			t.Errorf("openConfinedDir(%q) accepted", p)
++		}
++	}
++	for _, p := range []string{blk + "/ads/domains/", blk + "/x/../ads/domains", blk + "//ads/domains"} {
++		if _, err := confinedKind(p, OpDomainsLists); err == nil {
++			t.Errorf("confinedKind(%q) accepted", p)
++		}
++	}
++	// A relative path is resolved before the tree check.
++	wd, _ := os.Getwd()
++	t.Cleanup(func() { os.Chdir(wd) })
++	if err := os.Chdir(blk); err != nil {
++		t.Fatal(err)
++	}
++	if !bridgeOwned("ads/domains") {
++		t.Error("relative path into the tree not treated as bridge-owned")
++	}
++}
++
++// Stop is called with the loader lock held, so it must not wait for the
++// monitor (which sleeps between polls) and must tolerate a second call.
++func TestStopMonitoringListsIsPromptAndIdempotent(t *testing.T) {
++	for _, confined := range []bool{false, true} {
++		t.Run(fmt.Sprint("confined=", confined), func(t *testing.T) {
++			dir := t.TempDir() + "/domains"
++			if confined {
++				dir = useSnitchwatchRoot(t) + "/ads/domains"
++			}
++			writeFile(t, dir+"/domains.list", "0.0.0.0 a.example\n")
++			o := &Operator{Type: Lists, Operand: OpDomainsLists, Data: dir}
++			if err := o.Compile(); err != nil {
++				t.Fatal(err)
++			}
++			t.Cleanup(func() { stopAndWait(t, o) })
++			for deadline := time.Now().Add(3 * time.Second); numLists(o) == 0; time.Sleep(10 * time.Millisecond) {
++				if time.Now().After(deadline) {
++					t.Fatal("monitor never loaded the list")
++				}
++			}
++			// The monitor is now sleeping until its next poll.
++			start := time.Now()
++			done := make(chan struct{})
++			go func() {
++				o.StopMonitoringLists()
++				o.StopMonitoringLists()
++				close(done)
++			}()
++			select {
++			case <-done:
++			case <-time.After(time.Second):
++				t.Fatal("StopMonitoringLists blocked")
++			}
++			for numLists(o) != 0 {
++				if time.Since(start) > time.Second {
++					t.Fatal("monitor did not exit promptly")
++				}
++				time.Sleep(10 * time.Millisecond)
++			}
++		})
++	}
++}
++
++// Rootless podman's /tmp is fuse-overlayfs: a FUSE daemon could stall the
++// root daemon's reads, so confined lists there load nothing.
++func TestReadListsRefusesFUSE(t *testing.T) {
++	dir := t.TempDir()
++	var fs unix.Statfs_t
++	if err := unix.Statfs(dir, &fs); err != nil || fs.Type != unix.FUSE_SUPER_MAGIC {
++		t.Skip("temp dir is not on FUSE")
++	}
++	old := SnitchwatchRoot
++	SnitchwatchRoot = dir
++	t.Cleanup(func() { SnitchwatchRoot = old })
++	writeFile(t, dir+"/ads/domains/domains.list", "0.0.0.0 a.example\n")
++	if lists := readListsOnce(t, OpDomainsLists, dir+"/ads/domains").lists; len(lists) != 0 {
++		t.Errorf("loaded %v from FUSE", lists)
++	}
++}
++
++// Lists outside the bridge tree (including a sibling sharing its prefix) are
++// root-configured and keep upstream's reader, which follows symlinks.
++func TestReadListsOutsideSnitchwatchRootUsesUpstreamReader(t *testing.T) {
++	base := t.TempDir()
++	old := SnitchwatchRoot
++	SnitchwatchRoot = base + "/snitchwatch"
++	t.Cleanup(func() { SnitchwatchRoot = old })
++	writeFile(t, base+"/secret", "0.0.0.0 target.example\n")
++	for _, dir := range []string{t.TempDir(), base + "/snitchwatchx/ads/domains"} {
++		symlink(t, base+"/secret", dir+"/link.list")
++		if _, ok := readListsOnce(t, OpDomainsLists, dir).lists["target.example"]; !ok {
++			t.Errorf("%s: upstream reader did not load the list", dir)
++		}
++	}
++}
++
++// A monitor that is already stopped loads nothing, not even once.
++func TestMonitorConfinedListChecksStopFirst(t *testing.T) {
++	blk := useSnitchwatchRoot(t)
++	writeFile(t, blk+"/ads/domains/domains.list", "0.0.0.0 a.example\n")
++	o := &Operator{Type: Lists, Operand: OpDomainsLists, Data: blk + "/ads/domains"}
++	t.Cleanup(o.ClearLists)
++	stop := make(chan struct{})
++	close(stop)
++	o.monitorConfinedList(stop)
++	if numLists(o) != 0 {
++		t.Error("stopped monitor loaded the list")
++	}
++}
++
++func TestReleaseBudgetNeverGoesNegative(t *testing.T) {
++	if budgetUsed() != 0 {
++		t.Fatalf("budget already holds %d bytes", budgetUsed())
++	}
++	if !reserveBudget(10) {
++		t.Fatal("reserve refused")
++	}
++	releaseBudget(25)
++	if used := budgetUsed(); used != 0 {
++		t.Errorf("budget at %d after an over-release, want 0", used)
++	}
++}
++
++// confinedBudgetFor is what the budget must hold for total entries across all
++// lists, at most perList in one list, keyLen-byte keys and maxFile-byte files:
++// everything loaded, plus one list being reloaded (its file buffer and its
++// new entries) while its old entries are still held.
++func confinedBudgetFor(total, perList, keyLen int, maxFile int64) int64 {
++	entry := int64(keyLen + confinedEntryOverhead)
++	return int64(total)*entry + maxFile + 1 + int64(perList)*entry
++}
++
++// The contract (2M hosts in total, 1M per file, 67-byte hosts, 80 MiB files)
++// fits the production budget with a reload in flight.
++func TestConfinedBudgetCoversTheContract(t *testing.T) {
++	if need := confinedBudgetFor(2000000, 1000000, 67, maxBlocklistFileBytes); need > maxConfinedTotalBytes {
++		t.Errorf("contract needs %d bytes, budget is %d", need, maxConfinedTotalBytes)
++	}
++}
++
++// The contract scaled down (the gate's /dev/shm is 64 MiB): two full lists of
++// 67-byte hosts load, and either reloads, within the formula's budget.
++func TestConfinedTwoFullListsReloadWithinBudget(t *testing.T) {
++	blk := useSnitchwatchRoot(t)
++	const n = 20000
++	var size int64
++	for _, list := range []string{"a", "b"} {
++		var b strings.Builder
++		for i := 0; i < n; i++ {
++			host := fmt.Sprintf("%s%07d.", list, i)
++			host += strings.Repeat("x", 67-len(host)-len(".example")) + ".example"
++			b.WriteString("0.0.0.0 " + host + "\n")
++		}
++		writeFile(t, blk+"/"+list+"/domains/domains.list", b.String())
++		size = int64(b.Len())
++	}
++	useBlocklistCaps(t, size, maxBlocklistFileLines, n, confinedBudgetFor(2*n, n, 67, size))
++	a := readListsOnce(t, OpDomainsLists, blk+"/a/domains")
++	b := readListsOnce(t, OpDomainsLists, blk+"/b/domains")
++	if numLists(a) != n || numLists(b) != n {
++		t.Fatalf("loaded %d and %d entries, want %d each", numLists(a), numLists(b), n)
++	}
++	for _, o := range []*Operator{a, b} {
++		if res := o.reloadConfinedList(nil, o.confinedListState()); res != loadOK || numLists(o) != n {
++			t.Errorf("%s: reload gave %v with %d entries", o.Data, res, numLists(o))
++		}
++	}
++}
++
++// A stopped monitor waiting for the read slot exits without reading.
++func TestConfinedMonitorStopsWhileWaitingForTheReadSlot(t *testing.T) {
++	blk := useSnitchwatchRoot(t)
++	useConfinedTimings(t, 10*time.Millisecond, 0)
++	writeFile(t, blk+"/ads/domains/domains.list", "0.0.0.0 a.example\n")
++	confinedReadSem <- struct{}{}
++	defer func() { <-confinedReadSem }()
++	o := &Operator{Type: Lists, Operand: OpDomainsLists, Data: blk + "/ads/domains"}
++	o.Compile()
++	time.Sleep(50 * time.Millisecond) // let it block on the slot
++	stopAndWait(t, o)
++	if numLists(o) != 0 || budgetUsed() != 0 {
++		t.Errorf("stopped monitor loaded %d entries, budget %d", numLists(o), budgetUsed())
++	}
++}
++
++// A load or parse whose stop is closed gives up and holds nothing.
++func TestConfinedLoadHonoursStop(t *testing.T) {
++	blk := useSnitchwatchRoot(t)
++	var b strings.Builder
++	for i := 0; i < 70000; i++ {
++		fmt.Fprintf(&b, "0.0.0.0 h%d.example\n", i)
++	}
++	writeFile(t, blk+"/ads/domains/domains.list", b.String())
++	stop := make(chan struct{})
++	close(stop)
++	o := &Operator{Type: Lists, Operand: OpDomainsLists, Data: blk + "/ads/domains"}
++	if out := o.loadConfinedList(stop); out.res != loadStopped || budgetUsed() != 0 {
++		t.Errorf("load gave %v, budget %d; want stopped and 0", out.res, budgetUsed())
++	}
++	var charged int64
++	if _, _, err := parseConfinedList(stop, []byte(b.String()), "f", "domains", &charged); err != errStopped {
++		t.Errorf("parse gave %v, want errStopped", err)
++	}
++	releaseBudget(charged)
++}
++
++// Loads are limited per list path: without a record, or after a clear, a
++// load may start; otherwise it waits minConfinedReloadInterval. After budget
++// refusals a retry waits until the estimate fits, at the next poll the first
++// time, then backing off.
++func TestConfinedLoadAllowed(t *testing.T) {
++	path := "/test/confined-load-allowed/" + t.Name()
++	useBudget(t, 1000)
++	if !confinedLoadAllowed(path, 10) {
++		t.Error("unknown path refused")
++	}
++	confinedLoadDone(path, true)
++	if !confinedLoadAllowed(path, 10) {
++		t.Error("load after a clear limited")
++	}
++	confinedLoadDone(path, false)
++	if confinedLoadAllowed(path, 10) {
++		t.Error("reload not limited")
++	}
++	confinedPaths.Lock()
++	confinedPaths.m[path].lastDone = time.Now().Add(-minConfinedReloadInterval)
++	confinedPaths.Unlock()
++	confinedLoadRefused(path, 10, 500, true)
++	if !confinedLoadAllowed(path, 10) {
++		t.Error("first refusal not retried at the next poll")
++	}
++	confinedLoadRefused(path, 10, 5000, true)
++	if confinedLoadAllowed(path, 10) {
++		t.Error("retried although the estimate does not fit")
++	}
++	confinedPaths.Lock()
++	confinedPaths.m[path].lastRefused = time.Now().Add(-confinedBudgetBackoff)
++	confinedPaths.m[path].need = 100
++	confinedPaths.Unlock()
++	if !confinedLoadAllowed(path, 10) {
++		t.Error("not retried after the backoff")
++	}
++	confinedLoadRefused(path, 10, 100, true)
++	confinedPaths.Lock()
++	confinedPaths.m[path].lastRefused = time.Now().Add(-confinedBudgetBackoff)
++	confinedPaths.Unlock()
++	if confinedLoadAllowed(path, 10) {
++		t.Error("backoff did not double")
++	}
++	// a changed or removed file skips the backoff
++	if !confinedLoadAllowed(path, 20) || !confinedLoadAllowed(path, 0) {
++		t.Error("changed or removed file waited for the backoff")
++	}
++	if got := confinedLoadRefused(path, 10, 50, false); got != 100 {
++		t.Errorf("pre-parse refusal estimate %d, want the earlier 100", got)
++	}
++}
++
++// A load that finishes after its operator handed the list over is dropped.
++func TestConfinedReloadIntoRetiredOperatorIsDropped(t *testing.T) {
++	blk := useSnitchwatchRoot(t)
++	writeFile(t, blk+"/ads/domains/domains.list", "0.0.0.0 a.example\n")
++	o := &Operator{Type: Lists, Operand: OpDomainsLists, Data: blk + "/ads/domains", retired: true}
++	if res := o.reloadConfinedList(nil, o.confinedListState()); res != loadStopped || numLists(o) != 0 || budgetUsed() != 0 {
++		t.Errorf("got %v, %d entries, %d budget bytes; want stopped, 0, 0", res, numLists(o), budgetUsed())
++	}
++}
++
++// After a budget refusal a changed file is judged by its own buffer, not
++// the stale estimate.
++func TestConfinedRetryReestimatesAChangedFile(t *testing.T) {
++	path := "/test/confined-reestimate/" + t.Name()
++	useConfinedTimings(t, confinedPollInterval, 0) // no reload interval to wait for
++	useBudget(t, 1000)
++	confinedLoadRefused(path, 10, 5000, true)
++	if confinedLoadAllowed(path, 10) {
++		t.Error("unchanged file retried although its estimate does not fit")
++	}
++	if !confinedLoadAllowed(path, 20) {
++		t.Error("changed file not retried")
++	}
++}
 diff --git a/daemon/rule/rule_name_test.go b/daemon/rule/rule_name_test.go
 new file mode 100644
 index 00000000..4310ab74
@@ -2746,6 +5242,480 @@ index 00000000..4310ab74
 +	if _, err := os.Stat(filepath.Join(rulesDir, good+".json")); err != nil {
 +		t.Fatalf("valid rule not saved: %v", err)
 +	}
++}
+diff --git a/daemon/rule/ui_blocklist.go b/daemon/rule/ui_blocklist.go
+new file mode 100644
+index 00000000..4456f295
+--- /dev/null
++++ b/daemon/rule/ui_blocklist.go
+@@ -0,0 +1,80 @@
++package rule
++
++import (
++	"fmt"
++	"regexp"
++	"strings"
++
++	"github.com/evilsocket/opensnitch/daemon/ui/protocol"
++)
++
++// BlocklistsRoot is the directory the Snitchwatch bridge owns for blocklist
++// rules. It is a var only so tests can point it at a temp dir; it must stay
++// absolute, clean and free of glob metacharacters.
++var BlocklistsRoot = "/var/lib/snitchwatch/blocklists"
++
++// blocklistName is the only rule name a UI lists rule may carry:
++// z00-blocklist:<list>:<kind>.
++var blocklistName = regexp.MustCompile(`^z00-blocklist:([A-Za-z0-9_-]{1,81}|[A-Za-z0-9_-]{1,40}\.[0-9a-f]{16}):(domains|ips)$`)
++
++var blocklistKinds = map[string]Operand{"domains": OpDomainsLists, "ips": OpIPLists}
++
++// validateUIRule checks a rule received over the UI channel. A lists operator
++// is accepted only as a top-level Snitchwatch blocklist deny rule whose data
++// is rebuilt from its (regex-checked) name, so the client can never choose
++// which directory the root daemon reads; every other shape goes through
++// validateUIOperator, which still refuses lists anywhere else. Only the
++// CHANGE_RULE path passes allowBlocklist.
++func validateUIRule(reply *protocol.Rule, allowBlocklist bool) error {
++	op := reply.Operator
++	if op == nil {
++		return fmt.Errorf("missing operator")
++	}
++	if !allowBlocklist || Type(op.Type) != Lists && !strings.HasPrefix(op.Operand, "lists.") {
++		return validateUIOperator(op, 0)
++	}
++	m := blocklistName.FindStringSubmatch(reply.Name)
++	if m == nil {
++		return fmt.Errorf("lists operator refused for rule name %q", reply.Name)
++	}
++	list, kind := m[1], m[2]
++	switch {
++	case Type(op.Type) != Lists || Operand(op.Operand) != blocklistKinds[kind]:
++		return fmt.Errorf("blocklist %s rule needs type lists and operand %s", kind, blocklistKinds[kind])
++	case op.Sensitive || len(op.List) != 0:
++		return fmt.Errorf("blocklist rule operator must be plain")
++	case op.Data != BlocklistsRoot+"/"+list+"/"+kind:
++		return fmt.Errorf("blocklist rule data %q does not match its name", op.Data)
++	case Action(reply.Action) != Deny || Duration(reply.Duration) != Always || reply.Precedence:
++		return fmt.Errorf("blocklist rule must be deny/always without precedence")
++	}
++	return nil
++}
++
++// maxBlocklistRules bounds the bridge's blocklist rules (32 subscriptions x 2
++// kinds); each one is a lists monitor and up to maxBlocklistFileBytes of list.
++const maxBlocklistRules = 64
++
++const blocklistRulePrefix = "z00-blocklist:"
++
++// checkBlocklistCap refuses a new blocklist rule once maxBlocklistRules are
++// loaded; replacing a loaded one by name is fine. The caller holds the
++// loader's write lock and inserts in the same critical section.
++func (l *Loader) checkBlocklistCap(name string) error {
++	if !strings.HasPrefix(name, blocklistRulePrefix) {
++		return nil
++	}
++	if _, found := l.rules[name]; found {
++		return nil
++	}
++	n := 0
++	for k := range l.rules {
++		if strings.HasPrefix(k, blocklistRulePrefix) {
++			n++
++		}
++	}
++	if n >= maxBlocklistRules {
++		return fmt.Errorf("rule %q refused: %d blocklist rules already loaded", name, n)
++	}
++	return nil
++}
+diff --git a/daemon/rule/ui_blocklist_test.go b/daemon/rule/ui_blocklist_test.go
+new file mode 100644
+index 00000000..6ce97785
+--- /dev/null
++++ b/daemon/rule/ui_blocklist_test.go
+@@ -0,0 +1,382 @@
++package rule
++
++import (
++	"fmt"
++	"os"
++	"path/filepath"
++	"strings"
++	"sync"
++	"testing"
++	"time"
++
++	"github.com/evilsocket/opensnitch/daemon/ui/protocol"
++)
++
++func useBlocklistsRoot(t *testing.T, root string) {
++	old := BlocklistsRoot
++	BlocklistsRoot = root
++	t.Cleanup(func() { BlocklistsRoot = old })
++}
++
++func blocklistRule(name, typ, operand, data string) *protocol.Rule {
++	return &protocol.Rule{Name: name, Enabled: true, Action: "deny", Duration: "always",
++		Operator: &protocol.Operator{Type: typ, Operand: operand, Data: data}}
++}
++
++func TestDefaultBlocklistsRootIsCleanAndLiteral(t *testing.T) {
++	if strings.ContainsAny(BlocklistsRoot, `*?[]\`) || !filepath.IsAbs(BlocklistsRoot) || filepath.Clean(BlocklistsRoot) != BlocklistsRoot {
++		t.Errorf("BlocklistsRoot %q must be absolute, clean and glob-free", BlocklistsRoot)
++	}
++	if !strings.HasPrefix(BlocklistsRoot, SnitchwatchRoot+"/") || filepath.Clean(SnitchwatchRoot) != SnitchwatchRoot {
++		t.Errorf("BlocklistsRoot %q must be inside the confined tree %q", BlocklistsRoot, SnitchwatchRoot)
++	}
++}
++
++// A lists rule makes the root daemon read every file in its data directory,
++// so the UI channel may only add one whose directory is derived from its name.
++func TestDeserializeBlocklistRules(t *testing.T) {
++	root := t.TempDir()
++	useBlocklistsRoot(t, root)
++	hex := "0123456789abcdef"
++	accepted := map[string]*protocol.Rule{
++		"domains":        blocklistRule("z00-blocklist:ads:domains", "lists", "lists.domains", root+"/ads/domains"),
++		"ips":            blocklistRule("z00-blocklist:bad_ips-1:ips", "lists", "lists.ips", root+"/bad_ips-1/ips"),
++		"hashed list":    blocklistRule("z00-blocklist:ads."+hex+":domains", "lists", "lists.domains", root+"/ads."+hex+"/domains"),
++		"81-char list":   blocklistRule("z00-blocklist:"+strings.Repeat("a", 81)+":ips", "lists", "lists.ips", root+"/"+strings.Repeat("a", 81)+"/ips"),
++		"40-char hashed": blocklistRule("z00-blocklist:"+strings.Repeat("a", 40)+"."+hex+":ips", "lists", "lists.ips", root+"/"+strings.Repeat("a", 40)+"."+hex+"/ips"),
++	}
++	for name, r := range accepted {
++		if got, err := DeserializeChange(r); err != nil || got == nil {
++			t.Errorf("%s: refused: %v", name, err)
++		}
++		// AskRule replies come from packet workers and never add lists.
++		if got, err := Deserialize(r); err == nil || got != nil {
++			t.Errorf("%s: accepted on the ask path", name)
++		}
++	}
++
++	ok := func(mod func(r *protocol.Rule)) *protocol.Rule {
++		r := blocklistRule("z00-blocklist:ads:domains", "lists", "lists.domains", root+"/ads/domains")
++		mod(r)
++		return r
++	}
++	named := func(list, kind, operand string) *protocol.Rule {
++		return blocklistRule("z00-blocklist:"+list+":"+kind, "lists", operand, root+"/"+list+"/"+kind)
++	}
++	refused := map[string]*protocol.Rule{
++		"wrong root":       ok(func(r *protocol.Rule) { r.Operator.Data = "/tmp/ads/domains" }),
++		"default root":     ok(func(r *protocol.Rule) { r.Operator.Data = "/var/lib/snitchwatch/blocklists/ads/domains" }),
++		"trailing slash":   ok(func(r *protocol.Rule) { r.Operator.Data += "/" }),
++		"dotdot":           ok(func(r *protocol.Rule) { r.Operator.Data = root + "/ads/../ads/domains" }),
++		"extra segment":    ok(func(r *protocol.Rule) { r.Operator.Data += "/x" }),
++		"other list":       ok(func(r *protocol.Rule) { r.Operator.Data = root + "/other/domains" }),
++		"kind mismatch":    ok(func(r *protocol.Rule) { r.Operator.Operand = "lists.ips" }),
++		"data kind":        ok(func(r *protocol.Rule) { r.Operator.Data = root + "/ads/ips" }),
++		"82-char list":     named(strings.Repeat("a", 82), "ips", "lists.ips"),
++		"41-char hashed":   named(strings.Repeat("a", 41)+"."+hex, "ips", "lists.ips"),
++		"uppercase hex":    named("ads.0123456789ABCDEF", "ips", "lists.ips"),
++		"short hex":        named("ads.0123456789abcde", "ips", "lists.ips"),
++		"dot in list":      named("a.b", "ips", "lists.ips"),
++		"dotdot list":      named("..", "ips", "lists.ips"),
++		"slash in list":    named("a/b", "ips", "lists.ips"),
++		"newline name":     ok(func(r *protocol.Rule) { r.Name += "\n" }),
++		"name prefix":      ok(func(r *protocol.Rule) { r.Name = "x" + r.Name }),
++		"action allow":     ok(func(r *protocol.Rule) { r.Action = "allow" }),
++		"duration once":    ok(func(r *protocol.Rule) { r.Duration = "once" }),
++		"until restart":    ok(func(r *protocol.Rule) { r.Duration = "until restart" }),
++		"precedence":       ok(func(r *protocol.Rule) { r.Precedence = true }),
++		"sensitive":        ok(func(r *protocol.Rule) { r.Operator.Sensitive = true }),
++		"lists with list":  ok(func(r *protocol.Rule) { r.Operator.List = []*protocol.Operator{simple("dest.ip", "1.1.1.1")} }),
++		"lists, non-lists": ok(func(r *protocol.Rule) { r.Operator.Operand = "dest.host" }),
++		"simple, lists":    ok(func(r *protocol.Rule) { r.Operator.Type = "simple" }),
++		"domains_regexp":   ok(func(r *protocol.Rule) { r.Operator.Operand = "lists.domains_regexp" }),
++		"nets":             ok(func(r *protocol.Rule) { r.Operator.Operand = "lists.nets" }),
++		"hash.md5":         ok(func(r *protocol.Rule) { r.Operator.Operand = "lists.hash.md5" }),
++		"non-blocklist":    ok(func(r *protocol.Rule) { r.Name = "my-rule" }),
++		"nested in list": ok(func(r *protocol.Rule) {
++			r.Operator = &protocol.Operator{Type: "list", Operand: "list", List: []*protocol.Operator{r.Operator}}
++		}),
++		"nested simple lists operand": ok(func(r *protocol.Rule) {
++			r.Operator = &protocol.Operator{Type: "list", Operand: "list", List: []*protocol.Operator{
++				simple("process.path", "/usr/bin/curl"), simple("lists.domains", r.Operator.Data)}}
++		}),
++		"nested with app": ok(func(r *protocol.Rule) {
++			r.Operator = &protocol.Operator{Type: "list", Operand: "list", List: []*protocol.Operator{
++				{Type: "simple", Operand: "process.path", Data: "/usr/bin/curl"}, r.Operator}}
++		}),
++	}
++	for name, r := range refused {
++		if got, err := DeserializeChange(r); err == nil || got != nil {
++			t.Errorf("%s: accepted", name)
++		}
++	}
++}
++
++// Each blocklist rule is a lists monitor plus up to 80 MiB of list, so the UI
++// channel may hold at most maxBlocklistRules of them; replacing one is fine.
++func TestLoaderCapsBlocklistRules(t *testing.T) {
++	l, err := NewLoader(false)
++	if err != nil {
++		t.Fatal(err)
++	}
++	if err := l.Load(t.TempDir()); err != nil {
++		t.Fatal(err)
++	}
++	op, _ := NewOperator(Simple, false, OpTrue, "", nil)
++	rule := func(name string) *Rule { return Create(name, "", false, false, false, Deny, Restart, op) }
++	for i := 0; i < maxBlocklistRules; i++ {
++		if err := l.Replace(rule(fmt.Sprintf("z00-blocklist:l%d:domains", i)), false); err != nil {
++			t.Fatalf("rule %d refused: %v", i, err)
++		}
++	}
++	if err := l.Replace(rule("z00-blocklist:new:domains"), false); err == nil {
++		t.Error("Replace accepted a new blocklist rule over the cap")
++	}
++	if err := l.Add(rule("z00-blocklist:new:ips"), false); err == nil {
++		t.Error("Add accepted a new blocklist rule over the cap")
++	}
++	if err := l.Add(rule("z00-blocklist:l0:domains"), false); err == nil {
++		t.Error("Add accepted a renamed duplicate blocklist rule over the cap")
++	}
++	if err := l.Replace(rule("z00-blocklist:l0:domains"), false); err != nil {
++		t.Errorf("replacing an existing blocklist rule refused: %v", err)
++	}
++	if err := l.Replace(rule("other-rule"), false); err != nil {
++		t.Errorf("non-blocklist rule refused: %v", err)
++	}
++	if n := len(l.GetAll()); n != maxBlocklistRules+1 {
++		t.Errorf("%d rules loaded, want %d", n, maxBlocklistRules+1)
++	}
++}
++
++// Concurrent same-name Adds and Replaces of enabled blocklist rules must never
++// exceed the cap, and once everything is deleted every lists monitor and
++// every budget byte must be gone (displaced and refused rules included).
++func TestLoaderBlocklistRulesConcurrent(t *testing.T) {
++	blk := useSnitchwatchRoot(t)
++	useConfinedTimings(t, 10*time.Millisecond, 0)
++	writeFile(t, blk+"/ads/domains/domains.list", "0.0.0.0 a.example\n")
++	l, err := NewLoader(false)
++	if err != nil {
++		t.Fatal(err)
++	}
++	if err := l.Load(t.TempDir()); err != nil {
++		t.Fatal(err)
++	}
++	mkNamed := func(name string) *Rule {
++		op, _ := NewOperator(Lists, false, OpDomainsLists, blk+"/ads/domains", nil)
++		return Create(name, "", true, false, false, Deny, Always, op)
++	}
++	mk := func() *Rule { return mkNamed("z00-blocklist:ads:domains") }
++	// Fill to just under the cap so the concurrent burst races the boundary.
++	for i := 0; i < maxBlocklistRules-2; i++ {
++		if err := l.Add(mk(), false); err != nil {
++			t.Fatal(err)
++		}
++	}
++	var wg sync.WaitGroup
++	for i := 0; i < 100; i++ {
++		wg.Add(3)
++		go func() { defer wg.Done(); l.Replace(mk(), false) }()
++		go func() { defer wg.Done(); l.Add(mk(), false) }()
++		go func(i int) { defer wg.Done(); l.Replace(mkNamed(fmt.Sprintf("z00-blocklist:n%d:domains", i)), false) }(i)
++	}
++	wg.Wait()
++	l.RLock()
++	names := make([]string, 0, len(l.rules))
++	for name := range l.rules {
++		names = append(names, name)
++	}
++	l.RUnlock()
++	if len(names) > maxBlocklistRules {
++		t.Errorf("%d blocklist rules loaded, cap is %d", len(names), maxBlocklistRules)
++	}
++	for _, name := range names {
++		l.Delete(name)
++	}
++	waitSettled(t, "after delete")
++}
++
++// waitSettled waits up to 5 s for every lists monitor to exit and the budget
++// to be fully released.
++func waitSettled(t *testing.T, what string) {
++	t.Helper()
++	for deadline := time.Now().Add(5 * time.Second); liveListsMonitors.Load() != 0 || budgetUsed() != 0; time.Sleep(5 * time.Millisecond) {
++		if time.Now().After(deadline) {
++			t.Fatalf("%s: %d lists monitors still running, %d budget bytes held", what, liveListsMonitors.Load(), budgetUsed())
++		}
++	}
++}
++
++// Every lists monitor a rule starts is stopped when the rule fails to
++// compile, is deleted (all list sub-operators, not just the first) or, if
++// temporary, expires.
++func TestLoaderStopsAllListsMonitors(t *testing.T) {
++	blk := useSnitchwatchRoot(t)
++	useConfinedTimings(t, 10*time.Millisecond, 0)
++	writeFile(t, blk+"/ads/domains/domains.list", "0.0.0.0 a.example\n")
++	writeFile(t, blk+"/ads/ips/ips.list", "10.0.0.1\n")
++	l, err := NewLoader(false)
++	if err != nil {
++		t.Fatal(err)
++	}
++	if err := l.Load(t.TempDir()); err != nil {
++		t.Fatal(err)
++	}
++	listRule := func(name string, d Duration, typ Type, operand Operand, data string) *Rule {
++		op := &Operator{Type: List, Operand: OpList, List: []Operator{
++			{Type: Lists, Operand: OpDomainsLists, Data: blk + "/ads/domains"},
++			{Type: Lists, Operand: OpIPLists, Data: blk + "/ads/ips"},
++			{Type: typ, Operand: operand, Data: data},
++		}}
++		return Create(name, "", true, false, false, Deny, d, op)
++	}
++	if err := l.Replace(listRule("bad", Always, Regexp, OpDstHost, "("), false); err == nil {
++		t.Fatal("uncompilable rule accepted")
++	}
++	waitSettled(t, "compile failure")
++	if err := l.Replace(listRule("two-lists", Always, Simple, OpDstPort, "443"), false); err != nil {
++		t.Fatal(err)
++	}
++	l.Delete("two-lists")
++	waitSettled(t, "delete")
++	if err := l.Replace(listRule("temporary", Duration("50ms"), Simple, OpDstPort, "443"), false); err != nil {
++		t.Fatal(err)
++	}
++	waitSettled(t, "expiry")
++}
++
++// Names are validated before anything else, on both UI paths, and Rule.String
++// quotes them so a name can't forge a log line.
++func TestDeserializeValidatesNamesAndStringQuotes(t *testing.T) {
++	r := uiRule(simple("dest.port", "443"))
++	r.Name = "x\nforged"
++	if got, err := Deserialize(r); err == nil || got != nil {
++		t.Error("ask path accepted a bad name")
++	}
++	if got, err := DeserializeChange(r); err == nil || got != nil {
++		t.Error("change path accepted a bad name")
++	}
++	op, _ := NewOperator(Simple, false, OpDstHost, "a\nb", nil)
++	if s := Create("x\nforged", "", true, false, false, Deny, Always, op).String(); strings.Contains(s, "\n") {
++		t.Errorf("String() has a raw newline: %q", s)
++	}
++}
++
++// Add renames on a clash; the renamed name must still be a valid one.
++func TestLoaderAddRevalidatesRenamedNames(t *testing.T) {
++	l, err := NewLoader(false)
++	if err != nil {
++		t.Fatal(err)
++	}
++	if err := l.Load(t.TempDir()); err != nil {
++		t.Fatal(err)
++	}
++	op, _ := NewOperator(Simple, false, OpTrue, "", nil)
++	name := strings.Repeat("a", maxNameBytes)
++	if err := l.Add(Create(name, "", false, false, false, Deny, Restart, op), false); err != nil {
++		t.Fatal(err)
++	}
++	if err := l.Add(Create(name, "", false, false, false, Deny, Restart, op), false); err == nil {
++		t.Error("Add accepted a rename past maxNameBytes")
++	}
++}
++
++// A same-name Replace hands the loaded list to the new rule: the active rule
++// is never empty, no reload happens and only one monitor runs.
++func TestLoaderReplaceFloodHandsOverTheList(t *testing.T) {
++	blk := useSnitchwatchRoot(t)
++	useConfinedTimings(t, 10*time.Millisecond, 0)
++	writeFile(t, blk+"/ads/domains/domains.list", "0.0.0.0 a.example\n0.0.0.0 b.example\n")
++	l, err := NewLoader(false)
++	if err != nil {
++		t.Fatal(err)
++	}
++	if err := l.Load(t.TempDir()); err != nil {
++		t.Fatal(err)
++	}
++	const name = "z00-blocklist:ads:domains"
++	t.Cleanup(func() { l.Delete(name); waitSettled(t, "cleanup") })
++	mk := func() *Rule {
++		op, _ := NewOperator(Lists, false, OpDomainsLists, blk+"/ads/domains", nil)
++		return Create(name, "", true, false, false, Deny, Always, op)
++	}
++	active := func() *Operator {
++		l.RLock()
++		defer l.RUnlock()
++		return &l.rules[name].Operator
++	}
++	if err := l.Replace(mk(), false); err != nil {
++		t.Fatal(err)
++	}
++	waitFor(t, "first load", func() bool { return numLists(active()) == 2 })
++	loads := confinedLoads.Load()
++	for i := 0; i < 1000; i++ {
++		if err := l.Replace(mk(), false); err != nil {
++			t.Fatal(err)
++		}
++		if n := numLists(active()); n != 2 {
++			t.Fatalf("replace %d: active rule has %d entries", i, n)
++		}
++	}
++	waitFor(t, "one monitor", func() bool { return liveListsMonitors.Load() == 1 })
++	time.Sleep(5 * confinedPollInterval)
++	if d := confinedLoads.Load() - loads; d != 0 {
++		t.Errorf("%d reloads during the flood", d)
++	}
++	l.Delete(name)
++	waitSettled(t, "after delete")
++}
++
++// With live reload, CHANGE_RULE's Save echoes back through fsnotify as a new
++// rule; the list is handed over, so it is loaded once and stays loaded.
++func TestLoaderLiveReloadEchoHandsOverTheList(t *testing.T) {
++	blk := useSnitchwatchRoot(t)
++	useConfinedTimings(t, 10*time.Millisecond, 0)
++	writeFile(t, blk+"/ads/domains/domains.list", "0.0.0.0 a.example\n")
++	rules := filepath.Dir(blk) + "/rules"
++	if err := os.Mkdir(rules, 0700); err != nil {
++		t.Fatal(err)
++	}
++	l, err := NewLoader(true)
++	if err != nil {
++		t.Fatal(err)
++	}
++	if err := l.Load(rules); err != nil {
++		t.Fatal(err)
++	}
++	waitFor(t, "rules watcher not running", l.isLiveReloadRunning)
++	time.Sleep(100 * time.Millisecond) // let it add the inotify watch
++	const name = "z00-blocklist:ads:domains"
++	t.Cleanup(func() { l.Delete(name); waitSettled(t, "cleanup") })
++	mk := func() *Rule {
++		op, _ := NewOperator(Lists, false, OpDomainsLists, blk+"/ads/domains", nil)
++		return Create(name, "", true, false, false, Deny, Always, op)
++	}
++	active := func() *Rule {
++		l.RLock()
++		defer l.RUnlock()
++		return l.rules[name]
++	}
++	// Load it first without saving, so the echo below must hand over a
++	// loaded list (insertRule hands over to sent, loadRule to the echo).
++	if err := l.Replace(mk(), false); err != nil {
++		t.Fatal(err)
++	}
++	waitFor(t, "list not loaded", func() bool { return numLists(&active().Operator) == 1 })
++	loads := confinedLoads.Load()
++	sent := mk()
++	if err := l.Replace(sent, true); err != nil {
++		t.Fatal(err)
++	}
++	waitFor(t, "no fsnotify echo", func() bool { return active() != sent })
++	if numLists(&active().Operator) != 1 {
++		t.Error("echoed rule is empty")
++	}
++	time.Sleep(10 * confinedPollInterval)
++	if d := confinedLoads.Load() - loads; d != 0 || numLists(&active().Operator) != 1 || liveListsMonitors.Load() != 1 {
++		t.Errorf("%d reloads, %d entries, %d monitors; want 0, 1, 1", d, numLists(&active().Operator), liveListsMonitors.Load())
++	}
++	l.Delete(name)
++	waitSettled(t, "after delete")
 +}
 diff --git a/daemon/rule/ui_lists.go b/daemon/rule/ui_lists.go
 new file mode 100644
@@ -3234,10 +6204,10 @@ index 00000000..90c2b7d6
 +}
 diff --git a/daemon/ui/notification_policy_test.go b/daemon/ui/notification_policy_test.go
 new file mode 100644
-index 00000000..fe27e346
+index 00000000..e3994db4
 --- /dev/null
 +++ b/daemon/ui/notification_policy_test.go
-@@ -0,0 +1,118 @@
+@@ -0,0 +1,135 @@
 +package ui
 +
 +import (
@@ -3283,15 +6253,20 @@ index 00000000..fe27e346
 +// Every action the bridge does not send reaches root with client-chosen paths,
 +// firewall rules or task targets; the system variant refuses them with an
 +// error reply and no side effect.
++// CHANGE_CONFIG is checked through uiActionAllowed only: driving it through
++// handleNotification would need the global configFile redirected, which
++// races upstream tests (and, on a policy regression, would write the real
++// config).
 +func TestNotificationsOutsideTheBridgeSetAreRefused(t *testing.T) {
-+	saved := configFile
-+	configFile = filepath.Join(t.TempDir(), "default-config.json")
-+	defer func() { configFile = saved }()
 +	l, dir := policyLoader(t)
 +	c := &Client{rules: l}
 +	for value, name := range protocol.Action_name {
 +		action := protocol.Action(value)
-+		if action == protocol.Action_CHANGE_RULE || action == protocol.Action_DELETE_RULE {
++		bridge := action == protocol.Action_CHANGE_RULE || action == protocol.Action_DELETE_RULE
++		if uiActionAllowed(action) != bridge {
++			t.Errorf("%s: uiActionAllowed = %v", name, !bridge)
++		}
++		if bridge || action == protocol.Action_CHANGE_CONFIG {
 +			continue
 +		}
 +		stream := &replyRecorder{}
@@ -3301,9 +6276,6 @@ index 00000000..fe27e346
 +		if len(stream.replies) != 1 || stream.replies[0].Code != protocol.NotificationReplyCode_ERROR || stream.replies[0].Id != 7 {
 +			t.Errorf("%s: want one error reply for id 7, got %v", name, stream.replies)
 +		}
-+	}
-+	if _, err := os.Stat(configFile); !os.IsNotExist(err) {
-+		t.Errorf("a refused CHANGE_CONFIG wrote the config: %v", err)
 +	}
 +	if entries, _ := os.ReadDir(dir); len(entries) != 0 || len(l.GetAll()) != 0 {
 +		t.Errorf("a refused action changed the rules: %v", entries)
@@ -3354,5 +6326,20 @@ index 00000000..fe27e346
 +	}
 +	if entries, _ := os.ReadDir(dir); len(entries) != 0 || len(l.GetAll()) != 0 {
 +		t.Errorf("a lists rule was stored: %v", entries)
++	}
++}
++
++// ENABLE_RULE and DISABLE_RULE are refused by the policy, but their handlers
++// must still not dereference a rule that Deserialize refused.
++func TestEnableDisableHandleRefusedRules(t *testing.T) {
++	l, _ := policyLoader(t)
++	c := &Client{rules: l}
++	bad := allowRule("bad\nname", &protocol.Operator{Type: "simple", Operand: "true"})
++	for _, handle := range []func(protocol.UI_NotificationsClient, *protocol.Notification){c.handleActionEnableRule, c.handleActionDisableRule} {
++		stream := &replyRecorder{}
++		handle(stream, &protocol.Notification{Id: 9, Rules: []*protocol.Rule{bad}})
++		if len(stream.replies) != 1 || stream.replies[0].Code != protocol.NotificationReplyCode_ERROR {
++			t.Errorf("want one error reply, got %v", stream.replies)
++		}
 +	}
 +}

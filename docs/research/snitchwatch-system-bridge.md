@@ -250,7 +250,12 @@ an app-bound until-restart rule, #45 PR A blocklist plumbing, bridge unit
 dry-run preview, #93 pausing lets waiting connections through once, #95 a
 pause-answer test fix, and #91 the shipped fetch rule below; the range from
 `b224adf` also carries #76 blocklist enforcement, #79, #81, #84, #86, #87 and
-smaller fixes), and OpenSnitch submodule
+smaller fixes), then to the r11 candidate
+`98aad35defef2a7e6e3274ddb96fe79636d9bc1b` (tree `7bd1e9e9…`: #94 rule hit
+counts, #98 a 30 s auto-answer with the default action and "Decide later",
+#99 the rule editor, #100 notification Allow once/Deny actions and #104
+network-profile enforcement; no pinned packaging input changed), and
+OpenSnitch submodule
 `b404c4c6316760fa7bc415509d3f8d747f7dc9cc`. A fresh Fedora 44 native factory
 build produced actual CLI version 0.1.1; a second fresh source/target build
 reproduced the artifact bytes. The Fedora 43 binary used by the October 5

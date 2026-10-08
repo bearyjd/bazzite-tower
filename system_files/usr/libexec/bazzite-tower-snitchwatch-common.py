@@ -27,6 +27,8 @@ SOCKETS = ("snitchwatch-system-bridge-grpc.socket", "snitchwatch-system-bridge-g
 UNITS = (*SOCKETS, SERVICE, "opensnitch.service")
 APP = "org.snitchwatch.Snitchwatch"
 VENDOR_DROPIN = "/usr/lib/systemd/system/service.d/10-timeout-abort.conf"
+DAEMON_UNIT = "/usr/lib/systemd/system/opensnitch.service"
+DAEMON_DROPIN = "/usr/lib/systemd/system/opensnitch.service.d/20-system-bridge.conf"
 BASE_GLOBAL_OVERRIDE = "/var/lib/flatpak/overrides/global"
 BASE_GLOBAL_OVERRIDE_SHA256 = "85e2bf73515c8da8950f1afbbfaedfeca453777eeb0be0ea869f4db6c779bd80"
 VENDOR_DROPIN_SHA256 = "ae6b234f92bc22f1201a7572b59b454c9809f33c80d13f361b9674e1801acc37"
@@ -84,6 +86,23 @@ class Context:
 
     def stat(self, absolute):
         return self.path(absolute).lstat()
+
+    def present(self, absolute):
+        # Absent only when the kernel says so. A path readiness cannot inspect
+        # (EACCES, ELOOP, EIO) may hold an override, so it is refused.
+        try:
+            self.stat(absolute)
+        except (FileNotFoundError, NotADirectoryError):
+            return False
+        except OSError as error:
+            raise Refusal("cannot inspect "+absolute+": "+(error.strerror or str(error))) from error
+        return True
+
+    def listdir(self, absolute):
+        try:
+            return sorted(os.listdir(self.path(absolute)))
+        except OSError as error:
+            raise Refusal("cannot inspect "+absolute+": "+(error.strerror or str(error))) from error
 
     def homes(self):
         records = self.command(["getent", "passwd"]).stdout.splitlines()
@@ -184,8 +203,9 @@ def unit_contract(ctx):
         props = ctx.props(unit, ["Listen", "SocketUser", "SocketGroup", "SocketMode", "Accept", "Triggers", "FragmentPath", "DropInPaths", "NeedDaemonReload"])
         loaded_current(unit, props)
         require({k: v for k, v in props.items() if k != "NeedDaemonReload"} == dict(Listen=path+" (Stream)", SocketUser="root", SocketGroup=group, SocketMode=mode, Accept="no", Triggers=SERVICE, FragmentPath="/usr/lib/systemd/system/"+unit, DropInPaths=""), "effective socket contract drift: "+unit)
-    daemon = ctx.props("opensnitch.service", ["WorkingDirectory", "Requires", "After", "ExecStart", "NeedDaemonReload"])
+    daemon = ctx.props("opensnitch.service", ["WorkingDirectory", "Requires", "After", "ExecStart", "FragmentPath", "DropInPaths", "NeedDaemonReload"])
     loaded_current("opensnitch.service", daemon)
+    daemon_unit_contract(ctx, daemon)
     daemon_exec_contract(daemon["ExecStart"])
     require(daemon["WorkingDirectory"] == "/run/snitchwatch" and SOCKETS[0] in daemon["Requires"].split() and SOCKETS[0] in daemon["After"].split(), "OpenSnitch effective Unix socket CWD/dependencies drift")
     return actual
@@ -196,6 +216,16 @@ def loaded_current(unit, props):
     # deleted on disk since it was loaded, including in directories the
     # local-override scan does not list.
     require(props["NeedDaemonReload"] == "no", unit+" changed on disk since systemd loaded it; review it, then run systemctl daemon-reload")
+
+
+def daemon_unit_contract(ctx, props):
+    # The image's unit file plus its system-bridge drop-in, and at most
+    # Fedora's global service.d timeout drop-in; nothing else may be loaded.
+    dropins = props["DropInPaths"].split()
+    require(props["FragmentPath"] == DAEMON_UNIT and DAEMON_DROPIN in dropins and len(dropins) == len(set(dropins))
+            and set(dropins) <= {DAEMON_DROPIN, VENDOR_DROPIN}, "OpenSnitch effective unit file/drop-in drift: "+props["FragmentPath"]+" + "+props["DropInPaths"])
+    if VENDOR_DROPIN in dropins:
+        vendor_dropin_contract(ctx, VENDOR_DROPIN)
 
 
 def vendor_dropin_contract(ctx, value):
@@ -227,12 +257,11 @@ def inert_dropin_directory(ctx, name):
     # systemd loads nothing from an empty drop-in directory, so under a
     # root-only unit directory it is not an override. One lstat decides: a real
     # directory, root:root, not group/world-writable, with no entries.
-    try:
-        info = ctx.stat(name)
-    except (FileNotFoundError, NotADirectoryError):
+    if not ctx.present(name):
         return False
+    info = ctx.stat(name)
     return (stat.S_ISDIR(info.st_mode) and info.st_uid == 0 and info.st_gid == 0
-            and not info.st_mode & 0o022 and not os.listdir(ctx.path(name)))
+            and not info.st_mode & 0o022 and not ctx.listdir(name))
 
 
 def local_conflicts(ctx):
@@ -260,14 +289,13 @@ def local_conflicts(ctx):
         user_dirs.update(runtime+suffix for suffix in ("user.control", "transient", "generator.early", "user", "generator", "generator.late"))
     for directory in user_dirs:
         paths.extend(directory+"/snitchwatch-bridge.service"+suffix for suffix in ("", ".d"))
-        userdir = ctx.path(directory)
-        if userdir.exists():
-            for kind in ("wants", "requires", "upholds"):
-                paths.extend("/"+str(item.relative_to(ctx.root)) for item in userdir.glob("*."+kind+"/snitchwatch-bridge.service"))
+        if ctx.present(directory) and stat.S_ISDIR(ctx.stat(directory).st_mode):
+            paths.extend(directory+"/"+entry+"/snitchwatch-bridge.service" for entry in ctx.listdir(directory)
+                         if entry.rsplit(".", 1)[-1] in ("wants", "requires", "upholds"))
     for name in paths:
         if name in system_dropins and inert_dropin_directory(ctx, name):
             continue
-        require(not ctx.path(name).exists() and not ctx.path(name).is_symlink(), "local unit override/enabled legacy user service: "+name)
+        require(not ctx.present(name), "local unit override/enabled legacy user service: "+name)
     global_state = ctx.command(["systemctl", "--global", "is-enabled", "snitchwatch-bridge.service"], okay=(0, 1, 3, 4)).stdout.strip()
     require(global_state in ("disabled", "masked", "not-found"), "legacy global user service remains enabled: "+global_state)
 

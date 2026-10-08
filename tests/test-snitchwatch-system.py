@@ -59,7 +59,8 @@ class Fixture(common.Context):
                 ExecStart="{ path=/usr/bin/snitchwatch-bridge-cli ; argv[]=/usr/bin/snitchwatch-bridge-cli ; ignore_errors=no ; }",
                 Environment="SNITCHWATCH_SYSTEM_BRIDGE=1 SNITCHWATCH_WS_SOCKET=/run/snitchwatch/bridge.sock SNITCHWATCH_WS_TOKEN_PATH=/run/snitchwatch-auth/token HOME=/var/lib/snitchwatch XDG_STATE_HOME=/var/lib",
                 TriggeredBy=" ".join(common.SOCKETS), RestrictAddressFamilies="AF_UNIX AF_INET AF_INET6", MainPID="0", NeedDaemonReload="no"),
-            "opensnitch.service": dict(MainPID="501", ExecStart="{ path=/usr/bin/opensnitchd ; argv[]=/usr/bin/opensnitchd ; ignore_errors=no ; }", WorkingDirectory="/run/snitchwatch", Requires=common.SOCKETS[0]+" network.target", After=common.SOCKETS[0]+" network.target", NeedDaemonReload="no")}
+            "opensnitch.service": dict(MainPID="501", ExecStart="{ path=/usr/bin/opensnitchd ; argv[]=/usr/bin/opensnitchd ; ignore_errors=no ; }", WorkingDirectory="/run/snitchwatch", Requires=common.SOCKETS[0]+" network.target", After=common.SOCKETS[0]+" network.target", NeedDaemonReload="no",
+                FragmentPath="/usr/lib/systemd/system/opensnitch.service", DropInPaths="/usr/lib/systemd/system/opensnitch.service.d/20-system-bridge.conf")}
         for unit, path, group, mode in ((common.SOCKETS[0], "/run/snitchwatch/opensnitchd.sock", "root", "0600"), (common.SOCKETS[1], "/run/snitchwatch/bridge.sock", "snitchwatch-ui", "0660")):
             self.properties[unit] = dict(Listen=path+" (Stream)", SocketUser="root", SocketGroup=group, SocketMode=mode, Accept="no", Triggers=common.SERVICE, FragmentPath="/usr/lib/systemd/system/"+unit, DropInPaths="", NeedDaemonReload="no")
         self.write(common.PROFILE, "system\n")
@@ -347,6 +348,37 @@ class SystemBehavior(unittest.TestCase):
                 self.ctx.properties[unit]["NeedDaemonReload"] = "yes"
                 try: self.refuse_readiness("daemon-reload")
                 finally: self.ctx.properties[unit]["NeedDaemonReload"] = "no"
+
+    def test_daemon_unit_file_and_dropins_are_pinned(self):
+        # NeedDaemonReload only proves systemd loaded what is on disk; it says
+        # nothing about which file and drop-ins it loaded for the daemon.
+        self.ctx.system_config();self.ctx.flatpak()
+        daemon = self.ctx.properties["opensnitch.service"]
+        for name, value in (("FragmentPath", "/etc/systemd/system/opensnitch.service"), ("FragmentPath", ""),
+                            ("DropInPaths", ""), ("DropInPaths", common.VENDOR_DROPIN),
+                            ("DropInPaths", common.DAEMON_DROPIN+" /run/systemd/system.attached/opensnitch.service.d/x.conf"),
+                            ("DropInPaths", common.DAEMON_DROPIN+" "+common.DAEMON_DROPIN)):
+            with self.subTest(name=name, value=value):
+                old = daemon[name];daemon[name] = value
+                try: self.refuse_readiness("OpenSnitch effective unit")
+                finally: daemon[name] = old
+        # Fedora's global service.d timeout drop-in applies to every service.
+        self.ctx.write(common.VENDOR_DROPIN, VENDOR_CONTENT)
+        daemon["DropInPaths"] = common.DAEMON_DROPIN+" "+common.VENDOR_DROPIN
+        self.assertEqual(common.runtime_readiness(self.ctx)["defaultAction"], "allow")
+
+    def test_unreadable_override_path_refuses(self):
+        # An override that readiness cannot inspect must not count as absent.
+        for target in ("/etc/systemd/system/opensnitch.service.d", "/etc/systemd/system/"+common.SERVICE,
+                       "/var/home/gate/.config/systemd/user", "/var/home/gate/.config/systemd/user/snitchwatch-bridge.service"):
+            with self.subTest(target=target):
+                real = self.ctx.stat
+                def denied(name, real=real, target=target):
+                    if name == target:
+                        raise PermissionError(13, "Permission denied", name)
+                    return real(name)
+                with mock.patch.object(self.ctx, "stat", side_effect=denied):
+                    with self.assertRaisesRegex(common.Refusal, "cannot inspect"):common.local_conflicts(self.ctx)
 
     def test_populated_or_unsafe_dropin_directory_refuses(self):
         directory = "/etc/systemd/system/opensnitch.service.d"

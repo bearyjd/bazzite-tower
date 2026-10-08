@@ -417,9 +417,13 @@ Open items:
   `opensnitch.service`. That also catches a drop-in added in a directory the
   scan does not list, such as `system.attached` or dash-prefixed names.
   Tested in `tests/test-snitchwatch-system.py`.
-  Still open from the security review (predates this change):
-  `opensnitch.service` has no `FragmentPath`/`DropInPaths` pin, and an
-  unreadable path (EACCES) is treated as absent.
+  The two security-review leftovers are fixed (2026-10-07): readiness now
+  pins `opensnitch.service` to `/usr/lib/systemd/system/opensnitch.service`
+  with exactly the `20-system-bridge.conf` drop-in (plus, at most, Fedora's
+  byte-pinned `service.d/10-timeout-abort.conf`), and a path it cannot inspect
+  (EACCES, ELOOP, EIO) is refused instead of treated as absent. The pinned
+  values match the r5 VM's `systemctl show`, and the hardened helper passed
+  readiness there.
 - ~~The daemon factory and CI do not run the patch's Go tests.~~ Fixed
   2026-10-07: `just test-snitchwatch-daemon-patch` and the path-filtered
   `snitchwatch-daemon-patch.yml` workflow run them, `-race` included.

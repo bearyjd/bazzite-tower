@@ -670,6 +670,19 @@ was paused)", the read-only fetch-rule row with Delete disabled) and a clean
 10-boot graphical loop. Evidence:
 `output/snitchwatch-fresh-vm-r10.0N0Fnn/R10-VM-ACCEPTANCE-RESULT.json`.
 
+Status for the r11 candidate (2026-10-08): image `sha256:ffd6d4bc…` from
+`dc077dd` (#89 prompt-slot options in the 49-file daemon patch + Snitchwatch
+`98aad35`) passed its independent review and the VM gate: first boot,
+headless, the r10 regression checks, the 30 s auto-answer and "Decide later"
+(#98), default-action rows (#89 E3, blank name until the bridge mapping),
+`DropWhileAsking` busy drops (#89 E2, VM-only), the rule editor's refusals
+(#99), network-profile rules (#104, including a manual choice kept across a
+reboot), rule hit counts surviving a bridge restart and a reboot (#94), and a
+clean 10-boot loop. Finding: #100 notification "Allow once" did not answer
+the prompt, and with the window closed a new prompt raised the window
+without posting a notification; Snitchwatch is fixing both. Evidence:
+`output/snitchwatch-fresh-vm-r11.OBAPBX/R11-VM-ACCEPTANCE-RESULT.json`.
+
 The fixed target-image acceptance limits are 5 seconds for no-GUI fallback,
 2 seconds for pending cleanup and 15 seconds for daemon stop. Preserve the
 shutdown warnings even when exit status and stop timing pass. A container

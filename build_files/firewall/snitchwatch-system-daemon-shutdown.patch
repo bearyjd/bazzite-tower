@@ -1010,6 +1010,21 @@ index 3d743556..1d4c4772 100644
  }
  
  // deleteOldRuleFromDisk deletes a rule from disk if the Duration changes
+diff --git a/daemon/rule/rule.go b/daemon/rule/rule.go
+index 46d33629..b1f94424 100644
+--- a/daemon/rule/rule.go
++++ b/daemon/rule/rule.go
+@@ -87,6 +87,10 @@ func Deserialize(reply *protocol.Rule) (*Rule, error) {
+ 		log.Warning("Deserialize rule, Operator nil")
+ 		return nil, fmt.Errorf("invalid operator")
+ 	}
++	if err := refuseListsOperands(reply.Operator); err != nil {
++		log.Warning("Deserialize rule %q: %s", reply.Name, err)
++		return nil, err
++	}
+ 	operator, err := NewOperator(
+ 		Type(reply.Operator.Type),
+ 		Sensitive(reply.Operator.Sensitive),
 diff --git a/daemon/ui/client.go b/daemon/ui/client.go
 index b4d6845b..a88a6ee9 100644
 --- a/daemon/ui/client.go
@@ -1117,25 +1132,21 @@ index b4d6845b..a88a6ee9 100644
  
  // PostAlert queues a new message to be delivered to the server
 diff --git a/daemon/ui/notifications.go b/daemon/ui/notifications.go
-index 16003bba..9b506db3 100644
+index 16003bba..4b42b3ba 100644
 --- a/daemon/ui/notifications.go
 +++ b/daemon/ui/notifications.go
-@@ -70,6 +70,15 @@ func (c *Client) handleActionChangeConfig(stream protocol.UI_NotificationsClient
- 		return
- 	}
+@@ -286,6 +286,11 @@ func (c *Client) handleActionReloadFw(stream protocol.UI_NotificationsClient, nt
+ }
  
-+	c.RLock()
-+	current := c.config
-+	c.RUnlock()
-+	if err := confinedConfigChange(&current, &newConf); err != nil {
-+		log.Warning("[notification] %s", err)
-+		c.sendNotificationReply(stream, ntf.Type, ntf.Id, "", err)
+ func (c *Client) handleNotification(stream protocol.UI_NotificationsClient, ntf *protocol.Notification) {
++	if !uiActionAllowed(ntf.Type) {
++		log.Warning("[notification] refused action %d (id %d): not sent by the system bridge", ntf.Type, ntf.Id)
++		c.sendNotificationReply(stream, ntf.Type, ntf.Id, "", errActionRefused)
 +		return
 +	}
-+
- 	if err := c.reloadConfiguration(true, &newConf); err != nil {
- 		c.sendNotificationReply(stream, ntf.Type, ntf.Id, "", err.Msg)
- 		return
+ 	switch {
+ 	case ntf.Type == protocol.Action_TASK_START:
+ 		c.handleActionTaskStart(stream, ntf)
 diff --git a/daemon/firewall/nftables/policy_journal.go b/daemon/firewall/nftables/policy_journal.go
 new file mode 100644
 index 00000000..c91bd683
@@ -2736,6 +2747,39 @@ index 00000000..4310ab74
 +		t.Fatalf("valid rule not saved: %v", err)
 +	}
 +}
+diff --git a/daemon/rule/ui_lists.go b/daemon/rule/ui_lists.go
+new file mode 100644
+index 00000000..89c3bd8b
+--- /dev/null
++++ b/daemon/rule/ui_lists.go
+@@ -0,0 +1,27 @@
++package rule
++
++import (
++	"fmt"
++	"strings"
++
++	"github.com/evilsocket/opensnitch/daemon/ui/protocol"
++)
++
++// refuseListsOperands rejects lists.* operands anywhere in a rule received
++// over the UI channel (Deserialize is only used for those). A lists operand
++// makes the root daemon read every file in the directory named by its data,
++// so a client could point it anywhere. Rules root writes to disk still load.
++func refuseListsOperands(op *protocol.Operator) error {
++	if op == nil {
++		return nil
++	}
++	if strings.HasPrefix(op.Operand, "lists.") {
++		return fmt.Errorf("operand %q refused from the UI channel", op.Operand)
++	}
++	for _, child := range op.List {
++		if err := refuseListsOperands(child); err != nil {
++			return err
++		}
++	}
++	return nil
++}
 diff --git a/daemon/shutdown_signal_test.go b/daemon/shutdown_signal_test.go
 new file mode 100644
 index 00000000..2908c998
@@ -3052,158 +3096,157 @@ index 00000000..225eb35d
 +		}
 +	}
 +}
-diff --git a/daemon/ui/config_guard.go b/daemon/ui/config_guard.go
+diff --git a/daemon/ui/notification_policy.go b/daemon/ui/notification_policy.go
 new file mode 100644
-index 00000000..c56aff38
+index 00000000..90c2b7d6
 --- /dev/null
-+++ b/daemon/ui/config_guard.go
-@@ -0,0 +1,33 @@
++++ b/daemon/ui/notification_policy.go
+@@ -0,0 +1,24 @@
 +package ui
 +
 +import (
 +	"errors"
-+	"reflect"
 +
-+	"github.com/evilsocket/opensnitch/daemon/ui/config"
++	"github.com/evilsocket/opensnitch/daemon/ui/protocol"
 +)
 +
-+var errConfigChangeRefused = errors.New("CHANGE_CONFIG refused: a UI may only change DefaultAction/Duration, InterceptUnknown, logging, stats and internal tuning; paths, addresses, TLS, firewall and monitors stay as configured on disk")
-+
-+// confinedConfigChange accepts a UI-sent configuration only when it differs
-+// from the running one in settings a UI may tune. CHANGE_CONFIG arrives over
-+// the UI channel and is saved over the root-owned config, so it must not
-+// move rule, log, firewall, task or module paths, the server address or TLS
-+// material: each of those would redirect root's reads or writes.
-+func confinedConfigChange(current, proposed *config.Config) error {
-+	allowed := *current
-+	allowed.LogLevel = proposed.LogLevel
-+	allowed.DefaultAction = proposed.DefaultAction
-+	allowed.DefaultDuration = proposed.DefaultDuration
-+	allowed.InterceptUnknown = proposed.InterceptUnknown
-+	allowed.LogUTC = proposed.LogUTC
-+	allowed.LogMicro = proposed.LogMicro
-+	allowed.Stats = proposed.Stats
-+	allowed.Internal = proposed.Internal
-+	allowed.Rules.EnableChecksums = proposed.Rules.EnableChecksums
-+	allowed.FwOptions.MonitorInterval = proposed.FwOptions.MonitorInterval
-+	if !reflect.DeepEqual(allowed, *proposed) {
-+		return errConfigChangeRefused
-+	}
-+	return nil
++// uiAllowedActions are the notifications the Snitchwatch system bridge sends:
++// rule edits and deletes. Every other action hands the root daemon
++// client-chosen configuration paths, firewall rules (including NAT), or task
++// targets (another process's environment and memory map), so the system
++// variant refuses it. Re-enabling one needs its own range-checked security
++// review; do not just add it here.
++var uiAllowedActions = map[protocol.Action]bool{
++	protocol.Action_CHANGE_RULE: true,
++	protocol.Action_DELETE_RULE: true,
 +}
-diff --git a/daemon/ui/config_guard_test.go b/daemon/ui/config_guard_test.go
++
++var errActionRefused = errors.New("notification action refused: the system-bridge daemon accepts only CHANGE_RULE and DELETE_RULE")
++
++func uiActionAllowed(action protocol.Action) bool {
++	return uiAllowedActions[action]
++}
+diff --git a/daemon/ui/notification_policy_test.go b/daemon/ui/notification_policy_test.go
 new file mode 100644
-index 00000000..4e0bca33
+index 00000000..fe27e346
 --- /dev/null
-+++ b/daemon/ui/config_guard_test.go
-@@ -0,0 +1,110 @@
++++ b/daemon/ui/notification_policy_test.go
+@@ -0,0 +1,118 @@
 +package ui
 +
 +import (
-+	"go/ast"
-+	"go/parser"
-+	"go/token"
++	"io"
++	"os"
++	"path/filepath"
 +	"testing"
 +
-+	"github.com/evilsocket/opensnitch/daemon/ui/config"
++	"github.com/evilsocket/opensnitch/daemon/rule"
++	"github.com/evilsocket/opensnitch/daemon/ui/protocol"
++	"google.golang.org/grpc"
 +)
 +
-+func runningConfig() config.Config {
-+	var c config.Config
-+	level := int32(2)
-+	c.LogLevel = &level
-+	c.DefaultAction = "allow"
-+	c.DefaultDuration = "once"
-+	c.ProcMonitorMethod = "proc"
-+	c.Firewall = "nftables"
-+	c.Server.Address = "unix:opensnitchd.sock"
-+	c.Server.LogFile = "/var/log/opensnitchd.log"
-+	c.Rules.Path = "/etc/opensnitchd/rules"
-+	c.FwOptions.ConfigPath = "/etc/opensnitchd/system-fw.json"
-+	c.FwOptions.MonitorInterval = "15s"
-+	c.TasksOptions.ConfigPath = "/etc/opensnitchd/tasks/tasks.json"
-+	c.Ebpf.ModulesPath = "/usr/lib/opensnitchd/ebpf"
-+	c.Audit.AudispSocketPath = "/var/run/audispd_events"
-+	return c
++type replyRecorder struct {
++	grpc.ClientStream
++	replies []*protocol.NotificationReply
 +}
 +
-+// CHANGE_CONFIG arrives from the UI channel and is saved over the root-owned
-+// config, so it must not move any path, address or TLS material.
-+func TestChangeConfigRefusesPathsAndAddresses(t *testing.T) {
-+	refused := map[string]func(*config.Config){
-+		"Rules.Path":             func(c *config.Config) { c.Rules.Path = "/var/tmp/x" },
-+		"Server.LogFile":         func(c *config.Config) { c.Server.LogFile = "/etc/shadow" },
-+		"Server.Address":         func(c *config.Config) { c.Server.Address = "127.0.0.1:50051" },
-+		"TLS.CACert":             func(c *config.Config) { c.Server.Authentication.TLSOptions.CACert = "/tmp/ca.pem" },
-+		"Server.Authentication":  func(c *config.Config) { c.Server.Authentication.Type = "simple-tls" },
-+		"FwOptions.ConfigPath":   func(c *config.Config) { c.FwOptions.ConfigPath = "/tmp/fw.json" },
-+		"FwOptions.QueueNum":     func(c *config.Config) { c.FwOptions.QueueNum = 9 },
-+		"FwOptions.QueueBypass":  func(c *config.Config) { c.FwOptions.QueueBypass = true },
-+		"Firewall":               func(c *config.Config) { c.Firewall = "iptables" },
-+		"Tasks.ConfigPath":       func(c *config.Config) { c.TasksOptions.ConfigPath = "/tmp/t.json" },
-+		"Ebpf.ModulesPath":       func(c *config.Config) { c.Ebpf.ModulesPath = "/tmp/ebpf" },
-+		"Audit.AudispSocketPath": func(c *config.Config) { c.Audit.AudispSocketPath = "/tmp/a.sock" },
-+		"ProcMonitorMethod":      func(c *config.Config) { c.ProcMonitorMethod = "ebpf" },
-+	}
-+	for name, change := range refused {
-+		current, proposed := runningConfig(), runningConfig()
-+		change(&proposed)
-+		if err := confinedConfigChange(&current, &proposed); err == nil {
-+			t.Errorf("CHANGE_CONFIG changing %s was accepted", name)
-+		}
-+	}
-+	current, proposed := runningConfig(), runningConfig()
-+	level := int32(1)
-+	proposed.LogLevel = &level
-+	proposed.DefaultAction = "deny"
-+	proposed.DefaultDuration = "always"
-+	proposed.InterceptUnknown = true
-+	proposed.LogUTC, proposed.LogMicro = true, true
-+	proposed.Internal.GCPercent = 50
-+	proposed.Rules.EnableChecksums = true
-+	proposed.FwOptions.MonitorInterval = "30s"
-+	if err := confinedConfigChange(&current, &proposed); err != nil {
-+		t.Errorf("UI-tunable settings refused: %v", err)
-+	}
-+	if err := confinedConfigChange(&current, &current); err != nil {
-+		t.Errorf("unchanged config refused: %v", err)
-+	}
++func (r *replyRecorder) Send(reply *protocol.NotificationReply) error {
++	r.replies = append(r.replies, reply)
++	return nil
 +}
 +
-+// The guard must run before the config is applied or saved.
-+func TestChangeConfigHandlerGuardsBeforeApplying(t *testing.T) {
-+	file, err := parser.ParseFile(token.NewFileSet(), "notifications.go", nil, 0)
++func (r *replyRecorder) Recv() (*protocol.Notification, error) { return nil, io.EOF }
++
++func policyLoader(t *testing.T) (*rule.Loader, string) {
++	t.Helper()
++	dir := t.TempDir()
++	l, err := rule.NewLoader(false)
 +	if err != nil {
 +		t.Fatal(err)
 +	}
-+	var order []string
-+	for _, decl := range file.Decls {
-+		fn, ok := decl.(*ast.FuncDecl)
-+		if !ok || fn.Name.Name != "handleActionChangeConfig" {
++	if err := l.Load(dir); err != nil {
++		t.Fatal(err)
++	}
++	return l, dir
++}
++
++func allowRule(name string, op *protocol.Operator) *protocol.Rule {
++	return &protocol.Rule{Name: name, Enabled: true, Action: "allow", Duration: "always", Operator: op}
++}
++
++// Every action the bridge does not send reaches root with client-chosen paths,
++// firewall rules or task targets; the system variant refuses them with an
++// error reply and no side effect.
++func TestNotificationsOutsideTheBridgeSetAreRefused(t *testing.T) {
++	saved := configFile
++	configFile = filepath.Join(t.TempDir(), "default-config.json")
++	defer func() { configFile = saved }()
++	l, dir := policyLoader(t)
++	c := &Client{rules: l}
++	for value, name := range protocol.Action_name {
++		action := protocol.Action(value)
++		if action == protocol.Action_CHANGE_RULE || action == protocol.Action_DELETE_RULE {
 +			continue
 +		}
-+		ast.Inspect(fn.Body, func(n ast.Node) bool {
-+			if call, ok := n.(*ast.CallExpr); ok {
-+				switch f := call.Fun.(type) {
-+				case *ast.Ident:
-+					order = append(order, f.Name)
-+				case *ast.SelectorExpr:
-+					order = append(order, f.Sel.Name)
-+				}
-+			}
-+			return true
-+		})
-+	}
-+	index := func(name string) int {
-+		for i, n := range order {
-+			if n == name {
-+				return i
-+			}
++		stream := &replyRecorder{}
++		c.handleNotification(stream, &protocol.Notification{Id: 7, Type: action,
++			Data:  `{"Rules":{"Path":"/var/tmp/x"},"Stats":{"Workers":-1}}`,
++			Rules: []*protocol.Rule{allowRule("refused-"+name, &protocol.Operator{Type: "simple", Operand: "true"})}})
++		if len(stream.replies) != 1 || stream.replies[0].Code != protocol.NotificationReplyCode_ERROR || stream.replies[0].Id != 7 {
++			t.Errorf("%s: want one error reply for id 7, got %v", name, stream.replies)
 +		}
-+		return -1
 +	}
-+	guard, reload, save := index("confinedConfigChange"), index("reloadConfiguration"), index("Save")
-+	if guard < 0 || reload < 0 || save < 0 || guard > reload || guard > save {
-+		t.Fatalf("handleActionChangeConfig must call confinedConfigChange before reloadConfiguration and Save: %v", order)
++	if _, err := os.Stat(configFile); !os.IsNotExist(err) {
++		t.Errorf("a refused CHANGE_CONFIG wrote the config: %v", err)
++	}
++	if entries, _ := os.ReadDir(dir); len(entries) != 0 || len(l.GetAll()) != 0 {
++		t.Errorf("a refused action changed the rules: %v", entries)
++	}
++}
++
++func TestBridgeRuleNotificationsStillWork(t *testing.T) {
++	l, dir := policyLoader(t)
++	c := &Client{rules: l}
++	name := "snitchwatch-allow-10.0.2.2-f9292b96ff7d66ab-49190-pcurl-f0da955d46aa49e3"
++	op := &protocol.Operator{Type: "list", Operand: "list", List: []*protocol.Operator{
++		{Type: "simple", Operand: "process.path", Data: "/usr/bin/curl", Sensitive: true},
++		{Type: "simple", Operand: "dest.ip", Data: "10.0.2.2"}}}
++	stream := &replyRecorder{}
++	c.handleNotification(stream, &protocol.Notification{Id: 1, Type: protocol.Action_CHANGE_RULE, Rules: []*protocol.Rule{allowRule(name, op)}})
++	if len(stream.replies) != 1 || stream.replies[0].Code != protocol.NotificationReplyCode_OK {
++		t.Fatalf("CHANGE_RULE refused: %v", stream.replies)
++	}
++	if _, err := os.Stat(filepath.Join(dir, name+".json")); err != nil {
++		t.Fatalf("CHANGE_RULE did not save the rule: %v", err)
++	}
++	stream = &replyRecorder{}
++	c.handleNotification(stream, &protocol.Notification{Id: 2, Type: protocol.Action_DELETE_RULE, Rules: []*protocol.Rule{{Name: name}}})
++	if len(stream.replies) != 1 || stream.replies[0].Code != protocol.NotificationReplyCode_OK {
++		t.Fatalf("DELETE_RULE refused: %v", stream.replies)
++	}
++	if _, err := os.Stat(filepath.Join(dir, name+".json")); !os.IsNotExist(err) {
++		t.Fatalf("DELETE_RULE did not delete the rule: %v", err)
++	}
++}
++
++// A lists.* operand makes root read every file in a client-chosen directory,
++// even nested inside a list operator.
++func TestRuleNotificationsRefuseListsOperands(t *testing.T) {
++	l, dir := policyLoader(t)
++	c := &Client{rules: l}
++	for _, op := range []*protocol.Operator{
++		{Type: "lists", Operand: "lists.domains", Data: "/etc/ssl/private"},
++		{Type: "list", Operand: "list", List: []*protocol.Operator{
++			{Type: "simple", Operand: "process.path", Data: "/usr/bin/curl"},
++			{Type: "lists", Operand: "lists.ips", Data: "/root"}}},
++	} {
++		stream := &replyRecorder{}
++		c.handleNotification(stream, &protocol.Notification{Id: 3, Type: protocol.Action_CHANGE_RULE, Rules: []*protocol.Rule{allowRule("lists-rule", op)}})
++		if len(stream.replies) != 1 || stream.replies[0].Code != protocol.NotificationReplyCode_ERROR {
++			t.Errorf("lists operand %v accepted: %v", op, stream.replies)
++		}
++	}
++	if entries, _ := os.ReadDir(dir); len(entries) != 0 || len(l.GetAll()) != 0 {
++		t.Errorf("a lists rule was stored: %v", entries)
 +	}
 +}

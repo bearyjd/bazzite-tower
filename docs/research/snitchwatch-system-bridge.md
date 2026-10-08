@@ -427,15 +427,20 @@ Open items:
 - Rule names from the UI channel reached root file paths unvalidated
   (`../default-config` made the daemon write or delete outside
   `/etc/opensnitchd/rules`). Fixed in both layers on 2026-10-08: the bridge
-  (Snitchwatch #57) and, as defence in depth, the 32-file daemon patch, which
+  (Snitchwatch #57) and, as defence in depth, the 34-file daemon patch, which
   validates names in `Add`, `Replace`, `Delete` and `deleteRuleFromDisk` (no
   separators, control, format or line-separator characters, at most 200
-  bytes). The daemon's `CHANGE_CONFIG` notification could also move
-  `Rules.Path`, the log file, server address, TLS and other paths (not
-  reachable: the bridge only sends `CHANGE_RULE`/`DELETE_RULE`, guarded by a
-  Snitchwatch test). The patch now accepts a UI-sent config only when it
-  differs in UI-tunable settings (DefaultAction/Duration, InterceptUnknown,
-  logging, stats, internal tuning, rule checksums, monitor interval).
+  bytes). Two security reviews of the UI channel found more: `CHANGE_CONFIG`
+  could move rule/log/firewall paths, the server address and TLS, and its
+  "tunable" fields could still stall or crash the daemon; `RELOAD_FW_RULES`
+  takes arbitrary nftables rules (NAT included); `TASK_START` returns another
+  process's environment and memory map, and bad task input panics the daemon;
+  `lists.*` operators make root read any directory. None is reachable through
+  the bridge, which sends only `CHANGE_RULE`/`DELETE_RULE` (allowlisted at its
+  send point). The daemon now accepts exactly those two notification actions
+  in the system variant (others get an error reply) and refuses `lists.*`
+  operands from the UI channel until Snitchwatch blocklists (#45 PR B) define
+  a confined directory under `/var/lib/snitchwatch/blocklists/`.
 - ~~The daemon factory and CI do not run the patch's Go tests.~~ Fixed
   2026-10-07: `just test-snitchwatch-daemon-patch` and the path-filtered
   `snitchwatch-daemon-patch.yml` workflow run them, `-race` included.

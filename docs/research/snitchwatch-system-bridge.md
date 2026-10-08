@@ -353,18 +353,38 @@ Open items:
   entry the kernel flushed when another service removed a base chain was read
   by `nfq_destroy_queue()` as its unbind reply. The queue was in fact
   unbound. See [opensnitch-nfq-destroy](opensnitch-nfq-destroy/README.md). The
-  fix drains pending replies first; VM confirmation is pending (r4).
+  fix drains pending replies first. Confirmed on the r4 VM: a scripted
+  probe (a held Ask, a base-chain flush, then a stop) warned in 18 of 20
+  rounds on r3 and 0 of 20 on r4. Ordinary stops and 10 graphical cold
+  reboots on r4 logged none.
 - At first boot the patch's 1 ms `deliverPacket` timeout accepted one packet
-  without a decision (`Timed out while sending packet to queue channel 2`).
-  Cause: the queue's reader starts in `setupQueues`, but the loop handing
-  packets to the workers started only after UI connect, firewall and rule
-  reloads, process-monitor and DNS setup. Every packet queued in that window
-  was accepted without a rule check, even though rules were already loaded.
-  Fixed 2026-10-07 (owner's choice of option): dispatch now starts right after the queue is created.
-  The 1 ms accept-on-timeout itself is upstream behaviour and still applies
-  when all workers are busy; VM confirmation is pending (r4).
+  without a decision (`Timed out while sending packet to queue channel 2`,
+  0.6 s after the daemon loaded its rules on r3). Channel 2 is the **repeat
+  queue** (queues are numbered in creation order, primary first). Likely
+  mechanism, not yet proven: when the daemon asks the GUI, a worker re-queues
+  the packet there and then waits on the repeat channel; the repeat queue's
+  reader gives that hand-off only 1 ms, and under first-boot CPU load the
+  worker can arrive later, so the packet is accepted without being asked
+  about. This is still open
+  (upstream behaviour). It was mis-attributed on 2026-10-07 to a separate
+  startup window, which the patch now closes as hardening (owner's choice of
+  option). The queue's reader started in `setupQueues`, but packets reached the
+  workers only after UI connect, rule reload, process-monitor and DNS setup.
+  Dispatch now starts with the queue. Neither r3 nor r4 produced a timeout in
+  10 daemon restarts under connection load, so that window is small in
+  practice. The 1 ms accept-on-timeout still applies when all workers are
+  busy.
 - A GUI Allow creates a destination-only rule (`allow if dest.ip is …`, no
   process constraint); confirm that is the intended rule shape.
+- The GUI's inline Deny did not stop a retrying connection on r4. The daemon
+  logged `Added new rule: deny if dest.ip is 127.0.0.5`, yet the denied curl
+  completed (HTTP 404, i.e. allowed) about 4.4 s after the click, 19.4 s
+  after it started; a repeat curl timed out after 8 s. The likely path is a
+  retried connection attempt meeting the default allow while another Ask
+  held the only prompt slot; no rule-file listing was captured after the
+  Deny, so the rule's scope (in-memory once vs persisted) is unconfirmed.
+  Decide whether inline Deny should persist, and capture the rule files when
+  re-testing.
 - ~~Readiness treats an empty `opensnitch.service.d` directory as a local
   override.~~ Fixed 2026-10-07. Under a root-only unit directory
   (`/etc/systemd/system`, `/run/systemd/*`, `/usr/local/lib/systemd/system`),
@@ -391,7 +411,9 @@ Open items:
   logged; the `NETLINK_NO_ENOBUFS` `setsockopt` result is unchecked; reader
   errors name the internal queue index, not the queue number.
 - Serialized prompts are an upstream limitation with a real desktop cost:
-  background services can hold the only prompt slot.
+  background services can hold the only prompt slot. On r4 a `kioworker`
+  Ask (discord.com) held it right after login; Steam and the Bazzite welcome
+  app were also closed to clear the queue.
 
 ## Consumer rollout gate
 
@@ -418,14 +440,17 @@ passes its scoped integration checks:
    Account IDs must come from the target image's named accounts rather than
    the earlier VM's numeric IDs. No user receives GUI membership implicitly.
 
-Status for the `d96a7a5` candidate in the disposable VM: gate 1 is met for
-default KDE startup and Allow decisions without overrides on the supported KDE
-6.11 runtime; a GUI Deny was not exercised. Gate 2 is partly open: controlled stops are warning-free and the
-reader stall is fixed, but reboot-time stops can still log the
-`nfq_destroy_queue` warning. Gates 3–5 passed for this image, including
-independent provenance review, cold first boot, fallback, migration/refusal,
-token rotation and reconnection. A host trial and the open items above remain
-before any default rollout.
+Status for the `65e02dd` (r4) candidate in the disposable VM (2026-10-08 UTC):
+gate 1 is met for default KDE startup, Allow and Deny decisions (Deny with the caveat above), last-GUI
+loss and late-verdict rejection, without overrides on KDE 6.11 Gate 2 is met for teardown: the `nfq_destroy_queue`
+warning is fixed and VM-confirmed, and a forced reader death logged, exited 1,
+was restarted by systemd after 30 s and let traffic through meanwhile
+(QueueBypass; 44 of 45 requests succeeded). Gates 3–5 were re-run on r4: independent image review, cold
+first boot, every acceptance probe phase, readiness drop-in handling, 10
+graphical cold boots with no stall. A host trial and the open items above
+remain before any default rollout. Evidence:
+`output/snitchwatch-fresh-vm-r4.G9c5CJ/R4-VM-ACCEPTANCE-RESULT.json`, with r3
+controls in `output/snitchwatch-r3-control.*/`.
 
 The fixed target-image acceptance limits are 5 seconds for no-GUI fallback,
 2 seconds for pending cleanup and 15 seconds for daemon stop. Preserve the

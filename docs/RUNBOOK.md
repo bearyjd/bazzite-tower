@@ -221,8 +221,9 @@ Operating the system candidate:
   logs `netfilter queue reader N stopped: …`, leaves through its normal
   cleanup and exits 1. systemd restarts it after `RestartSec=30`; until then
   `QueueBypass` lets traffic through unfiltered, consistent with
-  `DefaultAction: allow`. This path is unit-tested; it was not triggered on
-  the VM.
+  `DefaultAction: allow`. Verified on the r4 VM (2026-10-08 UTC) by closing
+  the queue socket: the daemon exited 1 within 0.4 s and restarted 30 s
+  later; 44 of 45 test requests during the gap succeeded.
 - Before the 22-file daemon patch, a daemon stop during reboot could log
   `Queue.destroy() idx=1, nfq_destroy_queue() not closed: -1`. The queue was
   unbound anyway; a stale verdict error confused libnfnetlink. The patch now
@@ -231,6 +232,10 @@ Operating the system candidate:
 - While one prompt is pending, opensnitchd applies the default action to other
   new connections without asking; the GUI banner says so. Answer pending
   prompts promptly.
+- The GUI's inline Deny did not reliably stop a connection that retries: on
+  the r4 VM a denied request still completed a few seconds after the click
+  while another prompt was pending (default allow). Use a persistent rule to
+  block a destination.
 
 Keep `DefaultAction: allow` during rollout. For a local deny experiment that
 blocks networking, restore `allow` in `/etc/opensnitchd/default-config.json` from

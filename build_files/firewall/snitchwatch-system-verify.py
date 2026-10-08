@@ -10,7 +10,7 @@ import sys
 
 MANIFEST = '/usr/share/snitchwatch/system-bridge-manifest.json'
 PINS = '/usr/share/snitchwatch/build-pins.json'
-EXPECTED_PINS_SHA256 = 'd80616f64ac372959882cf32f0dc14fc50fcb48eb6329b7e0924f71439ebe71b'
+EXPECTED_PINS_SHA256 = '627a9b0bedc0d08f5e13fe413a46cb8e307db2554c9fbbee8b7fe2dd80b7112f'
 BINARY = '/usr/bin/snitchwatch-bridge-cli'
 PROFILE = '/usr/share/bazzite-tower/snitchwatch-bridge-profile'
 CONFIG = '/usr/share/bazzite-tower/opensnitchd-system-bridge-config.json'

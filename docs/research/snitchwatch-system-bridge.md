@@ -356,7 +356,11 @@ Open items:
   process constraint); confirm that is the intended rule shape.
 - Readiness treats an empty `opensnitch.service.d` directory as a local
   override.
-- The daemon factory and CI do not run the patch's Go tests.
+- ~~The daemon factory and CI do not run the patch's Go tests.~~ Fixed
+  2026-10-07: `just test-snitchwatch-daemon-patch` and the path-filtered
+  `snitchwatch-daemon-patch.yml` workflow run them, `-race` included.
+  Putting back the r2 `return EIO` makes the gate fail
+  (`.agent_native/agent_roadmap.md` item 7).
 - Ignored per-message `nfq_handle_packet()` failures are not counted or
   logged; the `NETLINK_NO_ENOBUFS` `setsockopt` result is unchecked; reader
   errors name the internal queue index, not the queue number.

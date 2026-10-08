@@ -1,8 +1,8 @@
 <!-- Generated: 2026-08-08 | Files scanned: 8 | Token estimate: ~800 -->
-<!-- Targeted update: 2026-10-05 | OpenSnitch readiness test and VM evidence scope; not a full regeneration -->
+<!-- Targeted update: 2026-10-07 | OpenSnitch patch-test workflow; not a full regeneration -->
 # CI / CD
 
-5 workflows + highlighted test scripts + 1 diff filter. Full failure model:
+6 workflows + highlighted test scripts + 1 diff filter. Full failure model:
 [`../downstream-change-tracking.md`](../downstream-change-tracking.md).
 
 ## Workflows (`.github/workflows/`)
@@ -13,6 +13,7 @@
 | `boot-test.yml` | PR (build paths), Sun 07:00 UTC, dispatch | build → `podman run --systemd=always /sbin/init` → wait running/degraded → exec `tests/boot-check.sh` | `boot-test-failure` |
 | `base-watch.yml` | daily 05:00 UTC, dispatch | pull `bazzite-nvidia-open:stable` → `rpm -qa` manifest → `ci/base-diff.py` vs last-seen baseline in `docs/manifests/` (written on first run) → commit refreshed manifest (and fail if every push retry fails) | `base-bump` |
 | `build-disk.yml` | dispatch (platform amd64/arm64), PR (disk.toml path) | resolve `:latest` once to an immutable digest → verify it with `cosign.pub` → pass that digest to bootc-image-builder → qcow2 disk image (rootfs=btrfs) → artifact or S3. anaconda-iso disabled: upstream BIB#1188 + bazzite#3418 | — |
+| `snitchwatch-daemon-patch.yml` | PR + push main (paths: `build_files/firewall/snitchwatch-system-daemon-*`, its script, itself), dispatch | `tests/test-snitchwatch-daemon-patch.sh`: pinned Fedora builder applies the pinned OpenSnitch patch to upstream `b404c4c` via the factory's check-source gates, then a `--network=none` container runs gofmt (patched files), `go vet` (netfilter/nftables in full; root/ui without the three analyzers upstream code trips), `go test -race` on root/netfilter/nftables/ui (three upstream ui race failures skipped by name; upstream's privileged nftables tests skip) and a plain `go test` pass. Not required (path-filtered). No image build | — |
 | `build-iso.yml` | dispatch, Sun 08:00 UTC | `podman build installer/` payload (live session + Anaconda, Fedora-signed kernel for Secure Boot) → titanoboa → bootable ISO → checksum + cosign sign-blob → artifact or S3 | `iso-failure` |
 
 The `installer/` payload + titanoboa contract is documented in
@@ -41,7 +42,7 @@ auto-closes — each leg's labelled tracking issue, independently of whether
 - `smoke.sh` — offline, `podman run -i <img> bash -s <`. Asserts the virtualisation and monitoring intent plus Docker/Cockpit/Waydroid disabled by default, a baked Docker group without user membership, Cockpit's loopback drop-in, and the reporting-only health helper. It retains the existing firewall, kernel-argument, firmware, and desktop contracts; reports every failure, not just the first.
 - `boot-check.sh` — runtime, inside the booted image. HARD = qemu user resolves, virtqemud/virtnetworkd active, `virsh -c qemu:///system` connects, wifi-guard active + not-failed, optional Docker/Cockpit/Waydroid services disabled, and no SOF storm in the boot journal. SOFT (container limits) = NetworkManager and firstboot.
 - `test-rpm-inventory-spdx.sh` — fixture contract for the standard-library SPDX generator: deterministic ordering and valid EVRA/SPDX structure, while malformed, empty, and duplicate RPM inventories fail closed.
-- `test-opensnitch-readiness.sh` — behavioral legacy readiness/dispatch tests. `test-snitchwatch-system.sh` covers read-only system preflight and transactional migration, refusal and rollback with fixtures; `test-snitchwatch-image-build.py` covers selector/refusal and immutable artifact/overlay provenance. `test-snitchwatch-image-build-daemon.py` checks the separate patched-daemon source/patch/build inventory and actual installed-binary identity. Both verify/release jobs run these checks. They do not exercise a GUI or prove NFQUEUE/SELinux behavior.
+- `test-opensnitch-readiness.sh` — behavioral legacy readiness/dispatch tests. `test-snitchwatch-system.sh` covers read-only system preflight and transactional migration, refusal and rollback with fixtures; `test-snitchwatch-image-build.py` covers selector/refusal and immutable artifact/overlay provenance. `test-snitchwatch-image-build-daemon.py` checks the separate patched-daemon source/patch/build inventory and actual installed-binary identity. Both verify/release jobs run these checks. `test-snitchwatch-daemon-patch.sh` (own workflow, above) is the only place the patch's Go and C harness tests run. None of these checks exercise a GUI or prove NFQUEUE/SELinux behavior.
 - `test-docker-libvirt-forwarding.sh` — hard mocked contract: exact `virbr0` `192.168.122.0/24` / `wlp9s0f0` stateful tagged rule pair, multi-NAT discovery, idempotence, discovery failures, and safe stale-rule pruning that leaves unowned rules untouched. `test-docker-libvirt-forwarding-hooks.sh` verifies the trigger contracts (libvirt path unit + service, no libvirt hook, NetworkManager dispatcher, Docker drop-in). `test-docker-libvirt-forwarding-integration.sh` is a separate privileged, opt-in host probe because nested Docker firewall support is runner-dependent.
 
 ## Snitchwatch VM evidence scope

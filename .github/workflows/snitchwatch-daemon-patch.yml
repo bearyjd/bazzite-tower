@@ -1,0 +1,56 @@
+---
+# Runs the downstream OpenSnitch patch's own Go/C tests (with -race) against the
+# pinned upstream commit. The daemon factory only builds the patch; this is the
+# one place its tests run (see .agent_native/agent_roadmap.md item 7). No image
+# build: tests/test-snitchwatch-daemon-patch.sh prepares the patched source in a
+# pinned Fedora container with network, then tests in one with --network=none.
+#
+# Not a required check: it is path-filtered, so a required status would hang
+# every PR that does not touch these paths (same reason boot-test is optional).
+name: Snitchwatch daemon patch tests
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'build_files/firewall/snitchwatch-system-daemon-*'
+      - 'tests/test-snitchwatch-daemon-patch.sh'
+      - '.github/workflows/snitchwatch-daemon-patch.yml'
+  push:
+    branches:
+      - main
+    paths:
+      - 'build_files/firewall/snitchwatch-system-daemon-*'
+      - 'tests/test-snitchwatch-daemon-patch.sh'
+      - '.github/workflows/snitchwatch-daemon-patch.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  # Only superseded PR runs are cancelled; every push to main is tested.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  daemon-patch-tests:
+    name: OpenSnitch patch tests (-race)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          persist-credentials: false
+
+      - name: Run patch tests
+        run: |
+          set +e
+          tests/test-snitchwatch-daemon-patch.sh
+          rc=$?
+          if [ "$rc" -eq 3 ]; then
+            echo "::error title=Toolchain drift::The Fedora builder no longer matches the reviewed pins (not a test failure); refresh snitchwatch-system-daemon-pins.json after review."
+          fi
+          exit "$rc"

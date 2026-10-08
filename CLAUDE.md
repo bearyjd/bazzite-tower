@@ -33,6 +33,7 @@ any of it.
 | `just lint` | `shellcheck` every `*.sh` in the repo |
 | `just lint-containerfile` | `hadolint` the `Containerfile` via a digest-pinned container — seconds, no image build. Run it after any `Containerfile` edit; it is **not** a CI gate |
 | `just format` | `shfmt --write` every `*.sh` — **not** a required gate; do not run it over existing files (see "Code style") |
+| `just test-snitchwatch-daemon-patch` | Apply the pinned OpenSnitch patch to upstream and run its Go tests (with `-race`) and C harness tests in throwaway containers (network to fetch, `--network=none` to test). No image build; minutes. Run it after touching `build_files/firewall/snitchwatch-system-daemon-*`. CI runs it as `snitchwatch-daemon-patch.yml` (path-filtered, not required) |
 | `just check` / `just fix` | Check / auto-format `Justfile`/`*.just` syntax |
 | `just clean` | Remove build artifacts (`output/`, manifests, `*_build*`) |
 

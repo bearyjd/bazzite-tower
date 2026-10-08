@@ -224,7 +224,7 @@ Operating the system candidate:
   `DefaultAction: allow`. Verified on the r4 VM (2026-10-08 UTC) by closing
   the queue socket: the daemon exited 1 within 0.4 s and restarted 30 s
   later; 44 of 45 test requests during the gap succeeded.
-- Before the 22-file daemon patch, a daemon stop during reboot could log
+- Before the 22-file and later daemon patches, a daemon stop during reboot could log
   `Queue.destroy() idx=1, nfq_destroy_queue() not closed: -1`. The queue was
   unbound anyway; a stale verdict error confused libnfnetlink. The patch now
   drains pending replies first and logs the `errno` if destroy still fails

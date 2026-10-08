@@ -127,18 +127,20 @@ index 08c08a2e..54e7a06a 100644
  	for _, fwCfg := range n.SysConfig.SystemRules {
  		for _, chain := range fwCfg.Chains {
 diff --git a/daemon/main.go b/daemon/main.go
-index f6247623..9c634b3c 100644
+index f6247623..5b5556a0 100644
 --- a/daemon/main.go
 +++ b/daemon/main.go
-@@ -25,6 +25,7 @@ package main
+@@ -23,8 +23,8 @@
+ package main
+ 
  import (
- 	"bytes"
+-	"bytes"
  	"context"
 +	"errors"
  	"flag"
  	"fmt"
  	"io/ioutil"
-@@ -35,6 +36,7 @@ import (
+@@ -35,6 +35,7 @@ import (
  	"runtime"
  	"runtime/pprof"
  	"runtime/trace"
@@ -146,7 +148,7 @@ index f6247623..9c634b3c 100644
  	"syscall"
  	"time"
  
-@@ -98,6 +100,7 @@ var (
+@@ -98,6 +99,7 @@ var (
  	sigChan       = (chan os.Signal)(nil)
  	loggerMgr     *loggers.LoggerManager
  	resolvMonitor *systemd.ResolvedMonitor
@@ -154,7 +156,29 @@ index f6247623..9c634b3c 100644
  )
  
  func init() {
-@@ -261,8 +264,8 @@ func setupSignals() {
+@@ -167,6 +169,12 @@ func overwriteFw(cfg *config.Config, qNum uint16, fwCfg string) {
+ 	//setupQueues(qNum)
+ }
+ 
++// repeatHandoffTimeout bounds both sides of the requeue hand-off in
++// acceptOrDeny. The repeat queue's callback starts its clock when the kernel
++// delivers the requeued packet, after the asking worker started waiting, so it
++// never gives up (and accepts the packet unasked) while the worker still waits.
++const repeatHandoffTimeout = time.Second
++
+ func setupQueues(qNum uint16) {
+ 	// prepare the queue
+ 	var err error
+@@ -181,7 +189,7 @@ func setupQueues(qNum uint16) {
+ 
+ 	repeatQueueNum = int(qNum) + 1
+ 
+-	repeatQueue, err = netfilter.NewQueue(uint16(repeatQueueNum))
++	repeatQueue, err = netfilter.NewQueueWithDeliveryTimeout(uint16(repeatQueueNum), repeatHandoffTimeout)
+ 	if err != nil {
+ 		msg := fmt.Sprintf("Error creating repeat queue #%d: %s", repeatQueueNum, err)
+ 		uiClient.SendErrorAlert(msg)
+@@ -261,8 +269,8 @@ func setupSignals() {
  		log.Important("Got signal: %v", sig)
  		cancel()
  		time.AfterFunc(10*time.Second, func() {
@@ -165,7 +189,7 @@ index f6247623..9c634b3c 100644
  		})
  	}()
  }
-@@ -286,6 +289,32 @@ Exit:
+@@ -286,6 +294,32 @@ Exit:
  	log.Debug("worker #%d exit", id)
  }
  
@@ -198,7 +222,7 @@ index f6247623..9c634b3c 100644
  func setupWorkers() {
  	log.Debug("Starting %d workers ...", workers)
  	// setup the workers
-@@ -368,11 +397,57 @@ func initSystemdResolvedMonitor() {
+@@ -368,11 +402,57 @@ func initSystemdResolvedMonitor() {
  	}()
  }
  
@@ -258,7 +282,48 @@ index f6247623..9c634b3c 100644
  	if resolvMonitor != nil {
  		resolvMonitor.Close()
  	}
-@@ -489,9 +564,12 @@ func acceptOrDeny(packet *netfilter.Packet, con *conman.Connection) *rule.Rule {
+@@ -449,36 +529,20 @@ func acceptOrDeny(packet *netfilter.Packet, con *conman.Connection) *rule.Rule {
+ 
+ 		// send a request to the UI client if
+ 		// 1) connected and running and 2) we are not already asking
+-		if uiClient.Connected() == false || uiClient.GetIsAsking() == true {
++		if uiClient.Connected() == false || !uiClient.TryStartAsking() {
+ 			applyDefaultAction(packet, con)
+ 			log.Debug("UI is not running or busy, connected: %v, running: %v", uiClient.Connected(), uiClient.GetIsAsking())
+ 			return nil
+ 		}
+-
+-		uiClient.SetIsAsking(true)
+ 		defer uiClient.SetIsAsking(false)
+ 
+ 		// In order not to block packet processing, we send our packet to a different netfilter queue
+ 		// and then immediately pull it back out of that queue
+ 		packet.SetRequeueVerdict(uint16(repeatQueueNum))
+ 
+-		var o bool
+-		var pkt netfilter.Packet
+-		// don't wait for the packet longer than 1 sec
+-		select {
+-		case pkt, o = <-repeatPktChan:
+-			if !o {
+-				log.Debug("error while receiving packet from repeatPktChan")
+-				return nil
+-			}
+-		case <-time.After(1 * time.Second):
+-			log.Debug("timed out while receiving packet from repeatPktChan")
+-			return nil
+-		}
+-
+-		//check if the pulled out packet is the same we put in
+-		if res := bytes.Compare(packet.Packet.Data(), pkt.Packet.Data()); res != 0 {
+-			log.Error("The packet which was requeued has changed abruptly. This should never happen. Please report this incident to the Opensnitch developers. %v %v ", packet, pkt)
++		pkt, err := netfilter.ReceiveRequeued(repeatPktChan, packet.Packet.Data(), repeatHandoffTimeout)
++		if err != nil {
++			log.Error("requeued packet not received, so it passes without being asked about (fail-open): %v", err)
+ 			return nil
+ 		}
+ 		packet = &pkt
+@@ -489,9 +553,12 @@ func acceptOrDeny(packet *netfilter.Packet, con *conman.Connection) *rule.Rule {
  			con.DstHost = dns.HostOr(con.DstIP, con.DstHost)
  		}
  
@@ -273,7 +338,7 @@ index f6247623..9c634b3c 100644
  			applyDefaultAction(packet, con)
  			return nil
  		}
-@@ -611,6 +689,12 @@ func main() {
+@@ -611,6 +678,12 @@ func main() {
  
  	setupWorkers()
  	setupQueues(qNum)
@@ -286,7 +351,7 @@ index f6247623..9c634b3c 100644
  
  	// queue and firewall rules should be ready by now
  
-@@ -665,19 +749,11 @@ func main() {
+@@ -665,19 +738,11 @@ func main() {
  	initSystemdResolvedMonitor()
  
  	log.Info("Running on netfilter queue #%d ...", queueNum)
@@ -379,7 +444,7 @@ index 3795c2ca..6bae1a04 100644
  
  // IsIPv4 returns if the packet is IPv4
 diff --git a/daemon/netfilter/queue.go b/daemon/netfilter/queue.go
-index ac4cf7ae..4f72a5ae 100644
+index ac4cf7ae..f1e5af33 100644
 --- a/daemon/netfilter/queue.go
 +++ b/daemon/netfilter/queue.go
 @@ -13,6 +13,7 @@ import (
@@ -400,7 +465,7 @@ index ac4cf7ae..4f72a5ae 100644
  	queueIndexLock = sync.RWMutex{}
  
  	gopacketDecodeOptions = gopacket.DecodeOptions{Lazy: true, NoCopy: true}
-@@ -55,27 +57,36 @@ type VerdictContainerC C.verdictContainer
+@@ -55,27 +57,49 @@ type VerdictContainerC C.verdictContainer
  // A channel where the intercepted packets will be received.
  // The ID of the queue.
  type Queue struct {
@@ -417,15 +482,28 @@ index ac4cf7ae..4f72a5ae 100644
 +	lifetime  *queueLifetime
 +	wakeRead  int
 +	wakeWrite int
++	// deliveryTimeout bounds the wait for a worker; zero means DefaultDeliveryTimeout.
++	deliveryTimeout time.Duration
  }
  
++// DefaultDeliveryTimeout is upstream's hand-off budget: a packet that no worker
++// takes within it is accepted without a rule check.
++const DefaultDeliveryTimeout = time.Millisecond
++
  // NewQueue opens a new netfilter queue to receive packets marked with a mark.
  func NewQueue(queueID uint16) (q *Queue, err error) {
++	return NewQueueWithDeliveryTimeout(queueID, DefaultDeliveryTimeout)
++}
++
++// NewQueueWithDeliveryTimeout is NewQueue with its own hand-off budget, for a
++// queue whose only reader is a worker that may still be on its way.
++func NewQueueWithDeliveryTimeout(queueID uint16, deliveryTimeout time.Duration) (q *Queue, err error) {
  	q = &Queue{
 -		idx:     uint32(time.Now().UnixNano()),
 -		packets: make(chan Packet),
 +		idx:     atomic.AddUint32(&nextQueueIndex, 1),
 +		packets: make(chan Packet), lifetime: newQueueLifetime(), wakeRead: -1, wakeWrite: -1,
++		deliveryTimeout: deliveryTimeout,
  	}
 -
 -	if err = q.create(queueID); err != nil {
@@ -450,7 +528,7 @@ index ac4cf7ae..4f72a5ae 100644
  
  	return q, nil
  }
-@@ -83,7 +94,7 @@ func NewQueue(queueID uint16) (q *Queue, err error) {
+@@ -83,7 +107,7 @@ func NewQueue(queueID uint16) (q *Queue, err error) {
  func (q *Queue) create(queueID uint16) (err error) {
  	var ret C.int
  
@@ -459,7 +537,7 @@ index ac4cf7ae..4f72a5ae 100644
  		return fmt.Errorf("Error opening Queue handle: %v", err)
  	} else if ret, err = C.nfq_unbind_pf(q.h, AF_INET); err != nil || ret < 0 {
  		errmsg := fmt.Errorf("Error %d unbinding existing q handler from AF_INET protocol family: %v", ret, err)
-@@ -98,12 +109,11 @@ func (q *Queue) create(queueID uint16) (err error) {
+@@ -98,12 +122,11 @@ func (q *Queue) create(queueID uint16) (err error) {
  	} else if ret, err := C.nfq_bind_pf(q.h, AF_INET6); err != nil || ret < 0 {
  		return fmt.Errorf("Error (%d) binding to AF_INET6 protocol family: %v", ret, err)
  	} else if q.qh, err = C.CreateQueue(q.h, C.uint16_t(queueID), C.uint32_t(q.idx)); err != nil || q.qh == nil {
@@ -473,7 +551,7 @@ index ac4cf7ae..4f72a5ae 100644
  	queueIndexLock.Unlock()
  
  	return nil
-@@ -111,62 +121,106 @@ func (q *Queue) create(queueID uint16) (err error) {
+@@ -111,62 +134,106 @@ func (q *Queue) create(queueID uint16) (err error) {
  
  func (q *Queue) setup() (err error) {
  	var ret C.int
@@ -609,7 +687,7 @@ index ac4cf7ae..4f72a5ae 100644
  	}
  
  	q.closeNfq()
-@@ -174,9 +228,10 @@ func (q *Queue) destroy() {
+@@ -174,9 +241,10 @@ func (q *Queue) destroy() {
  
  func (q *Queue) closeNfq() {
  	if q.h != nil {
@@ -622,7 +700,7 @@ index ac4cf7ae..4f72a5ae 100644
  	}
  }
  
-@@ -193,19 +248,34 @@ func go_callback(queueID C.int, data *C.uchar, length C.int, mark C.uint, idx ui
+@@ -193,19 +261,34 @@ func go_callback(queueID C.int, data *C.uchar, length C.int, mark C.uint, idx ui
  	(*vc).data = nil
  	(*vc).mark_set = 0
  	(*vc).length = 0
@@ -659,7 +737,7 @@ index ac4cf7ae..4f72a5ae 100644
  		Mark:            uint32(mark),
  		UID:             uid,
  		NetworkProtocol: xdata[0] >> 4, // first 4 bits is the version
-@@ -222,25 +292,40 @@ func go_callback(queueID C.int, data *C.uchar, length C.int, mark C.uint, idx ui
+@@ -222,25 +305,44 @@ func go_callback(queueID C.int, data *C.uchar, length C.int, mark C.uint, idx ui
  
  	p.Packet = packet
  
@@ -678,15 +756,19 @@ index ac4cf7ae..4f72a5ae 100644
 +
 +func (q *Queue) deliverPacket(p Packet) VerdictContainer {
 +	fallback := VerdictContainer{Verdict: NF_ACCEPT}
- 	select {
--	case *queueChannel <- p:
++	select {
 +	case <-q.lifetime.stop:
 +		return fallback
 +	default:
 +	}
-+	timer := time.NewTimer(time.Millisecond)
++	timeout := q.deliveryTimeout
++	if timeout <= 0 {
++		timeout = DefaultDeliveryTimeout
++	}
++	timer := time.NewTimer(timeout)
 +	defer timer.Stop()
-+	select {
+ 	select {
+-	case *queueChannel <- p:
 +	case <-q.lifetime.stop:
 +		return fallback
 +	case q.packets <- p:
@@ -880,7 +962,7 @@ index 9c06aab7..d80761c8 100644
  
  #endif
 diff --git a/daemon/ui/client.go b/daemon/ui/client.go
-index b4d6845b..209aaf22 100644
+index b4d6845b..a88a6ee9 100644
 --- a/daemon/ui/client.go
 +++ b/daemon/ui/client.go
 @@ -1,6 +1,7 @@
@@ -907,7 +989,7 @@ index b4d6845b..209aaf22 100644
  	configFile             = "/etc/opensnitchd/default-config.json"
  	dummyOperator, _       = rule.NewOperator(rule.Simple, false, rule.OpTrue, "", make([]rule.Operator, 0))
  	clientDisconnectedRule = rule.Create("ui.client.disconnected", "", true, false, false, rule.Allow, rule.Once, dummyOperator)
-@@ -175,14 +180,14 @@ func (c *Client) Connected() bool {
+@@ -175,14 +180,26 @@ func (c *Client) Connected() bool {
  	return true
  }
  
@@ -920,11 +1002,23 @@ index b4d6845b..209aaf22 100644
  }
  
 -//SetIsAsking sets the isAsking flag
++// TryStartAsking claims the single prompt slot in one step. It returns false
++// when another worker already holds it.
++func (c *Client) TryStartAsking() bool {
++	c.Lock()
++	defer c.Unlock()
++	if c.isAsking {
++		return false
++	}
++	c.isAsking = true
++	return true
++}
++
 +// SetIsAsking sets the isAsking flag
  func (c *Client) SetIsAsking(flag bool) {
  	c.Lock()
  	defer c.Unlock()
-@@ -358,24 +363,42 @@ func (c *Client) ping(ts time.Time) (err error) {
+@@ -358,24 +375,42 @@ func (c *Client) ping(ts time.Time) (err error) {
  // Ask sends a request to the server, with the values of a connection to be
  // allowed or denied.
  func (c *Client) Ask(con *conman.Connection) *rule.Rule {
@@ -1801,6 +1895,162 @@ index 00000000..da803221
 +		t.Fatalf("Ccallback test: %v\n%s", err, out)
 +	}
 +}
+diff --git a/daemon/netfilter/requeue.go b/daemon/netfilter/requeue.go
+new file mode 100644
+index 00000000..00fa0a9a
+--- /dev/null
++++ b/daemon/netfilter/requeue.go
+@@ -0,0 +1,42 @@
++package netfilter
++
++import (
++	"bytes"
++	"errors"
++	"time"
++
++	"github.com/evilsocket/opensnitch/daemon/log"
++)
++
++var (
++	// ErrRequeueTimeout means the requeued packet did not come back in time.
++	ErrRequeueTimeout = errors.New("timed out waiting for the requeued packet")
++	// ErrRequeueClosed means the repeat queue stopped.
++	ErrRequeueClosed = errors.New("repeat queue closed")
++)
++
++// ReceiveRequeued waits up to timeout for the requeued packet whose payload is
++// want. A different packet is a late hand-off from an earlier, abandoned ask;
++// it gets the fail-open verdict its callback would otherwise have timed out
++// to, so that callback is released, and the wait goes on.
++// Matching is by payload, so a byte-identical retransmit of the same flow
++// counts as ours, as upstream's comparison did.
++func ReceiveRequeued(packets <-chan Packet, want []byte, timeout time.Duration) (Packet, error) {
++	timer := time.NewTimer(timeout)
++	defer timer.Stop()
++	for {
++		select {
++		case pkt, ok := <-packets:
++			if !ok {
++				return Packet{}, ErrRequeueClosed
++			}
++			if bytes.Equal(pkt.Packet.Data(), want) {
++				return pkt, nil
++			}
++			log.Warning("accepting a stale requeued packet from an abandoned ask")
++			pkt.SetVerdict(NF_ACCEPT)
++		case <-timer.C:
++			return Packet{}, ErrRequeueTimeout
++		}
++	}
++}
+diff --git a/daemon/netfilter/requeue_handoff_test.go b/daemon/netfilter/requeue_handoff_test.go
+new file mode 100644
+index 00000000..0a597355
+--- /dev/null
++++ b/daemon/netfilter/requeue_handoff_test.go
+@@ -0,0 +1,102 @@
++package netfilter
++
++import (
++	"errors"
++	"sync"
++	"testing"
++	"time"
++
++	"github.com/google/gopacket"
++	"github.com/google/gopacket/layers"
++)
++
++func handoffPacket(stop <-chan struct{}, payload ...byte) Packet {
++	return Packet{
++		Packet:         gopacket.NewPacket(payload, layers.LayerTypeIPv4, gopacket.Default),
++		verdictChannel: make(chan VerdictContainer, 1), verdictOnce: new(sync.Once), queueDone: stop,
++	}
++}
++
++func awaitVerdict(t *testing.T, result <-chan VerdictContainer, within time.Duration) VerdictContainer {
++	t.Helper()
++	select {
++	case v := <-result:
++		return v
++	case <-time.After(within):
++		t.Fatalf("callback did not return within %v", within)
++	}
++	return VerdictContainer{}
++}
++
++func TestRepeatQueueWaitsForLateAskingWorker(t *testing.T) {
++	q := &Queue{packets: make(chan Packet), lifetime: newQueueLifetime(), deliveryTimeout: time.Second}
++	result := make(chan VerdictContainer, 1)
++	go func() { result <- q.deliverPacket(handoffPacket(q.lifetime.stop, 0x45)) }()
++	// The asking worker parks 20 ms late, well past upstream's 1 ms budget.
++	time.Sleep(20 * time.Millisecond)
++	select {
++	case worker := <-q.packets:
++		worker.SetVerdict(NF_DROP)
++	case <-time.After(500 * time.Millisecond):
++		t.Fatal("callback gave up before the late worker arrived (packet accepted without asking)")
++	}
++	if got := awaitVerdict(t, result, 2*time.Second); got.Verdict != NF_DROP {
++		t.Fatalf("late worker's verdict lost: got %d, want NF_DROP", got.Verdict)
++	}
++}
++
++func TestPrimaryQueueKeepsUpstreamHandoffBudget(t *testing.T) {
++	if DefaultDeliveryTimeout != time.Millisecond {
++		t.Fatalf("primary hand-off budget changed: %v", DefaultDeliveryTimeout)
++	}
++	// Nobody receives: a zero deliveryTimeout must fall back to the 1 ms default,
++	// not wait, and fail open.
++	q := &Queue{packets: make(chan Packet), lifetime: newQueueLifetime()}
++	result := make(chan VerdictContainer, 1)
++	go func() { result <- q.deliverPacket(handoffPacket(q.lifetime.stop, 0x45)) }()
++	if got := awaitVerdict(t, result, 500*time.Millisecond); got.Verdict != NF_ACCEPT {
++		t.Fatalf("default queue should fail open, got %d", got.Verdict)
++	}
++}
++
++func TestReceiveRequeuedReleasesStalePacketsAndReturnsOurs(t *testing.T) {
++	stop := make(chan struct{})
++	packets := make(chan Packet)
++	stale, ours := handoffPacket(stop, 1, 2), handoffPacket(stop, 3, 4)
++	go func() { packets <- stale; time.Sleep(20 * time.Millisecond); packets <- ours }()
++	got, err := ReceiveRequeued(packets, []byte{3, 4}, time.Second)
++	if err != nil {
++		t.Fatal(err)
++	}
++	if string(got.Packet.Data()) != string([]byte{3, 4}) {
++		t.Fatalf("returned the wrong packet: %v", got.Packet.Data())
++	}
++	select {
++	case v := <-stale.verdictChannel:
++		if v.Verdict != NF_ACCEPT {
++			t.Fatalf("stale packet verdict %d, want NF_ACCEPT", v.Verdict)
++		}
++	default:
++		t.Fatal("stale packet left without a verdict: its queue callback would block forever")
++	}
++	select {
++	case v := <-ours.verdictChannel:
++		t.Fatalf("our packet must be left for the asker, got verdict %d", v.Verdict)
++	default:
++	}
++}
++
++func TestReceiveRequeuedTimesOutAndReportsClose(t *testing.T) {
++	start := time.Now()
++	if _, err := ReceiveRequeued(make(chan Packet), []byte{1}, 30*time.Millisecond); !errors.Is(err, ErrRequeueTimeout) {
++		t.Fatalf("want ErrRequeueTimeout, got %v", err)
++	}
++	if time.Since(start) > time.Second {
++		t.Fatal("timeout not honoured")
++	}
++	closed := make(chan Packet)
++	close(closed)
++	if _, err := ReceiveRequeued(closed, []byte{1}, time.Second); !errors.Is(err, ErrRequeueClosed) {
++		t.Fatalf("want ErrRequeueClosed, got %v", err)
++	}
++}
 diff --git a/daemon/netfilter/testdata/queue_callback.c b/daemon/netfilter/testdata/queue_callback.c
 new file mode 100644
 index 00000000..5e2b8217
@@ -2222,6 +2472,81 @@ index 00000000..14f82e2a
 +	case <-time.After(50 * time.Millisecond):
 +	}
 +}
+diff --git a/daemon/repeat_handoff_test.go b/daemon/repeat_handoff_test.go
+new file mode 100644
+index 00000000..48d08fcf
+--- /dev/null
++++ b/daemon/repeat_handoff_test.go
+@@ -0,0 +1,69 @@
++package main
++
++import (
++	"go/ast"
++	"go/parser"
++	"go/token"
++	"testing"
++	"time"
++)
++
++// callArgs returns the argument lists of every call to pkg.fn inside function
++// owner of main.go.
++func callArgs(t *testing.T, owner, pkg, fn string) [][]ast.Expr {
++	t.Helper()
++	file, err := parser.ParseFile(token.NewFileSet(), "main.go", nil, 0)
++	if err != nil {
++		t.Fatal(err)
++	}
++	var found [][]ast.Expr
++	for _, decl := range file.Decls {
++		f, ok := decl.(*ast.FuncDecl)
++		if !ok || f.Name.Name != owner {
++			continue
++		}
++		ast.Inspect(f.Body, func(n ast.Node) bool {
++			if call, ok := n.(*ast.CallExpr); ok {
++				if sel, ok := call.Fun.(*ast.SelectorExpr); ok {
++					if x, ok := sel.X.(*ast.Ident); ok && x.Name == pkg && sel.Sel.Name == fn {
++						found = append(found, call.Args)
++					}
++				}
++			}
++			return true
++		})
++	}
++	return found
++}
++
++func usesIdent(args []ast.Expr, name string) bool {
++	for _, a := range args {
++		if id, ok := a.(*ast.Ident); ok && id.Name == name {
++			return true
++		}
++	}
++	return false
++}
++
++// The repeat queue's callback starts its clock when the kernel hands it the
++// requeued packet, after the asking worker started waiting, so one shared
++// budget means the callback never gives up while the worker still waits.
++func TestRepeatHandoffSharesOneBudgetOnBothSides(t *testing.T) {
++	if repeatHandoffTimeout < 500*time.Millisecond {
++		t.Fatalf("repeat hand-off budget %v is too small to survive scheduler delay", repeatHandoffTimeout)
++	}
++	queues := callArgs(t, "setupQueues", "netfilter", "NewQueueWithDeliveryTimeout")
++	if len(queues) != 1 || !usesIdent(queues[0], "repeatHandoffTimeout") {
++		t.Fatalf("setupQueues must create the repeat queue with repeatHandoffTimeout: %d calls", len(queues))
++	}
++	waits := callArgs(t, "acceptOrDeny", "netfilter", "ReceiveRequeued")
++	if len(waits) != 1 || !usesIdent(waits[0], "repeatHandoffTimeout") {
++		t.Fatalf("acceptOrDeny must wait for the requeued packet with repeatHandoffTimeout: %d calls", len(waits))
++	}
++	if claims := callArgs(t, "acceptOrDeny", "uiClient", "TryStartAsking"); len(claims) != 1 {
++		t.Fatal("acceptOrDeny must claim the prompt slot atomically with TryStartAsking")
++	}
++	if checks := callArgs(t, "acceptOrDeny", "uiClient", "SetIsAsking"); len(checks) != 1 {
++		t.Fatalf("acceptOrDeny should only release the slot with SetIsAsking(false), found %d calls", len(checks))
++	}
++}
 diff --git a/daemon/shutdown_signal_test.go b/daemon/shutdown_signal_test.go
 new file mode 100644
 index 00000000..2908c998
@@ -2267,6 +2592,53 @@ index 00000000..2908c998
 +	}
 +	if elapsed := time.Since(started); elapsed < 9*time.Second || elapsed > 13*time.Second {
 +		t.Fatalf("unexpected watchdog bound%s", elapsed)
++	}
++}
+diff --git a/daemon/ui/client_asking_test.go b/daemon/ui/client_asking_test.go
+new file mode 100644
+index 00000000..27146ae7
+--- /dev/null
++++ b/daemon/ui/client_asking_test.go
+@@ -0,0 +1,41 @@
++package ui
++
++import (
++	"sync"
++	"sync/atomic"
++	"testing"
++)
++
++func TestTryStartAskingHasExactlyOneWinner(t *testing.T) {
++	for round := 0; round < 50; round++ {
++		c := &Client{}
++		var wins int32
++		var ready, done sync.WaitGroup
++		gate := make(chan struct{})
++		for i := 0; i < 32; i++ {
++			ready.Add(1)
++			done.Add(1)
++			go func() {
++				defer done.Done()
++				ready.Done()
++				<-gate
++				if c.TryStartAsking() {
++					atomic.AddInt32(&wins, 1)
++				}
++			}()
++		}
++		ready.Wait()
++		close(gate)
++		done.Wait()
++		if wins != 1 {
++			t.Fatalf("round %d: %d workers claimed the prompt slot", round, wins)
++		}
++		if !c.GetIsAsking() {
++			t.Fatal("winner did not mark the slot taken")
++		}
++		c.SetIsAsking(false)
++		if !c.TryStartAsking() {
++			t.Fatal("released slot cannot be claimed again")
++		}
 +	}
 +}
 diff --git a/daemon/ui/client_shutdown_test.go b/daemon/ui/client_shutdown_test.go

@@ -626,6 +626,27 @@ action while no UI is connected. The build verifier, readiness helper and boot
 check now require `Wants=`. Daemon reconnection after the socket comes back
 is checked on the r9 VM.
 
+Status for the r9 and r10 candidates (2026-10-08). The r9 image (`78dd7ef`:
+#86 + the 44-file blocklist daemon patch #87 + Snitchwatch `c088132` #88)
+passed its build and independent review, but its first boot found that the
+readiness helper still required every system manifest entry to be under
+`/usr` and refused the shipped `/etc` fetch rule ("unsafe system manifest
+entry"). `e600c1a` accepts exactly that one path (and refuses it behind a
+symlinked directory); the rebuilt r10 image `sha256:f5f22e8f…` passed its
+independent review and the full VM gate: first boot with readiness passing,
+the headless gate (requeue losses 0/0/47 as r8), and on deny-by-default the
+fetch rule (compiles; the `snitchwatch` account exists first), a blocklist
+subscription (rule installed, listed host denied by the `z00-blocklist` rule,
+unlisted host prompts, no resend after a bridge restart, clean unsubscribe,
+0 AVCs), #93 pause answering a waiting prompt once with no rule, the `Wants=`
+socket stop (firewall stays up, NFQUEUE rules kept, daemon reconnects in 2 s
+without a restart), WireGuard traffic (not intercepted with the shipped
+`InterceptUnknown: false`; with a VM-only `true`, an empty-path prompt whose
+Deny applies once), the GUI checks (pause wording, "Allowed once (filtering
+was paused)", the read-only fetch-rule row with Delete disabled) and a clean
+10-boot graphical loop. Evidence:
+`output/snitchwatch-fresh-vm-r10.0N0Fnn/R10-VM-ACCEPTANCE-RESULT.json`.
+
 The fixed target-image acceptance limits are 5 seconds for no-GUI fallback,
 2 seconds for pending cleanup and 15 seconds for daemon stop. Preserve the
 shutdown warnings even when exit status and stop timing pass. A container

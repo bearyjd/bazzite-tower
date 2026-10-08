@@ -36,7 +36,7 @@ leaving a slash-containing HTTP/2 authority that the bridge rejects with
 then subscribed successfully with this configuration:
 
 - `Server.Address: unix:opensnitchd.sock`
-- `opensnitch.service`: `WorkingDirectory=/run/snitchwatch`, with `Requires=`
+- `opensnitch.service`: `WorkingDirectory=/run/snitchwatch`, with `Wants=`
   and `After=` on `snitchwatch-system-bridge-grpc.socket`.
 
 This VM-only workaround retains the absolute root-owned 0600 listener and root-peer check.
@@ -456,7 +456,9 @@ Open items:
   send point). The daemon now accepts exactly those two notification actions
   in the system variant (others get an error reply) and refuses `lists.*`
   operands from the UI channel until Snitchwatch blocklists (#45 PR B) define
-  a confined directory under `/var/lib/snitchwatch/blocklists/`.
+  a confined directory under `/var/lib/snitchwatch/blocklists/`. The owner confirmed on
+  2026-10-08 that this two-action allowlist is policy: any further action
+  needs its own change, with validation and review.
 - ~~The daemon factory and CI do not run the patch's Go tests.~~ Fixed
   2026-10-07: `just test-snitchwatch-daemon-patch` and the path-filtered
   `snitchwatch-daemon-patch.yml` workflow run them, `-race` included.

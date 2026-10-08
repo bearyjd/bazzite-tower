@@ -210,11 +210,13 @@ def unit_contract(ctx):
         props = ctx.props(unit, ["Listen", "SocketUser", "SocketGroup", "SocketMode", "Accept", "Triggers", "FragmentPath", "DropInPaths", "NeedDaemonReload"])
         loaded_current(unit, props)
         require({k: v for k, v in props.items() if k != "NeedDaemonReload"} == dict(Listen=path+" (Stream)", SocketUser="root", SocketGroup=group, SocketMode=mode, Accept="no", Triggers=SERVICE, FragmentPath="/usr/lib/systemd/system/"+unit, DropInPaths=""), "effective socket contract drift: "+unit)
-    daemon = ctx.props("opensnitch.service", ["WorkingDirectory", "Wants", "After", "ExecStart", "FragmentPath", "DropInPaths", "NeedDaemonReload"])
+    daemon = ctx.props("opensnitch.service", ["WorkingDirectory", "Wants", "After", "Requires", "Requisite", "BindsTo", "PartOf", "ExecStart", "FragmentPath", "DropInPaths", "NeedDaemonReload"])
     loaded_current("opensnitch.service", daemon)
     daemon_unit_contract(ctx, daemon)
     daemon_exec_contract(daemon["ExecStart"])
     require(daemon["WorkingDirectory"] == "/run/snitchwatch" and SOCKETS[0] in daemon["Wants"].split() and SOCKETS[0] in daemon["After"].split(), "OpenSnitch effective Unix socket CWD/dependencies drift")
+    # A stop of the gRPC socket must never take the firewall down with it.
+    require(not any(SOCKETS[0] in daemon[key].split() for key in ("Requires", "Requisite", "BindsTo", "PartOf")), "OpenSnitch must only Want the bridge gRPC socket: a socket stop would stop the firewall")
     return actual
 
 

@@ -59,7 +59,7 @@ class Fixture(common.Context):
                 ExecStart="{ path=/usr/bin/snitchwatch-bridge-cli ; argv[]=/usr/bin/snitchwatch-bridge-cli ; ignore_errors=no ; }",
                 Environment="SNITCHWATCH_SYSTEM_BRIDGE=1 SNITCHWATCH_WS_SOCKET=/run/snitchwatch/bridge.sock SNITCHWATCH_WS_TOKEN_PATH=/run/snitchwatch-auth/token HOME=/var/lib/snitchwatch XDG_STATE_HOME=/var/lib",
                 TriggeredBy=" ".join(common.SOCKETS), RestrictAddressFamilies="AF_UNIX AF_INET AF_INET6", MainPID="0", NeedDaemonReload="no"),
-            "opensnitch.service": dict(MainPID="501", ExecStart="{ path=/usr/bin/opensnitchd ; argv[]=/usr/bin/opensnitchd ; ignore_errors=no ; }", WorkingDirectory="/run/snitchwatch", Wants=common.SOCKETS[0]+" network.target", After=common.SOCKETS[0]+" network.target", NeedDaemonReload="no",
+            "opensnitch.service": dict(MainPID="501", ExecStart="{ path=/usr/bin/opensnitchd ; argv[]=/usr/bin/opensnitchd ; ignore_errors=no ; }", WorkingDirectory="/run/snitchwatch", Wants=common.SOCKETS[0]+" network.target", After=common.SOCKETS[0]+" network.target", Requires="", Requisite="", BindsTo="", PartOf="", NeedDaemonReload="no",
                 FragmentPath="/usr/lib/systemd/system/opensnitch.service", DropInPaths="/usr/lib/systemd/system/opensnitch.service.d/20-system-bridge.conf")}
         for unit, path, group, mode in ((common.SOCKETS[0], "/run/snitchwatch/opensnitchd.sock", "root", "0600"), (common.SOCKETS[1], "/run/snitchwatch/bridge.sock", "snitchwatch-ui", "0660")):
             self.properties[unit] = dict(Listen=path+" (Stream)", SocketUser="root", SocketGroup=group, SocketMode=mode, Accept="no", Triggers=common.SERVICE, FragmentPath="/usr/lib/systemd/system/"+unit, DropInPaths="", NeedDaemonReload="no")
@@ -348,6 +348,15 @@ class SystemBehavior(unittest.TestCase):
                 self.ctx.properties[unit]["NeedDaemonReload"] = "yes"
                 try: self.refuse_readiness("daemon-reload")
                 finally: self.ctx.properties[unit]["NeedDaemonReload"] = "no"
+
+    def test_hard_dependency_on_grpc_socket_refuses(self):
+        for key in ("Requires", "Requisite", "BindsTo", "PartOf"):
+            with self.subTest(key=key):
+                daemon = self.ctx.properties["opensnitch.service"]
+                daemon[key] = common.SOCKETS[0]
+                with self.assertRaisesRegex(common.Refusal, "only Want the bridge gRPC socket"):
+                    common.unit_contract(self.ctx)
+                daemon[key] = ""
 
     def test_daemon_unit_file_and_dropins_are_pinned(self):
         # NeedDaemonReload only proves systemd loaded what is on disk; it says

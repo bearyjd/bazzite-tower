@@ -235,9 +235,11 @@ lifecycle and release/image integration unresolved.
 
 The initial image plan used reviewed Snitchwatch commit `d09defc`. The
 reconciled candidate pinned `5c2b44adece96008e973947a9551b700b8d8a15b`, tree
-`fa952a8c2547160e928c1ee9b81be80370ef822e`; since 2026-10-07 it pins
-`670f42c28ace7cbffe6b032f6aa72b0f2bb2414c` (tree `0a52b15a…`, Snitchwatch PR
-#39: #47 pause fixes and #44 app-bound prompt rules), and OpenSnitch submodule
+`fa952a8c2547160e928c1ee9b81be80370ef822e`; on 2026-10-07 it moved to
+`670f42c` (Snitchwatch PR #39: #47 pause fixes, #44 app-bound prompt rules) and
+on 2026-10-08 to `4b3ba5246b0e1401ae2cd6d8ea144107081e80a0` (tree
+`c3f08c67…`: honest UI, rule-name validation, timed session-scoped pause,
+Rules page listing every daemon rule), and OpenSnitch submodule
 `b404c4c6316760fa7bc415509d3f8d747f7dc9cc`. A fresh Fedora 44 native factory
 build produced actual CLI version 0.1.1; a second fresh source/target build
 reproduced the artifact bytes. The Fedora 43 binary used by the October 5
@@ -501,6 +503,22 @@ with a GUI, cleared when the last GUI leaves, not inherited), last-GUI loss
 (0.076 s) and late-verdict rejection PASS; 0 AVC, no core dumps. Reader death
 was not re-run (r4 PASS, code path unchanged). Evidence:
 `output/snitchwatch-fresh-vm-r5.N3rERm/R5-VM-ACCEPTANCE-RESULT.json`.
+
+Status for the `76dddc0` (r6) candidate (34-file daemon patch with the
+UI-channel hardening, Snitchwatch `4b3ba52`, GUI rebuilt offline at app commit
+`3c269292`) in the disposable VM (2026-10-08 UTC): independent image review
+PASS; every headless phase PASS (requeue stress 0/300, readiness, flush-stop
+0/20, startup 0/10, teardown 0/20); 10 graphical cold boots clean; the daemon
+refused 0 notification actions during real GUI use (Rules page list, toggle,
+delete). The Rules page lists every daemon rule after a reconnect and shows
+an invalid-name rule read-only; an open inspector stops offering a verdict
+once its prompt times out; the bridge's timed pause auto-allows without
+saving, expires at exactly 300 s and prompting resumes. Findings handed to
+Snitchwatch: the tray's "Pause filtering" item does nothing, and rule files
+changed on disk after the daemon's HELLO appear only after a reconnect
+(#65). A connection's own retransmits are held while its prompt is open;
+only a different pending Ask makes new connections fall to the default
+action. Evidence: `output/snitchwatch-fresh-vm-r6.Ywa9O5/R6-VM-ACCEPTANCE-RESULT.json`.
 
 The fixed target-image acceptance limits are 5 seconds for no-GUI fallback,
 2 seconds for pending cleanup and 15 seconds for daemon stop. Preserve the

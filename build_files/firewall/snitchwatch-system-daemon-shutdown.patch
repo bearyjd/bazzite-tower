@@ -1011,14 +1011,14 @@ index 3d743556..1d4c4772 100644
  
  // deleteOldRuleFromDisk deletes a rule from disk if the Duration changes
 diff --git a/daemon/rule/rule.go b/daemon/rule/rule.go
-index 46d33629..b1f94424 100644
+index 46d33629..5a0d97f3 100644
 --- a/daemon/rule/rule.go
 +++ b/daemon/rule/rule.go
 @@ -87,6 +87,10 @@ func Deserialize(reply *protocol.Rule) (*Rule, error) {
  		log.Warning("Deserialize rule, Operator nil")
  		return nil, fmt.Errorf("invalid operator")
  	}
-+	if err := refuseListsOperands(reply.Operator); err != nil {
++	if err := validateUIOperator(reply.Operator, 0); err != nil {
 +		log.Warning("Deserialize rule %q: %s", reply.Name, err)
 +		return nil, err
 +	}
@@ -2749,10 +2749,10 @@ index 00000000..4310ab74
 +}
 diff --git a/daemon/rule/ui_lists.go b/daemon/rule/ui_lists.go
 new file mode 100644
-index 00000000..89c3bd8b
+index 00000000..7506fdbd
 --- /dev/null
 +++ b/daemon/rule/ui_lists.go
-@@ -0,0 +1,27 @@
+@@ -0,0 +1,65 @@
 +package rule
 +
 +import (
@@ -2762,23 +2762,129 @@ index 00000000..89c3bd8b
 +	"github.com/evilsocket/opensnitch/daemon/ui/protocol"
 +)
 +
-+// refuseListsOperands rejects lists.* operands anywhere in a rule received
-+// over the UI channel (Deserialize is only used for those). A lists operand
-+// makes the root daemon read every file in the directory named by its data,
-+// so a client could point it anywhere. Rules root writes to disk still load.
-+func refuseListsOperands(op *protocol.Operator) error {
++// maxListOperators bounds a UI-sent list operator; app-bound prompt rules use 2.
++const maxListOperators = 64
++
++// validateUIOperator checks a rule received over the UI channel (Deserialize
++// is only used for those) before the root daemon compiles it:
++//   - lists.* operands make the daemon read every file in a client-chosen
++//     directory, so they are refused;
++//   - each operator type's match callback hard-asserts its value type
++//     (simple/regexp want a string, network a net.IP), and Match picks the
++//     value by operand, so a mismatched pair panics the daemon on the next
++//     matching packet and, saved as "always", crash-loops it;
++//   - an empty list, a nested list (Deserialize copies one level, so it
++//     arrives empty) or a non-simple "true" would match every connection.
++func validateUIOperator(op *protocol.Operator, depth int) error {
 +	if op == nil {
-+		return nil
++		return fmt.Errorf("missing operator")
 +	}
-+	if strings.HasPrefix(op.Operand, "lists.") {
++	typ, operand := Type(op.Type), Operand(op.Operand)
++	if strings.HasPrefix(op.Operand, "lists.") || typ == Lists {
 +		return fmt.Errorf("operand %q refused from the UI channel", op.Operand)
 +	}
-+	for _, child := range op.List {
-+		if err := refuseListsOperands(child); err != nil {
-+			return err
++	switch {
++	case typ == List || operand == OpList:
++		// Compile rewrites a list type's operand to "list" (upstream sends
++		// "true" too), but a "list" operand on another type would match its
++		// empty member list, i.e. everything.
++		if typ != List {
++			return fmt.Errorf("operand list needs the list type, got %s", typ)
++		}
++		if depth > 0 {
++			return fmt.Errorf("nested list operators are refused")
++		}
++		if n := len(op.List); n < 1 || n > maxListOperators {
++			return fmt.Errorf("list operator needs 1-%d members, got %d", maxListOperators, n)
++		}
++		for _, child := range op.List {
++			if err := validateUIOperator(child, depth+1); err != nil {
++				return err
++			}
++		}
++		return nil
++	case operand == OpDstNetwork || operand == OpSrcNetwork || typ == Network:
++		if typ != Network || (operand != OpDstNetwork && operand != OpSrcNetwork) {
++			return fmt.Errorf("network type and network operands must go together (%s/%s)", typ, operand)
++		}
++		return nil
++	case operand == OpTrue:
++		if typ != Simple {
++			return fmt.Errorf("operand true is only valid as a simple operator")
++		}
++		return nil
++	case typ == Simple || typ == Regexp:
++		return nil
++	}
++	return fmt.Errorf("unsupported operator type %q", op.Type)
++}
+diff --git a/daemon/rule/ui_operator_test.go b/daemon/rule/ui_operator_test.go
+new file mode 100644
+index 00000000..db0ba318
+--- /dev/null
++++ b/daemon/rule/ui_operator_test.go
+@@ -0,0 +1,62 @@
++package rule
++
++import (
++	"testing"
++
++	"github.com/evilsocket/opensnitch/daemon/ui/protocol"
++)
++
++func uiRule(op *protocol.Operator) *protocol.Rule {
++	return &protocol.Rule{Name: "ui-operator", Enabled: true, Action: "deny", Duration: "always", Operator: op}
++}
++
++func simple(operand, data string) *protocol.Operator {
++	return &protocol.Operator{Type: "simple", Operand: operand, Data: data}
++}
++
++// Operator callbacks hard-assert their value type (simpleCmp wants a string,
++// network matchers a net.IP), so a mismatched type/operand pair panics the
++// root daemon on the next matching packet; some shapes match everything.
++func TestDeserializeRefusesUnsafeOperatorShapes(t *testing.T) {
++	refused := map[string]*protocol.Operator{
++		"simple on dest.network":    simple("dest.network", "10.0.0.0/8"),
++		"regexp on source.network":  {Type: "regexp", Operand: "source.network", Data: ".*"},
++		"network on dest.ip":        {Type: "network", Operand: "dest.ip", Data: "10.0.0.0/8"},
++		"network on process.path":   {Type: "network", Operand: "process.path", Data: "10.0.0.0/8"},
++		"list operand, simple type": simple("list", ""),
++		"empty list":                {Type: "list", Operand: "list"},
++		"nested list": {Type: "list", Operand: "list", List: []*protocol.Operator{
++			{Type: "list", Operand: "list", List: []*protocol.Operator{simple("dest.ip", "1.1.1.1")}}}},
++		"true as regexp":  {Type: "regexp", Operand: "true", Data: ".*"},
++		"unknown type":    {Type: "bogus", Operand: "dest.ip", Data: "1.1.1.1"},
++		"65-member list":  {Type: "list", Operand: "list", List: make65()},
++		"mismatch inside": {Type: "list", Operand: "list", List: []*protocol.Operator{simple("process.path", "/usr/bin/curl"), simple("dest.network", "10.0.0.0/8")}},
++	}
++	for name, op := range refused {
++		if r, err := Deserialize(uiRule(op)); err == nil || r != nil {
++			t.Errorf("%s: accepted", name)
 +		}
 +	}
-+	return nil
++	accepted := map[string]*protocol.Operator{
++		"app-bound list": {Type: "list", Operand: "list", List: []*protocol.Operator{
++			{Type: "simple", Operand: "process.path", Data: "/usr/bin/curl", Sensitive: true}, simple("dest.ip", "10.0.2.2")}},
++		"network on dest.network": {Type: "network", Operand: "dest.network", Data: "10.0.0.0/8"},
++		"regexp on dest.host":     {Type: "regexp", Operand: "dest.host", Data: `^(.*\.)?example\.org$`},
++		"simple true":             simple("true", ""),
++		"simple dest.port":        simple("dest.port", "443"),
++		"upstream list form":      {Type: "list", Operand: "true", List: []*protocol.Operator{simple("process.path", "/path/x"), simple("dest.port", "23")}},
++	}
++	for name, op := range accepted {
++		if r, err := Deserialize(uiRule(op)); err != nil || r == nil {
++			t.Errorf("%s: refused: %v", name, err)
++		}
++	}
++}
++
++func make65() []*protocol.Operator {
++	ops := make([]*protocol.Operator, 65)
++	for i := range ops {
++		ops[i] = simple("dest.port", "443")
++	}
++	return ops
 +}
 diff --git a/daemon/shutdown_signal_test.go b/daemon/shutdown_signal_test.go
 new file mode 100644

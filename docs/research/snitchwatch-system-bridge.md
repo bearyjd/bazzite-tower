@@ -234,8 +234,10 @@ lifecycle and release/image integration unresolved.
 ## Opt-in image integration candidate
 
 The initial image plan used reviewed Snitchwatch commit `d09defc`. The
-reconciled candidate now pins `5c2b44adece96008e973947a9551b700b8d8a15b`, tree
-`fa952a8c2547160e928c1ee9b81be80370ef822e`, and OpenSnitch submodule
+reconciled candidate pinned `5c2b44adece96008e973947a9551b700b8d8a15b`, tree
+`fa952a8c2547160e928c1ee9b81be80370ef822e`; since 2026-10-07 it pins
+`670f42c28ace7cbffe6b032f6aa72b0f2bb2414c` (tree `0a52b15a…`, Snitchwatch PR
+#39: #47 pause fixes and #44 app-bound prompt rules), and OpenSnitch submodule
 `b404c4c6316760fa7bc415509d3f8d747f7dc9cc`. A fresh Fedora 44 native factory
 build produced actual CLI version 0.1.1; a second fresh source/target build
 reproduced the artifact bytes. The Fedora 43 binary used by the October 5
@@ -372,7 +374,10 @@ Open items:
   mismatch left the repeat reader blocked forever) and claims the single
   prompt slot atomically (`TryStartAsking`). Unit tests prove the hand-off
   mechanism in isolation, each checked by a mutation; the r3 first-boot
-  incident itself was not reproduced and no VM run has used this patch yet.
+  incident itself was not reproduced. On the VM (r5, same stress script,
+  every core saturated, no GUI so each Ask takes the hand-off) r5 logged 0
+  channel-2 timeouts and 0 lost requeues in 900 attempts; the r4 control
+  logged 3 in 900.
   The primary queue keeps upstream's 1 ms. It was mis-attributed on 2026-10-07 to a separate
   startup window, which the patch now closes as hardening (owner's choice of
   option). The queue's reader started in `setupQueues`, but packets reached the
@@ -381,17 +386,23 @@ Open items:
   10 daemon restarts under connection load, so that window is small in
   practice. The 1 ms accept-on-timeout still applies when all workers are
   busy.
-- A GUI Allow creates a destination-only rule (`allow if dest.ip is …`, no
-  process constraint); confirm that is the intended rule shape.
+- ~~A GUI Allow creates a destination-only rule.~~ Fixed in Snitchwatch
+  `670f42c` (#44): a remembered "This host" answer now writes `list` =
+  `process.path` (sensitive) AND `dest.ip`/`dest.host`; VM-confirmed on r5.
+  Inline row buttons still answer "once", and existing host-only rules are
+  not migrated.
 - The GUI's inline Deny did not stop a retrying connection on r4. The daemon
   logged `Added new rule: deny if dest.ip is 127.0.0.5`, yet the denied curl
   completed (HTTP 404, i.e. allowed) about 4.4 s after the click, 19.4 s
-  after it started; a repeat curl timed out after 8 s. The likely path is a
-  retried connection attempt meeting the default allow while another Ask
-  held the only prompt slot; no rule-file listing was captured after the
-  Deny, so the rule's scope (in-memory once vs persisted) is unconfirmed.
-  Decide whether inline Deny should persist, and capture the rule files when
-  re-testing.
+  after it started; a repeat curl timed out after 8 s. Root cause, from
+  source and confirmed on r5: the daemon never stores a `once` rule
+  (`rule/loader.go` `addUserRule`), and "Added new rule" is logged anyway. So
+  inline Deny drops one SYN; the retransmit asks again and, while that Ask
+  holds the only prompt slot, other new connections get the default allow
+  (r5: a fresh python request returned 200 in 0.02 s). A sheet Deny with
+  "Until quit" stored an app-bound in-memory rule that refused retries
+  without prompting and was gone after `systemctl restart opensnitch`. Owner
+  decision: inline Deny becomes "until restart", app-bound (Snitchwatch side).
 - ~~Readiness treats an empty `opensnitch.service.d` directory as a local
   override.~~ Fixed 2026-10-07. Under a root-only unit directory
   (`/etc/systemd/system`, `/run/systemd/*`, `/usr/local/lib/systemd/system`),
@@ -449,7 +460,7 @@ passes its scoped integration checks:
 
 Status for the `65e02dd` (r4) candidate in the disposable VM (2026-10-08 UTC):
 gate 1 is met for default KDE startup, Allow and Deny decisions (Deny with the caveat above), last-GUI
-loss and late-verdict rejection, without overrides on KDE 6.11 Gate 2 is met for teardown: the `nfq_destroy_queue`
+loss and late-verdict rejection, without overrides on KDE 6.11. Gate 2 is met for teardown: the `nfq_destroy_queue`
 warning is fixed and VM-confirmed, and a forced reader death logged, exited 1,
 was restarted by systemd after 30 s and let traffic through meanwhile
 (QueueBypass; 44 of 45 requests succeeded). Gates 3–5 were re-run on r4: independent image review, cold
@@ -458,6 +469,17 @@ graphical cold boots with no stall. A host trial and the open items above
 remain before any default rollout. Evidence:
 `output/snitchwatch-fresh-vm-r4.G9c5CJ/R4-VM-ACCEPTANCE-RESULT.json`, with r3
 controls in `output/snitchwatch-r3-control.*/`.
+
+Status for the `fc418c2` (r5) candidate (26-file daemon patch, Snitchwatch
+`670f42c`) in the disposable VM (2026-10-08 UTC): independent image review
+PASS; cold first boot and every acceptance probe phase PASS; readiness
+drop-ins, pending-flush-stop (0/20), startup window (0/10) and teardown
+stress (0/20) unchanged from r4; 10 graphical cold boots clean; repeat-queue
+stress 0/900 against r4's 3/900; app-bound Allow, #47 pause (auto-allow only
+with a GUI, cleared when the last GUI leaves, not inherited), last-GUI loss
+(0.076 s) and late-verdict rejection PASS; 0 AVC, no core dumps. Reader death
+was not re-run (r4 PASS, code path unchanged). Evidence:
+`output/snitchwatch-fresh-vm-r5.N3rERm/R5-VM-ACCEPTANCE-RESULT.json`.
 
 The fixed target-image acceptance limits are 5 seconds for no-GUI fallback,
 2 seconds for pending cleanup and 15 seconds for daemon stop. Preserve the

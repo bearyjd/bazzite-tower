@@ -232,10 +232,10 @@ Operating the system candidate:
 - While one prompt is pending, opensnitchd applies the default action to other
   new connections without asking; the GUI banner says so. Answer pending
   prompts promptly.
-- The GUI's inline Deny did not reliably stop a connection that retries: on
-  the r4 VM a denied request still completed a few seconds after the click
-  while another prompt was pending (default allow). Use a persistent rule to
-  block a destination.
+- The GUI's inline Deny answers "this time" only: the daemon keeps no rule,
+  so a retrying program is asked again, and while that prompt is pending
+  other new connections get the default allow. To block, open the row and
+  Deny with "Until quit" or "Forever" (verified on the r5 VM).
 
 Keep `DefaultAction: allow` during rollout. For a local deny experiment that
 blocks networking, restore `allow` in `/etc/opensnitchd/default-config.json` from

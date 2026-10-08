@@ -176,19 +176,19 @@ run_tests() {
         printf 'not gofmt-clean:\n%s\n' "$unformatted" >&2
         exit 1
     }
-    echo "== go vet ./netfilter ./firewall/nftables; . ./ui ./rule without ${UPSTREAM_VET_FINDINGS[*]}"
-    go vet ./netfilter ./firewall/nftables
+    echo "== go vet ./netfilter ./firewall/nftables ./statistics; . ./ui ./rule without ${UPSTREAM_VET_FINDINGS[*]}"
+    go vet ./netfilter ./firewall/nftables ./statistics
     go vet "${UPSTREAM_VET_FINDINGS[@]}" . ./ui ./rule
     # Upstream's privileged nftables tests skip here (they need PRIVILEGED_TESTS
     # and namespace creation); the patch's own nftables tests run.
-    echo "== go test -race (root, netfilter, firewall/nftables)"
-    go test -count=1 -race . ./netfilter ./firewall/nftables
+    echo "== go test -race (root, netfilter, firewall/nftables, statistics)"
+    go test -count=1 -race . ./netfilter ./firewall/nftables ./statistics
     echo "== go test -race ./rule (skipping upstream timing flake: $UPSTREAM_RULE_RACE_FLAKES)"
     go test -count=1 -race -skip "$UPSTREAM_RULE_RACE_FLAKES" ./rule
     echo "== go test -race ./ui (skipping upstream race failures: $UPSTREAM_UI_RACE_FAILURES)"
     go test -count=1 -race -skip "$UPSTREAM_UI_RACE_FAILURES" ./ui
     echo "== go test (no -race; includes the skipped ui tests)"
-    go test -count=1 . ./netfilter ./firewall/nftables ./ui ./rule
+    go test -count=1 . ./netfilter ./firewall/nftables ./statistics ./ui ./rule
     echo "PASS: OpenSnitch patch tests"
 }
 

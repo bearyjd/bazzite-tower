@@ -127,7 +127,7 @@ index 08c08a2e..54e7a06a 100644
  	for _, fwCfg := range n.SysConfig.SystemRules {
  		for _, chain := range fwCfg.Chains {
 diff --git a/daemon/main.go b/daemon/main.go
-index f6247623..3752981a 100644
+index f6247623..45c6d131 100644
 --- a/daemon/main.go
 +++ b/daemon/main.go
 @@ -23,8 +23,8 @@
@@ -148,15 +148,41 @@ index f6247623..3752981a 100644
  	"syscall"
  	"time"
  
-@@ -98,6 +99,7 @@ var (
+@@ -98,8 +99,33 @@ var (
  	sigChan       = (chan os.Signal)(nil)
  	loggerMgr     *loggers.LoggerManager
  	resolvMonitor *systemd.ResolvedMonitor
 +	readerFailed  atomic.Bool
++
++	// busyDrops counts connections dropped unasked because the prompt slot
++	// was busy and DropWhileAsking is on. It is their only record: they skip
++	// statistics entirely, and repeat-queue hand-off failures are not
++	// counted here.
++	busyDrops atomic.Uint64
++	// busyDropLoggedAt is when the busy-drop line was last logged, as
++	// nanoseconds since busyDropEpoch plus one; 0 means never.
++	busyDropLoggedAt atomic.Int64
++	// busyDropEpoch carries a monotonic clock reading, so the log rate
++	// limit ignores wall-clock steps.
++	busyDropEpoch = time.Now()
  )
  
++// busyDropLogInterval rate-limits the busy-drop log line: while a prompt is
++// open, retries of every unasked connection land here.
++const busyDropLogInterval = 10 * time.Second
++
++// noteBusyDrop counts one busy-slot drop and reports whether it may be logged.
++func noteBusyDrop(now time.Time) (total uint64, logIt bool) {
++	total = busyDrops.Add(1)
++	at := int64(now.Sub(busyDropEpoch)) + 1
++	last := busyDropLoggedAt.Load()
++	return total, (last == 0 || at-last >= int64(busyDropLogInterval)) && busyDropLoggedAt.CompareAndSwap(last, at)
++}
++
  func init() {
-@@ -167,6 +169,12 @@ func overwriteFw(cfg *config.Config, qNum uint16, fwCfg string) {
+ 	flag.BoolVar(&showVersion, "version", debug, "Show daemon version of this executable and exit.")
+ 	flag.BoolVar(&checkRequirements, "check-requirements", debug, "Check system requirements for incompatibilities.")
+@@ -167,6 +193,12 @@ func overwriteFw(cfg *config.Config, qNum uint16, fwCfg string) {
  	//setupQueues(qNum)
  }
  
@@ -169,7 +195,7 @@ index f6247623..3752981a 100644
  func setupQueues(qNum uint16) {
  	// prepare the queue
  	var err error
-@@ -181,7 +189,7 @@ func setupQueues(qNum uint16) {
+@@ -181,7 +213,7 @@ func setupQueues(qNum uint16) {
  
  	repeatQueueNum = int(qNum) + 1
  
@@ -178,7 +204,7 @@ index f6247623..3752981a 100644
  	if err != nil {
  		msg := fmt.Sprintf("Error creating repeat queue #%d: %s", repeatQueueNum, err)
  		uiClient.SendErrorAlert(msg)
-@@ -261,8 +269,8 @@ func setupSignals() {
+@@ -261,8 +293,8 @@ func setupSignals() {
  		log.Important("Got signal: %v", sig)
  		cancel()
  		time.AfterFunc(10*time.Second, func() {
@@ -189,7 +215,7 @@ index f6247623..3752981a 100644
  		})
  	}()
  }
-@@ -286,6 +294,32 @@ Exit:
+@@ -286,6 +318,32 @@ Exit:
  	log.Debug("worker #%d exit", id)
  }
  
@@ -222,7 +248,7 @@ index f6247623..3752981a 100644
  func setupWorkers() {
  	log.Debug("Starting %d workers ...", workers)
  	// setup the workers
-@@ -368,11 +402,57 @@ func initSystemdResolvedMonitor() {
+@@ -368,11 +426,57 @@ func initSystemdResolvedMonitor() {
  	}()
  }
  
@@ -282,15 +308,87 @@ index f6247623..3752981a 100644
  	if resolvMonitor != nil {
  		resolvMonitor.Close()
  	}
-@@ -449,36 +529,20 @@ func acceptOrDeny(packet *netfilter.Packet, con *conman.Connection) *rule.Rule {
+@@ -418,30 +522,48 @@ func onPacket(packet netfilter.Packet) {
+ 	}
+ 
+ 	// search a match in preloaded rules
+-	r := acceptOrDeny(&packet, con)
++	r, defaultAction, busyDropped := acceptOrDeny(&packet, con)
++	if busyDropped {
++		// Counted only in busyDrops: no stats, no Event, no logger line.
++		return
++	}
+ 
+ 	if r != nil && r.Nolog {
+ 		return
+ 	}
++	if defaultAction != "" {
++		stats.OnDefaultActionEvent(con, defaultAction)
++		return
++	}
+ 	// XXX: if a connection is not intercepted due to InterceptUnknown == false,
+ 	// it's not sent to the server, which leads to miss information.
+ 	stats.OnConnectionEvent(con, r, r == nil)
+ }
+ 
+-func applyDefaultAction(packet *netfilter.Packet, con *conman.Connection) {
+-	log.Trace("Applying DefaultAction (%s) on %s", uiClient.DefaultAction(), con)
+-	if uiClient.DefaultAction() == rule.Allow {
++// applyDefaultAction returns the verdict it gave: allow, reject, or deny for
++// any other value.
++func applyDefaultAction(packet *netfilter.Packet, con *conman.Connection) rule.Action {
++	action := uiClient.DefaultAction()
++	log.Trace("Applying DefaultAction (%s) on %s", action, con)
++	if action == rule.Allow {
+ 		packet.SetVerdictAndMark(netfilter.NF_ACCEPT, packet.Mark)
+-		return
++		return action
+ 	}
+-	if uiClient.DefaultAction() == rule.Reject && con != nil {
++	if action == rule.Reject && con != nil {
+ 		netlink.KillSocket(con.Protocol, con.SrcIP, con.SrcPort, con.DstIP, con.DstPort)
+ 	}
+ 	packet.SetVerdict(netfilter.NF_DROP)
++	if action == rule.Reject {
++		return rule.Reject
++	}
++	return rule.Deny
+ }
+ 
+-func acceptOrDeny(packet *netfilter.Packet, con *conman.Connection) *rule.Rule {
+-	r := rules.FindFirstMatch(con)
++// acceptOrDeny also returns the action DefaultAction applied when no rule
++// decided the connection ("" when it did not apply), and whether the
++// connection was dropped unasked because the prompt slot was busy.
++func acceptOrDeny(packet *netfilter.Packet, con *conman.Connection) (r *rule.Rule, defaultAction rule.Action, busyDropped bool) {
++	r = rules.FindFirstMatch(con)
+ 	if r == nil {
+ 		// no rule matched
+ 		// Note that as soon as we set a verdict on a packet, the next packet in the netfilter queue
+@@ -449,37 +571,34 @@ func acceptOrDeny(packet *netfilter.Packet, con *conman.Connection) *rule.Rule {
  
  		// send a request to the UI client if
  		// 1) connected and running and 2) we are not already asking
 -		if uiClient.Connected() == false || uiClient.GetIsAsking() == true {
-+		if uiClient.Connected() == false || !uiClient.TryStartAsking() {
- 			applyDefaultAction(packet, con)
+-			applyDefaultAction(packet, con)
++		connected := uiClient.Connected()
++		if !connected || !uiClient.TryStartAsking() {
++			if connected && uiClient.DropWhileAsking() {
++				// Drop with no rule; TCP and DNS retry, and the retry is
++				// asked once the slot frees. Fail-closed: whoever holds the
++				// slot gets other programs' unmatched connections dropped,
++				// as DefaultAction deny would; rule-matched traffic is
++				// unaffected.
++				packet.SetVerdict(netfilter.NF_DROP)
++				if total, logIt := noteBusyDrop(time.Now()); logIt {
++					log.Info("prompt slot busy: dropped %q -> %q:%d unasked so its retry is asked (DropWhileAsking; %d busy drops so far)", con.Process.Path, con.To(), con.DstPort, total)
++				}
++				return nil, "", true
++			}
++			action := applyDefaultAction(packet, con)
  			log.Debug("UI is not running or busy, connected: %v, running: %v", uiClient.Connected(), uiClient.GetIsAsking())
- 			return nil
+-			return nil
++			return nil, action, false
  		}
 -
 -		uiClient.SetIsAsking(true)
@@ -317,13 +415,15 @@ index f6247623..3752981a 100644
 -		//check if the pulled out packet is the same we put in
 -		if res := bytes.Compare(packet.Packet.Data(), pkt.Packet.Data()); res != 0 {
 -			log.Error("The packet which was requeued has changed abruptly. This should never happen. Please report this incident to the Opensnitch developers. %v %v ", packet, pkt)
+-			return nil
 +		pkt, err := netfilter.ReceiveRequeued(repeatPktChan, packet.Packet.Data(), repeatHandoffTimeout)
 +		if err != nil {
 +			log.Error("requeued packet not received, so it passes without being asked about (fail-open): %v", err)
- 			return nil
++			return nil, "", false
  		}
  		packet = &pkt
-@@ -489,9 +553,12 @@ func acceptOrDeny(packet *netfilter.Packet, con *conman.Connection) *rule.Rule {
+ 
+@@ -489,11 +608,13 @@ func acceptOrDeny(packet *netfilter.Packet, con *conman.Connection) *rule.Rule {
  			con.DstHost = dns.HostOr(con.DstIP, con.DstHost)
  		}
  
@@ -332,13 +432,39 @@ index f6247623..3752981a 100644
 +		r, askErr = uiClient.AskWithError(con)
  		if r == nil {
 -			log.Error("Invalid rule received, applying default action")
+-			applyDefaultAction(packet, con)
+-			return nil
 +			if !errors.Is(askErr, ui.ErrClientShutdown) {
 +				log.Error("Invalid rule received, applying default action")
 +			}
- 			applyDefaultAction(packet, con)
- 			return nil
++			return nil, applyDefaultAction(packet, con), false
  		}
-@@ -574,6 +641,7 @@ func main() {
+ 		ok := false
+ 		pers := ""
+@@ -530,10 +651,12 @@ func acceptOrDeny(packet *netfilter.Packet, con *conman.Connection) *rule.Rule {
+ 	}
+ 	if packet == nil {
+ 		log.Debug("Packet nil after processing rules")
+-		return r
++		return r, "", false
+ 	}
+ 
+ 	if r.Enabled == false {
++		// Upstream: the verdict is DefaultAction's, but the connection is
++		// recorded as matching this disabled rule, with the rule's action.
+ 		applyDefaultAction(packet, con)
+ 		ruleName := log.Green(r.Name)
+ 		log.Info("DISABLED (%s) %s %s -> %s:%d (%s)", uiClient.DefaultAction(), log.Bold(log.Green("✔")), log.Bold(con.Process.Path), log.Bold(con.To()), con.DstPort, ruleName)
+@@ -554,7 +677,7 @@ func acceptOrDeny(packet *netfilter.Packet, con *conman.Connection) *rule.Rule {
+ 		log.Debug("%s %s -> %d:%s => %s:%d, mark: %x (%s)", log.Bold(log.Red("✘")), log.Bold(con.Process.Path), con.SrcPort, log.Bold(con.SrcIP.String()), log.Bold(con.To()), con.DstPort, packet.Mark, log.Red(r.Name))
+ 	}
+ 
+-	return r
++	return r, "", false
+ }
+ 
+ func main() {
+@@ -574,6 +697,7 @@ func main() {
  	setupLogging()
  	setupProfiling()
  	setupSignals()
@@ -346,7 +472,7 @@ index f6247623..3752981a 100644
  
  	log.Important("Starting %s v%s", core.Name, core.Version)
  
-@@ -611,6 +679,12 @@ func main() {
+@@ -611,6 +735,12 @@ func main() {
  
  	setupWorkers()
  	setupQueues(qNum)
@@ -359,7 +485,7 @@ index f6247623..3752981a 100644
  
  	// queue and firewall rules should be ready by now
  
-@@ -665,19 +739,11 @@ func main() {
+@@ -665,19 +795,11 @@ func main() {
  	initSystemdResolvedMonitor()
  
  	log.Info("Running on netfilter queue #%d ...", queueNum)
@@ -1544,8 +1670,105 @@ index 46d33629..abff25e5 100644
  	operator, err := NewOperator(
  		Type(reply.Operator.Type),
  		Sensitive(reply.Operator.Sensitive),
+diff --git a/daemon/statistics/stats.go b/daemon/statistics/stats.go
+index 3719c333..2ec25272 100644
+--- a/daemon/statistics/stats.go
++++ b/daemon/statistics/stats.go
+@@ -21,10 +21,28 @@ type StatsConfig struct {
+ 	Workers   int `json:"Workers"`
+ }
+ 
++// DefaultActionRuleName names the synthetic rule of an Event whose verdict
++// came from DefaultAction rather than a rule. It is empty because
++// rule.ValidName refuses that, so no rule the UI creates can share it
++// ("<default>" passes ValidName).
++//
++// Contract with Snitchwatch's bridge, which recognises these Events by
++// name == "" AND DefaultActionRuleDescription. Do not change either without
++// coordinating with the bridge.
++const DefaultActionRuleName = ""
++
++// DefaultActionRuleDescription marks the synthetic rule of a default-applied
++// Event. Contract with Snitchwatch's bridge (see DefaultActionRuleName); do
++// not change it without coordinating with the bridge.
++const DefaultActionRuleDescription = "snitchwatch:default-action"
++
+ type conEvent struct {
+ 	con       *conman.Connection
+ 	match     *rule.Rule
+ 	wasMissed bool
++
++	// defaultAction is the verdict DefaultAction gave a missed connection.
++	defaultAction rule.Action
+ }
+ 
+ // Statistics holds the connections and statistics the daemon intercepts.
+@@ -135,6 +153,13 @@ func (s *Statistics) OnConnectionEvent(con *conman.Connection, match *rule.Rule,
+ 	s.logger.Log(con.Serialize(), action, rname)
+ }
+ 
++// OnDefaultActionEvent records a connection no rule decided, which got
++// DefaultAction's verdict, as a missed connection that is also an Event.
++func (s *Statistics) OnDefaultActionEvent(con *conman.Connection, action rule.Action) {
++	s.jobs <- conEvent{con: con, wasMissed: true, defaultAction: action}
++	s.logger.Log(con.Serialize(), "<nil>", "<nil>")
++}
++
+ // OnDNSResponse increases the counter of dns and accepted connections.
+ func (s *Statistics) OnDNSResponse() {
+ 	s.Lock()
+@@ -185,14 +210,14 @@ func (s *Statistics) eventWorker(id int, done <-chan struct{}) {
+ 		case <-done:
+ 			goto Exit
+ 		case job := <-s.jobs:
+-			s.onConnection(job.con, job.match, job.wasMissed)
++			s.onConnection(job.con, job.match, job.wasMissed, job.defaultAction)
+ 		}
+ 	}
+ Exit:
+ 	log.Debug("stats.worker() %d exited", id)
+ }
+ 
+-func (s *Statistics) onConnection(con *conman.Connection, match *rule.Rule, wasMissed bool) {
++func (s *Statistics) onConnection(con *conman.Connection, match *rule.Rule, wasMissed bool, defaultAction rule.Action) {
+ 	s.Lock()
+ 	defer s.Unlock()
+ 
+@@ -207,6 +232,8 @@ func (s *Statistics) onConnection(con *conman.Connection, match *rule.Rule, wasM
+ 	if wasMissed == false && match.Action == rule.Allow {
+ 		s.Accepted++
+ 	} else {
++		// Upstream: every miss counts as dropped, even when DefaultAction
++		// allowed it.
+ 		s.Dropped++
+ 	}
+ 
+@@ -219,15 +246,20 @@ func (s *Statistics) onConnection(con *conman.Connection, match *rule.Rule, wasM
+ 	s.incMap(&s.ByUID, strconv.Itoa(con.Entry.UserId))
+ 	s.incMap(&s.ByExecutable, con.Process.Path)
+ 
++	if wasMissed {
++		// A miss that adds no Event must not evict one either.
++		if defaultAction == "" {
++			return
++		}
++		op, _ := rule.NewOperator(rule.Simple, false, rule.OpTrue, "", nil)
++		match = rule.Create(DefaultActionRuleName, DefaultActionRuleDescription, true, false, false, defaultAction, rule.Once, op)
++	}
+ 	// if we reached the limit, shift everything back
+ 	// by one position
+ 	nEvents := len(s.Events)
+ 	if nEvents == s.maxEvents {
+ 		s.Events = s.Events[1:]
+ 	}
+-	if wasMissed {
+-		return
+-	}
+ 	s.Events = append(s.Events, NewEvent(con, match))
+ 
+ 	s.newEvents = true
 diff --git a/daemon/ui/client.go b/daemon/ui/client.go
-index b4d6845b..a88a6ee9 100644
+index b4d6845b..63476cae 100644
 --- a/daemon/ui/client.go
 +++ b/daemon/ui/client.go
 @@ -1,6 +1,7 @@
@@ -1572,7 +1795,26 @@ index b4d6845b..a88a6ee9 100644
  	configFile             = "/etc/opensnitchd/default-config.json"
  	dummyOperator, _       = rule.NewOperator(rule.Simple, false, rule.OpTrue, "", make([]rule.Operator, 0))
  	clientDisconnectedRule = rule.Create("ui.client.disconnected", "", true, false, false, rule.Allow, rule.Once, dummyOperator)
-@@ -175,14 +180,26 @@ func (c *Client) Connected() bool {
+@@ -133,6 +138,18 @@ func (c *Client) InterceptUnknown() bool {
+ 	return c.config.InterceptUnknown
+ }
+ 
++// DropWhileAsking reports whether a connection that finds the prompt slot
++// busy is dropped unasked, so its retry is asked, instead of getting
++// DefaultAction. Only the config file sets it. When it is on, a local process
++// holding the slot gets other programs' unmatched connections dropped
++// (fail-closed, as DefaultAction deny would); rule-matched traffic is
++// unaffected.
++func (c *Client) DropWhileAsking() bool {
++	c.RLock()
++	defer c.RUnlock()
++	return c.config.DropWhileAsking
++}
++
+ // GetFirewallType returns the firewall to use
+ func (c *Client) GetFirewallType() string {
+ 	c.RLock()
+@@ -175,14 +192,26 @@ func (c *Client) Connected() bool {
  	return true
  }
  
@@ -1601,7 +1843,7 @@ index b4d6845b..a88a6ee9 100644
  func (c *Client) SetIsAsking(flag bool) {
  	c.Lock()
  	defer c.Unlock()
-@@ -358,24 +375,42 @@ func (c *Client) ping(ts time.Time) (err error) {
+@@ -358,24 +387,42 @@ func (c *Client) ping(ts time.Time) (err error) {
  // Ask sends a request to the server, with the values of a connection to be
  // allowed or denied.
  func (c *Client) Ask(con *conman.Connection) *rule.Rule {
@@ -1650,6 +1892,25 @@ index b4d6845b..a88a6ee9 100644
  }
  
  // PostAlert queues a new message to be delivered to the server
+diff --git a/daemon/ui/config/config.go b/daemon/ui/config/config.go
+index d325f79b..9f8fe1bf 100644
+--- a/daemon/ui/config/config.go
++++ b/daemon/ui/config/config.go
+@@ -93,6 +93,14 @@ type Config struct {
+ 	InterceptUnknown bool `json:"InterceptUnknown"`
+ 	LogUTC           bool `json:"LogUTC"`
+ 	LogMicro         bool `json:"LogMicro"`
++
++	// DropWhileAsking drops, with no rule, a connection that finds the prompt
++	// slot busy instead of applying DefaultAction; its retry is asked. The
++	// trade-off: a local process holding the slot gets other programs'
++	// unmatched connections dropped (fail-closed, as DefaultAction deny
++	// would); rule-matched traffic is unaffected. Off by default; set only
++	// from the config file.
++	DropWhileAsking bool `json:"DropWhileAsking"`
+ }
+ 
+ // Parse determines if the given configuration is ok.
 diff --git a/daemon/ui/notifications.go b/daemon/ui/notifications.go
 index 16003bba..9df3de39 100644
 --- a/daemon/ui/notifications.go
@@ -1715,6 +1976,259 @@ index 16003bba..9df3de39 100644
  	switch {
  	case ntf.Type == protocol.Action_TASK_START:
  		c.handleActionTaskStart(stream, ntf)
+diff --git a/daemon/drop_while_asking_test.go b/daemon/drop_while_asking_test.go
+new file mode 100644
+index 00000000..c2f64e01
+--- /dev/null
++++ b/daemon/drop_while_asking_test.go
+@@ -0,0 +1,247 @@
++package main
++
++import (
++	"bytes"
++	"go/ast"
++	"go/parser"
++	"go/printer"
++	"go/token"
++	"strings"
++	"sync"
++	"sync/atomic"
++	"testing"
++	"time"
++)
++
++func resetBusyDrops() {
++	busyDrops.Store(0)
++	busyDropLoggedAt.Store(0)
++}
++
++func TestBusyDropCountsEveryDropAndRateLimitsItsLog(t *testing.T) {
++	resetBusyDrops()
++	defer resetBusyDrops()
++	// busyDropEpoch carries a monotonic reading, and Add keeps it.
++	t0 := busyDropEpoch
++
++	if n, logged := noteBusyDrop(t0); n != 1 || !logged {
++		t.Fatalf("first busy drop: n=%d logged=%v, want 1 true", n, logged)
++	}
++	if n, logged := noteBusyDrop(t0.Add(busyDropLogInterval / 2)); n != 2 || logged {
++		t.Fatalf("drop inside the log interval: n=%d logged=%v, want 2 false", n, logged)
++	}
++	if n, logged := noteBusyDrop(t0.Add(busyDropLogInterval)); n != 3 || !logged {
++		t.Fatalf("drop after the log interval: n=%d logged=%v, want 3 true", n, logged)
++	}
++}
++
++func TestConcurrentBusyDropsLogOnce(t *testing.T) {
++	resetBusyDrops()
++	defer resetBusyDrops()
++	now := busyDropEpoch.Add(time.Hour)
++	var logs int32
++	var wg sync.WaitGroup
++	for i := 0; i < 32; i++ {
++		wg.Add(1)
++		go func() {
++			defer wg.Done()
++			if _, logged := noteBusyDrop(now); logged {
++				atomic.AddInt32(&logs, 1)
++			}
++		}()
++	}
++	wg.Wait()
++	if logs != 1 || busyDrops.Load() != 32 {
++		t.Fatalf("32 concurrent drops: %d log lines, counter %d; want 1, 32", logs, busyDrops.Load())
++	}
++}
++
++// funcBody returns the body of function name in main.go.
++func funcBody(t *testing.T, fset *token.FileSet, name string) *ast.BlockStmt {
++	t.Helper()
++	file, err := parser.ParseFile(fset, "main.go", nil, 0)
++	if err != nil {
++		t.Fatal(err)
++	}
++	for _, decl := range file.Decls {
++		if f, ok := decl.(*ast.FuncDecl); ok && f.Name.Name == name {
++			return f.Body
++		}
++	}
++	t.Fatalf("%s not found in main.go", name)
++	return nil
++}
++
++func render(t *testing.T, fset *token.FileSet, n ast.Node) string {
++	t.Helper()
++	var b bytes.Buffer
++	if err := printer.Fprint(&b, fset, n); err != nil {
++		t.Fatal(err)
++	}
++	return b.String()
++}
++
++// ifWithCond finds the if statement in body whose condition renders as cond.
++func ifWithCond(t *testing.T, fset *token.FileSet, body ast.Node, cond string) *ast.IfStmt {
++	t.Helper()
++	var found *ast.IfStmt
++	ast.Inspect(body, func(n ast.Node) bool {
++		if s, ok := n.(*ast.IfStmt); ok && found == nil && render(t, fset, s.Cond) == cond {
++			found = s
++		}
++		return found == nil
++	})
++	if found == nil {
++		t.Fatalf("no `if %s` found", cond)
++	}
++	return found
++}
++
++// The prompt slot is only claimed while the UI is connected, and only a
++// connection that lost the race for a held slot is dropped while busy. The UI
++// being away, or the option being off, keeps upstream's DefaultAction.
++func TestBusySlotDropsOnlyWhenOptedInAndConnected(t *testing.T) {
++	fset := token.NewFileSet()
++	body := funcBody(t, fset, "acceptOrDeny")
++	unasked := ifWithCond(t, fset, body, "!connected || !uiClient.TryStartAsking()")
++	busy := ifWithCond(t, fset, unasked.Body, "connected && uiClient.DropWhileAsking()")
++
++	busySrc := render(t, fset, busy.Body)
++	for _, want := range []string{"packet.SetVerdict(netfilter.NF_DROP)", "noteBusyDrop(", `return nil, "", true`} {
++		if !strings.Contains(busySrc, want) {
++			t.Fatalf("busy-drop branch lacks %q:\n%s", want, busySrc)
++		}
++	}
++	for _, banned := range []string{"applyDefaultAction", "rules.Add", "KillSocket", "SetIsAsking", "requeued packet not received"} {
++		if strings.Contains(busySrc, banned) {
++			t.Fatalf("busy-drop branch must not use %q:\n%s", banned, busySrc)
++		}
++	}
++
++	// After the busy branch, the unasked path still applies DefaultAction and
++	// reports it, so the connection is recorded as default-applied.
++	rest := render(t, fset, unasked.Body)
++	if !strings.Contains(rest, "action := applyDefaultAction(packet, con)") || !strings.Contains(rest, "return nil, action, false") {
++		t.Fatalf("unasked path no longer applies and reports DefaultAction:\n%s", rest)
++	}
++	if n := len(callArgs(t, "acceptOrDeny", "uiClient", "DropWhileAsking")); n != 1 {
++		t.Fatalf("acceptOrDeny reads DropWhileAsking %d times, want once (only for the busy slot)", n)
++	}
++}
++
++// A failed repeat-queue hand-off keeps its own log line and fail-open verdict;
++// it is neither a busy drop nor a default-applied event.
++func TestRequeueFailureIsNotABusyDropOrDefaultEvent(t *testing.T) {
++	fset := token.NewFileSet()
++	body := funcBody(t, fset, "acceptOrDeny")
++	fail := ifWithCond(t, fset, body, "err != nil")
++	src := render(t, fset, fail.Body)
++	if !strings.Contains(src, `log.Error("requeued packet not received, so it passes without being asked about (fail-open): %v", err)`) {
++		t.Fatalf("requeue failure log line changed:\n%s", src)
++	}
++	if !strings.Contains(src, `return nil, "", false`) || strings.Contains(src, "noteBusyDrop") || strings.Contains(src, "applyDefaultAction") {
++		t.Fatalf("requeue failure must return no rule and no default action:\n%s", src)
++	}
++}
++
++// endsInReturn reports whether block's last statement is a return.
++func endsInReturn(block *ast.BlockStmt) bool {
++	if len(block.List) == 0 {
++		return false
++	}
++	_, ok := block.List[len(block.List)-1].(*ast.ReturnStmt)
++	return ok
++}
++
++// stmtIndex returns the index of the top-level statement of body that
++// contains n.
++func stmtIndex(body *ast.BlockStmt, n ast.Node) int {
++	for i, s := range body.List {
++		if s.Pos() <= n.Pos() && n.End() <= s.End() {
++			return i
++		}
++	}
++	return -1
++}
++
++func TestOnPacketRecordsDefaultAppliedConnections(t *testing.T) {
++	fset := token.NewFileSet()
++	body := funcBody(t, fset, "onPacket")
++	rec := ifWithCond(t, fset, body, `defaultAction != ""`)
++	src := render(t, fset, rec.Body)
++	if !strings.Contains(src, "stats.OnDefaultActionEvent(con, defaultAction)") || !endsInReturn(rec.Body) {
++		t.Fatalf("default-applied connections are not recorded once, as default events:\n%s", src)
++	}
++	if n := len(callArgs(t, "onPacket", "stats", "OnConnectionEvent")); n != 1 {
++		t.Fatalf("onPacket calls OnConnectionEvent %d times, want 1", n)
++	}
++}
++
++// A busy drop is counted only in busyDrops: onPacket returns before any
++// statistics call, so no counter, map, Event or logger line changes.
++func TestBusyDropSkipsStatisticsEntirely(t *testing.T) {
++	fset := token.NewFileSet()
++	body := funcBody(t, fset, "onPacket")
++	skip := ifWithCond(t, fset, body, "busyDropped")
++	if len(skip.Body.List) != 1 || !endsInReturn(skip.Body) {
++		t.Fatalf("busy drops must return at once:\n%s", render(t, fset, skip.Body))
++	}
++	at := stmtIndex(body, skip)
++	ast.Inspect(body, func(n ast.Node) bool {
++		if sel, ok := n.(*ast.SelectorExpr); ok {
++			recordsConnection := sel.Sel.Name == "OnConnectionEvent" || sel.Sel.Name == "OnDefaultActionEvent"
++			if x, ok := sel.X.(*ast.Ident); ok && x.Name == "stats" && recordsConnection && stmtIndex(body, sel) <= at {
++				t.Fatalf("stats.%s runs before busy drops return", sel.Sel.Name)
++			}
++		}
++		return true
++	})
++
++	// Only the busy branch of acceptOrDeny reports a busy drop.
++	var busy []string
++	ast.Inspect(funcBody(t, fset, "acceptOrDeny"), func(n ast.Node) bool {
++		if ret, ok := n.(*ast.ReturnStmt); ok && len(ret.Results) == 3 {
++			if last := render(t, fset, ret.Results[2]); last != "false" {
++				busy = append(busy, render(t, fset, ret))
++			}
++		}
++		return true
++	})
++	if len(busy) != 1 || busy[0] != `return nil, "", true` {
++		t.Fatalf("acceptOrDeny reports a busy drop from %q, want only the busy branch", busy)
++	}
++}
++
++// A rule request that fails gets DefaultAction, and that is reported so the
++// connection is recorded as default-applied.
++func TestFailedAskReportsDefaultAction(t *testing.T) {
++	fset := token.NewFileSet()
++	body := funcBody(t, fset, "acceptOrDeny")
++	var failed string
++	ast.Inspect(body, func(n ast.Node) bool {
++		if s, ok := n.(*ast.IfStmt); ok && render(t, fset, s.Cond) == "r == nil" {
++			if src := render(t, fset, s.Body); strings.Contains(src, "Invalid rule received") && !strings.Contains(src, "TryStartAsking") {
++				failed = src
++			}
++		}
++		return true
++	})
++	if !strings.Contains(failed, "return nil, applyDefaultAction(packet, con), false") {
++		t.Fatalf("failed Ask does not report DefaultAction:\n%s", failed)
++	}
++}
++
++// Any DefaultAction other than allow or reject drops, including an empty one
++// (the bridge's Subscribe config may omit it); it is reported as deny, never
++// "", so the dropped connection is still recorded as default-applied.
++func TestDefaultActionReportsTheVerdictItGave(t *testing.T) {
++	fset := token.NewFileSet()
++	body := funcBody(t, fset, "applyDefaultAction")
++	guard := ifWithCond(t, fset, body, "action == rule.Reject")
++	if src := render(t, fset, guard.Body); src != "{\n\treturn rule.Reject\n}" {
++		t.Fatalf("reject is not reported as reject:\n%s", src)
++	}
++	if last := render(t, fset, body.List[len(body.List)-1]); last != "return rule.Deny" {
++		t.Fatalf("an unknown or empty DefaultAction is not reported as deny: %s", last)
++	}
++}
 diff --git a/daemon/firewall/nftables/policy_journal.go b/daemon/firewall/nftables/policy_journal.go
 new file mode 100644
 index 00000000..c91bd683
@@ -5903,6 +6417,170 @@ index 00000000..2908c998
 +		t.Fatalf("unexpected watchdog bound%s", elapsed)
 +	}
 +}
+diff --git a/daemon/statistics/default_event_test.go b/daemon/statistics/default_event_test.go
+new file mode 100644
+index 00000000..2876c53a
+--- /dev/null
++++ b/daemon/statistics/default_event_test.go
+@@ -0,0 +1,158 @@
++package statistics
++
++import (
++	"net"
++	"testing"
++
++	"github.com/evilsocket/opensnitch/daemon/conman"
++	"github.com/evilsocket/opensnitch/daemon/log/loggers"
++	"github.com/evilsocket/opensnitch/daemon/netstat"
++	"github.com/evilsocket/opensnitch/daemon/procmon"
++	"github.com/evilsocket/opensnitch/daemon/rule"
++)
++
++func testConnection() *conman.Connection {
++	proc := procmon.NewProcessEmpty(4242, "curl")
++	proc.Path = "/usr/bin/curl"
++	return &conman.Connection{
++		Protocol: "tcp",
++		SrcIP:    net.ParseIP("10.0.0.2"),
++		DstIP:    net.ParseIP("192.0.2.1"),
++		DstPort:  443,
++		Entry:    &netstat.Entry{UserId: 1000},
++		Process:  proc,
++	}
++}
++
++type counters struct{ conns, hits, misses, accepted, dropped int }
++
++func countersOf(s *Statistics) counters {
++	return counters{s.Connections, s.RuleHits, s.RuleMisses, s.Accepted, s.Dropped}
++}
++
++// A UI-created rule can never carry the synthetic name, so an Event's rule
++// name alone says whether a rule or DefaultAction decided it. "<default>"
++// would not do: ValidName accepts it, so the UI could save a rule so named.
++func TestDefaultActionRuleNameIsRefusedForRealRules(t *testing.T) {
++	if err := rule.ValidName(DefaultActionRuleName); err == nil {
++		t.Fatalf("ValidName accepts %q, so a real rule could collide with default-applied events", DefaultActionRuleName)
++	}
++}
++
++func TestDefaultAppliedConnectionIsRecordedAsEvent(t *testing.T) {
++	for _, action := range []rule.Action{rule.Allow, rule.Deny, rule.Reject} {
++		s := New(nil)
++		s.onConnection(testConnection(), nil, true, action)
++
++		if len(s.Events) != 1 {
++			t.Fatalf("%s: got %d events, want 1", action, len(s.Events))
++		}
++		ev := s.Events[0].Serialize()
++		if ev.Rule == nil {
++			t.Fatalf("%s: event has no rule, so its action is lost", action)
++		}
++		if ev.Rule.Name != DefaultActionRuleName || ev.Rule.Action != string(action) {
++			t.Fatalf("%s: event rule = %q/%q, want %q/%q", action, ev.Rule.Name, ev.Rule.Action, DefaultActionRuleName, action)
++		}
++		if ev.Connection.DstPort != 443 || ev.Connection.ProcessPath != "/usr/bin/curl" {
++			t.Fatalf("%s: event carries the wrong connection: %v", action, ev.Connection)
++		}
++		if !s.newEvents {
++			t.Fatalf("%s: default-applied event is not flagged for the next stats push", action)
++		}
++		// Counters stay exactly upstream's for a missed connection.
++		if got, want := countersOf(s), (counters{conns: 1, misses: 1, dropped: 1}); got != want {
++			t.Fatalf("%s: counters = %+v, want %+v", action, got, want)
++		}
++	}
++}
++
++// The synthetic rule's shape is a contract with Snitchwatch's bridge, which
++// recognises default-applied Events by name == "" and this description.
++func TestDefaultActionRuleShapeIsTheBridgeContract(t *testing.T) {
++	if DefaultActionRuleName != "" || DefaultActionRuleDescription != "snitchwatch:default-action" {
++		t.Fatalf("marker changed to %q/%q without coordinating with the bridge", DefaultActionRuleName, DefaultActionRuleDescription)
++	}
++	s := New(nil)
++	s.onConnection(testConnection(), nil, true, rule.Reject)
++	if len(s.Events) != 1 {
++		t.Fatalf("got %d events, want 1", len(s.Events))
++	}
++	r := s.Events[0].Serialize().Rule
++	if r.Name != "" || r.Description != "snitchwatch:default-action" || r.Action != "reject" ||
++		!r.Enabled || r.Precedence || r.Nolog || r.Duration != string(rule.Once) {
++		t.Fatalf("synthetic rule = %+v", r)
++	}
++	if op := r.Operator; op == nil || op.Type != string(rule.Simple) || op.Operand != string(rule.OpTrue) || op.Data != "" || len(op.List) != 0 {
++		t.Fatalf("synthetic rule operator = %+v, want simple/true", r.Operator)
++	}
++}
++
++func fillEvents(s *Statistics) {
++	op, _ := rule.NewOperator(rule.Simple, false, rule.OpTrue, "", nil)
++	for i := 0; i < s.maxEvents; i++ {
++		s.onConnection(testConnection(), rule.Create("allow-curl", "", true, false, false, rule.Allow, rule.Always, op), false, "")
++	}
++}
++
++// A miss that adds no Event must not evict one from a full ring.
++func TestMissWithoutDefaultActionEvictsNoEvent(t *testing.T) {
++	s := New(nil)
++	fillEvents(s)
++	first := s.Events[0]
++	s.onConnection(testConnection(), nil, true, "")
++	if len(s.Events) != s.maxEvents || s.Events[0] != first {
++		t.Fatalf("a miss with no Event evicted one: %d events, first kept %v", len(s.Events), s.Events[0] == first)
++	}
++}
++
++func TestDefaultEventsStayWithinMaxEvents(t *testing.T) {
++	s := New(nil)
++	fillEvents(s)
++	for i := 0; i < 3*s.maxEvents; i++ {
++		s.onConnection(testConnection(), nil, true, rule.Deny)
++		if len(s.Events) != s.maxEvents {
++			t.Fatalf("after %d default events: %d events, want %d", i+1, len(s.Events), s.maxEvents)
++		}
++	}
++	if s.Events[0].Rule.Name != DefaultActionRuleName {
++		t.Fatal("default events did not shift the oldest events out")
++	}
++}
++
++// A miss nobody applied DefaultAction to (a failed repeat-queue hand-off;
++// busy-slot drops never reach statistics) still counts, as upstream, but is
++// not an Event.
++func TestMissWithoutDefaultActionIsNotAnEvent(t *testing.T) {
++	s := New(nil)
++	s.onConnection(testConnection(), nil, true, "")
++	if len(s.Events) != 0 || s.newEvents {
++		t.Fatalf("a miss without DefaultAction became an event: %d", len(s.Events))
++	}
++	if got, want := countersOf(s), (counters{conns: 1, misses: 1, dropped: 1}); got != want {
++		t.Fatalf("counters = %+v, want %+v", got, want)
++	}
++}
++
++func TestRuleMatchedEventIsUnchanged(t *testing.T) {
++	op, _ := rule.NewOperator(rule.Simple, false, rule.OpTrue, "", nil)
++	r := rule.Create("allow-curl", "", true, false, false, rule.Allow, rule.Always, op)
++	s := New(nil)
++	s.onConnection(testConnection(), r, false, "")
++	if len(s.Events) != 1 || s.Events[0].Rule != r {
++		t.Fatalf("rule-matched event does not carry the matched rule: %v", s.Events)
++	}
++	if got, want := countersOf(s), (counters{conns: 1, hits: 1, accepted: 1}); got != want {
++		t.Fatalf("counters = %+v, want %+v", got, want)
++	}
++}
++
++func TestOnDefaultActionEventQueuesAMissWithItsAction(t *testing.T) {
++	s := New(nil)
++	s.SetLoggers(loggers.NewLoggerManager())
++	go s.OnDefaultActionEvent(testConnection(), rule.Deny)
++	job := <-s.jobs
++	if job.match != nil || !job.wasMissed || job.defaultAction != rule.Deny {
++		t.Fatalf("queued job = match %v, missed %v, action %q; want nil, true, deny", job.match, job.wasMissed, job.defaultAction)
++	}
++}
 diff --git a/daemon/ui/client_asking_test.go b/daemon/ui/client_asking_test.go
 new file mode 100644
 index 00000000..27146ae7
@@ -6170,6 +6848,72 @@ index 00000000..225eb35d
 +				}
 +			})
 +		}
++	}
++}
+diff --git a/daemon/ui/drop_while_asking_test.go b/daemon/ui/drop_while_asking_test.go
+new file mode 100644
+index 00000000..901a8c27
+--- /dev/null
++++ b/daemon/ui/drop_while_asking_test.go
+@@ -0,0 +1,60 @@
++package ui
++
++import (
++	"sync"
++	"testing"
++
++	"github.com/evilsocket/opensnitch/daemon/ui/config"
++)
++
++func TestDropWhileAskingIsOffUnlessTheConfigFileSetsIt(t *testing.T) {
++	for raw, want := range map[string]bool{
++		`{"DefaultAction": "deny"}`:                           false,
++		`{"DefaultAction": "deny", "DropWhileAsking": false}`: false,
++		`{"DefaultAction": "deny", "DropWhileAsking": true}`:  true,
++	} {
++		cfg, err := config.Parse(raw)
++		if err != nil {
++			t.Fatalf("%s: %v", raw, err)
++		}
++		c := &Client{config: cfg}
++		if got := c.DropWhileAsking(); got != want {
++			t.Fatalf("%s: DropWhileAsking() = %v, want %v", raw, got, want)
++		}
++	}
++}
++
++// loadConfiguration swaps c.config under the client lock on every reload; the
++// packet workers read the option concurrently and must see either value.
++// This mirrors that swap instead of calling loadConfiguration, whose
++// reloadConfiguration also reloads rules, the process monitor and the
++// firewall, which a unit test cannot do without root and a real system.
++func TestDropWhileAskingFollowsConfigReloads(t *testing.T) {
++	c := &Client{}
++	var wg sync.WaitGroup
++	stop := make(chan struct{})
++	for i := 0; i < 8; i++ {
++		wg.Add(1)
++		go func() {
++			defer wg.Done()
++			for {
++				select {
++				case <-stop:
++					return
++				default:
++					c.DropWhileAsking()
++				}
++			}
++		}()
++	}
++	for i := 0; i < 200; i++ {
++		c.Lock()
++		c.config = config.Config{DropWhileAsking: i%2 == 0}
++		c.Unlock()
++	}
++	close(stop)
++	wg.Wait()
++	if c.DropWhileAsking() {
++		t.Fatal("last reload turned DropWhileAsking off, but the client still reports it on")
 +	}
 +}
 diff --git a/daemon/ui/notification_policy.go b/daemon/ui/notification_policy.go

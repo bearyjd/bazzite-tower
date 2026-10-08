@@ -508,6 +508,24 @@ Open items:
   `0.0.0.0 <host>` or canonical IPv4 lines. Five security and code review
   rounds; the daemon patch gate runs the confined tests and fails, rather
   than skips, if no non-FUSE temporary directory is available.
+- Prompt-slot options (owner decision 2026-10-08, Snitchwatch plan section E;
+  49-file patch). E2 `DropWhileAsking` (daemon config file only, default
+  `false`, absent from the shipped config): while the UI is connected and the
+  single Ask slot is busy, a connection no rule matched is dropped with no
+  rule, no `DefaultAction` and no statistics at all (its own `busyDrops`
+  counter and a rate-limited log line); TCP and DNS retry and the retry is
+  asked. Rules still match first, so it never overrides a rule; when enabled,
+  a local process that keeps the slot busy gets other programs' unmatched
+  connections dropped, the same fail-closed outcome as `DefaultAction: deny`.
+  E3: a connection decided by `DefaultAction` is recorded as a statistics
+  Event whose synthetic rule is exactly name `""`, description
+  `snitchwatch:default-action`, the applied action, enabled, duration
+  `once`, operator `simple`/`true`. **That name and description are a
+  contract with the Snitchwatch bridge** (it keys on both, so it stays inert
+  against stock OpenSnitch); they must not change without coordinating. `""`
+  is used because rule-name validation refuses it, while `<default>` is a
+  legal rule name. The Event ring also no longer evicts an older Event for a
+  miss that records nothing (a change from upstream).
 - ~~The daemon factory and CI do not run the patch's Go tests.~~ Fixed
   2026-10-07: `just test-snitchwatch-daemon-patch` and the path-filtered
   `snitchwatch-daemon-patch.yml` workflow run them, `-race` included.

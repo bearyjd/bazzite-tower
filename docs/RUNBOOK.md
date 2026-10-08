@@ -223,9 +223,11 @@ Operating the system candidate:
   `QueueBypass` lets traffic through unfiltered, consistent with
   `DefaultAction: allow`. This path is unit-tested; it was not triggered on
   the VM.
-- A daemon stop during reboot can log
-  `Queue.destroy() idx=1, nfq_destroy_queue() not closed: -1`. It is a known,
-  unresolved teardown warning and remains an open rollout item.
+- Before the 22-file daemon patch, a daemon stop during reboot could log
+  `Queue.destroy() idx=1, nfq_destroy_queue() not closed: -1`. The queue was
+  unbound anyway; a stale verdict error confused libnfnetlink. The patch now
+  drains pending replies first and logs the `errno` if destroy still fails
+  ([investigation](research/opensnitch-nfq-destroy/README.md)).
 - While one prompt is pending, opensnitchd applies the default action to other
   new connections without asking; the GUI banner says so. Answer pending
   prompts promptly.

@@ -1,0 +1,43 @@
+# Unpatched teardown order: repro.c (3 runs, 2026-10-07, host kernel 7.2.0-ogc6.1.fc44, rootless container netns)
+queued packet id=1
+late verdict send=32
+pending: NLMSG_ERROR seq=0 error=-2 (No such file or directory)
+kernel queues before destroy: [    7     22     0 2 65531     0     0        1  1]
+nfq_destroy_queue=-1 errno=2 (No such file or directory)
+kernel queues after destroy: none
+kernel queues after nfq_close: none
+== with drain
+queued packet id=1
+late verdict send=32
+pending: NLMSG_ERROR seq=0 error=-2 (No such file or directory)
+drained 1 message(s) before destroy
+kernel queues before destroy: [    7      1     0 2 65531     0     0        1  1]
+nfq_destroy_queue=0 errno=0 (Success)
+kernel queues after destroy: none
+kernel queues after nfq_close: none
+
+# Patched order: repro-patched.c = repro.c calling DrainPending() from the patched queue.h
+== run 1: unpatched order (no drain)
+pending: NLMSG_ERROR seq=0 error=-2 (No such file or directory)
+nfq_destroy_queue=-1 errno=2 (No such file or directory)
+kernel queues after destroy: none
+== run 1: patched DrainPending
+patched DrainPending drained 1 message(s) before destroy
+nfq_destroy_queue=0 errno=0 (Success)
+kernel queues after destroy: none
+== run 2: unpatched order (no drain)
+pending: NLMSG_ERROR seq=0 error=-2 (No such file or directory)
+nfq_destroy_queue=-1 errno=2 (No such file or directory)
+kernel queues after destroy: none
+== run 2: patched DrainPending
+patched DrainPending drained 1 message(s) before destroy
+nfq_destroy_queue=0 errno=0 (Success)
+kernel queues after destroy: none
+== run 3: unpatched order (no drain)
+pending: NLMSG_ERROR seq=0 error=-2 (No such file or directory)
+nfq_destroy_queue=-1 errno=2 (No such file or directory)
+kernel queues after destroy: none
+== run 3: patched DrainPending
+patched DrainPending drained 1 message(s) before destroy
+nfq_destroy_queue=0 errno=0 (Success)
+kernel queues after destroy: none

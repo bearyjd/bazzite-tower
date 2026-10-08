@@ -255,7 +255,7 @@ October 6 build evidence at the exact reconciled source:
 
 - Native bridge artifact SHA256: `5b1c89864985b862c2782dd7ac340aeefe7ba29f71de7bed3ede1b0e8039c2d1`; actual 0.1.1 binary SHA256: `cce18095907a0364abcae6f0be7c3e3b3554c982827ac2b3e9a11fe48e016370`. Artifact, checksum sidecar, licenses, source/tree/gitlink and 20 immutable overlay files passed independent inspection.
 - Fresh system-profile GUI bundle SHA256: `ab7d6ee8aefc195178a7914d343780a3a01b5c1b7512ba363a5ecf025d696ae0`. Its clean release build used supported KDE 6.11 / Qt 6.11.2, Rust 1.98.1, mold 2.42.0, declared protoc 29.3 and 657 lockfile-verified crate inputs. The GUI crate version remains 0.1.0. A separate archive supplies the full committed workspace, exact upstream vendor source, complete crate source archives and license texts.
-- The reviewed downstream OpenSnitch repair applies to upstream 1.8.0 at `b404c4c`. It cancels UI requests, joins both queue readers and callbacks while firewall hooks remain valid, then removes the hooks and releases the queues. Independent targeted race tests, the actual C callback fixture, full normal package tests, NFT ownership cases and a real watchdog child exiting nonzero passed. The October 6 16-file revision (`6e48804a…`, binary `3ea27d30…`) silently lost a queue reader on some boots; see [Target-image validation](#target-image-validation-october-67). The current 19-file patch (commit `d96a7a5`) SHA256 is `8d68ad9e6175d17f55c0884208089fcc50d44b3e098de954d12e6fa62aa6173c`; the image factory's two builds and an independent local pair are byte-identical at `2cf22351d645d7843b487d31dfb431d38b449aa0d4eadb13e518932d7dee4d02`.
+- The reviewed downstream OpenSnitch repair applies to upstream 1.8.0 at `b404c4c`. It cancels UI requests, joins both queue readers and callbacks while firewall hooks remain valid, then removes the hooks and releases the queues. Independent targeted race tests, the actual C callback fixture, full normal package tests, NFT ownership cases and a real watchdog child exiting nonzero passed. The October 6 16-file revision (`6e48804a…`, binary `3ea27d30…`) silently lost a queue reader on some boots; see [Target-image validation](#target-image-validation-october-67). The 19-file patch of commit `d96a7a5` (`8d68ad9e…`, binary `2cf22351…`) fixed that. The current 22-file patch (SHA256 `4e7d9fe6203069da1f5fcda0a4dd8b4514eb36bdf9f3bfa3e370e3eaff18bf84`) adds two fixes. It drains replies the reader never read before `nfq_destroy_queue()` (see [the investigation](opensnitch-nfq-destroy/README.md)). It also hands queued packets to the workers as soon as the queue exists, rather than after the rest of startup. An independent local pair of builds is byte-identical at `8c9256404788225fcf551271c42df6cb7052379d445b6f2dc0f4e233d2cf2936`.
 - The earlier patch `4b53c88c390a0e85cb17067532bf6232034bd5f3f2e0843e5dc1a988dcc88043` and binary `2e6daa72db1e14b7ef3b82b7a04ef1ca4acd3f441c934ec4b9c4ae0c7310899b` are retained historical diagnostics. Fast stops still logged `nfq_destroy_queue() not closed: -1` and canceled-Ask invalid-rule errors. Bounded, nonconsuming instrumentation identified a stale negative ACK for a VERDICT preceding the successful UNBIND configuration ACK. Those instrumented binaries are excluded from shipping and do not prove the new uninstrumented repair passes on a VM.
 - A broader full-package race run failed in UI configuration watcher/global state paths. The same failure reproduced on unchanged upstream `b404c4c` with identical tools and generated protocol inputs; existing tests create successive clients without watcher cleanup. The scoped shutdown regressions passed independently. This does not establish production configuration reload paths are race-free; both failure logs and the unchanged source archive are retained.
 
@@ -348,10 +348,21 @@ Open items:
 
 - `nfq_destroy_queue() not closed: -1` appeared 3 times in the daemon log,
   each in the stop just before a stall-loop reboot (observed, not exported);
-  the eight timed daemon stops were warning-free.
+  the eight timed daemon stops were warning-free. Root cause found and fixed
+  2026-10-07, reproduced against the real kernel: a stale verdict error for an
+  entry the kernel flushed when another service removed a base chain was read
+  by `nfq_destroy_queue()` as its unbind reply. The queue was in fact
+  unbound. See [opensnitch-nfq-destroy](opensnitch-nfq-destroy/README.md). The
+  fix drains pending replies first; VM confirmation is pending (r4).
 - At first boot the patch's 1 ms `deliverPacket` timeout accepted one packet
-  without a decision (`Timed out while sending packet to queue channel 2`), a
-  pre-existing per-packet fail-open path.
+  without a decision (`Timed out while sending packet to queue channel 2`).
+  Cause: the queue's reader starts in `setupQueues`, but the loop handing
+  packets to the workers started only after UI connect, firewall and rule
+  reloads, process-monitor and DNS setup. Every packet queued in that window
+  was accepted without a rule check, even though rules were already loaded.
+  Fixed 2026-10-07 (owner's choice of option): dispatch now starts right after the queue is created.
+  The 1 ms accept-on-timeout itself is upstream behaviour and still applies
+  when all workers are busy; VM confirmation is pending (r4).
 - A GUI Allow creates a destination-only rule (`allow if dest.ip is …`, no
   process constraint); confirm that is the intended rule shape.
 - ~~Readiness treats an empty `opensnitch.service.d` directory as a local

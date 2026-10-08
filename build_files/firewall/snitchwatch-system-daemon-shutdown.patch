@@ -127,7 +127,7 @@ index 08c08a2e..54e7a06a 100644
  	for _, fwCfg := range n.SysConfig.SystemRules {
  		for _, chain := range fwCfg.Chains {
 diff --git a/daemon/main.go b/daemon/main.go
-index f6247623..82b1e67d 100644
+index f6247623..9c634b3c 100644
 --- a/daemon/main.go
 +++ b/daemon/main.go
 @@ -25,6 +25,7 @@ package main
@@ -165,7 +165,40 @@ index f6247623..82b1e67d 100644
  		})
  	}()
  }
-@@ -368,11 +371,57 @@ func initSystemdResolvedMonitor() {
+@@ -286,6 +289,32 @@ Exit:
+ 	log.Debug("worker #%d exit", id)
+ }
+ 
++// dispatchPackets hands queued packets to the workers until the daemon stops
++// or the queue closes; the returned channel is closed when it has returned.
++// A packet still held when the daemon stops is released by StopAndJoin.
++func dispatchPackets(done <-chan struct{}, packets <-chan netfilter.Packet, workers chan<- netfilter.Packet) <-chan struct{} {
++	finished := make(chan struct{})
++	go func() {
++		defer close(finished)
++		for {
++			select {
++			case <-done:
++				return
++			case pkt, ok := <-packets:
++				if !ok {
++					return
++				}
++				select {
++				case workers <- pkt:
++				case <-done:
++					return
++				}
++			}
++		}
++	}()
++	return finished
++}
++
+ func setupWorkers() {
+ 	log.Debug("Starting %d workers ...", workers)
+ 	// setup the workers
+@@ -368,11 +397,57 @@ func initSystemdResolvedMonitor() {
  	}()
  }
  
@@ -225,7 +258,7 @@ index f6247623..82b1e67d 100644
  	if resolvMonitor != nil {
  		resolvMonitor.Close()
  	}
-@@ -489,9 +538,12 @@ func acceptOrDeny(packet *netfilter.Packet, con *conman.Connection) *rule.Rule {
+@@ -489,9 +564,12 @@ func acceptOrDeny(packet *netfilter.Packet, con *conman.Connection) *rule.Rule {
  			con.DstHost = dns.HostOr(con.DstIP, con.DstHost)
  		}
  
@@ -240,16 +273,36 @@ index f6247623..82b1e67d 100644
  			applyDefaultAction(packet, con)
  			return nil
  		}
-@@ -611,6 +663,7 @@ func main() {
+@@ -611,6 +689,12 @@ func main() {
  
  	setupWorkers()
  	setupQueues(qNum)
 +	watchQueueReaders(ctx.Done(), requestFailingShutdown, queue, repeatQueue)
++	// ui.NewClient (loadDiskConfiguration) has loaded the rules and installed
++	// the interception hooks by now. Until packets are dispatched,
++	// deliverPacket waits 1 ms per packet and then accepts it without a rule
++	// check, so dispatch starts with the queue.
++	dispatched := dispatchPackets(ctx.Done(), pktChan, wrkChan)
  
  	// queue and firewall rules should be ready by now
  
-@@ -679,5 +732,8 @@ func main() {
- Exit:
+@@ -665,19 +749,11 @@ func main() {
+ 	initSystemdResolvedMonitor()
+ 
+ 	log.Info("Running on netfilter queue #%d ...", queueNum)
+-	for {
+-		select {
+-		case <-ctx.Done():
+-			goto Exit
+-		case pkt, ok := <-pktChan:
+-			if !ok {
+-				goto Exit
+-			}
+-			wrkChan <- pkt
+-		}
+-	}
+-Exit:
++	<-dispatched
  	close(wrkChan)
  	doCleanup(queue, repeatQueue)
 +	if readerFailed.Load() {
@@ -326,7 +379,7 @@ index 3795c2ca..6bae1a04 100644
  
  // IsIPv4 returns if the packet is IPv4
 diff --git a/daemon/netfilter/queue.go b/daemon/netfilter/queue.go
-index ac4cf7ae..bc1a4bb2 100644
+index ac4cf7ae..4f72a5ae 100644
 --- a/daemon/netfilter/queue.go
 +++ b/daemon/netfilter/queue.go
 @@ -13,6 +13,7 @@ import (
@@ -420,7 +473,7 @@ index ac4cf7ae..bc1a4bb2 100644
  	queueIndexLock.Unlock()
  
  	return nil
-@@ -111,62 +121,97 @@ func (q *Queue) create(queueID uint16) (err error) {
+@@ -111,62 +121,106 @@ func (q *Queue) create(queueID uint16) (err error) {
  
  func (q *Queue) setup() (err error) {
  	var ret C.int
@@ -538,22 +591,38 @@ index ac4cf7ae..bc1a4bb2 100644
 +
 +func (q *Queue) destroy() {
  	if q.qh != nil {
- 		if ret := C.nfq_destroy_queue(q.qh); ret != 0 {
- 			log.Warning("Queue.destroy() idx=%d, nfq_destroy_queue() not closed: %d", q.idx, ret)
+-		if ret := C.nfq_destroy_queue(q.qh); ret != 0 {
+-			log.Warning("Queue.destroy() idx=%d, nfq_destroy_queue() not closed: %d", q.idx, ret)
++		// Packet notifications drained here are retired (lifetime.done is
++		// closed), exactly as nfq_destroy_queue would have consumed them.
++		limit := C.int(2 * NF_DEFAULT_QUEUE_SIZE)
++		var drained C.int
++		ret, err := C.DestroyQueueDrained(q.h, q.qh, limit, &drained)
++		log.Debug("Queue.destroy() idx=%d drained %d pending message(s)", q.idx, drained)
++		if drained == limit {
++			log.Warning("Queue.destroy() idx=%d stopped draining at %d messages", q.idx, limit)
++		}
++		if ret != 0 {
++			log.Warning("Queue.destroy() idx=%d, nfq_destroy_queue() not closed: %d (%v)", q.idx, ret, err)
  		}
 +		q.qh = nil
  	}
  
  	q.closeNfq()
-@@ -177,6 +222,7 @@ func (q *Queue) closeNfq() {
- 		if ret := C.nfq_close(q.h); ret != 0 {
- 			log.Warning("Queue.destroy() idx=%d, nfq_close() not closed: %d", q.idx, ret)
+@@ -174,9 +228,10 @@ func (q *Queue) destroy() {
+ 
+ func (q *Queue) closeNfq() {
+ 	if q.h != nil {
+-		if ret := C.nfq_close(q.h); ret != 0 {
+-			log.Warning("Queue.destroy() idx=%d, nfq_close() not closed: %d", q.idx, ret)
++		if ret, err := C.nfq_close(q.h); ret != 0 {
++			log.Warning("Queue.destroy() idx=%d, nfq_close() not closed: %d (%v)", q.idx, ret, err)
  		}
 +		q.h = nil
  	}
  }
  
-@@ -193,19 +239,34 @@ func go_callback(queueID C.int, data *C.uchar, length C.int, mark C.uint, idx ui
+@@ -193,19 +248,34 @@ func go_callback(queueID C.int, data *C.uchar, length C.int, mark C.uint, idx ui
  	(*vc).data = nil
  	(*vc).mark_set = 0
  	(*vc).length = 0
@@ -590,7 +659,7 @@ index ac4cf7ae..bc1a4bb2 100644
  		Mark:            uint32(mark),
  		UID:             uid,
  		NetworkProtocol: xdata[0] >> 4, // first 4 bits is the version
-@@ -222,25 +283,40 @@ func go_callback(queueID C.int, data *C.uchar, length C.int, mark C.uint, idx ui
+@@ -222,25 +292,40 @@ func go_callback(queueID C.int, data *C.uchar, length C.int, mark C.uint, idx ui
  
  	p.Packet = packet
  
@@ -648,7 +717,7 @@ index ac4cf7ae..bc1a4bb2 100644
  	}
  }
 diff --git a/daemon/netfilter/queue.h b/daemon/netfilter/queue.h
-index 9c06aab7..5547500e 100644
+index 9c06aab7..d80761c8 100644
 --- a/daemon/netfilter/queue.h
 +++ b/daemon/netfilter/queue.h
 @@ -8,6 +8,8 @@
@@ -733,7 +802,7 @@ index 9c06aab7..5547500e 100644
  }
  
  static inline struct nfq_q_handle* CreateQueue(struct nfq_handle *h, uint16_t queue, uint32_t idx) {
-@@ -94,24 +108,38 @@ static inline struct nfq_q_handle* CreateQueue(struct nfq_handle *h, uint16_t qu
+@@ -94,24 +108,63 @@ static inline struct nfq_q_handle* CreateQueue(struct nfq_handle *h, uint16_t qu
      return qh;
  }
  
@@ -781,8 +850,32 @@ index 9c06aab7..5547500e 100644
 +            nfq_handle_packet(h, buf, received);
 +        }
      }
--
++}
++
++// Teardown only, after the reader has joined. A reply the reader never read,
++// such as the kernel's ENOENT for a verdict on an entry it flushed when a base
++// chain was unregistered, would otherwise be read by nfq_destroy_queue() as the
++// reply to its unbind request: it then returns -1 although the kernel already
++// unbound the queue. Bounded, so a queue that is still hooked cannot spin.
++static inline int DrainPending(struct nfq_handle *h, int max) {
++    char buf[8192] __attribute__ ((aligned));
++    int fd = nfq_fd(h), drained = 0;
++    while (drained < max) {
++        int received = recv(fd, buf, sizeof(buf), MSG_DONTWAIT);
++        if (received < 0 && errno == EINTR) continue;
++        if (received <= 0) break;
++        nfq_handle_packet(h, buf, received);
++        drained++;
++    }
++    return drained;
++}
+ 
 -    return errno;
++// Drains first, then unbinds; nfq_destroy_queue's result and errno are
++// returned unchanged. Only called once the reader has joined.
++static inline int DestroyQueueDrained(struct nfq_handle *h, struct nfq_q_handle *qh, int max, int *drained) {
++    *drained = DrainPending(h, max);
++    return nfq_destroy_queue(qh);
  }
  
  #endif
@@ -1211,6 +1304,60 @@ index 00000000..a15b6b96
 +	j.committed(true)
 +	if len(j.applied) != 0 {
 +		t.Fatal("kept stale administrator ownership")
++	}
++}
+diff --git a/daemon/netfilter/queue_destroy_test.go b/daemon/netfilter/queue_destroy_test.go
+new file mode 100644
+index 00000000..0ce12953
+--- /dev/null
++++ b/daemon/netfilter/queue_destroy_test.go
+@@ -0,0 +1,48 @@
++package netfilter
++
++import (
++	"go/ast"
++	"go/parser"
++	"go/token"
++	"os/exec"
++	"path/filepath"
++	"testing"
++)
++
++// nfq_destroy_queue() reads replies until it sees one for its unbind request,
++// but stops at the first error it reads. A stale error reply to an earlier
++// verdict made it return -1 although the kernel had unbound the queue.
++func TestTeardownDrainConsumesStaleReplies(t *testing.T) {
++	binary := filepath.Join(t.TempDir(), "queue-drain-test")
++	args := []string{"-O2", "-Wall", "-Wextra", "-Werror", "-I.", "testdata/queue_drain.c", "-lnetfilter_queue", "-lnfnetlink", "-ldl", "-pthread", "-Wl,--wrap=nfq_handle_packet,--wrap=nfq_fd,--wrap=nfq_destroy_queue", "-o", binary}
++	if out, err := exec.Command("cc", args...).CombinedOutput(); err != nil {
++		t.Fatalf("C drain test build: %v\n%s", err, out)
++	}
++	if out, err := exec.Command(binary).CombinedOutput(); err != nil {
++		t.Fatalf("C drain test: %v\n%s", err, out)
++	}
++}
++
++// The C test covers DestroyQueueDrained; this keeps Queue.destroy on it.
++func TestQueueDestroyUnbindsOnlyAfterDraining(t *testing.T) {
++	file, err := parser.ParseFile(token.NewFileSet(), "queue.go", nil, 0)
++	if err != nil {
++		t.Fatal(err)
++	}
++	calls := map[string]int{}
++	for _, decl := range file.Decls {
++		if fn, ok := decl.(*ast.FuncDecl); ok && fn.Name.Name == "destroy" {
++			ast.Inspect(fn, func(n ast.Node) bool {
++				if sel, ok := n.(*ast.SelectorExpr); ok {
++					if x, ok := sel.X.(*ast.Ident); ok && x.Name == "C" {
++						calls[sel.Sel.Name]++
++					}
++				}
++				return true
++			})
++		}
++	}
++	if calls["DestroyQueueDrained"] != 1 || calls["nfq_destroy_queue"] != 0 {
++		t.Fatalf("Queue.destroy must unbind only through DestroyQueueDrained: %v", calls)
 +	}
 +}
 diff --git a/daemon/netfilter/queue_lifetime.go b/daemon/netfilter/queue_lifetime.go
@@ -1689,6 +1836,70 @@ index 00000000..5e2b8217
 +    puts("active Ccallback verdict preserved; retired config callbacks continue without verdict");
 +    return 0;
 +}
+diff --git a/daemon/netfilter/testdata/queue_drain.c b/daemon/netfilter/testdata/queue_drain.c
+new file mode 100644
+index 00000000..2a607d64
+--- /dev/null
++++ b/daemon/netfilter/testdata/queue_drain.c
+@@ -0,0 +1,58 @@
++#include "queue.h"
++#include <assert.h>
++#include <sys/socket.h>
++
++// A queued packet message carries up to the 4096-byte copy range plus netlink
++// and nfqueue attribute headers, so it is larger than the copy range itself.
++#define QUEUED_MESSAGE_LEN (4096 + 400)
++
++static int handled, largest, destroyed, sock[2];
++static int pending(void) { char b; return recv(sock[0],&b,1,MSG_PEEK|MSG_DONTWAIT) >= 0; }
++int __wrap_nfq_fd(struct nfq_handle *h) { (void)h; return sock[0]; }
++int __wrap_nfq_handle_packet(struct nfq_handle *h,char *buf,int len) {
++    (void)h;(void)buf;
++    if (len > largest) largest = len;
++    // The first message models the kernel's ENOENT reply to a verdict for an
++    // entry it flushed when a base chain was unregistered. libnetfilter_queue
++    // returns -1 for it; nfq_destroy_queue() would take it as its own reply.
++    return handled++ == 0 ? -1 : 0;
++}
++int __wrap_nfq_destroy_queue(struct nfq_q_handle *qh) {
++    (void)qh;
++    destroyed++;
++    // Nothing the reader left behind may still be queued when destroy reads.
++    assert(!pending());
++    errno = ENOENT;
++    return -1;
++}
++void go_callback(int id,unsigned char *data,int len,unsigned int mark,uint32_t idx,verdictContainer *vc,uint32_t uid,uint32_t in_dev,uint32_t out_dev) {
++    (void)id;(void)data;(void)len;(void)mark;(void)idx;(void)vc;(void)uid;(void)in_dev;(void)out_dev;
++}
++static void queue_message(const void *data, size_t len) {
++    ssize_t sent = send(sock[1],data,len,0);
++    assert(sent == (ssize_t)len);
++}
++int main(void) {
++    static char large[QUEUED_MESSAGE_LEN];
++    int made, drained = -1;
++    alarm(5); // teardown must never block on an empty socket
++    made = socketpair(AF_UNIX,SOCK_DGRAM,0,sock);
++    assert(made == 0);
++    assert(DrainPending(NULL,64) == 0);
++    queue_message("stale-error",11);
++    queue_message("packet",6);
++    queue_message(large,sizeof(large));
++    assert(DrainPending(NULL,64) == 3);
++    assert(handled == 3 && largest == QUEUED_MESSAGE_LEN && !pending());
++    // Bounded: a queue that is still hooked cannot keep teardown spinning.
++    for (int i=0;i<5;i++) queue_message("p",1);
++    assert(DrainPending(NULL,2) == 2);
++    assert(pending());
++    // Teardown drains what is left before nfq_destroy_queue() reads replies,
++    // and destroy's result and errno reach the caller unchanged.
++    errno = 0;
++    assert(DestroyQueueDrained(NULL,NULL,64,&drained) == -1 && errno == ENOENT);
++    assert(destroyed == 1 && drained == 3);
++    puts("teardown drained stale replies before nfq_destroy_queue, without blocking and bounded");
++    return 0;
++}
 diff --git a/daemon/netfilter/testdata/queue_run.c b/daemon/netfilter/testdata/queue_run.c
 new file mode 100644
 index 00000000..7621d2e5
@@ -1740,6 +1951,125 @@ index 00000000..7621d2e5
 +    assert(result==0);
 +    puts("reader kept the bound queue after a failed message and received a full-size queued message");
 +    return 0;
++}
+diff --git a/daemon/packet_dispatch_test.go b/daemon/packet_dispatch_test.go
+new file mode 100644
+index 00000000..31a3b43f
+--- /dev/null
++++ b/daemon/packet_dispatch_test.go
+@@ -0,0 +1,113 @@
++package main
++
++import (
++	"go/ast"
++	"go/parser"
++	"go/token"
++	"testing"
++	"time"
++
++	"github.com/evilsocket/opensnitch/daemon/netfilter"
++)
++
++func TestDispatchForwardsQueuedPackets(t *testing.T) {
++	done, packets, workers := make(chan struct{}), make(chan netfilter.Packet), make(chan netfilter.Packet)
++	defer close(done)
++	dispatchPackets(done, packets, workers)
++	select {
++	case packets <- netfilter.Packet{Mark: 7}:
++	case <-time.After(time.Second):
++		t.Fatal("dispatcher did not take a queued packet")
++	}
++	select {
++	case p := <-workers:
++		if p.Mark != 7 {
++			t.Fatalf("worker got a different packet: mark %d", p.Mark)
++		}
++	case <-time.After(time.Second):
++		t.Fatal("queued packet never reached a worker")
++	}
++}
++
++func TestDispatchStopsWhileWorkersAreBusy(t *testing.T) {
++	done, packets := make(chan struct{}), make(chan netfilter.Packet)
++	finished := dispatchPackets(done, packets, make(chan netfilter.Packet))
++	packets <- netfilter.Packet{} // unbuffered: the dispatcher now holds it, blocked on the busy workers
++	close(done)
++	select {
++	case <-finished:
++	case <-time.After(time.Second):
++		t.Fatal("dispatcher kept shutdown waiting on busy workers")
++	}
++}
++
++func TestDispatchStopsWhenQueueCloses(t *testing.T) {
++	done, packets := make(chan struct{}), make(chan netfilter.Packet)
++	defer close(done)
++	finished := dispatchPackets(done, packets, make(chan netfilter.Packet))
++	close(packets)
++	select {
++	case <-finished:
++	case <-time.After(time.Second):
++		t.Fatal("dispatcher did not stop after the queue closed")
++	}
++}
++
++// Until packets are dispatched, deliverPacket waits 1 ms per packet and then
++// accepts it without a rule check. Rules are loaded before the queue exists,
++// so dispatch must start with the queue, ahead of the slower startup steps.
++func TestMainDispatchesBeforeSlowStartupSteps(t *testing.T) {
++	file, err := parser.ParseFile(token.NewFileSet(), "main.go", nil, 0)
++	if err != nil {
++		t.Fatal(err)
++	}
++	order := map[string]int{}
++	for _, decl := range file.Decls {
++		fn, ok := decl.(*ast.FuncDecl)
++		if !ok || fn.Name.Name != "main" {
++			continue
++		}
++		for i, stmt := range fn.Body.List {
++			ast.Inspect(stmt, func(n ast.Node) bool {
++				if recv, ok := n.(*ast.UnaryExpr); ok && recv.Op == token.ARROW {
++					if x, ok := recv.X.(*ast.Ident); ok {
++						if _, seen := order["<-"+x.Name]; !seen {
++							order["<-"+x.Name] = i
++						}
++					}
++				}
++				if call, ok := n.(*ast.CallExpr); ok {
++					name := ""
++					switch f := call.Fun.(type) {
++					case *ast.Ident:
++						name = f.Name
++					case *ast.SelectorExpr:
++						if x, ok := f.X.(*ast.Ident); ok {
++							name = x.Name + "." + f.Sel.Name
++						}
++					}
++					if _, seen := order[name]; name != "" && !seen {
++						order[name] = i
++					}
++				}
++				return true
++			})
++		}
++	}
++	for _, name := range []string{"ui.NewClient", "setupQueues", "dispatchPackets", "uiClient.Connect", "initSystemdResolvedMonitor", "<-dispatched", "close", "doCleanup"} {
++		if _, ok := order[name]; !ok {
++			t.Fatalf("main() no longer has %s", name)
++		}
++	}
++	// ui.NewClient loads the rules and firewall, so the first dispatched
++	// packet already gets a rule check.
++	if !(order["ui.NewClient"] < order["setupQueues"] && order["setupQueues"] < order["dispatchPackets"] &&
++		order["dispatchPackets"] < order["uiClient.Connect"] && order["dispatchPackets"] < order["initSystemdResolvedMonitor"]) {
++		t.Fatalf("main() must start dispatchPackets right after setupQueues, before slow startup steps: %v", order)
++	}
++	// Closing wrkChan or cleaning up while the dispatcher may still send panics
++	// or stops the daemon at startup.
++	if !(order["<-dispatched"] < order["close"] && order["<-dispatched"] < order["doCleanup"]) {
++		t.Fatalf("main() must wait for the dispatcher before closing wrkChan and cleaning up: %v", order)
++	}
 +}
 diff --git a/daemon/queue_cleanup_order_test.go b/daemon/queue_cleanup_order_test.go
 new file mode 100644

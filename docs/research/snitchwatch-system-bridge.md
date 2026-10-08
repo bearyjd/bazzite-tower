@@ -354,8 +354,23 @@ Open items:
   pre-existing per-packet fail-open path.
 - A GUI Allow creates a destination-only rule (`allow if dest.ip is …`, no
   process constraint); confirm that is the intended rule shape.
-- Readiness treats an empty `opensnitch.service.d` directory as a local
-  override.
+- ~~Readiness treats an empty `opensnitch.service.d` directory as a local
+  override.~~ Fixed 2026-10-07. Under a root-only unit directory
+  (`/etc/systemd/system`, `/run/systemd/*`, `/usr/local/lib/systemd/system`),
+  an empty `.d` directory is no longer refused if it is a real directory,
+  owned `root:root` and not group- or world-writable. The decision comes from
+  one `lstat`. Still refused: any entry in it, a symlink, a non-directory,
+  wrong ownership, a writable directory, and any `.d` under a home directory,
+  because the user owns its parent. Removing that refusal also dropped an
+  accidental tripwire: a loaded drop-in deleted without `daemon-reload`
+  leaves an empty directory. So readiness now requires
+  `NeedDaemonReload=no` for the bridge service, both sockets and
+  `opensnitch.service`. That also catches a drop-in added in a directory the
+  scan does not list, such as `system.attached` or dash-prefixed names.
+  Tested in `tests/test-snitchwatch-system.py`.
+  Still open from the security review (predates this change):
+  `opensnitch.service` has no `FragmentPath`/`DropInPaths` pin, and an
+  unreadable path (EACCES) is treated as absent.
 - ~~The daemon factory and CI do not run the patch's Go tests.~~ Fixed
   2026-10-07: `just test-snitchwatch-daemon-patch` and the path-filtered
   `snitchwatch-daemon-patch.yml` workflow run them, `-race` included.

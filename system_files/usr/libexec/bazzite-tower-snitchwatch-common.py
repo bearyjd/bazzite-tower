@@ -165,8 +165,9 @@ def unit_contract(ctx):
                     ProtectKernelModules="yes", ProtectControlGroups="yes", ReadWritePaths="/run/snitchwatch-auth", StateDirectory="snitchwatch",
                     StateDirectoryMode="0700", SupplementaryGroups="", EnvironmentFiles="", RootDirectory="", RootImage="",
                     BindPaths="", BindReadOnlyPaths="", FragmentPath="/usr/lib/systemd/system/"+SERVICE, DropInPaths="", ExecStartPre="", ExecStartPost="", ExecStop="", ExecStopPost="", ExecCondition="")
-    names = [*expected, "ExecStart", "Environment", "TriggeredBy", "RestrictAddressFamilies", "MainPID"]
+    names = [*expected, "ExecStart", "Environment", "TriggeredBy", "RestrictAddressFamilies", "MainPID", "NeedDaemonReload"]
     actual = ctx.props(SERVICE, names)
+    loaded_current(SERVICE, actual)
     vendor_dropin_contract(ctx, actual["DropInPaths"])
     for name, value in expected.items():
         if name == "DropInPaths":
@@ -180,12 +181,21 @@ def unit_contract(ctx):
     require(set(actual["TriggeredBy"].split()) == set(SOCKETS), "effective bridge socket association drift")
     require(set(actual["RestrictAddressFamilies"].split()) == {"AF_UNIX", "AF_INET", "AF_INET6"}, "effective bridge address-family restriction drift")
     for unit, path, group, mode in ((SOCKETS[0], "/run/snitchwatch/opensnitchd.sock", "root", "0600"), (SOCKETS[1], "/run/snitchwatch/bridge.sock", "snitchwatch-ui", "0660")):
-        props = ctx.props(unit, ["Listen", "SocketUser", "SocketGroup", "SocketMode", "Accept", "Triggers", "FragmentPath", "DropInPaths"])
-        require(props == dict(Listen=path+" (Stream)", SocketUser="root", SocketGroup=group, SocketMode=mode, Accept="no", Triggers=SERVICE, FragmentPath="/usr/lib/systemd/system/"+unit, DropInPaths=""), "effective socket contract drift: "+unit)
-    daemon = ctx.props("opensnitch.service", ["WorkingDirectory", "Requires", "After", "ExecStart"])
+        props = ctx.props(unit, ["Listen", "SocketUser", "SocketGroup", "SocketMode", "Accept", "Triggers", "FragmentPath", "DropInPaths", "NeedDaemonReload"])
+        loaded_current(unit, props)
+        require({k: v for k, v in props.items() if k != "NeedDaemonReload"} == dict(Listen=path+" (Stream)", SocketUser="root", SocketGroup=group, SocketMode=mode, Accept="no", Triggers=SERVICE, FragmentPath="/usr/lib/systemd/system/"+unit, DropInPaths=""), "effective socket contract drift: "+unit)
+    daemon = ctx.props("opensnitch.service", ["WorkingDirectory", "Requires", "After", "ExecStart", "NeedDaemonReload"])
+    loaded_current("opensnitch.service", daemon)
     daemon_exec_contract(daemon["ExecStart"])
     require(daemon["WorkingDirectory"] == "/run/snitchwatch" and SOCKETS[0] in daemon["Requires"].split() and SOCKETS[0] in daemon["After"].split(), "OpenSnitch effective Unix socket CWD/dependencies drift")
     return actual
+
+
+def loaded_current(unit, props):
+    # systemd reports yes when a unit file or drop-in was added, changed or
+    # deleted on disk since it was loaded, including in directories the
+    # local-override scan does not list.
+    require(props["NeedDaemonReload"] == "no", unit+" changed on disk since systemd loaded it; review it, then run systemctl daemon-reload")
 
 
 def vendor_dropin_contract(ctx, value):
@@ -213,6 +223,18 @@ def config_contract(ctx, address="unix:opensnitchd.sock"):
     return config
 
 
+def inert_dropin_directory(ctx, name):
+    # systemd loads nothing from an empty drop-in directory, so under a
+    # root-only unit directory it is not an override. One lstat decides: a real
+    # directory, root:root, not group/world-writable, with no entries.
+    try:
+        info = ctx.stat(name)
+    except (FileNotFoundError, NotADirectoryError):
+        return False
+    return (stat.S_ISDIR(info.st_mode) and info.st_uid == 0 and info.st_gid == 0
+            and not info.st_mode & 0o022 and not os.listdir(ctx.path(name)))
+
+
 def local_conflicts(ctx):
     # Include control/transient/generator and default XDG search paths; an
     # immutable /usr/lib mask alone cannot defeat higher-priority user units.
@@ -221,6 +243,10 @@ def local_conflicts(ctx):
                    "/run/systemd/generator", "/usr/local/lib/systemd/system", "/run/systemd/generator.late")
     paths = [directory+"/"+unit+suffix for directory in system_dirs for unit in UNITS for suffix in ("", ".d")]
     paths.extend(directory+"/service.d" for directory in system_dirs)
+    # Only root can add or replace entries here. User-unit drop-in directories
+    # are never exempt: under a home directory the user owns the parent, so an
+    # empty one there proves nothing.
+    system_dropins = {name for name in paths if name.endswith(".d")}
     user_dirs = {"/etc/systemd/user", "/run/systemd/user", "/etc/xdg/systemd/user",
                  "/usr/local/lib/systemd/user", "/usr/local/share/systemd/user", "/usr/share/systemd/user"}
     records = ctx.command(["getent", "passwd"]).stdout.splitlines()
@@ -239,6 +265,8 @@ def local_conflicts(ctx):
             for kind in ("wants", "requires", "upholds"):
                 paths.extend("/"+str(item.relative_to(ctx.root)) for item in userdir.glob("*."+kind+"/snitchwatch-bridge.service"))
     for name in paths:
+        if name in system_dropins and inert_dropin_directory(ctx, name):
+            continue
         require(not ctx.path(name).exists() and not ctx.path(name).is_symlink(), "local unit override/enabled legacy user service: "+name)
     global_state = ctx.command(["systemctl", "--global", "is-enabled", "snitchwatch-bridge.service"], okay=(0, 1, 3, 4)).stdout.strip()
     require(global_state in ("disabled", "masked", "not-found"), "legacy global user service remains enabled: "+global_state)

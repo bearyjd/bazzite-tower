@@ -1096,7 +1096,7 @@ index 9c06aab7..d80761c8 100644
  
  #endif
 diff --git a/daemon/rule/loader.go b/daemon/rule/loader.go
-index 3d743556..d6d6e75b 100644
+index 3d743556..30205a9a 100644
 --- a/daemon/rule/loader.go
 +++ b/daemon/rule/loader.go
 @@ -105,6 +105,8 @@ func (l *Loader) Reload(path string) error {
@@ -1142,21 +1142,26 @@ index 3d743556..d6d6e75b 100644
  	l.Lock()
  	defer l.Unlock()
  
-@@ -235,10 +248,9 @@ func (l *Loader) loadRule(fileName string) error {
+@@ -235,10 +248,16 @@ func (l *Loader) loadRule(fileName string) error {
  	}
  	raw = nil
  
 -	if oldRule, found := l.rules[r.Name]; found {
 -		l.cleanListsRule(oldRule)
--	}
--
++	// Rule files bypass the UI paths that validate names; refuse (but leave
++	// on disk) a file whose name could spoof a reserved name or forge logs.
++	if err = ValidName(r.Name); err != nil {
++		log.Warning("Refusing to load rule file %q: %s", fileName, err)
++		return fmt.Errorf("Refusing rule file %q: %s", fileName, err)
+ 	}
+ 
 +	// Lists monitors start only once the rule is committed below, so a
 +	// failed compile leaves the old rule (and its list) intact.
 +	deferListsMonitors(&r)
  	if !r.Enabled {
  		// XXX: we only parse and load the Data field if the rule is disabled and the Data field is not empty
  		// the rule will remain disabled.
-@@ -260,15 +272,25 @@ func (l *Loader) loadRule(fileName string) error {
+@@ -260,15 +279,25 @@ func (l *Loader) loadRule(fileName string) error {
  		}
  	}
  	if oldRule, found := l.rules[r.Name]; found {
@@ -1183,7 +1188,7 @@ index 3d743556..d6d6e75b 100644
  	}
  
  	return nil
-@@ -291,8 +313,12 @@ func (l *Loader) deleteRule(filePath string) {
+@@ -291,8 +320,12 @@ func (l *Loader) deleteRule(filePath string) {
  }
  
  func (l *Loader) deleteRuleFromDisk(ruleName string) error {
@@ -1198,7 +1203,7 @@ index 3d743556..d6d6e75b 100644
  }
  
  // deleteOldRuleFromDisk deletes a rule from disk if the Duration changes
-@@ -306,15 +332,15 @@ func (l *Loader) deleteOldRuleFromDisk(oldRule, newRule *Rule) {
+@@ -306,15 +339,15 @@ func (l *Loader) deleteOldRuleFromDisk(oldRule, newRule *Rule) {
  }
  
  // cleanListsRule erases the lists loaded of an Operator of type Lists,
@@ -1218,7 +1223,7 @@ index 3d743556..d6d6e75b 100644
  			}
  		}
  	}
-@@ -329,10 +355,9 @@ func (l *Loader) isUniqueName(name string) bool {
+@@ -329,10 +362,9 @@ func (l *Loader) isUniqueName(name string) bool {
  	return !found
  }
  
@@ -1231,7 +1236,7 @@ index 3d743556..d6d6e75b 100644
  	idx := 1
  	base := rule.Name
  	for l.isUniqueName(rule.Name) == false {
-@@ -377,32 +402,27 @@ func (l *Loader) sortRules() {
+@@ -377,32 +409,27 @@ func (l *Loader) sortRules() {
  	sort.Strings(l.activeRules)
  }
  
@@ -1276,7 +1281,7 @@ index 3d743556..d6d6e75b 100644
  
  	if rule.Enabled {
  		if err := rule.Operator.Compile(); err != nil {
-@@ -420,19 +440,44 @@ func (l *Loader) replaceUserRule(rule *Rule) (err error) {
+@@ -420,19 +447,44 @@ func (l *Loader) replaceUserRule(rule *Rule) (err error) {
  		}
  	}
  	l.Lock()
@@ -1324,7 +1329,7 @@ index 3d743556..d6d6e75b 100644
  	if err != nil {
  		return err
  	}
-@@ -441,13 +486,14 @@ func (l *Loader) scheduleTemporaryRule(rule Rule) error {
+@@ -441,13 +493,14 @@ func (l *Loader) scheduleTemporaryRule(rule Rule) error {
  		l.Lock()
  		defer l.Unlock()
  
@@ -3707,6 +3712,144 @@ index 00000000..48d08fcf
 +	}
 +	if checks := callArgs(t, "acceptOrDeny", "uiClient", "SetIsAsking"); len(checks) != 1 {
 +		t.Fatalf("acceptOrDeny should only release the slot with SetIsAsking(false), found %d calls", len(checks))
++	}
++}
+diff --git a/daemon/rule/loader_name_validation_test.go b/daemon/rule/loader_name_validation_test.go
+new file mode 100644
+index 00000000..32b74df7
+--- /dev/null
++++ b/daemon/rule/loader_name_validation_test.go
+@@ -0,0 +1,132 @@
++package rule
++
++import (
++	"encoding/json"
++	"os"
++	"path/filepath"
++	"testing"
++	"time"
++)
++
++func ruleFileJSON(t *testing.T, name string) []byte {
++	t.Helper()
++	raw, err := json.Marshal(map[string]interface{}{
++		"name":       name,
++		"enabled":    true,
++		"precedence": false,
++		"action":     "allow",
++		"duration":   "always",
++		"operator": map[string]interface{}{
++			"type":      "simple",
++			"operand":   "process.path",
++			"sensitive": false,
++			"data":      "/usr/bin/true",
++			"list":      []interface{}{},
++		},
++	})
++	if err != nil {
++		t.Fatal(err)
++	}
++	return raw
++}
++
++func hasRule(l *Loader, name string) bool {
++	l.RLock()
++	defer l.RUnlock()
++	_, ok := l.rules[name]
++	return ok
++}
++
++// Rule files are written by root, but they bypass the UI paths that call
++// ValidName; the reserved name "" must not be loadable from disk.
++func TestLoadRefusesInvalidRuleNamesFromDisk(t *testing.T) {
++	bad := map[string]string{
++		"empty":     "",
++		"slash":     "a/b",
++		"newline":   "a\nb",
++		"too-long":  longName(),
++		"dot":       ".",
++		"backslash": `a\b`,
++	}
++	dir := t.TempDir()
++	for file, name := range bad {
++		if err := os.WriteFile(filepath.Join(dir, file+".json"), ruleFileJSON(t, name), 0600); err != nil {
++			t.Fatal(err)
++		}
++	}
++	good := filepath.Join(dir, "good.json")
++	if err := os.WriteFile(good, ruleFileJSON(t, "good"), 0600); err != nil {
++		t.Fatal(err)
++	}
++
++	l, err := NewLoader(false)
++	if err != nil {
++		t.Fatal(err)
++	}
++	if err := l.Load(dir); err != nil {
++		t.Fatal(err)
++	}
++	if !hasRule(l, "good") {
++		t.Error("valid rule file was not loaded")
++	}
++	if n := l.NumRules(); n != 1 {
++		t.Errorf("only the valid rule should load, got %d rules", n)
++	}
++	for file, name := range bad {
++		if hasRule(l, name) {
++			t.Errorf("rule file %s.json with invalid name %q was loaded", file, name)
++		}
++		if err := l.loadRule(filepath.Join(dir, file+".json")); err == nil {
++			t.Errorf("loadRule(%s.json) accepted invalid name %q", file, name)
++		}
++	}
++	for file := range bad {
++		if _, err := os.Stat(filepath.Join(dir, file+".json")); err != nil {
++			t.Errorf("refused file %s.json must be left on disk: %s", file, err)
++		}
++	}
++}
++
++func longName() string {
++	b := make([]byte, maxNameBytes+1)
++	for i := range b {
++		b[i] = 'a'
++	}
++	return string(b)
++}
++
++func TestLiveReloadRefusesInvalidRuleName(t *testing.T) {
++	dir := t.TempDir()
++	l, err := NewLoader(true)
++	if err != nil {
++		t.Fatal(err)
++	}
++	if err := l.Load(dir); err != nil {
++		t.Fatal(err)
++	}
++	// wait for the watcher to be registered
++	time.Sleep(time.Second)
++
++	for file, name := range map[string]string{"empty": "", "slash": "a/b", "newline": "a\nb"} {
++		if err := os.WriteFile(filepath.Join(dir, file+".json"), ruleFileJSON(t, name), 0600); err != nil {
++			t.Fatal(err)
++		}
++	}
++	// events are handled in order, so once the sentinel is in, the bad ones were processed
++	if err := os.WriteFile(filepath.Join(dir, "sentinel.json"), ruleFileJSON(t, "sentinel"), 0600); err != nil {
++		t.Fatal(err)
++	}
++	deadline := time.Now().Add(5 * time.Second)
++	for !hasRule(l, "sentinel") && time.Now().Before(deadline) {
++		time.Sleep(50 * time.Millisecond)
++	}
++	if !hasRule(l, "sentinel") {
++		t.Fatal("live reload did not pick up the valid rule")
++	}
++	if n := l.NumRules(); n != 1 {
++		t.Errorf("live reload loaded a rule with an invalid name; %d rules", n)
++	}
++	if hasRule(l, "") {
++		t.Error("rule named \"\" loaded on live reload")
 +	}
 +}
 diff --git a/daemon/rule/name.go b/daemon/rule/name.go

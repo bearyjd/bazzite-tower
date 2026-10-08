@@ -86,7 +86,7 @@ class DaemonBuildContracts(unittest.TestCase):
         self.assertEqual(sha(pins_bytes), real['EXPECTED_PINS_SHA256'])
         pins = json.loads(pins_bytes)
         self.assertEqual(sha((FACTORY / 'snitchwatch-system-daemon-shutdown.patch').read_bytes()), pins['patchSha256'])
-        self.assertEqual(len(pins['patchedFiles']), 49)
+        self.assertEqual(len(pins['patchedFiles']), 50)
 
     def test_valid_complete_readonly_default_check(self):
         before = {str(p): p.read_bytes() for p in self.root.rglob('*') if p.is_file()}

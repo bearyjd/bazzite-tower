@@ -531,6 +531,9 @@ Open items:
   is used because rule-name validation refuses it, while `<default>` is a
   legal rule name. The Event ring also no longer evicts an older Event for a
   miss that records nothing (a change from upstream).
+  The rule loader also refuses rule files whose name fails the same
+  validation, at startup and on live reload (logged, file left in place),
+  so a root-written file named `""` cannot pose as that synthetic rule.
 - ~~The daemon factory and CI do not run the patch's Go tests.~~ Fixed
   2026-10-07: `just test-snitchwatch-daemon-patch` and the path-filtered
   `snitchwatch-daemon-patch.yml` workflow run them, `-race` included.

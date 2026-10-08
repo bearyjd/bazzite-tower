@@ -239,7 +239,9 @@ reconciled candidate pinned `5c2b44adece96008e973947a9551b700b8d8a15b`, tree
 `670f42c` (Snitchwatch PR #39: #47 pause fixes, #44 app-bound prompt rules) and
 on 2026-10-08 to `4b3ba5246b0e1401ae2cd6d8ea144107081e80a0` (tree
 `c3f08c67…`: honest UI, rule-name validation, timed session-scoped pause,
-Rules page listing every daemon rule), and OpenSnitch submodule
+Rules page listing every daemon rule), then to
+`b5238dc9bb699be9792c13c75ca019ab091bd9de` (tree `cbd56f4b…`: #63 bridge-side
+operator-shape validation, #66 flat tray menu), and OpenSnitch submodule
 `b404c4c6316760fa7bc415509d3f8d747f7dc9cc`. A fresh Fedora 44 native factory
 build produced actual CLI version 0.1.1; a second fresh source/target build
 reproduced the artifact bytes. The Fedora 43 binary used by the October 5
@@ -379,7 +381,16 @@ Open items:
   incident itself was not reproduced. On the VM (r5, same stress script,
   every core saturated, no GUI so each Ask takes the hand-off) r5 logged 0
   channel-2 timeouts and 0 lost requeues in 900 attempts; the r4 control
-  logged 3 in 900.
+  logged 3 in 900. That result holds without nftables base-chain changes.
+  Under chain churn the hand-off can still time out: the r7 VM logged 52
+  "requeued packet not received" lines during the teardown stress (20
+  restarts while a loop adds and deletes a base chain) and one at each of
+  2 of 10 boots; r6's disk log shows the same (44, and 4 boots). The
+  restart-under-load and requeue-stress controls logged 0. The working
+  hypothesis is that unregistering a base chain makes the kernel flush
+  queued entries with a drop verdict, so the requeued packet is dropped and
+  the "fail-open" wording of that log line is wrong. This is not yet proven
+  and is tracked for r8.
   The primary queue keeps upstream's 1 ms. It was mis-attributed on 2026-10-07 to a separate
   startup window, which the patch now closes as hardening (owner's choice of
   option). The queue's reader started in `setupQueues`, but packets reached the
@@ -519,6 +530,22 @@ changed on disk after the daemon's HELLO appear only after a reconnect
 (#65). A connection's own retransmits are held while its prompt is open;
 only a different pending Ask makes new connections fall to the default
 action. Evidence: `output/snitchwatch-fresh-vm-r6.Ywa9O5/R6-VM-ACCEPTANCE-RESULT.json`.
+
+Status for the `01ccefa` (r7) candidate (35-file daemon patch adding the
+UI-channel operator type/operand guard, Snitchwatch `b5238dc`, GUI rebuilt
+offline at app commit `f582bc14`) in the disposable VM (2026-10-08 UTC):
+independent image review PASS; every headless phase PASS; 10 graphical cold
+boots clean; 0 AVC, no core dumps, 0 refused notification actions. From the
+real Plasma tray: the exported dbusmenu is flat and enables either the three
+Pause items or "Resume filtering (until HH:MM)"; "Pause for 5 minutes" sets
+FilterOff for 300 s as uid 1000 and auto-allows without writing a rule;
+Resume ends it early and prompting returns; an unattended pause expires at
++300.0 s; the menu works from the keyboard. Rules-page toggles still save
+after #63. The daemon's operator guard is not reachable from the GUI (the
+bridge already refuses those shapes), so it is covered only by unit tests
+and the patch gate. Still open: #65, and the hand-off timeout under chain
+churn described above. Evidence:
+`output/snitchwatch-fresh-vm-r7.BijrNa/R7-VM-ACCEPTANCE-RESULT.json`.
 
 The fixed target-image acceptance limits are 5 seconds for no-GUI fallback,
 2 seconds for pending cleanup and 15 seconds for daemon stop. Preserve the

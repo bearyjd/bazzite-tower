@@ -13,7 +13,7 @@
     "daemon/go.mod": "556fe4926644b3eeb5e0e5212d5b66d88f1476480508a9337a7b71e3b034626a",
     "daemon/go.sum": "eded94c59f8e572018f7f5a845a6ec0e6ecd8671d55802ee37d619d831128d41"
   },
-  "patchSha256": "4419cc2e5b4da0f5e01c804701bab736af490465829c34285f5498de42dc43a9",
+  "patchSha256": "63c1bf5a25676939c611a63ee9e90a46c0051d06b5651565fcbbeed8dcc7fba7",
   "patchedFiles": {
     "daemon/firewall/nftables/chains.go": "bc26d889f83d4f2a14d19f8ec4ebe39d66dc2cae2d95e41627d2acb0fe0b6825",
     "daemon/firewall/nftables/nftables.go": "18614f9fc0d7497070e098a6b10bf3d19f3af4c8df281285329e9c36c1309c0f",
@@ -37,6 +37,9 @@
     "daemon/queue_cleanup_order_test.go": "c180b0f62b435298cb903a34616fbe61a5931b6a16eaf1d9ca9e6456fb9fd1bc",
     "daemon/reader_failure_test.go": "ca10e0986dcc60e3fd94a2720695085c0d3435b05213a75df5f79c72666d9a11",
     "daemon/repeat_handoff_test.go": "a6939b8f186e82d580f6c413bd8beb3d096fe696fe4a31409c982bc63d9a5360",
+    "daemon/rule/loader.go": "facd66c22a4643d00626db02928c80a485c8de584f5d8a13d0f381f53d289c0f",
+    "daemon/rule/name.go": "5f6e4dbe9b918b532b64f990e2e50adbafa82f1b92c409c5e674420f0a766b83",
+    "daemon/rule/rule_name_test.go": "cd59cb961f8ac8d1504f82f2ac14f1441b88dd1a1a5a574a2e871ae9cf73cb13",
     "daemon/shutdown_signal_test.go": "42f5800c15c9c61d43f39dff3099b270f6ce9204b04ef7685e8af5bc53931e97",
     "daemon/ui/client.go": "819ceaa7b5f4082b78f32db1925918429f28b61c97a122f1c5f2c385219e1dfd",
     "daemon/ui/client_asking_test.go": "1bb07f716ebf78159fa0adf1fe8d27bcf8eda4b5c3c729713d2bb79307687fc4",

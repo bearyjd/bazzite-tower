@@ -961,6 +961,55 @@ index 9c06aab7..d80761c8 100644
  }
  
  #endif
+diff --git a/daemon/rule/loader.go b/daemon/rule/loader.go
+index 3d743556..1d4c4772 100644
+--- a/daemon/rule/loader.go
++++ b/daemon/rule/loader.go
+@@ -157,6 +157,9 @@ func (l *Loader) Load(path string) error {
+ 
+ // Add adds a rule to the list of rules, and optionally saves it to disk.
+ func (l *Loader) Add(rule *Rule, saveToDisk bool) error {
++	if err := ValidName(rule.Name); err != nil {
++		return err
++	}
+ 	l.addUserRule(rule)
+ 	if saveToDisk {
+ 		fileName := filepath.Join(l.Path, fmt.Sprintf("%s.json", rule.Name))
+@@ -167,6 +170,9 @@ func (l *Loader) Add(rule *Rule, saveToDisk bool) error {
+ 
+ // Replace adds a rule to the list of rules, and optionally saves it to disk.
+ func (l *Loader) Replace(rule *Rule, saveToDisk bool) error {
++	if err := ValidName(rule.Name); err != nil {
++		return err
++	}
+ 	if err := l.replaceUserRule(rule); err != nil {
+ 		return err
+ 	}
+@@ -200,6 +206,9 @@ func (l *Loader) Save(rule *Rule, path string) error {
+ // If the duration is Always (i.e: saved on disk), it'll attempt to delete
+ // it from disk.
+ func (l *Loader) Delete(ruleName string) error {
++	if err := ValidName(ruleName); err != nil {
++		return err
++	}
+ 	l.Lock()
+ 	defer l.Unlock()
+ 
+@@ -291,8 +300,12 @@ func (l *Loader) deleteRule(filePath string) {
+ }
+ 
+ func (l *Loader) deleteRuleFromDisk(ruleName string) error {
+-	path := fmt.Sprint(l.Path, "/", ruleName, ".json")
+-	return os.Remove(path)
++	// Rules loaded from disk take their name from the file's contents, so
++	// validate here too: every caller that removes a file goes through this.
++	if err := ValidName(ruleName); err != nil {
++		return err
++	}
++	return os.Remove(filepath.Join(l.Path, ruleName+".json"))
+ }
+ 
+ // deleteOldRuleFromDisk deletes a rule from disk if the Duration changes
 diff --git a/daemon/ui/client.go b/daemon/ui/client.go
 index b4d6845b..a88a6ee9 100644
 --- a/daemon/ui/client.go
@@ -2545,6 +2594,126 @@ index 00000000..48d08fcf
 +	}
 +	if checks := callArgs(t, "acceptOrDeny", "uiClient", "SetIsAsking"); len(checks) != 1 {
 +		t.Fatalf("acceptOrDeny should only release the slot with SetIsAsking(false), found %d calls", len(checks))
++	}
++}
+diff --git a/daemon/rule/name.go b/daemon/rule/name.go
+new file mode 100644
+index 00000000..753b883d
+--- /dev/null
++++ b/daemon/rule/name.go
+@@ -0,0 +1,29 @@
++package rule
++
++import (
++	"fmt"
++	"unicode"
++	"unicode/utf8"
++)
++
++// maxNameBytes keeps "<name>.json" well under NAME_MAX; the Snitchwatch bridge
++// enforces the same limit.
++const maxNameBytes = 200
++
++// ValidName reports whether a rule name is safe to use as a file name inside
++// the rules directory. Names arrive over the UI channel and the daemon, as
++// root, builds rule file paths from them, so a name must not be able to
++// leave that directory or forge log lines.
++func ValidName(name string) error {
++	if name == "" || name == "." || name == ".." || len(name) > maxNameBytes || !utf8.ValidString(name) {
++		return fmt.Errorf("invalid rule name %q", name)
++	}
++	for _, r := range name {
++		// Format (bidi overrides, zero-width) and line/paragraph separators
++		// cannot escape the directory but can spoof names in logs and the UI.
++		if r == '/' || r == '\\' || unicode.IsControl(r) || unicode.In(r, unicode.Cf, unicode.Zl, unicode.Zp) {
++			return fmt.Errorf("invalid rule name %q", name)
++		}
++	}
++	return nil
++}
+diff --git a/daemon/rule/rule_name_test.go b/daemon/rule/rule_name_test.go
+new file mode 100644
+index 00000000..4310ab74
+--- /dev/null
++++ b/daemon/rule/rule_name_test.go
+@@ -0,0 +1,79 @@
++package rule
++
++import (
++	"os"
++	"path/filepath"
++	"strings"
++	"testing"
++)
++
++// The daemon runs as root and builds rule file paths from rule names that
++// arrive from the UI channel, so a name must never leave the rules directory.
++func TestLoaderRefusesRuleNamesOutsideTheRulesDir(t *testing.T) {
++	base := t.TempDir()
++	rulesDir := filepath.Join(base, "rules")
++	if err := os.Mkdir(rulesDir, 0700); err != nil {
++		t.Fatal(err)
++	}
++	victim := filepath.Join(base, "default-config.json")
++	if err := os.WriteFile(victim, []byte("{}\n"), 0600); err != nil {
++		t.Fatal(err)
++	}
++	l, err := NewLoader(false)
++	if err != nil {
++		t.Fatal(err)
++	}
++	if err := l.Load(rulesDir); err != nil {
++		t.Fatal(err)
++	}
++	op, _ := NewOperator(Simple, false, OpTrue, "", nil)
++	op.Compile()
++	bad := []string{"../default-config", "../../tmp/x", "a/b", `a\b`, "..", ".", "", "x\nforged log line", "x\x00y",
++		strings.Repeat("a", 201), strings.Repeat("é", 101), "spoof\u202egnp", "zero\u200bwidth", "line\u2028sep", "x\xffy"}
++	for _, name := range bad {
++		if err := l.Add(Create(name, "", true, false, false, Deny, Always, op), true); err == nil {
++			t.Errorf("Add accepted rule name %q", name)
++		}
++		if err := l.Replace(Create(name, "", true, false, false, Deny, Always, op), true); err == nil {
++			t.Errorf("Replace accepted rule name %q", name)
++		}
++		if l.GetAll()[name] != nil {
++			t.Errorf("rule name %q reached the in-memory rule set", name)
++		}
++	}
++	// A rule already in memory under a bad name (e.g. loaded before this
++	// check existed) must not steer a delete outside the rules directory.
++	l.Lock()
++	l.rules["../default-config"] = Create("../default-config", "", true, false, false, Deny, Always, op)
++	l.Unlock()
++	if err := l.Delete("../default-config"); err == nil {
++		t.Error("Delete accepted a traversal rule name")
++	}
++	if _, err := os.Stat(victim); err != nil {
++		t.Fatalf("file outside the rules directory was touched: %v", err)
++	}
++	if entries, _ := os.ReadDir(base); len(entries) != 2 {
++		t.Fatalf("files created outside the rules directory: %v", entries)
++	}
++	// A rule loaded from disk carries the name from the file's contents, not
++	// its file name; turning it temporary must not delete outside the dir.
++	l.Lock()
++	l.rules["../default-config"] = Create("../default-config", "", true, false, false, Deny, Always, op)
++	l.Unlock()
++	l.deleteOldRuleFromDisk(l.GetAll()["../default-config"], Create("../default-config", "", true, false, false, Deny, Restart, op))
++	if _, err := os.Stat(victim); err != nil {
++		t.Fatalf("a disk-loaded rule name deleted a file outside the rules directory: %v", err)
++	}
++	for _, name := range []string{strings.Repeat("a", 200), strings.Repeat("é", 100), "größe-über-straße"} {
++		if err := ValidName(name); err != nil {
++			t.Errorf("valid name %q refused: %v", name, err)
++		}
++	}
++	good := "snitchwatch-allow-10.0.2.2-f9292b96ff7d66ab-49190-pcurl-f0da955d46aa49e3"
++	if err := l.Add(Create(good, "", true, false, false, Allow, Always, op), true); err != nil {
++		t.Fatalf("valid rule name refused: %v", err)
++	}
++	if _, err := os.Stat(filepath.Join(rulesDir, good+".json")); err != nil {
++		t.Fatalf("valid rule not saved: %v", err)
 +	}
 +}
 diff --git a/daemon/shutdown_signal_test.go b/daemon/shutdown_signal_test.go

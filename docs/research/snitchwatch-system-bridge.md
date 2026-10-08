@@ -424,6 +424,16 @@ Open items:
   (EACCES, ELOOP, EIO) is refused instead of treated as absent. The pinned
   values match the r5 VM's `systemctl show`, and the hardened helper passed
   readiness there.
+- Rule names from the UI channel reached root file paths unvalidated
+  (`../default-config` made the daemon write or delete outside
+  `/etc/opensnitchd/rules`). Fixed in both layers on 2026-10-08: the bridge
+  (Snitchwatch #57) and, as defence in depth, the 29-file daemon patch, which
+  validates names in `Add`, `Replace`, `Delete` and `deleteRuleFromDisk` (no
+  separators, control, format or line-separator characters, at most 200
+  bytes). Still open, not reachable through the bridge: the daemon's
+  `CHANGE_CONFIG` notification can move `Rules.Path` and other path fields;
+  the bridge only ever sends `CHANGE_RULE`/`DELETE_RULE` (guarded by a
+  Snitchwatch test), and a daemon-side guard is a follow-up.
 - ~~The daemon factory and CI do not run the patch's Go tests.~~ Fixed
   2026-10-07: `just test-snitchwatch-daemon-patch` and the path-filtered
   `snitchwatch-daemon-patch.yml` workflow run them, `-race` included.

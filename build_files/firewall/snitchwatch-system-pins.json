@@ -20,7 +20,7 @@
   "protocVersion": "3.19.6",
   "rustVersion": "1.98.1",
   "schemaVersion": 1,
-  "sourceCommit": "4b3ba5246b0e1401ae2cd6d8ea144107081e80a0",
+  "sourceCommit": "b5238dc9bb699be9792c13c75ca019ab091bd9de",
   "sourceFiles": {
     "packaging/flatpak/org.snitchwatch.Snitchwatch.system.yml": "a170b2ecb6ef191cca2b4571ea1f6b4a8bf09cd58bd5ad4c7ec9db57100da8ae",
     "packaging/release/bridge_artifact.py": "6a82d12348772446d57ca0163d0b31fadf268db2345b6de3db485896d279d3e2",
@@ -36,6 +36,6 @@
     "packaging/system/stage.sh": "f08d84df9c3b9022e65cdcb19a0596c74d6182171bc4f983878af8f703b142a6"
   },
   "sourceRepository": "https://github.com/bearyjd/snitchwatch.git",
-  "sourceTree": "c3f08c6764cab2d38af8ff9f7b0c4e1fce59260c",
+  "sourceTree": "cbd56f4b96312b93f21e0134764bcbb1a23f3c77",
   "submoduleCommit": "b404c4c6316760fa7bc415509d3f8d747f7dc9cc"
 }

@@ -241,7 +241,10 @@ on 2026-10-08 to `4b3ba5246b0e1401ae2cd6d8ea144107081e80a0` (tree
 `c3f08c67…`: honest UI, rule-name validation, timed session-scoped pause,
 Rules page listing every daemon rule), then to
 `b5238dc9bb699be9792c13c75ca019ab091bd9de` (tree `cbd56f4b…`: #63 bridge-side
-operator-shape validation, #66 flat tray menu), and OpenSnitch submodule
+operator-shape validation, #66 flat tray menu), then to
+`b224adf1cbaa0965ab5d49a4ce4754d20d0c4f8d` (tree `05a640e6…`: #74 inline Deny as
+an app-bound until-restart rule, #45 PR A blocklist plumbing, bridge unit
+`MemoryMax=512M`), and OpenSnitch submodule
 `b404c4c6316760fa7bc415509d3f8d747f7dc9cc`. A fresh Fedora 44 native factory
 build produced actual CLI version 0.1.1; a second fresh source/target build
 reproduced the artifact bytes. The Fedora 43 binary used by the October 5
@@ -389,8 +392,8 @@ Open items:
   restart-under-load and requeue-stress controls logged 0. The working
   hypothesis is that unregistering a base chain makes the kernel flush
   queued entries with a drop verdict, so the requeued packet is dropped and
-  the "fail-open" wording of that log line is wrong. This is not yet proven
-  and is tracked for r8.
+  the "fail-open" wording of that log line is wrong. The r8 churn-only probe
+  on a deny-by-default VM confirmed it: 6 timeouts, 0 connections passed.
   The primary queue keeps upstream's 1 ms. It was mis-attributed on 2026-10-07 to a separate
   startup window, which the patch now closes as hardening (owner's choice of
   option). The queue's reader started in `setupQueues`, but packets reached the
@@ -546,6 +549,25 @@ bridge already refuses those shapes), so it is covered only by unit tests
 and the patch gate. Still open: #65, and the hand-off timeout under chain
 churn described above. Evidence:
 `output/snitchwatch-fresh-vm-r7.BijrNa/R7-VM-ACCEPTANCE-RESULT.json`.
+
+Status for the `20be83f` (r8) candidate (daemon patch unchanged from r7,
+Snitchwatch `b224adf`, GUI rebuilt offline at app commit `6842ca15`) in the
+disposable VM (2026-10-08 UTC): independent image review PASS; every headless
+phase PASS; 10 graphical cold boots clean; 0 AVC, no core dumps, 0 refused
+notification actions. With `DefaultAction` set to deny in the VM only:
+inline Deny stores one app-bound rule (program path and destination) for
+"until restart", in memory only; it blocks the program's retries, leaves other
+programs to the same host prompting, survives other prompts and is gone after
+a daemon restart. Deleting it on the Rules page restores prompting; "Deny all"
+makes one rule per host; a Deny with the bridge down says it was not sent; the
+tray pause, resume and 300 s expiry still work. A churn-only probe on the
+deny-by-default VM (6 hand-off timeouts, 0 of 40 connections passed, 0 stale
+requeues accepted) shows the requeued packet is dropped under chain churn, so
+the daemon's "fail-open" log wording is wrong rather than a bypass. Findings:
+a prompt pending before a pause keeps the prompt slot (Snitchwatch #78), and
+stopping `snitchwatch-system-bridge-grpc.socket` also stops `opensnitch.service`
+(its drop-in `Requires=` the socket) until it is started by hand. Evidence:
+`output/snitchwatch-fresh-vm-r8.xZd346/R8-VM-ACCEPTANCE-RESULT.json`.
 
 The fixed target-image acceptance limits are 5 seconds for no-GUI fallback,
 2 seconds for pending cleanup and 15 seconds for daemon stop. Preserve the

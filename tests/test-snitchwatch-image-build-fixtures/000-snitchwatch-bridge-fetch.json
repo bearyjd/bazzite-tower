@@ -1,0 +1,47 @@
+{
+  "created": "2026-10-08T00:00:00Z",
+  "updated": "2026-10-08T00:00:00Z",
+  "name": "000-snitchwatch-bridge-fetch",
+  "description": "Shipped by Snitchwatch: lets the system bridge (/usr/bin/snitchwatch-bridge-cli, account snitchwatch) download blocklists over HTTPS (TCP port 443). Deny rules and blocklists still win.",
+  "action": "allow",
+  "duration": "always",
+  "operator": {
+    "operand": "list",
+    "data": "",
+    "type": "list",
+    "sensitive": false,
+    "list": [
+      {
+        "operand": "process.path",
+        "data": "/usr/bin/snitchwatch-bridge-cli",
+        "type": "simple",
+        "sensitive": true,
+        "list": []
+      },
+      {
+        "operand": "user.name",
+        "data": "snitchwatch",
+        "type": "simple",
+        "sensitive": false,
+        "list": []
+      },
+      {
+        "operand": "dest.port",
+        "data": "443",
+        "type": "simple",
+        "sensitive": false,
+        "list": []
+      },
+      {
+        "operand": "protocol",
+        "data": "^tcp6?$",
+        "type": "regexp",
+        "sensitive": false,
+        "list": []
+      }
+    ]
+  },
+  "enabled": true,
+  "precedence": false,
+  "nolog": false
+}

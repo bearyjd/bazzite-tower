@@ -119,6 +119,9 @@ else:
  assert open("/proc/"+str(pid)+"/cmdline","rb").read()==b"/usr/bin/opensnitchd\0"
  status=dict(line.split(":",1) for line in open("/proc/"+str(pid)+"/status") if ":" in line)
  assert status.get("Uid","").split()==["0"]*4'
+    # shellcheck disable=SC2016 # Expanded by the inner shell.
+    hard "shipped bridge fetch rule is a regular 0644 file" \
+        bash -c 'f=/etc/opensnitchd/rules/000-snitchwatch-bridge-fetch.json; [[ -f "$f" && ! -L "$f" && "$(stat -c %a "$f")" == 644 ]]'
     hard "system bridge user resolves" id snitchwatch
     hard "system GUI group resolves" getent group snitchwatch-ui
     hard "sysusers and tmpfiles setup completed" \

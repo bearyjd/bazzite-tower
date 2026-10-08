@@ -244,13 +244,45 @@ Rules page listing every daemon rule), then to
 operator-shape validation, #66 flat tray menu), then to
 `b224adf1cbaa0965ab5d49a4ce4754d20d0c4f8d` (tree `05a640e6…`: #74 inline Deny as
 an app-bound until-restart rule, #45 PR A blocklist plumbing, bridge unit
-`MemoryMax=512M`), and OpenSnitch submodule
+`MemoryMax=512M`), then to the r9 candidate
+`c088132d19d1619f16d9752a036c1dc2ba365677` (tree `3b366b74…`: headline
+#90 hardened profile/blocklist store opening, #89 rule import/export with a
+dry-run preview, #93 pausing lets waiting connections through once, #95 a
+pause-answer test fix, and #91 the shipped fetch rule below; the range from
+`b224adf` also carries #76 blocklist enforcement, #79, #81, #84, #86, #87 and
+smaller fixes), and OpenSnitch submodule
 `b404c4c6316760fa7bc415509d3f8d747f7dc9cc`. A fresh Fedora 44 native factory
 build produced actual CLI version 0.1.1; a second fresh source/target build
 reproduced the artifact bytes. The Fedora 43 binary used by the October 5
 disposable VM and the divergent published v0.1.1 user-service release are
 not image deployment inputs. Original schema1 artifact evidence and the
 installed system-overlay provenance remain separate.
+
+From r9 the system variant also ships the one opensnitchd rule Snitchwatch
+owns, `/etc/opensnitchd/rules/000-snitchwatch-bridge-fetch.json` (0644, staged
+by upstream `packaging/system/stage.sh`, pinned in `sourceFiles` and in the
+installed manifest). It is an `allow`/`always` rule that matches only when all
+four hold: process path `/usr/bin/snitchwatch-bridge-cli`, user `snitchwatch`,
+destination port 443 and protocol `tcp`/`tcp6`. It lets the system bridge
+download blocklists under a future `DefaultAction: deny`. Threat notes, checked
+against the pinned OpenSnitch source (`daemon/rule/loader.go`,
+`operator.go`; the downstream patch leaves `FindFirstMatch` and the
+`user.name` lookup alone, and its UI-rule shape gate (`validateUIRule`)
+applies only to rules received over the UI channel, not to rules loaded from
+disk; the rule's name passes its `ValidName` check):
+`precedence: false`, so `FindFirstMatch` keeps scanning after it matches and
+any matching deny/reject rule, including Snitchwatch blocklist rules, still
+wins. The `user.name` operand is resolved with `user.Lookup` when the rule
+loads; if the `snitchwatch` account is missing at that moment the rule fails
+to compile and is skipped, never broadened. It is the only `/etc` path
+`verify-system-manifest.py` reads (an explicit constant; symlink and `..`
+checks kept). Because `/etc` is mutable on a booted bootc system, editing,
+re-moding or deleting it makes the verifier, and therefore the smoke/boot
+checks, refuse with a message naming it as the reserved, image-pinned rule.
+The RPM's own `/etc/opensnitchd/rules` is `drwxr-xr-x root root`
+(`rpm -qlvp` of the pinned 1.8.0 RPM; the RPM does not own
+`/etc/opensnitchd` itself) and `install -D` creates both staged parents 0755
+regardless of umask, so the overlay `COPY` does not change their modes.
 
 `SNITCHWATCH_BRIDGE=legacy` remains the default. The explicit `system` candidate
 requires `FIREWALL_DAEMON=opensnitch`, installs the native bridge and system

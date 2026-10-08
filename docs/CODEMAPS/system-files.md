@@ -57,8 +57,11 @@ an opt-in native system deployment.
 The system installer stages release-owned assets instead of duplicating them
 under `system_files/`: `/usr/bin/snitchwatch-bridge-cli`,
 `snitchwatch-system-bridge.service`, `snitchwatch-system-bridge-grpc.socket`,
-`snitchwatch-system-bridge-gui.socket`, `/usr/lib/sysusers.d/snitchwatch.conf`
-and `/usr/lib/tmpfiles.d/snitchwatch.conf`. Accounts are named `snitchwatch`
+`snitchwatch-system-bridge-gui.socket`, `/usr/lib/sysusers.d/snitchwatch.conf`,
+`/usr/lib/tmpfiles.d/snitchwatch.conf` and the one shipped opensnitchd rule
+`/etc/opensnitchd/rules/000-snitchwatch-bridge-fetch.json` (bridge HTTPS
+blocklist fetch; pinned, and the only `/etc` file the manifest verifier reads,
+so a local edit or delete fails verification). Accounts are named `snitchwatch`
 and `snitchwatch-ui`; numeric IDs are allocated by sysusers. The protected IPC
 and auth directories use `/run/snitchwatch` and `/run/snitchwatch-auth`; no GUI
 user membership is baked in. Licensing lives under

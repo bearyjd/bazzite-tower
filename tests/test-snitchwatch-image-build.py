@@ -8,6 +8,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import runpy
 import shutil
 import subprocess
 import tempfile
@@ -17,6 +18,7 @@ ROOT = Path(__file__).resolve().parents[1]
 FACTORY = ROOT / 'build_files/firewall'
 FIXTURES = Path(__file__).with_name('test-snitchwatch-image-build-fixtures')
 MANIFEST = 'usr/share/snitchwatch/system-bridge-manifest.json'
+FETCH_RULE = 'etc/opensnitchd/rules/000-snitchwatch-bridge-fetch.json'
 sha = lambda data: hashlib.sha256(data).hexdigest()
 
 
@@ -46,6 +48,7 @@ class ImageBuildContracts(unittest.TestCase):
         for name, directory in units.items():
             target = 'snitchwatch.conf' if name.endswith('.sysusers') else name
             self.write(directory + target, (FIXTURES / name).read_bytes())
+        self.write(FETCH_RULE, (FIXTURES / '000-snitchwatch-bridge-fetch.json').read_bytes())
         for name in ['LICENSE', 'LICENSE.opensnitch', 'THIRD-PARTY-LICENSES.md']:
             self.write('usr/share/licenses/snitchwatch-bridge/' + name, 'License metadata fixture\n')
         self.write('usr/share/bazzite-tower/snitchwatch-bridge-profile', 'system\n')
@@ -88,7 +91,7 @@ class ImageBuildContracts(unittest.TestCase):
     def test_valid_complete_fixture_is_read_only(self):
         before = {str(p): p.read_bytes() for p in self.root.rglob('*') if p.is_file() and not p.is_symlink()}
         result = self.check(valid=True)
-        self.assertEqual(json.loads(result.stdout)['verifiedFiles'], 20)
+        self.assertEqual(json.loads(result.stdout)['verifiedFiles'], 21)
         self.assertEqual(before, {str(p): p.read_bytes() for p in self.root.rglob('*') if p.is_file() and not p.is_symlink()})
 
     def test_binary_tamper(self):
@@ -103,6 +106,60 @@ class ImageBuildContracts(unittest.TestCase):
         self.manifest['files']['/etc/shadow'] = '0' * 64
         result = self.check()
         self.assertIn('inventory', result.stderr)
+
+    def test_fetch_rule_fixture_is_the_pinned_source(self):
+        pinned = self.pins['sourceFiles']['packaging/bluebuild/files/system/etc/opensnitchd/rules/000-snitchwatch-bridge-fetch.json']
+        self.assertEqual(sha((FIXTURES / '000-snitchwatch-bridge-fetch.json').read_bytes()), pinned)
+        self.assertEqual(self.manifest['files']['/' + FETCH_RULE], pinned)
+
+    def test_read_file_allows_only_the_fetch_rule_under_etc(self):
+        module = runpy.run_path(str(FACTORY / 'snitchwatch-system-verify.py'))
+        self.write('etc/opensnitchd/rules/other.json', '{}')
+        self.write('etc/shadow', 'x')
+        for name in ['/etc/shadow', '/etc/opensnitchd/rules/other.json', '/etc/opensnitchd/rules/../rules/000-snitchwatch-bridge-fetch.json', '/usr/../etc/shadow']:
+            with self.subTest(name=name), self.assertRaisesRegex(ValueError, 'invalid immutable file path'):
+                module['read_file'](self.root, name)
+        self.assertEqual(module['read_file'](self.root, '/' + FETCH_RULE), (self.root / FETCH_RULE).read_bytes())
+
+    def test_self_consistent_fetch_rule_edit(self):
+        # Manifest updated to match: only the pinned-source comparison can catch it.
+        rule = json.loads((self.root / FETCH_RULE).read_text())
+        rule['operator']['list'] = [op for op in rule['operator']['list'] if op['operand'] != 'dest.port']
+        self.write(FETCH_RULE, json.dumps(rule)); self.update_hash(FETCH_RULE)
+        result = self.check()
+        self.assertIn('system overlay differs from pinned source: /' + FETCH_RULE, result.stderr)
+        self.assertIn('reserved', result.stderr)
+
+    def test_fetch_rule_edit_without_manifest_update(self):
+        self.write(FETCH_RULE, (self.root / FETCH_RULE).read_text().replace('"precedence": false', '"precedence": true'))
+        result = self.check()
+        self.assertIn('immutable file hash mismatch: /' + FETCH_RULE, result.stderr)
+
+    def test_missing_fetch_rule(self):
+        (self.root / FETCH_RULE).unlink()
+        result = self.check()
+        self.assertIn('missing immutable file: /' + FETCH_RULE, result.stderr)
+        self.assertIn('reserved', result.stderr)
+
+    def test_fetch_rule_mode_0600(self):
+        (self.root / FETCH_RULE).chmod(0o600)
+        result = self.check()
+        self.assertIn('incorrect file type/mode: /' + FETCH_RULE, result.stderr)
+
+    def test_fetch_rule_symlink_to_identical_copy(self):
+        path = self.root / FETCH_RULE
+        copy = self.root / 'elsewhere/000-snitchwatch-bridge-fetch.json'
+        copy.parent.mkdir(); copy.write_bytes(path.read_bytes()); copy.chmod(0o644)
+        path.unlink(); path.symlink_to(copy)
+        result = self.check()
+        self.assertIn('symlink in immutable file path: /' + FETCH_RULE, result.stderr)
+
+    def test_fetch_rule_symlinked_rules_directory(self):
+        rules = self.root / 'etc/opensnitchd/rules'
+        moved = self.root / 'elsewhere-rules'
+        rules.rename(moved); rules.symlink_to(moved)
+        result = self.check()
+        self.assertIn('symlink in immutable file path: /' + FETCH_RULE, result.stderr)
 
     def test_self_consistent_hardening_tamper(self):
         name = 'usr/lib/systemd/system/snitchwatch-system-bridge.service'

@@ -1116,6 +1116,26 @@ index b4d6845b..a88a6ee9 100644
  }
  
  // PostAlert queues a new message to be delivered to the server
+diff --git a/daemon/ui/notifications.go b/daemon/ui/notifications.go
+index 16003bba..9b506db3 100644
+--- a/daemon/ui/notifications.go
++++ b/daemon/ui/notifications.go
+@@ -70,6 +70,15 @@ func (c *Client) handleActionChangeConfig(stream protocol.UI_NotificationsClient
+ 		return
+ 	}
+ 
++	c.RLock()
++	current := c.config
++	c.RUnlock()
++	if err := confinedConfigChange(&current, &newConf); err != nil {
++		log.Warning("[notification] %s", err)
++		c.sendNotificationReply(stream, ntf.Type, ntf.Id, "", err)
++		return
++	}
++
+ 	if err := c.reloadConfiguration(true, &newConf); err != nil {
+ 		c.sendNotificationReply(stream, ntf.Type, ntf.Id, "", err.Msg)
+ 		return
 diff --git a/daemon/firewall/nftables/policy_journal.go b/daemon/firewall/nftables/policy_journal.go
 new file mode 100644
 index 00000000..c91bd683
@@ -3030,5 +3050,160 @@ index 00000000..225eb35d
 +				}
 +			})
 +		}
++	}
++}
+diff --git a/daemon/ui/config_guard.go b/daemon/ui/config_guard.go
+new file mode 100644
+index 00000000..c56aff38
+--- /dev/null
++++ b/daemon/ui/config_guard.go
+@@ -0,0 +1,33 @@
++package ui
++
++import (
++	"errors"
++	"reflect"
++
++	"github.com/evilsocket/opensnitch/daemon/ui/config"
++)
++
++var errConfigChangeRefused = errors.New("CHANGE_CONFIG refused: a UI may only change DefaultAction/Duration, InterceptUnknown, logging, stats and internal tuning; paths, addresses, TLS, firewall and monitors stay as configured on disk")
++
++// confinedConfigChange accepts a UI-sent configuration only when it differs
++// from the running one in settings a UI may tune. CHANGE_CONFIG arrives over
++// the UI channel and is saved over the root-owned config, so it must not
++// move rule, log, firewall, task or module paths, the server address or TLS
++// material: each of those would redirect root's reads or writes.
++func confinedConfigChange(current, proposed *config.Config) error {
++	allowed := *current
++	allowed.LogLevel = proposed.LogLevel
++	allowed.DefaultAction = proposed.DefaultAction
++	allowed.DefaultDuration = proposed.DefaultDuration
++	allowed.InterceptUnknown = proposed.InterceptUnknown
++	allowed.LogUTC = proposed.LogUTC
++	allowed.LogMicro = proposed.LogMicro
++	allowed.Stats = proposed.Stats
++	allowed.Internal = proposed.Internal
++	allowed.Rules.EnableChecksums = proposed.Rules.EnableChecksums
++	allowed.FwOptions.MonitorInterval = proposed.FwOptions.MonitorInterval
++	if !reflect.DeepEqual(allowed, *proposed) {
++		return errConfigChangeRefused
++	}
++	return nil
++}
+diff --git a/daemon/ui/config_guard_test.go b/daemon/ui/config_guard_test.go
+new file mode 100644
+index 00000000..4e0bca33
+--- /dev/null
++++ b/daemon/ui/config_guard_test.go
+@@ -0,0 +1,110 @@
++package ui
++
++import (
++	"go/ast"
++	"go/parser"
++	"go/token"
++	"testing"
++
++	"github.com/evilsocket/opensnitch/daemon/ui/config"
++)
++
++func runningConfig() config.Config {
++	var c config.Config
++	level := int32(2)
++	c.LogLevel = &level
++	c.DefaultAction = "allow"
++	c.DefaultDuration = "once"
++	c.ProcMonitorMethod = "proc"
++	c.Firewall = "nftables"
++	c.Server.Address = "unix:opensnitchd.sock"
++	c.Server.LogFile = "/var/log/opensnitchd.log"
++	c.Rules.Path = "/etc/opensnitchd/rules"
++	c.FwOptions.ConfigPath = "/etc/opensnitchd/system-fw.json"
++	c.FwOptions.MonitorInterval = "15s"
++	c.TasksOptions.ConfigPath = "/etc/opensnitchd/tasks/tasks.json"
++	c.Ebpf.ModulesPath = "/usr/lib/opensnitchd/ebpf"
++	c.Audit.AudispSocketPath = "/var/run/audispd_events"
++	return c
++}
++
++// CHANGE_CONFIG arrives from the UI channel and is saved over the root-owned
++// config, so it must not move any path, address or TLS material.
++func TestChangeConfigRefusesPathsAndAddresses(t *testing.T) {
++	refused := map[string]func(*config.Config){
++		"Rules.Path":             func(c *config.Config) { c.Rules.Path = "/var/tmp/x" },
++		"Server.LogFile":         func(c *config.Config) { c.Server.LogFile = "/etc/shadow" },
++		"Server.Address":         func(c *config.Config) { c.Server.Address = "127.0.0.1:50051" },
++		"TLS.CACert":             func(c *config.Config) { c.Server.Authentication.TLSOptions.CACert = "/tmp/ca.pem" },
++		"Server.Authentication":  func(c *config.Config) { c.Server.Authentication.Type = "simple-tls" },
++		"FwOptions.ConfigPath":   func(c *config.Config) { c.FwOptions.ConfigPath = "/tmp/fw.json" },
++		"FwOptions.QueueNum":     func(c *config.Config) { c.FwOptions.QueueNum = 9 },
++		"FwOptions.QueueBypass":  func(c *config.Config) { c.FwOptions.QueueBypass = true },
++		"Firewall":               func(c *config.Config) { c.Firewall = "iptables" },
++		"Tasks.ConfigPath":       func(c *config.Config) { c.TasksOptions.ConfigPath = "/tmp/t.json" },
++		"Ebpf.ModulesPath":       func(c *config.Config) { c.Ebpf.ModulesPath = "/tmp/ebpf" },
++		"Audit.AudispSocketPath": func(c *config.Config) { c.Audit.AudispSocketPath = "/tmp/a.sock" },
++		"ProcMonitorMethod":      func(c *config.Config) { c.ProcMonitorMethod = "ebpf" },
++	}
++	for name, change := range refused {
++		current, proposed := runningConfig(), runningConfig()
++		change(&proposed)
++		if err := confinedConfigChange(&current, &proposed); err == nil {
++			t.Errorf("CHANGE_CONFIG changing %s was accepted", name)
++		}
++	}
++	current, proposed := runningConfig(), runningConfig()
++	level := int32(1)
++	proposed.LogLevel = &level
++	proposed.DefaultAction = "deny"
++	proposed.DefaultDuration = "always"
++	proposed.InterceptUnknown = true
++	proposed.LogUTC, proposed.LogMicro = true, true
++	proposed.Internal.GCPercent = 50
++	proposed.Rules.EnableChecksums = true
++	proposed.FwOptions.MonitorInterval = "30s"
++	if err := confinedConfigChange(&current, &proposed); err != nil {
++		t.Errorf("UI-tunable settings refused: %v", err)
++	}
++	if err := confinedConfigChange(&current, &current); err != nil {
++		t.Errorf("unchanged config refused: %v", err)
++	}
++}
++
++// The guard must run before the config is applied or saved.
++func TestChangeConfigHandlerGuardsBeforeApplying(t *testing.T) {
++	file, err := parser.ParseFile(token.NewFileSet(), "notifications.go", nil, 0)
++	if err != nil {
++		t.Fatal(err)
++	}
++	var order []string
++	for _, decl := range file.Decls {
++		fn, ok := decl.(*ast.FuncDecl)
++		if !ok || fn.Name.Name != "handleActionChangeConfig" {
++			continue
++		}
++		ast.Inspect(fn.Body, func(n ast.Node) bool {
++			if call, ok := n.(*ast.CallExpr); ok {
++				switch f := call.Fun.(type) {
++				case *ast.Ident:
++					order = append(order, f.Name)
++				case *ast.SelectorExpr:
++					order = append(order, f.Sel.Name)
++				}
++			}
++			return true
++		})
++	}
++	index := func(name string) int {
++		for i, n := range order {
++			if n == name {
++				return i
++			}
++		}
++		return -1
++	}
++	guard, reload, save := index("confinedConfigChange"), index("reloadConfiguration"), index("Save")
++	if guard < 0 || reload < 0 || save < 0 || guard > reload || guard > save {
++		t.Fatalf("handleActionChangeConfig must call confinedConfigChange before reloadConfiguration and Save: %v", order)
 +	}
 +}

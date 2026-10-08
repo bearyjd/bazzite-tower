@@ -13,7 +13,7 @@
     "daemon/go.mod": "556fe4926644b3eeb5e0e5212d5b66d88f1476480508a9337a7b71e3b034626a",
     "daemon/go.sum": "eded94c59f8e572018f7f5a845a6ec0e6ecd8671d55802ee37d619d831128d41"
   },
-  "patchSha256": "63c1bf5a25676939c611a63ee9e90a46c0051d06b5651565fcbbeed8dcc7fba7",
+  "patchSha256": "bba528ef031d8f31b9f7da9dfb899851ea683d0b739e72ad74c54b8164fcdcac",
   "patchedFiles": {
     "daemon/firewall/nftables/chains.go": "bc26d889f83d4f2a14d19f8ec4ebe39d66dc2cae2d95e41627d2acb0fe0b6825",
     "daemon/firewall/nftables/nftables.go": "18614f9fc0d7497070e098a6b10bf3d19f3af4c8df281285329e9c36c1309c0f",
@@ -43,7 +43,10 @@
     "daemon/shutdown_signal_test.go": "42f5800c15c9c61d43f39dff3099b270f6ce9204b04ef7685e8af5bc53931e97",
     "daemon/ui/client.go": "819ceaa7b5f4082b78f32db1925918429f28b61c97a122f1c5f2c385219e1dfd",
     "daemon/ui/client_asking_test.go": "1bb07f716ebf78159fa0adf1fe8d27bcf8eda4b5c3c729713d2bb79307687fc4",
-    "daemon/ui/client_shutdown_test.go": "e3f4dfb768a93ace66125aa5fe18a67db09066dd41af5dd7757993c82e703615"
+    "daemon/ui/client_shutdown_test.go": "e3f4dfb768a93ace66125aa5fe18a67db09066dd41af5dd7757993c82e703615",
+    "daemon/ui/config_guard.go": "1e3afc32d7676729f37858f1cf9c578357a2a7446a41343fdfdd906470e734c2",
+    "daemon/ui/config_guard_test.go": "dabb9e5b91dae7a357d5b664e14ec8e193e524b504722c443a6c8c599d1c54ae",
+    "daemon/ui/notifications.go": "b04319b8694e39f39887830163fa59e7a780657c9e8968b7071a24fab6ba470c"
   },
   "protoSourceSha256": "62de7d3661c33558daeae1092cd7eb98cdc05179695f5d41f166b1c8f7ffbd06",
   "protocVersion": "libprotoc 3.19.6",

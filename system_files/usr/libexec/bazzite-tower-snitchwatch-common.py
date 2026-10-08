@@ -29,6 +29,8 @@ APP = "org.snitchwatch.Snitchwatch"
 VENDOR_DROPIN = "/usr/lib/systemd/system/service.d/10-timeout-abort.conf"
 DAEMON_UNIT = "/usr/lib/systemd/system/opensnitch.service"
 DAEMON_DROPIN = "/usr/lib/systemd/system/opensnitch.service.d/20-system-bridge.conf"
+# The one opensnitchd rule Snitchwatch ships; the only manifest entry outside /usr.
+FETCH_RULE = "/etc/opensnitchd/rules/000-snitchwatch-bridge-fetch.json"
 BASE_GLOBAL_OVERRIDE = "/var/lib/flatpak/overrides/global"
 BASE_GLOBAL_OVERRIDE_SHA256 = "85e2bf73515c8da8950f1afbbfaedfeca453777eeb0be0ea869f4db6c779bd80"
 VENDOR_DROPIN_SHA256 = "ae6b234f92bc22f1201a7572b59b454c9809f33c80d13f361b9674e1801acc37"
@@ -133,11 +135,15 @@ def immutable(ctx):
             and re.fullmatch(r"[0-9a-f]{40}", source.get("commit", "")) and re.fullmatch(r"[0-9a-f]{40}", source.get("submoduleCommit", "")), "unexpected source provenance")
     require(manifest.get("binary", {}).get("path") == BINARY, "unexpected manifest executable path")
     files = manifest.get("files", {})
-    mandatory = {BINARY, REFERENCE, LEGACY_REFERENCE, PINS, "/usr/lib/sysusers.d/snitchwatch.conf", "/usr/lib/tmpfiles.d/snitchwatch.conf", "/usr/lib/systemd/system/opensnitch.service.d/20-system-bridge.conf"}
+    mandatory = {BINARY, REFERENCE, LEGACY_REFERENCE, PINS, FETCH_RULE, "/usr/lib/sysusers.d/snitchwatch.conf", "/usr/lib/tmpfiles.d/snitchwatch.conf", "/usr/lib/systemd/system/opensnitch.service.d/20-system-bridge.conf"}
     mandatory.update("/usr/lib/systemd/system/"+unit for unit in (SERVICE, *SOCKETS))
     require(isinstance(files, dict) and mandatory <= files.keys(), "system manifest lacks required installed assets")
     for name, expected in files.items():
-        require(name.startswith("/usr/") and ".." not in Path(name).parts and re.fullmatch(r"[0-9a-f]{64}", expected or ""), "unsafe system manifest entry")
+        require((name.startswith("/usr/") or name == FETCH_RULE) and ".." not in Path(name).parts and re.fullmatch(r"[0-9a-f]{64}", expected or ""), "unsafe system manifest entry")
+        if name == FETCH_RULE:
+            # /etc is mutable: no directory on the way may be a symlink either.
+            require(not any(stat.S_ISLNK(ctx.stat(str(parent)).st_mode) for parent in Path(name).parents if str(parent) != "/"),
+                    "symlink in the path of the shipped Snitchwatch fetch rule")
         info = ctx.stat(name)
         require(stat.S_ISREG(info.st_mode) and info.st_uid == 0 and not info.st_mode & 0o022, "mutable/non-root installed asset: "+name)
         require(digest(ctx.path(name)) == expected, "installed asset hash mismatch: "+name)

@@ -65,7 +65,7 @@ class Fixture(common.Context):
             self.properties[unit] = dict(Listen=path+" (Stream)", SocketUser="root", SocketGroup=group, SocketMode=mode, Accept="no", Triggers=common.SERVICE, FragmentPath="/usr/lib/systemd/system/"+unit, DropInPaths="", NeedDaemonReload="no")
         self.write(common.PROFILE, "system\n")
         self.write(common.BINARY, "reviewed released bridge executable\n", 0o755)
-        mandatory = [common.BINARY, common.REFERENCE, "/usr/lib/sysusers.d/snitchwatch.conf", "/usr/lib/tmpfiles.d/snitchwatch.conf", "/usr/lib/systemd/system/opensnitch.service.d/20-system-bridge.conf"]
+        mandatory = [common.BINARY, common.REFERENCE, "/usr/lib/sysusers.d/snitchwatch.conf", "/usr/lib/tmpfiles.d/snitchwatch.conf", "/usr/lib/systemd/system/opensnitch.service.d/20-system-bridge.conf", common.FETCH_RULE]
         mandatory += ["/usr/lib/systemd/system/"+unit for unit in (common.SERVICE, *common.SOCKETS)]
         for name in mandatory:
             if name != common.BINARY:
@@ -348,6 +348,25 @@ class SystemBehavior(unittest.TestCase):
                 self.ctx.properties[unit]["NeedDaemonReload"] = "yes"
                 try: self.refuse_readiness("daemon-reload")
                 finally: self.ctx.properties[unit]["NeedDaemonReload"] = "no"
+
+    def test_fetch_rule_is_the_only_manifest_entry_outside_usr(self):
+        common.immutable(self.ctx)
+        self.ctx.write("/etc/opensnitchd/rules/other.json", "{}\n")
+        self.ctx.refresh_manifest([*self.ctx.manifest["files"], "/etc/opensnitchd/rules/other.json"])
+        with self.assertRaisesRegex(common.Refusal, "unsafe system manifest entry"):
+            common.immutable(self.ctx)
+
+    def test_manifest_without_fetch_rule_refuses(self):
+        self.ctx.refresh_manifest([name for name in self.ctx.manifest["files"] if name != common.FETCH_RULE])
+        with self.assertRaisesRegex(common.Refusal, "lacks required installed assets"):
+            common.immutable(self.ctx)
+
+    def test_symlinked_fetch_rule_directory_refuses(self):
+        rules = self.ctx.path("/etc/opensnitchd/rules")
+        moved = self.ctx.path("/etc/opensnitchd/rules-real")
+        rules.rename(moved);rules.symlink_to("rules-real")
+        with self.assertRaisesRegex(common.Refusal, "symlink in the path of the shipped Snitchwatch fetch rule"):
+            common.immutable(self.ctx)
 
     def test_hard_dependency_on_grpc_socket_refuses(self):
         for key in ("Requires", "Requisite", "BindsTo", "PartOf"):

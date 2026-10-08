@@ -156,7 +156,7 @@ assert set(p.get("TriggeredBy","").split())=={"snitchwatch-system-bridge-grpc.so
 import re, subprocess
 p=dict(line.split("=",1) for line in subprocess.check_output(["systemctl","show","opensnitch.service"],text=True,timeout=5).splitlines() if "=" in line)
 assert p.get("WorkingDirectory")=="/run/snitchwatch"
-assert "snitchwatch-system-bridge-grpc.socket" in p.get("Requires","").split()
+assert "snitchwatch-system-bridge-grpc.socket" in p.get("Wants","").split()
 assert "snitchwatch-system-bridge-grpc.socket" in p.get("After","").split()
 assert re.findall(r"(?:^|[ {])path=([^ ;}]+)",p.get("ExecStart",""))==["/usr/bin/opensnitchd"]
 assert re.findall(r"argv\[\]=([^;]+)",p.get("ExecStart",""))==["/usr/bin/opensnitchd "]'

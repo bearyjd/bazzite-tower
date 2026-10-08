@@ -103,7 +103,7 @@ def verify(root):
         raise ValueError('system candidate changes more than the daemon address')
     if config.get('DefaultAction') != 'allow' or config.get('ProcMonitorMethod') != 'proc' or config.get('Server', {}).get('Address') != 'unix:opensnitchd.sock':
         raise ValueError('incorrect system candidate policy/transport')
-    expected_dropin = b'[Unit]\nRequires=snitchwatch-system-bridge-grpc.socket\nAfter=snitchwatch-system-bridge-grpc.socket\n\n[Service]\nWorkingDirectory=/run/snitchwatch\n'
+    expected_dropin = b'[Unit]\nWants=snitchwatch-system-bridge-grpc.socket\nAfter=snitchwatch-system-bridge-grpc.socket\n\n[Service]\nWorkingDirectory=/run/snitchwatch\n'
     if contents[DROPIN] != expected_dropin or contents['/usr/share/bazzite-tower/snitchwatch/opensnitch.service.d/20-system-bridge.conf'] != expected_dropin:
         raise ValueError('incorrect daemon system-socket ordering/drop-in')
     artifact = json.loads(contents['/usr/share/snitchwatch/schema1-artifact-MANIFEST.json'])

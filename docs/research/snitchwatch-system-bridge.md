@@ -568,6 +568,12 @@ a prompt pending before a pause keeps the prompt slot (Snitchwatch #78), and
 stopping `snitchwatch-system-bridge-grpc.socket` also stops `opensnitch.service`
 (its drop-in `Requires=` the socket) until it is started by hand. Evidence:
 `output/snitchwatch-fresh-vm-r8.xZd346/R8-VM-ACCEPTANCE-RESULT.json`.
+The owner chose to keep the firewall up: the drop-in now uses `Wants=` (with
+the same `After=`), so the socket is still pulled in and ordered first at boot,
+but stopping it no longer stops the daemon, which falls back to its default
+action while no UI is connected. The build verifier, readiness helper and boot
+check now require `Wants=`. Daemon reconnection after the socket comes back
+is checked on the r9 VM.
 
 The fixed target-image acceptance limits are 5 seconds for no-GUI fallback,
 2 seconds for pending cleanup and 15 seconds for daemon stop. Preserve the

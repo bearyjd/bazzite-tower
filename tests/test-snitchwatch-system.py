@@ -367,10 +367,30 @@ class SystemBehavior(unittest.TestCase):
         daemon["DropInPaths"] = common.DAEMON_DROPIN+" "+common.VENDOR_DROPIN
         self.assertEqual(common.runtime_readiness(self.ctx)["defaultAction"], "allow")
 
+    def test_enabled_user_unit_under_a_symlinked_unit_dir_refuses(self):
+        # systemd follows a symlinked ~/.config/systemd/user (dotfile
+        # managers), so a wants link inside it enables the legacy bridge.
+        real = self.ctx.path("/var/home/gate/dotfiles/systemd/user/default.target.wants")
+        real.mkdir(parents=True);(real/"snitchwatch-bridge.service").symlink_to("/usr/lib/systemd/user/snitchwatch-bridge.service")
+        link = self.ctx.path("/var/home/gate/.config/systemd/user");link.parent.mkdir(parents=True)
+        link.symlink_to(self.ctx.path("/var/home/gate/dotfiles/systemd/user"))
+        with self.assertRaisesRegex(common.Refusal, "default.target.wants/snitchwatch-bridge.service"):common.local_conflicts(self.ctx)
+
+    def test_unlistable_user_unit_dir_refuses(self):
+        self.ctx.path("/var/home/gate/.config/systemd/user").mkdir(parents=True)
+        real = os.listdir
+        def denied(path):
+            if str(path).endswith("/var/home/gate/.config/systemd/user"):
+                raise PermissionError(13, "Permission denied", str(path))
+            return real(path)
+        with mock.patch.object(common.os, "listdir", side_effect=denied):
+            with self.assertRaisesRegex(common.Refusal, "cannot inspect"):common.local_conflicts(self.ctx)
+
     def test_unreadable_override_path_refuses(self):
         # An override that readiness cannot inspect must not count as absent.
+        # (An unlistable user unit directory: test_unlistable_user_unit_dir_refuses.)
         for target in ("/etc/systemd/system/opensnitch.service.d", "/etc/systemd/system/"+common.SERVICE,
-                       "/var/home/gate/.config/systemd/user", "/var/home/gate/.config/systemd/user/snitchwatch-bridge.service"):
+                       "/var/home/gate/.config/systemd/user/snitchwatch-bridge.service"):
             with self.subTest(target=target):
                 real = self.ctx.stat
                 def denied(name, real=real, target=target):

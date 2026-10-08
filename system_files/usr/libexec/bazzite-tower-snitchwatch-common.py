@@ -87,20 +87,27 @@ class Context:
     def stat(self, absolute):
         return self.path(absolute).lstat()
 
-    def present(self, absolute):
-        # Absent only when the kernel says so. A path readiness cannot inspect
-        # (EACCES, ELOOP, EIO) may hold an override, so it is refused.
+    def lookup(self, absolute):
+        # One lstat decides. Absent only when the kernel says so; a path
+        # readiness cannot inspect (EACCES, ELOOP, EIO) may hold an override,
+        # so it is refused.
         try:
-            self.stat(absolute)
+            return self.stat(absolute)
         except (FileNotFoundError, NotADirectoryError):
-            return False
+            return None
         except OSError as error:
             raise Refusal("cannot inspect "+absolute+": "+(error.strerror or str(error))) from error
-        return True
+
+    def present(self, absolute):
+        return self.lookup(absolute) is not None
 
     def listdir(self, absolute):
+        # Follows a symlinked directory, as systemd does; absent or not a
+        # directory lists as empty.
         try:
             return sorted(os.listdir(self.path(absolute)))
+        except (FileNotFoundError, NotADirectoryError):
+            return []
         except OSError as error:
             raise Refusal("cannot inspect "+absolute+": "+(error.strerror or str(error))) from error
 
@@ -257,9 +264,9 @@ def inert_dropin_directory(ctx, name):
     # systemd loads nothing from an empty drop-in directory, so under a
     # root-only unit directory it is not an override. One lstat decides: a real
     # directory, root:root, not group/world-writable, with no entries.
-    if not ctx.present(name):
+    info = ctx.lookup(name)
+    if info is None:
         return False
-    info = ctx.stat(name)
     return (stat.S_ISDIR(info.st_mode) and info.st_uid == 0 and info.st_gid == 0
             and not info.st_mode & 0o022 and not ctx.listdir(name))
 
@@ -289,9 +296,8 @@ def local_conflicts(ctx):
         user_dirs.update(runtime+suffix for suffix in ("user.control", "transient", "generator.early", "user", "generator", "generator.late"))
     for directory in user_dirs:
         paths.extend(directory+"/snitchwatch-bridge.service"+suffix for suffix in ("", ".d"))
-        if ctx.present(directory) and stat.S_ISDIR(ctx.stat(directory).st_mode):
-            paths.extend(directory+"/"+entry+"/snitchwatch-bridge.service" for entry in ctx.listdir(directory)
-                         if entry.rsplit(".", 1)[-1] in ("wants", "requires", "upholds"))
+        paths.extend(directory+"/"+entry+"/snitchwatch-bridge.service" for entry in ctx.listdir(directory)
+                     if entry.rsplit(".", 1)[-1] in ("wants", "requires", "upholds"))
     for name in paths:
         if name in system_dropins and inert_dropin_directory(ctx, name):
             continue

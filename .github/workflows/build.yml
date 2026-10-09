@@ -462,10 +462,33 @@ jobs:
 
       - name: Verify signed image and SBOM
         if: github.event_name != 'pull_request' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+        # A stuck lookup must fail with a log, not hang until the job limit.
+        timeout-minutes: 10
         run: |
           image="${IMAGE_REGISTRY}/${IMAGE_NAME}@${DIGEST}"
-          cosign verify --key cosign.pub "${image}"
-          cosign verify-attestation --key cosign.pub --type spdxjson "${image}"
+          diagnose() {
+            echo "::group::diagnostics ($(date -u +%FT%TZ))"
+            cosign version 2>&1 | head -12 || true
+            curl -sS -m 10 -o /dev/null -w 'rekor http=%{http_code} t=%{time_total}s\n' https://rekor.sigstore.dev/api/v1/log || echo "rekor unreachable"
+            curl -sS -m 10 -o /dev/null -w 'ghcr http=%{http_code} t=%{time_total}s\n' "https://${IMAGE_REGISTRY}/v2/" || echo "ghcr unreachable"
+            ps -eo pid,etime,args | grep -E 'cosign|docker|skopeo|podman' | grep -v grep | cut -c1-200 || true
+            echo "::endgroup::"
+          }
+          # Bound each command so a stuck lookup reports what it was doing.
+          # stdout is discarded: cosign prints the verified payload there, and
+          # for the SBOM attestation that is the whole base64 SPDX document,
+          # which stalled the runner's log streaming (the check itself had
+          # already passed). The verification summary goes to stderr.
+          run_bounded() {
+            echo "+ $*"
+            timeout 180 "$@" >/dev/null && return 0
+            rc=$?
+            echo "::error::'$*' exited ${rc} (124 = no answer within 180 s)"
+            diagnose
+            return "${rc}"
+          }
+          run_bounded cosign verify --key cosign.pub "${image}"
+          run_bounded cosign verify-attestation --key cosign.pub --type spdxjson "${image}"
         env:
           DIGEST: ${{ steps.push_candidate.outputs.digest }}
 
@@ -479,6 +502,7 @@ jobs:
 
       - name: Verify GitHub provenance
         if: github.event_name != 'pull_request' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+        timeout-minutes: 10
         run: gh attestation verify "oci://${IMAGE_REGISTRY}/${IMAGE_NAME}@${DIGEST}" --repo "${GITHUB_REPOSITORY}"
         env:
           DIGEST: ${{ steps.push_candidate.outputs.digest }}

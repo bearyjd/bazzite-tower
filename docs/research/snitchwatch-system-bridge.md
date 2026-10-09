@@ -539,6 +539,14 @@ Open items:
   The rule loader also refuses rule files whose name fails the same
   validation, at startup and on live reload (logged, file left in place),
   so a root-written file named `""` cannot pose as that synthetic rule.
+  Deleting a saved rule removes its file first: if that fails (e.g. an
+  immutable file, seen in r12's curated `cleanup-off` check) the rule stays
+  loaded and `DELETE_RULE` is answered with an error, also when the same
+  notification deletes other rules. A file that is already gone counts as
+  deleted (the watcher's `Remove` path), so that reply is now OK where stock
+  1.8.0 returned the `ENOENT` error. Stock 1.8.0 forgets the rule first and
+  leaves the file on disk; the bridge-side handling is a separate Snitchwatch
+  PR.
 - ~~The daemon factory and CI do not run the patch's Go tests.~~ Fixed
   2026-10-07: `just test-snitchwatch-daemon-patch` and the path-filtered
   `snitchwatch-daemon-patch.yml` workflow run them, `-race` included.

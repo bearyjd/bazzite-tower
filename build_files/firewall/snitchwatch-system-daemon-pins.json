@@ -13,7 +13,7 @@
     "daemon/go.mod": "556fe4926644b3eeb5e0e5212d5b66d88f1476480508a9337a7b71e3b034626a",
     "daemon/go.sum": "eded94c59f8e572018f7f5a845a6ec0e6ecd8671d55802ee37d619d831128d41"
   },
-  "patchSha256": "b49df4502aa4334140696ec386c817ed753d3edc50a33f8a1139c490cfa6eaf4",
+  "patchSha256": "27bba673d43c063c5c3d1937046b834c8331a68bc4596c878e44bd4441ecdff9",
   "patchedFiles": {
     "daemon/drop_while_asking_test.go": "acae364ef2421fb1dcc5a15ca6228129743ebd8afb7f968c59f17a596b15655d",
     "daemon/firewall/nftables/chains.go": "bc26d889f83d4f2a14d19f8ec4ebe39d66dc2cae2d95e41627d2acb0fe0b6825",
@@ -38,7 +38,8 @@
     "daemon/queue_cleanup_order_test.go": "c180b0f62b435298cb903a34616fbe61a5931b6a16eaf1d9ca9e6456fb9fd1bc",
     "daemon/reader_failure_test.go": "ca10e0986dcc60e3fd94a2720695085c0d3435b05213a75df5f79c72666d9a11",
     "daemon/repeat_handoff_test.go": "a6939b8f186e82d580f6c413bd8beb3d096fe696fe4a31409c982bc63d9a5360",
-    "daemon/rule/loader.go": "35ced210a6ab96f9d0f4b702882af5db2c988295a4e37062c1c68a8c577f8f87",
+    "daemon/rule/loader.go": "fe99ceff983e2c6608b0abb45e2eee7959bb19cf42db43a7ab8fd7ef61804d18",
+    "daemon/rule/loader_delete_test.go": "bab3da728bdafb0b6c601b071e6aa8ece8d49e16a6a369f1d01ed67c6d6abe28",
     "daemon/rule/loader_name_validation_test.go": "451510c142faa5aea1f106ba8dfc72471c95a1624fb2582837eac862a185abf1",
     "daemon/rule/name.go": "5f6e4dbe9b918b532b64f990e2e50adbafa82f1b92c409c5e674420f0a766b83",
     "daemon/rule/operator.go": "6255c6d020d8e182d55580b97f84d4f5d3d317e33d855eef9ce7f9da16d73a56",
@@ -63,8 +64,8 @@
     "daemon/ui/config/config.go": "cc5eeb25abdb1f10b7e800e1a3de2d52ca1292ede7f480cebaeeb23eb0f330ac",
     "daemon/ui/drop_while_asking_test.go": "bb7006322f2814ab07b89ef2a19cebfda940da8e22085e6443ad4277f0cb09c6",
     "daemon/ui/notification_policy.go": "adacab49f88b9fe82d1fa07094ce2dcd162ecd7fe8d89e4332ed1d7f22792d85",
-    "daemon/ui/notification_policy_test.go": "c6f0088b8837972b7afd202fbcb4f15a091a16e23b666641ca810472a70bee41",
-    "daemon/ui/notifications.go": "de8a488c41a08fc28889ddc337d6d257303ce755c5309abe44c4ca66843e3762"
+    "daemon/ui/notification_policy_test.go": "9f75b9303b8a5115d00b20ec861450f0027896e89fdb55ca5788910adacd0780",
+    "daemon/ui/notifications.go": "7d960eaf06f4e6e6f2f7478303764690cabbf1d9cc878998260a9c32d070396a"
   },
   "protoSourceSha256": "62de7d3661c33558daeae1092cd7eb98cdc05179695f5d41f166b1c8f7ffbd06",
   "protocVersion": "libprotoc 3.19.6",

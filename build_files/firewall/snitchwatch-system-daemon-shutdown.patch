@@ -1096,10 +1096,20 @@ index 9c06aab7..d80761c8 100644
  
  #endif
 diff --git a/daemon/rule/loader.go b/daemon/rule/loader.go
-index 3d743556..30205a9a 100644
+index 3d743556..083379d7 100644
 --- a/daemon/rule/loader.go
 +++ b/daemon/rule/loader.go
-@@ -105,6 +105,8 @@ func (l *Loader) Reload(path string) error {
+@@ -2,7 +2,9 @@ package rule
+ 
+ import (
+ 	"encoding/json"
++	"errors"
+ 	"fmt"
++	"io/fs"
+ 	"io/ioutil"
+ 	"os"
+ 	"path"
+@@ -105,6 +107,8 @@ func (l *Loader) Reload(path string) error {
  	if l.watcher != nil {
  		l.watcher.Remove(l.Path)
  	}
@@ -1108,7 +1118,7 @@ index 3d743556..30205a9a 100644
  	for _, r := range l.rules {
  		l.cleanListsRule(r)
  	}
-@@ -157,7 +159,12 @@ func (l *Loader) Load(path string) error {
+@@ -157,7 +161,12 @@ func (l *Loader) Load(path string) error {
  
  // Add adds a rule to the list of rules, and optionally saves it to disk.
  func (l *Loader) Add(rule *Rule, saveToDisk bool) error {
@@ -1122,7 +1132,7 @@ index 3d743556..30205a9a 100644
  	if saveToDisk {
  		fileName := filepath.Join(l.Path, fmt.Sprintf("%s.json", rule.Name))
  		return l.Save(rule, fileName)
-@@ -167,6 +174,9 @@ func (l *Loader) Add(rule *Rule, saveToDisk bool) error {
+@@ -167,6 +176,9 @@ func (l *Loader) Add(rule *Rule, saveToDisk bool) error {
  
  // Replace adds a rule to the list of rules, and optionally saves it to disk.
  func (l *Loader) Replace(rule *Rule, saveToDisk bool) error {
@@ -1132,9 +1142,15 @@ index 3d743556..30205a9a 100644
  	if err := l.replaceUserRule(rule); err != nil {
  		return err
  	}
-@@ -200,6 +210,9 @@ func (l *Loader) Save(rule *Rule, path string) error {
- // If the duration is Always (i.e: saved on disk), it'll attempt to delete
- // it from disk.
+@@ -197,9 +209,13 @@ func (l *Loader) Save(rule *Rule, path string) error {
+ }
+ 
+ // Delete deletes a rule from the list by name.
+-// If the duration is Always (i.e: saved on disk), it'll attempt to delete
+-// it from disk.
++// If the duration is Always (i.e: saved on disk), its file is removed first;
++// if that fails the rule stays loaded and the error is returned. A file that
++// is already gone (e.g. the watcher's Remove event) counts as removed.
  func (l *Loader) Delete(ruleName string) error {
 +	if err := ValidName(ruleName); err != nil {
 +		return err
@@ -1142,7 +1158,33 @@ index 3d743556..30205a9a 100644
  	l.Lock()
  	defer l.Unlock()
  
-@@ -235,10 +248,16 @@ func (l *Loader) loadRule(fileName string) error {
+@@ -207,17 +223,18 @@ func (l *Loader) Delete(ruleName string) error {
+ 	if rule == nil {
+ 		return nil
+ 	}
++	if rule.Duration == Always {
++		log.Info("Delete() rule: %s", rule)
++		if err := l.deleteRuleFromDisk(ruleName); err != nil && !errors.Is(err, fs.ErrNotExist) {
++			log.Error("Error deleting rule %q, keeping it: %s", ruleName, err)
++			return err
++		}
++	}
+ 	l.cleanListsRule(rule)
+ 
+ 	delete(l.rules, ruleName)
+ 	l.sortRules()
+-
+-	if rule.Duration != Always {
+-		return nil
+-	}
+-
+-	log.Info("Delete() rule: %s", rule)
+-	return l.deleteRuleFromDisk(ruleName)
++	return nil
+ }
+ 
+ func (l *Loader) loadRule(fileName string) error {
+@@ -235,10 +252,16 @@ func (l *Loader) loadRule(fileName string) error {
  	}
  	raw = nil
  
@@ -1161,7 +1203,7 @@ index 3d743556..30205a9a 100644
  	if !r.Enabled {
  		// XXX: we only parse and load the Data field if the rule is disabled and the Data field is not empty
  		// the rule will remain disabled.
-@@ -260,15 +279,25 @@ func (l *Loader) loadRule(fileName string) error {
+@@ -260,15 +283,25 @@ func (l *Loader) loadRule(fileName string) error {
  		}
  	}
  	if oldRule, found := l.rules[r.Name]; found {
@@ -1188,7 +1230,7 @@ index 3d743556..30205a9a 100644
  	}
  
  	return nil
-@@ -291,8 +320,12 @@ func (l *Loader) deleteRule(filePath string) {
+@@ -291,8 +324,12 @@ func (l *Loader) deleteRule(filePath string) {
  }
  
  func (l *Loader) deleteRuleFromDisk(ruleName string) error {
@@ -1203,7 +1245,7 @@ index 3d743556..30205a9a 100644
  }
  
  // deleteOldRuleFromDisk deletes a rule from disk if the Duration changes
-@@ -306,15 +339,15 @@ func (l *Loader) deleteOldRuleFromDisk(oldRule, newRule *Rule) {
+@@ -306,15 +343,15 @@ func (l *Loader) deleteOldRuleFromDisk(oldRule, newRule *Rule) {
  }
  
  // cleanListsRule erases the lists loaded of an Operator of type Lists,
@@ -1223,7 +1265,7 @@ index 3d743556..30205a9a 100644
  			}
  		}
  	}
-@@ -329,10 +362,9 @@ func (l *Loader) isUniqueName(name string) bool {
+@@ -329,10 +366,9 @@ func (l *Loader) isUniqueName(name string) bool {
  	return !found
  }
  
@@ -1236,7 +1278,7 @@ index 3d743556..30205a9a 100644
  	idx := 1
  	base := rule.Name
  	for l.isUniqueName(rule.Name) == false {
-@@ -377,32 +409,27 @@ func (l *Loader) sortRules() {
+@@ -377,32 +413,27 @@ func (l *Loader) sortRules() {
  	sort.Strings(l.activeRules)
  }
  
@@ -1281,7 +1323,7 @@ index 3d743556..30205a9a 100644
  
  	if rule.Enabled {
  		if err := rule.Operator.Compile(); err != nil {
-@@ -420,19 +447,44 @@ func (l *Loader) replaceUserRule(rule *Rule) (err error) {
+@@ -420,19 +451,44 @@ func (l *Loader) replaceUserRule(rule *Rule) (err error) {
  		}
  	}
  	l.Lock()
@@ -1329,7 +1371,7 @@ index 3d743556..30205a9a 100644
  	if err != nil {
  		return err
  	}
-@@ -441,13 +493,14 @@ func (l *Loader) scheduleTemporaryRule(rule Rule) error {
+@@ -441,13 +497,14 @@ func (l *Loader) scheduleTemporaryRule(rule Rule) error {
  		l.Lock()
  		defer l.Unlock()
  
@@ -1917,7 +1959,7 @@ index d325f79b..9f8fe1bf 100644
  
  // Parse determines if the given configuration is ok.
 diff --git a/daemon/ui/notifications.go b/daemon/ui/notifications.go
-index 16003bba..9df3de39 100644
+index 16003bba..fdc8cc8a 100644
 --- a/daemon/ui/notifications.go
 +++ b/daemon/ui/notifications.go
 @@ -87,9 +87,13 @@ func (c *Client) handleActionChangeConfig(stream protocol.UI_NotificationsClient
@@ -1960,15 +2002,27 @@ index 16003bba..9df3de39 100644
  		if r == nil {
  			rErr = fmt.Errorf("Invalid rule, %s", err)
  			continue
-@@ -128,7 +136,7 @@ func (c *Client) handleActionChangeRule(stream protocol.UI_NotificationsClient,
+@@ -126,15 +134,15 @@ func (c *Client) handleActionChangeRule(stream protocol.UI_NotificationsClient,
+ }
+ 
  func (c *Client) handleActionDeleteRule(stream protocol.UI_NotificationsClient, ntf *protocol.Notification) {
- 	var err error
+-	var err error
++	var rErr error
  	for _, rul := range ntf.Rules {
 -		log.Info("[notification] delete rule: %s %d", rul.Name, ntf.Id)
+-		err = c.rules.Delete(rul.Name)
+-		if err != nil {
 +		log.Info("[notification] delete rule: %q %d", rul.Name, ntf.Id)
- 		err = c.rules.Delete(rul.Name)
- 		if err != nil {
++		if err := c.rules.Delete(rul.Name); err != nil {
  			log.Error("[notification] Error deleting rule: %s %s", err, rul)
++			rErr = err
+ 		}
+ 	}
+-	c.sendNotificationReply(stream, ntf.Type, ntf.Id, "", err)
++	c.sendNotificationReply(stream, ntf.Type, ntf.Id, "", rErr)
+ }
+ 
+ func (c *Client) handleActionTaskStart(stream protocol.UI_NotificationsClient, ntf *protocol.Notification) {
 @@ -286,6 +294,11 @@ func (c *Client) handleActionReloadFw(stream protocol.UI_NotificationsClient, nt
  }
  
@@ -3712,6 +3766,195 @@ index 00000000..48d08fcf
 +	}
 +	if checks := callArgs(t, "acceptOrDeny", "uiClient", "SetIsAsking"); len(checks) != 1 {
 +		t.Fatalf("acceptOrDeny should only release the slot with SetIsAsking(false), found %d calls", len(checks))
++	}
++}
+diff --git a/daemon/rule/loader_delete_test.go b/daemon/rule/loader_delete_test.go
+new file mode 100644
+index 00000000..d5576c4a
+--- /dev/null
++++ b/daemon/rule/loader_delete_test.go
+@@ -0,0 +1,183 @@
++package rule
++
++import (
++	"errors"
++	"io/fs"
++	"os"
++	"path/filepath"
++	"testing"
++	"time"
++)
++
++func deleteTestLoader(t *testing.T, liveReload bool) (*Loader, string) {
++	t.Helper()
++	dir := t.TempDir()
++	l, err := NewLoader(liveReload)
++	if err != nil {
++		t.Fatal(err)
++	}
++	if err := l.Load(dir); err != nil {
++		t.Fatal(err)
++	}
++	return l, dir
++}
++
++func deleteTestRule(t *testing.T, name string, duration Duration) *Rule {
++	t.Helper()
++	op, err := NewOperator(Simple, false, OpTrue, "", []Operator{})
++	if err != nil {
++		t.Fatal(err)
++	}
++	return Create(name, "", true, false, false, Allow, duration, op)
++}
++
++func isActive(l *Loader, name string) bool {
++	l.RLock()
++	defer l.RUnlock()
++	for _, n := range l.activeRules {
++		if n == name {
++			return true
++		}
++	}
++	return false
++}
++
++// A rule whose file cannot be removed must stay loaded: the daemon keeps
++// enforcing what is on disk and the caller gets the error.
++func TestDeleteKeepsRuleWhenFileDeleteFails(t *testing.T) {
++	l, dir := deleteTestLoader(t, false)
++	name := "keep-me"
++	if err := l.Add(deleteTestRule(t, name, Always), false); err != nil {
++		t.Fatal(err)
++	}
++	// A non-empty directory in place of the rule file: os.Remove fails with
++	// ENOTEMPTY for root and unprivileged users alike.
++	blocker := filepath.Join(dir, name+".json")
++	if err := os.MkdirAll(filepath.Join(blocker, "x"), 0700); err != nil {
++		t.Fatal(err)
++	}
++
++	err := l.Delete(name)
++	if err == nil {
++		t.Fatal("Delete() returned nil although the rule file could not be removed")
++	}
++	if errors.Is(err, fs.ErrNotExist) {
++		t.Fatalf("Delete() failed for the wrong reason: %s", err)
++	}
++	if !hasRule(l, name) {
++		t.Error("the rule was dropped from memory although its file is still on disk")
++	}
++	if _, ok := l.GetAll()[name]; !ok || l.NumRules() != 1 {
++		t.Errorf("the rule is missing from the rules list: %v", l.GetAll())
++	}
++	if !isActive(l, name) {
++		t.Error("the kept rule is no longer active")
++	}
++	if _, err := os.Stat(blocker); err != nil {
++		t.Errorf("the rule path changed: %s", err)
++	}
++
++	// Once the file can be removed, the same delete succeeds.
++	if err := os.Remove(filepath.Join(blocker, "x")); err != nil {
++		t.Fatal(err)
++	}
++	if err := l.Delete(name); err != nil {
++		t.Fatalf("retried Delete() failed: %s", err)
++	}
++	if hasRule(l, name) || isActive(l, name) || l.NumRules() != 0 {
++		t.Error("the retried delete left the rule in memory")
++	}
++	if _, err := os.Stat(blocker); !os.IsNotExist(err) {
++		t.Errorf("the retried delete left the rule path: %v", err)
++	}
++}
++
++func TestDeleteRemovesSavedRuleAndFile(t *testing.T) {
++	l, dir := deleteTestLoader(t, false)
++	name := "saved"
++	if err := l.Add(deleteTestRule(t, name, Always), true); err != nil {
++		t.Fatal(err)
++	}
++	file := filepath.Join(dir, name+".json")
++	if _, err := os.Stat(file); err != nil {
++		t.Fatal(err)
++	}
++	if err := l.Delete(name); err != nil {
++		t.Fatalf("Delete() failed: %s", err)
++	}
++	if hasRule(l, name) || isActive(l, name) {
++		t.Error("the deleted rule is still in memory")
++	}
++	if _, err := os.Stat(file); !os.IsNotExist(err) {
++		t.Errorf("the deleted rule's file is still on disk: %v", err)
++	}
++}
++
++func TestDeleteTemporaryRuleTouchesNoFile(t *testing.T) {
++	l, dir := deleteTestLoader(t, false)
++	name := "until-restart"
++	if err := l.Add(deleteTestRule(t, name, Restart), false); err != nil {
++		t.Fatal(err)
++	}
++	// a same-named path that must be left alone
++	stray := filepath.Join(dir, name+".json")
++	if err := os.MkdirAll(filepath.Join(stray, "x"), 0700); err != nil {
++		t.Fatal(err)
++	}
++	if err := l.Delete(name); err != nil {
++		t.Fatalf("Delete() of a temporary rule failed: %s", err)
++	}
++	if hasRule(l, name) {
++		t.Error("the temporary rule is still in memory")
++	}
++	if _, err := os.Stat(filepath.Join(stray, "x")); err != nil {
++		t.Errorf("deleting a temporary rule touched the disk: %s", err)
++	}
++	if err := l.Delete("not-loaded"); err != nil {
++		t.Errorf("Delete() of a rule not in memory: %s", err)
++	}
++}
++
++// When the file is already gone (removed by hand, then the watcher's Remove
++// event), the rule must still be dropped from memory.
++func TestDeleteDropsRuleWhoseFileIsGone(t *testing.T) {
++	l, _ := deleteTestLoader(t, false)
++	name := "file-gone"
++	if err := l.Add(deleteTestRule(t, name, Always), false); err != nil {
++		t.Fatal(err)
++	}
++	if err := l.Delete(name); err != nil {
++		t.Errorf("Delete() of a rule whose file is gone: %s", err)
++	}
++	if hasRule(l, name) {
++		t.Error("the rule whose file is gone is still in memory")
++	}
++}
++
++func TestLiveReloadExternalRemoveDropsRule(t *testing.T) {
++	l, dir := deleteTestLoader(t, true)
++	// wait for the watcher to be registered
++	time.Sleep(time.Second)
++
++	file := filepath.Join(dir, "external.json")
++	if err := os.WriteFile(file, ruleFileJSON(t, "external"), 0600); err != nil {
++		t.Fatal(err)
++	}
++	deadline := time.Now().Add(5 * time.Second)
++	for !hasRule(l, "external") && time.Now().Before(deadline) {
++		time.Sleep(50 * time.Millisecond)
++	}
++	if !hasRule(l, "external") {
++		t.Fatal("live reload did not load the rule")
++	}
++	if err := os.Remove(file); err != nil {
++		t.Fatal(err)
++	}
++	deadline = time.Now().Add(5 * time.Second)
++	for hasRule(l, "external") && time.Now().Before(deadline) {
++		time.Sleep(50 * time.Millisecond)
++	}
++	if hasRule(l, "external") {
++		t.Error("removing the rule file did not drop the rule from memory")
 +	}
 +}
 diff --git a/daemon/rule/loader_name_validation_test.go b/daemon/rule/loader_name_validation_test.go
@@ -7091,10 +7334,10 @@ index 00000000..90c2b7d6
 +}
 diff --git a/daemon/ui/notification_policy_test.go b/daemon/ui/notification_policy_test.go
 new file mode 100644
-index 00000000..e3994db4
+index 00000000..95d5cbe7
 --- /dev/null
 +++ b/daemon/ui/notification_policy_test.go
-@@ -0,0 +1,135 @@
+@@ -0,0 +1,175 @@
 +package ui
 +
 +import (
@@ -7228,5 +7471,45 @@ index 00000000..e3994db4
 +		if len(stream.replies) != 1 || stream.replies[0].Code != protocol.NotificationReplyCode_ERROR {
 +			t.Errorf("want one error reply, got %v", stream.replies)
 +		}
++	}
++}
++
++// A DELETE_RULE whose file cannot be removed is answered with an error, also
++// when a later rule in the same notification is deleted, and the rule stays.
++func TestDeleteRuleReplyReportsFailedFileDelete(t *testing.T) {
++	l, dir := policyLoader(t)
++	c := &Client{rules: l}
++	op := &protocol.Operator{Type: "simple", Operand: "process.path", Data: "/usr/bin/true"}
++	for _, name := range []string{"stuck", "fine"} {
++		stream := &replyRecorder{}
++		c.handleNotification(stream, &protocol.Notification{Id: 1, Type: protocol.Action_CHANGE_RULE, Rules: []*protocol.Rule{allowRule(name, op)}})
++		if len(stream.replies) != 1 || stream.replies[0].Code != protocol.NotificationReplyCode_OK {
++			t.Fatalf("CHANGE_RULE %s refused: %v", name, stream.replies)
++		}
++	}
++	// a non-empty directory in place of the file makes its removal fail
++	stuck := filepath.Join(dir, "stuck.json")
++	if err := os.Remove(stuck); err != nil {
++		t.Fatal(err)
++	}
++	if err := os.MkdirAll(filepath.Join(stuck, "x"), 0700); err != nil {
++		t.Fatal(err)
++	}
++
++	stream := &replyRecorder{}
++	c.handleNotification(stream, &protocol.Notification{Id: 2, Type: protocol.Action_DELETE_RULE,
++		Rules: []*protocol.Rule{{Name: "stuck"}, {Name: "fine"}}})
++	if len(stream.replies) != 1 || stream.replies[0].Code != protocol.NotificationReplyCode_ERROR || stream.replies[0].Id != 2 {
++		t.Fatalf("want one error reply for id 2, got %v", stream.replies)
++	}
++	rules := l.GetAll()
++	if _, ok := rules["stuck"]; !ok {
++		t.Error("the rule whose file could not be removed was dropped")
++	}
++	if _, ok := rules["fine"]; ok {
++		t.Error("the second rule was not deleted")
++	}
++	if _, err := os.Stat(filepath.Join(dir, "fine.json")); !os.IsNotExist(err) {
++		t.Errorf("the second rule's file is still on disk: %v", err)
 +	}
 +}

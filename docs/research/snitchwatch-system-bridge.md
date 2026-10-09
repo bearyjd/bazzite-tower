@@ -36,7 +36,7 @@ leaving a slash-containing HTTP/2 authority that the bridge rejects with
 then subscribed successfully with this configuration:
 
 - `Server.Address: unix:opensnitchd.sock`
-- `opensnitch.service`: `WorkingDirectory=/run/snitchwatch`, with `Requires=`
+- `opensnitch.service`: `WorkingDirectory=/run/snitchwatch`, with `Wants=`
   and `After=` on `snitchwatch-system-bridge-grpc.socket`.
 
 This VM-only workaround retains the absolute root-owned 0600 listener and root-peer check.
@@ -234,14 +234,65 @@ lifecycle and release/image integration unresolved.
 ## Opt-in image integration candidate
 
 The initial image plan used reviewed Snitchwatch commit `d09defc`. The
-reconciled candidate now pins `5c2b44adece96008e973947a9551b700b8d8a15b`, tree
-`fa952a8c2547160e928c1ee9b81be80370ef822e`, and OpenSnitch submodule
+reconciled candidate pinned `5c2b44adece96008e973947a9551b700b8d8a15b`, tree
+`fa952a8c2547160e928c1ee9b81be80370ef822e`; on 2026-10-07 it moved to
+`670f42c` (Snitchwatch PR #39: #47 pause fixes, #44 app-bound prompt rules) and
+on 2026-10-08 to `4b3ba5246b0e1401ae2cd6d8ea144107081e80a0` (tree
+`c3f08c67…`: honest UI, rule-name validation, timed session-scoped pause,
+Rules page listing every daemon rule), then to
+`b5238dc9bb699be9792c13c75ca019ab091bd9de` (tree `cbd56f4b…`: #63 bridge-side
+operator-shape validation, #66 flat tray menu), then to
+`b224adf1cbaa0965ab5d49a4ce4754d20d0c4f8d` (tree `05a640e6…`: #74 inline Deny as
+an app-bound until-restart rule, #45 PR A blocklist plumbing, bridge unit
+`MemoryMax=512M`), then to the r9 candidate
+`c088132d19d1619f16d9752a036c1dc2ba365677` (tree `3b366b74…`: headline
+#90 hardened profile/blocklist store opening, #89 rule import/export with a
+dry-run preview, #93 pausing lets waiting connections through once, #95 a
+pause-answer test fix, and #91 the shipped fetch rule below; the range from
+`b224adf` also carries #76 blocklist enforcement, #79, #81, #84, #86, #87 and
+smaller fixes), then to the r11 candidate
+`98aad35defef2a7e6e3274ddb96fe79636d9bc1b` (tree `7bd1e9e9…`: #94 rule hit
+counts, #98 a 30 s auto-answer with the default action and "Decide later",
+#99 the rule editor, #100 notification Allow once/Deny actions and #104
+network-profile enforcement; no pinned packaging input changed), then to the
+r12 candidate `9f5e2d64ffc7914df90b580392323041141c0bb2` (tree `a306a02a…`:
+#108 default-action rows for the #89 daemon events, #112 the #100
+notification fix, #105 recommended background-service rules, #101 rule
+badges, #106 and #111 Rules page and Make-a-rule follow-ups, #107 blocklist
+follow-ups; no pinned packaging input changed), and
+OpenSnitch submodule
 `b404c4c6316760fa7bc415509d3f8d747f7dc9cc`. A fresh Fedora 44 native factory
 build produced actual CLI version 0.1.1; a second fresh source/target build
 reproduced the artifact bytes. The Fedora 43 binary used by the October 5
 disposable VM and the divergent published v0.1.1 user-service release are
 not image deployment inputs. Original schema1 artifact evidence and the
 installed system-overlay provenance remain separate.
+
+From r9 the system variant also ships the one opensnitchd rule Snitchwatch
+owns, `/etc/opensnitchd/rules/000-snitchwatch-bridge-fetch.json` (0644, staged
+by upstream `packaging/system/stage.sh`, pinned in `sourceFiles` and in the
+installed manifest). It is an `allow`/`always` rule that matches only when all
+four hold: process path `/usr/bin/snitchwatch-bridge-cli`, user `snitchwatch`,
+destination port 443 and protocol `tcp`/`tcp6`. It lets the system bridge
+download blocklists under a future `DefaultAction: deny`. Threat notes, checked
+against the pinned OpenSnitch source (`daemon/rule/loader.go`,
+`operator.go`; the downstream patch leaves `FindFirstMatch` and the
+`user.name` lookup alone, and its UI-rule shape gate (`validateUIRule`)
+applies only to rules received over the UI channel, not to rules loaded from
+disk; the rule's name passes its `ValidName` check):
+`precedence: false`, so `FindFirstMatch` keeps scanning after it matches and
+any matching deny/reject rule, including Snitchwatch blocklist rules, still
+wins. The `user.name` operand is resolved with `user.Lookup` when the rule
+loads; if the `snitchwatch` account is missing at that moment the rule fails
+to compile and is skipped, never broadened. It is the only `/etc` path
+`verify-system-manifest.py` reads (an explicit constant; symlink and `..`
+checks kept). Because `/etc` is mutable on a booted bootc system, editing,
+re-moding or deleting it makes the verifier, and therefore the smoke/boot
+checks, refuse with a message naming it as the reserved, image-pinned rule.
+The RPM's own `/etc/opensnitchd/rules` is `drwxr-xr-x root root`
+(`rpm -qlvp` of the pinned 1.8.0 RPM; the RPM does not own
+`/etc/opensnitchd` itself) and `install -D` creates both staged parents 0755
+regardless of umask, so the overlay `COPY` does not change their modes.
 
 `SNITCHWATCH_BRIDGE=legacy` remains the default. The explicit `system` candidate
 requires `FIREWALL_DAEMON=opensnitch`, installs the native bridge and system
@@ -255,7 +306,7 @@ October 6 build evidence at the exact reconciled source:
 
 - Native bridge artifact SHA256: `5b1c89864985b862c2782dd7ac340aeefe7ba29f71de7bed3ede1b0e8039c2d1`; actual 0.1.1 binary SHA256: `cce18095907a0364abcae6f0be7c3e3b3554c982827ac2b3e9a11fe48e016370`. Artifact, checksum sidecar, licenses, source/tree/gitlink and 20 immutable overlay files passed independent inspection.
 - Fresh system-profile GUI bundle SHA256: `ab7d6ee8aefc195178a7914d343780a3a01b5c1b7512ba363a5ecf025d696ae0`. Its clean release build used supported KDE 6.11 / Qt 6.11.2, Rust 1.98.1, mold 2.42.0, declared protoc 29.3 and 657 lockfile-verified crate inputs. The GUI crate version remains 0.1.0. A separate archive supplies the full committed workspace, exact upstream vendor source, complete crate source archives and license texts.
-- The reviewed downstream OpenSnitch repair applies to upstream 1.8.0 at `b404c4c`. It cancels UI requests, joins both queue readers and callbacks while firewall hooks remain valid, then removes the hooks and releases the queues. Independent targeted race tests, the actual C callback fixture, full normal package tests, NFT ownership cases and a real watchdog child exiting nonzero passed. The October 6 16-file revision (`6e48804a…`, binary `3ea27d30…`) silently lost a queue reader on some boots; see [Target-image validation](#target-image-validation-october-67). The current 19-file patch (commit `d96a7a5`) SHA256 is `8d68ad9e6175d17f55c0884208089fcc50d44b3e098de954d12e6fa62aa6173c`; the image factory's two builds and an independent local pair are byte-identical at `2cf22351d645d7843b487d31dfb431d38b449aa0d4eadb13e518932d7dee4d02`.
+- The reviewed downstream OpenSnitch repair applies to upstream 1.8.0 at `b404c4c`. It cancels UI requests, joins both queue readers and callbacks while firewall hooks remain valid, then removes the hooks and releases the queues. Independent targeted race tests, the actual C callback fixture, full normal package tests, NFT ownership cases and a real watchdog child exiting nonzero passed. The October 6 16-file revision (`6e48804a…`, binary `3ea27d30…`) silently lost a queue reader on some boots; see [Target-image validation](#target-image-validation-october-67). The 19-file patch of commit `d96a7a5` (`8d68ad9e…`, binary `2cf22351…`) fixed that. The 22-file patch (SHA256 `4e7d9fe6…`, binary `8c925640…`, the r4 image) adds two fixes. It drains replies the reader never read before `nfq_destroy_queue()` (see [the investigation](opensnitch-nfq-destroy/README.md)). It also hands queued packets to the workers as soon as the queue exists, rather than after the rest of startup. The current 26-file patch (SHA256 `4419cc2e5b4da0f5e01c804701bab736af490465829c34285f5498de42dc43a9`) also closes the repeat-queue hand-off race (see the open items). A local pair of builds is byte-identical at `380540065ea93cb10b8071a1480a17aba1a70f88fdae608c863d22738c6bb881`; it has not been built into an image or run on a VM.
 - The earlier patch `4b53c88c390a0e85cb17067532bf6232034bd5f3f2e0843e5dc1a988dcc88043` and binary `2e6daa72db1e14b7ef3b82b7a04ef1ca4acd3f441c934ec4b9c4ae0c7310899b` are retained historical diagnostics. Fast stops still logged `nfq_destroy_queue() not closed: -1` and canceled-Ask invalid-rule errors. Bounded, nonconsuming instrumentation identified a stale negative ACK for a VERDICT preceding the successful UNBIND configuration ACK. Those instrumented binaries are excluded from shipping and do not prove the new uninstrumented repair passes on a VM.
 - A broader full-package race run failed in UI configuration watcher/global state paths. The same failure reproduced on unchanged upstream `b404c4c` with identical tools and generated protocol inputs; existing tests create successive clients without watcher cleanup. The scoped shutdown regressions passed independently. This does not establish production configuration reload paths are race-free; both failure logs and the unchanged source archive are retained.
 
@@ -348,20 +399,158 @@ Open items:
 
 - `nfq_destroy_queue() not closed: -1` appeared 3 times in the daemon log,
   each in the stop just before a stall-loop reboot (observed, not exported);
-  the eight timed daemon stops were warning-free.
+  the eight timed daemon stops were warning-free. Root cause found and fixed
+  2026-10-07, reproduced against the real kernel: a stale verdict error for an
+  entry the kernel flushed when another service removed a base chain was read
+  by `nfq_destroy_queue()` as its unbind reply. The queue was in fact
+  unbound. See [opensnitch-nfq-destroy](opensnitch-nfq-destroy/README.md). The
+  fix drains pending replies first. Confirmed on the r4 VM: a scripted
+  probe (a held Ask, a base-chain flush, then a stop) warned in 18 of 20
+  rounds on r3 and 0 of 20 on r4. Ordinary stops and 10 graphical cold
+  reboots on r4 logged none.
 - At first boot the patch's 1 ms `deliverPacket` timeout accepted one packet
-  without a decision (`Timed out while sending packet to queue channel 2`), a
-  pre-existing per-packet fail-open path.
-- A GUI Allow creates a destination-only rule (`allow if dest.ip is …`, no
-  process constraint); confirm that is the intended rule shape.
-- Readiness treats an empty `opensnitch.service.d` directory as a local
-  override.
-- The daemon factory and CI do not run the patch's Go tests.
+  without a decision (`Timed out while sending packet to queue channel 2`,
+  0.6 s after the daemon loaded its rules on r3). Channel 2 is the **repeat
+  queue** (queues are numbered in creation order, primary first). Likely
+  mechanism, not yet proven: when the daemon asks the GUI, a worker re-queues
+  the packet there and then waits on the repeat channel; the repeat queue's
+  reader gives that hand-off only 1 ms, and under first-boot CPU load the
+  worker can arrive later, so the packet is accepted without being asked
+  about. Fixed on 2026-10-07 in the 26-file patch: the repeat queue now waits
+  up to `repeatHandoffTimeout` (1 s), the same budget the asking worker
+  waits, so its reader can no longer give up first while the worker is on its
+  way. The same change gives any stale requeued packet a verdict (before, a
+  mismatch left the repeat reader blocked forever) and claims the single
+  prompt slot atomically (`TryStartAsking`). Unit tests prove the hand-off
+  mechanism in isolation, each checked by a mutation; the r3 first-boot
+  incident itself was not reproduced. On the VM (r5, same stress script,
+  every core saturated, no GUI so each Ask takes the hand-off) r5 logged 0
+  channel-2 timeouts and 0 lost requeues in 900 attempts; the r4 control
+  logged 3 in 900. That result holds without nftables base-chain changes.
+  Under chain churn the hand-off can still time out: the r7 VM logged 52
+  "requeued packet not received" lines during the teardown stress (20
+  restarts while a loop adds and deletes a base chain) and one at each of
+  2 of 10 boots; r6's disk log shows the same (44, and 4 boots). The
+  restart-under-load and requeue-stress controls logged 0. The working
+  hypothesis is that unregistering a base chain makes the kernel flush
+  queued entries with a drop verdict, so the requeued packet is dropped and
+  the "fail-open" wording of that log line is wrong. The r8 churn-only probe
+  on a deny-by-default VM confirmed it: 6 timeouts, 0 connections passed.
+  The primary queue keeps upstream's 1 ms. It was mis-attributed on 2026-10-07 to a separate
+  startup window, which the patch now closes as hardening (owner's choice of
+  option). The queue's reader started in `setupQueues`, but packets reached the
+  workers only after UI connect, rule reload, process-monitor and DNS setup.
+  Dispatch now starts with the queue. Neither r3 nor r4 produced a timeout in
+  10 daemon restarts under connection load, so that window is small in
+  practice. The 1 ms accept-on-timeout still applies when all workers are
+  busy.
+- ~~A GUI Allow creates a destination-only rule.~~ Fixed in Snitchwatch
+  `670f42c` (#44): a remembered "This host" answer now writes `list` =
+  `process.path` (sensitive) AND `dest.ip`/`dest.host`; VM-confirmed on r5.
+  Inline row buttons still answer "once", and existing host-only rules are
+  not migrated.
+- The GUI's inline Deny did not stop a retrying connection on r4. The daemon
+  logged `Added new rule: deny if dest.ip is 127.0.0.5`, yet the denied curl
+  completed (HTTP 404, i.e. allowed) about 4.4 s after the click, 19.4 s
+  after it started; a repeat curl timed out after 8 s. Root cause, from
+  source and confirmed on r5: the daemon never stores a `once` rule
+  (`rule/loader.go` `addUserRule`), and "Added new rule" is logged anyway. So
+  inline Deny drops one SYN; the retransmit asks again and, while that Ask
+  holds the only prompt slot, other new connections get the default allow
+  (r5: a fresh python request returned 200 in 0.02 s). A sheet Deny with
+  "Until quit" stored an app-bound in-memory rule that refused retries
+  without prompting and was gone after `systemctl restart opensnitch`. Owner
+  decision: inline Deny becomes "until restart", app-bound (Snitchwatch side).
+- ~~Readiness treats an empty `opensnitch.service.d` directory as a local
+  override.~~ Fixed 2026-10-07. Under a root-only unit directory
+  (`/etc/systemd/system`, `/run/systemd/*`, `/usr/local/lib/systemd/system`),
+  an empty `.d` directory is no longer refused if it is a real directory,
+  owned `root:root` and not group- or world-writable. The decision comes from
+  one `lstat`. Still refused: any entry in it, a symlink, a non-directory,
+  wrong ownership, a writable directory, and any `.d` under a home directory,
+  because the user owns its parent. Removing that refusal also dropped an
+  accidental tripwire: a loaded drop-in deleted without `daemon-reload`
+  leaves an empty directory. So readiness now requires
+  `NeedDaemonReload=no` for the bridge service, both sockets and
+  `opensnitch.service`. That also catches a drop-in added in a directory the
+  scan does not list, such as `system.attached` or dash-prefixed names.
+  Tested in `tests/test-snitchwatch-system.py`.
+  The two security-review leftovers are fixed (2026-10-07): readiness now
+  pins `opensnitch.service` to `/usr/lib/systemd/system/opensnitch.service`
+  with exactly the `20-system-bridge.conf` drop-in (plus, at most, Fedora's
+  byte-pinned `service.d/10-timeout-abort.conf`), and a path it cannot inspect
+  (EACCES, ELOOP, EIO) is refused instead of treated as absent. The pinned
+  values match the r5 VM's `systemctl show`, and the hardened helper passed
+  readiness there.
+- Rule names from the UI channel reached root file paths unvalidated
+  (`../default-config` made the daemon write or delete outside
+  `/etc/opensnitchd/rules`). Fixed in both layers on 2026-10-08: the bridge
+  (Snitchwatch #57) and, as defence in depth, the 34-file daemon patch, which
+  validates names in `Add`, `Replace`, `Delete` and `deleteRuleFromDisk` (no
+  separators, control, format or line-separator characters, at most 200
+  bytes). Two security reviews of the UI channel found more: `CHANGE_CONFIG`
+  could move rule/log/firewall paths, the server address and TLS, and its
+  "tunable" fields could still stall or crash the daemon; `RELOAD_FW_RULES`
+  takes arbitrary nftables rules (NAT included); `TASK_START` returns another
+  process's environment and memory map, and bad task input panics the daemon;
+  `lists.*` operators make root read any directory. None is reachable through
+  the bridge, which sends only `CHANGE_RULE`/`DELETE_RULE` (allowlisted at its
+  send point). The daemon now accepts exactly those two notification actions
+  in the system variant (others get an error reply) and confines `lists.*`
+  operands from the UI channel to the Snitchwatch blocklist directory (below). The owner confirmed on
+  2026-10-08 that this two-action allowlist is policy: any further action
+  needs its own change, with validation and review.
+- Snitchwatch blocklists (#45 PR B) are in the 44-file patch. The UI channel
+  accepts a `lists.domains`/`lists.ips` operand only from `CHANGE_RULE`, only
+  for a `z00-blocklist:<list>` rule whose data is exactly
+  `/var/lib/snitchwatch/blocklists/<list>/<kind>`, and at most 64 such rules;
+  AskRule replies and every other lists operand are refused. The daemon reads
+  those files through a confined reader (component-wise `openat` with
+  `O_NOFOLLOW`, no FUSE, regular single-link files only, at most 80 MiB and
+  1M accepted entries per file) under a shared 640 MiB budget, which holds the
+  contract's 2M hosts plus one reload in flight. It also sets a soft Go memory
+  limit of 896 MiB unless `GOMEMLIMIT` is set. A list over budget is kept at
+  its last good version, retried with backoff and logged as an error; the
+  bridge is not told (owner decision 2026-10-08). Threat model: a malformed
+  list line (e.g. a bare `127.0.0.1`) used to panic upstream's parser; only a
+  compromised bridge, something running as `snitchwatch`, or an edited or
+  leftover file can produce one, because the honest bridge writes only
+  `0.0.0.0 <host>` or canonical IPv4 lines. Five security and code review
+  rounds; the daemon patch gate runs the confined tests and fails, rather
+  than skips, if no non-FUSE temporary directory is available.
+- Prompt-slot options (owner decision 2026-10-08, Snitchwatch plan section E;
+  49-file patch). E2 `DropWhileAsking` (daemon config file only, default
+  `false`, absent from the shipped config): while the UI is connected and the
+  single Ask slot is busy, a connection no rule matched is dropped with no
+  rule, no `DefaultAction` and no statistics at all (its own `busyDrops`
+  counter and a rate-limited log line); TCP and DNS retry and the retry is
+  asked. Rules still match first, so it never overrides a rule; when enabled,
+  a local process that keeps the slot busy gets other programs' unmatched
+  connections dropped, the same fail-closed outcome as `DefaultAction: deny`.
+  E3: a connection decided by `DefaultAction` is recorded as a statistics
+  Event whose synthetic rule is exactly name `""`, description
+  `snitchwatch:default-action`, the applied action, enabled, duration
+  `once`, operator `simple`/`true`. **That name and description are a
+  contract with the Snitchwatch bridge** (it keys on both, so it stays inert
+  against stock OpenSnitch); they must not change without coordinating. `""`
+  is used because rule-name validation refuses it, while `<default>` is a
+  legal rule name. The Event ring also no longer evicts an older Event for a
+  miss that records nothing (a change from upstream).
+  The rule loader also refuses rule files whose name fails the same
+  validation, at startup and on live reload (logged, file left in place),
+  so a root-written file named `""` cannot pose as that synthetic rule.
+- ~~The daemon factory and CI do not run the patch's Go tests.~~ Fixed
+  2026-10-07: `just test-snitchwatch-daemon-patch` and the path-filtered
+  `snitchwatch-daemon-patch.yml` workflow run them, `-race` included.
+  Putting back the r2 `return EIO` makes the gate fail
+  (`.agent_native/agent_roadmap.md` item 7).
 - Ignored per-message `nfq_handle_packet()` failures are not counted or
   logged; the `NETLINK_NO_ENOBUFS` `setsockopt` result is unchecked; reader
   errors name the internal queue index, not the queue number.
 - Serialized prompts are an upstream limitation with a real desktop cost:
-  background services can hold the only prompt slot.
+  background services can hold the only prompt slot. On r4 a `kioworker`
+  Ask (discord.com) held it right after login; Steam and the Bazzite welcome
+  app were also closed to clear the queue.
 
 ## Consumer rollout gate
 
@@ -388,14 +577,119 @@ passes its scoped integration checks:
    Account IDs must come from the target image's named accounts rather than
    the earlier VM's numeric IDs. No user receives GUI membership implicitly.
 
-Status for the `d96a7a5` candidate in the disposable VM: gate 1 is met for
-default KDE startup and Allow decisions without overrides on the supported KDE
-6.11 runtime; a GUI Deny was not exercised. Gate 2 is partly open: controlled stops are warning-free and the
-reader stall is fixed, but reboot-time stops can still log the
-`nfq_destroy_queue` warning. Gates 3–5 passed for this image, including
-independent provenance review, cold first boot, fallback, migration/refusal,
-token rotation and reconnection. A host trial and the open items above remain
-before any default rollout.
+Status for the `65e02dd` (r4) candidate in the disposable VM (2026-10-08 UTC):
+gate 1 is met for default KDE startup, Allow and Deny decisions (Deny with the caveat above), last-GUI
+loss and late-verdict rejection, without overrides on KDE 6.11. Gate 2 is met for teardown: the `nfq_destroy_queue`
+warning is fixed and VM-confirmed, and a forced reader death logged, exited 1,
+was restarted by systemd after 30 s and let traffic through meanwhile
+(QueueBypass; 44 of 45 requests succeeded). Gates 3–5 were re-run on r4: independent image review, cold
+first boot, every acceptance probe phase, readiness drop-in handling, 10
+graphical cold boots with no stall. A host trial and the open items above
+remain before any default rollout. Evidence:
+`output/snitchwatch-fresh-vm-r4.G9c5CJ/R4-VM-ACCEPTANCE-RESULT.json`, with r3
+controls in `output/snitchwatch-r3-control.*/`.
+
+Status for the `fc418c2` (r5) candidate (26-file daemon patch, Snitchwatch
+`670f42c`) in the disposable VM (2026-10-08 UTC): independent image review
+PASS; cold first boot and every acceptance probe phase PASS; readiness
+drop-ins, pending-flush-stop (0/20), startup window (0/10) and teardown
+stress (0/20) unchanged from r4; 10 graphical cold boots clean; repeat-queue
+stress 0/900 against r4's 3/900; app-bound Allow, #47 pause (auto-allow only
+with a GUI, cleared when the last GUI leaves, not inherited), last-GUI loss
+(0.076 s) and late-verdict rejection PASS; 0 AVC, no core dumps. Reader death
+was not re-run (r4 PASS, code path unchanged). Evidence:
+`output/snitchwatch-fresh-vm-r5.N3rERm/R5-VM-ACCEPTANCE-RESULT.json`.
+
+Status for the `76dddc0` (r6) candidate (34-file daemon patch with the
+UI-channel hardening, Snitchwatch `4b3ba52`, GUI rebuilt offline at app commit
+`3c269292`) in the disposable VM (2026-10-08 UTC): independent image review
+PASS; every headless phase PASS (requeue stress 0/300, readiness, flush-stop
+0/20, startup 0/10, teardown 0/20); 10 graphical cold boots clean; the daemon
+refused 0 notification actions during real GUI use (Rules page list, toggle,
+delete). The Rules page lists every daemon rule after a reconnect and shows
+an invalid-name rule read-only; an open inspector stops offering a verdict
+once its prompt times out; the bridge's timed pause auto-allows without
+saving, expires at exactly 300 s and prompting resumes. Findings handed to
+Snitchwatch: the tray's "Pause filtering" item does nothing, and rule files
+changed on disk after the daemon's HELLO appear only after a reconnect
+(#65). A connection's own retransmits are held while its prompt is open;
+only a different pending Ask makes new connections fall to the default
+action. Evidence: `output/snitchwatch-fresh-vm-r6.Ywa9O5/R6-VM-ACCEPTANCE-RESULT.json`.
+
+Status for the `01ccefa` (r7) candidate (35-file daemon patch adding the
+UI-channel operator type/operand guard, Snitchwatch `b5238dc`, GUI rebuilt
+offline at app commit `f582bc14`) in the disposable VM (2026-10-08 UTC):
+independent image review PASS; every headless phase PASS; 10 graphical cold
+boots clean; 0 AVC, no core dumps, 0 refused notification actions. From the
+real Plasma tray: the exported dbusmenu is flat and enables either the three
+Pause items or "Resume filtering (until HH:MM)"; "Pause for 5 minutes" sets
+FilterOff for 300 s as uid 1000 and auto-allows without writing a rule;
+Resume ends it early and prompting returns; an unattended pause expires at
++300.0 s; the menu works from the keyboard. Rules-page toggles still save
+after #63. The daemon's operator guard is not reachable from the GUI (the
+bridge already refuses those shapes), so it is covered only by unit tests
+and the patch gate. Still open: #65, and the hand-off timeout under chain
+churn described above. Evidence:
+`output/snitchwatch-fresh-vm-r7.BijrNa/R7-VM-ACCEPTANCE-RESULT.json`.
+
+Status for the `20be83f` (r8) candidate (daemon patch unchanged from r7,
+Snitchwatch `b224adf`, GUI rebuilt offline at app commit `6842ca15`) in the
+disposable VM (2026-10-08 UTC): independent image review PASS; every headless
+phase PASS; 10 graphical cold boots clean; 0 AVC, no core dumps, 0 refused
+notification actions. With `DefaultAction` set to deny in the VM only:
+inline Deny stores one app-bound rule (program path and destination) for
+"until restart", in memory only; it blocks the program's retries, leaves other
+programs to the same host prompting, survives other prompts and is gone after
+a daemon restart. Deleting it on the Rules page restores prompting; "Deny all"
+makes one rule per host; a Deny with the bridge down says it was not sent; the
+tray pause, resume and 300 s expiry still work. A churn-only probe on the
+deny-by-default VM (6 hand-off timeouts, 0 of 40 connections passed, 0 stale
+requeues accepted) shows the requeued packet is dropped under chain churn, so
+the daemon's "fail-open" log wording is wrong rather than a bypass. Findings:
+a prompt pending before a pause keeps the prompt slot (Snitchwatch #78), and
+stopping `snitchwatch-system-bridge-grpc.socket` also stops `opensnitch.service`
+(its drop-in `Requires=` the socket) until it is started by hand. Evidence:
+`output/snitchwatch-fresh-vm-r8.xZd346/R8-VM-ACCEPTANCE-RESULT.json`.
+The owner chose to keep the firewall up: the drop-in now uses `Wants=` (with
+the same `After=`), so the socket is still pulled in and ordered first at boot,
+but stopping it no longer stops the daemon, which falls back to its default
+action while no UI is connected. The build verifier, readiness helper and boot
+check now require `Wants=`. Daemon reconnection after the socket comes back
+is checked on the r9 VM.
+
+Status for the r9 and r10 candidates (2026-10-08). The r9 image (`78dd7ef`:
+#86 + the 44-file blocklist daemon patch #87 + Snitchwatch `c088132` #88)
+passed its build and independent review, but its first boot found that the
+readiness helper still required every system manifest entry to be under
+`/usr` and refused the shipped `/etc` fetch rule ("unsafe system manifest
+entry"). `e600c1a` accepts exactly that one path (and refuses it behind a
+symlinked directory); the rebuilt r10 image `sha256:f5f22e8f…` passed its
+independent review and the full VM gate: first boot with readiness passing,
+the headless gate (requeue losses 0/0/47 as r8), and on deny-by-default the
+fetch rule (compiles; the `snitchwatch` account exists first), a blocklist
+subscription (rule installed, listed host denied by the `z00-blocklist` rule,
+unlisted host prompts, no resend after a bridge restart, clean unsubscribe,
+0 AVCs), #93 pause answering a waiting prompt once with no rule, the `Wants=`
+socket stop (firewall stays up, NFQUEUE rules kept, daemon reconnects in 2 s
+without a restart), WireGuard traffic (not intercepted with the shipped
+`InterceptUnknown: false`; with a VM-only `true`, an empty-path prompt whose
+Deny applies once), the GUI checks (pause wording, "Allowed once (filtering
+was paused)", the read-only fetch-rule row with Delete disabled) and a clean
+10-boot graphical loop. Evidence:
+`output/snitchwatch-fresh-vm-r10.0N0Fnn/R10-VM-ACCEPTANCE-RESULT.json`.
+
+Status for the r11 candidate (2026-10-08): image `sha256:ffd6d4bc…` from
+`dc077dd` (#89 prompt-slot options in the 49-file daemon patch + Snitchwatch
+`98aad35`) passed its independent review and the VM gate: first boot,
+headless, the r10 regression checks, the 30 s auto-answer and "Decide later"
+(#98), default-action rows (#89 E3, blank name until the bridge mapping),
+`DropWhileAsking` busy drops (#89 E2, VM-only), the rule editor's refusals
+(#99), network-profile rules (#104, including a manual choice kept across a
+reboot), rule hit counts surviving a bridge restart and a reboot (#94), and a
+clean 10-boot loop. Finding: #100 notification "Allow once" did not answer
+the prompt, and with the window closed a new prompt raised the window
+without posting a notification; Snitchwatch is fixing both. Evidence:
+`output/snitchwatch-fresh-vm-r11.OBAPBX/R11-VM-ACCEPTANCE-RESULT.json`.
 
 The fixed target-image acceptance limits are 5 seconds for no-GUI fallback,
 2 seconds for pending cleanup and 15 seconds for daemon stop. Preserve the

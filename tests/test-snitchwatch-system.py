@@ -58,13 +58,14 @@ class Fixture(common.Context):
                 FragmentPath="/usr/lib/systemd/system/"+common.SERVICE, DropInPaths="", ExecStartPre="", ExecStartPost="", ExecStop="", ExecStopPost="", ExecCondition="",
                 ExecStart="{ path=/usr/bin/snitchwatch-bridge-cli ; argv[]=/usr/bin/snitchwatch-bridge-cli ; ignore_errors=no ; }",
                 Environment="SNITCHWATCH_SYSTEM_BRIDGE=1 SNITCHWATCH_WS_SOCKET=/run/snitchwatch/bridge.sock SNITCHWATCH_WS_TOKEN_PATH=/run/snitchwatch-auth/token HOME=/var/lib/snitchwatch XDG_STATE_HOME=/var/lib",
-                TriggeredBy=" ".join(common.SOCKETS), RestrictAddressFamilies="AF_UNIX AF_INET AF_INET6", MainPID="0"),
-            "opensnitch.service": dict(MainPID="501", ExecStart="{ path=/usr/bin/opensnitchd ; argv[]=/usr/bin/opensnitchd ; ignore_errors=no ; }", WorkingDirectory="/run/snitchwatch", Requires=common.SOCKETS[0]+" network.target", After=common.SOCKETS[0]+" network.target")}
+                TriggeredBy=" ".join(common.SOCKETS), RestrictAddressFamilies="AF_UNIX AF_INET AF_INET6", MainPID="0", NeedDaemonReload="no"),
+            "opensnitch.service": dict(MainPID="501", ExecStart="{ path=/usr/bin/opensnitchd ; argv[]=/usr/bin/opensnitchd ; ignore_errors=no ; }", WorkingDirectory="/run/snitchwatch", Wants=common.SOCKETS[0]+" network.target", After=common.SOCKETS[0]+" network.target", Requires="", Requisite="", BindsTo="", PartOf="", NeedDaemonReload="no",
+                FragmentPath="/usr/lib/systemd/system/opensnitch.service", DropInPaths="/usr/lib/systemd/system/opensnitch.service.d/20-system-bridge.conf")}
         for unit, path, group, mode in ((common.SOCKETS[0], "/run/snitchwatch/opensnitchd.sock", "root", "0600"), (common.SOCKETS[1], "/run/snitchwatch/bridge.sock", "snitchwatch-ui", "0660")):
-            self.properties[unit] = dict(Listen=path+" (Stream)", SocketUser="root", SocketGroup=group, SocketMode=mode, Accept="no", Triggers=common.SERVICE, FragmentPath="/usr/lib/systemd/system/"+unit, DropInPaths="")
+            self.properties[unit] = dict(Listen=path+" (Stream)", SocketUser="root", SocketGroup=group, SocketMode=mode, Accept="no", Triggers=common.SERVICE, FragmentPath="/usr/lib/systemd/system/"+unit, DropInPaths="", NeedDaemonReload="no")
         self.write(common.PROFILE, "system\n")
         self.write(common.BINARY, "reviewed released bridge executable\n", 0o755)
-        mandatory = [common.BINARY, common.REFERENCE, "/usr/lib/sysusers.d/snitchwatch.conf", "/usr/lib/tmpfiles.d/snitchwatch.conf", "/usr/lib/systemd/system/opensnitch.service.d/20-system-bridge.conf"]
+        mandatory = [common.BINARY, common.REFERENCE, "/usr/lib/sysusers.d/snitchwatch.conf", "/usr/lib/tmpfiles.d/snitchwatch.conf", "/usr/lib/systemd/system/opensnitch.service.d/20-system-bridge.conf", common.FETCH_RULE]
         mandatory += ["/usr/lib/systemd/system/"+unit for unit in (common.SERVICE, *common.SOCKETS)]
         for name in mandatory:
             if name != common.BINARY:
@@ -308,11 +309,152 @@ class SystemBehavior(unittest.TestCase):
                 if path.is_symlink():path.unlink()
 
     def test_typewide_local_service_overrides_refuse(self):
+        # Intent changed 2026-10-07: an empty directory alone is no longer an
+        # override (see the empty drop-in tests below); a planted drop-in is.
         for directory in ["/etc/systemd/system/service.d", "/run/systemd/system/service.d", "/usr/local/lib/systemd/system/service.d"]:
             with self.subTest(directory=directory):
-                self.ctx.path(directory).mkdir(parents=True)
+                planted = self.ctx.write(directory+"/unsafe.conf", "[Service]\nExecStart=/unsafe\n")
+                self.ctx.path(directory).chmod(0o755)  # refuse for the planted drop-in, not a umask-writable directory
                 with self.assertRaises(common.Refusal):common.local_conflicts(self.ctx)
-                self.ctx.path(directory).rmdir()
+                planted.unlink();self.ctx.path(directory).rmdir()
+
+    def test_empty_root_owned_dropin_directory_is_not_an_override(self):
+        # systemd loads nothing from an empty drop-in directory. The r3 VM's
+        # refusals fixture left /etc/systemd/system/opensnitch.service.d behind
+        # and readiness refused it.
+        for directory in ["/etc/systemd/system/opensnitch.service.d", "/run/systemd/system/"+common.SERVICE+".d",
+                          "/etc/systemd/system/service.d", "/usr/local/lib/systemd/system/service.d"]:
+            with self.subTest(directory=directory):
+                path = self.ctx.path(directory);path.mkdir(parents=True);path.chmod(0o755)
+                try: common.local_conflicts(self.ctx)
+                finally: path.rmdir()
+        self.ctx.system_config();self.ctx.flatpak()
+        self.ctx.path("/etc/systemd/system/opensnitch.service.d").mkdir(parents=True, mode=0o755)
+        self.assertEqual(common.runtime_readiness(self.ctx)["defaultAction"], "allow")
+
+    def test_empty_dropin_directory_under_a_home_still_refuses(self):
+        # The user owns the parent, so ownership of the empty directory proves
+        # nothing: they can replace it with one holding an override.
+        path = self.ctx.path("/var/home/gate/.config/systemd/user/snitchwatch-bridge.service.d")
+        path.mkdir(parents=True);path.chmod(0o755)
+        with self.assertRaisesRegex(common.Refusal, "local unit override"):common.local_conflicts(self.ctx)
+
+    def test_units_changed_on_disk_since_load_refuse(self):
+        # A loaded drop-in deleted (or a new one added anywhere) without a
+        # daemon-reload leaves systemd running a configuration nobody reviewed.
+        self.ctx.system_config();self.ctx.flatpak()
+        for unit in common.UNITS:
+            with self.subTest(unit=unit):
+                self.ctx.properties[unit]["NeedDaemonReload"] = "yes"
+                try: self.refuse_readiness("daemon-reload")
+                finally: self.ctx.properties[unit]["NeedDaemonReload"] = "no"
+
+    def test_fetch_rule_is_the_only_manifest_entry_outside_usr(self):
+        common.immutable(self.ctx)
+        self.ctx.write("/etc/opensnitchd/rules/other.json", "{}\n")
+        self.ctx.refresh_manifest([*self.ctx.manifest["files"], "/etc/opensnitchd/rules/other.json"])
+        with self.assertRaisesRegex(common.Refusal, "unsafe system manifest entry"):
+            common.immutable(self.ctx)
+
+    def test_manifest_without_fetch_rule_refuses(self):
+        self.ctx.refresh_manifest([name for name in self.ctx.manifest["files"] if name != common.FETCH_RULE])
+        with self.assertRaisesRegex(common.Refusal, "lacks required installed assets"):
+            common.immutable(self.ctx)
+
+    def test_symlinked_fetch_rule_directory_refuses(self):
+        rules = self.ctx.path("/etc/opensnitchd/rules")
+        moved = self.ctx.path("/etc/opensnitchd/rules-real")
+        rules.rename(moved);rules.symlink_to("rules-real")
+        with self.assertRaisesRegex(common.Refusal, "symlink in the path of the shipped Snitchwatch fetch rule"):
+            common.immutable(self.ctx)
+
+    def test_hard_dependency_on_grpc_socket_refuses(self):
+        for key in ("Requires", "Requisite", "BindsTo", "PartOf"):
+            with self.subTest(key=key):
+                daemon = self.ctx.properties["opensnitch.service"]
+                daemon[key] = common.SOCKETS[0]
+                with self.assertRaisesRegex(common.Refusal, "only Want the bridge gRPC socket"):
+                    common.unit_contract(self.ctx)
+                daemon[key] = ""
+
+    def test_daemon_unit_file_and_dropins_are_pinned(self):
+        # NeedDaemonReload only proves systemd loaded what is on disk; it says
+        # nothing about which file and drop-ins it loaded for the daemon.
+        self.ctx.system_config();self.ctx.flatpak()
+        daemon = self.ctx.properties["opensnitch.service"]
+        for name, value in (("FragmentPath", "/etc/systemd/system/opensnitch.service"), ("FragmentPath", ""),
+                            ("DropInPaths", ""), ("DropInPaths", common.VENDOR_DROPIN),
+                            ("DropInPaths", common.DAEMON_DROPIN+" /run/systemd/system.attached/opensnitch.service.d/x.conf"),
+                            ("DropInPaths", common.DAEMON_DROPIN+" "+common.DAEMON_DROPIN)):
+            with self.subTest(name=name, value=value):
+                old = daemon[name];daemon[name] = value
+                try: self.refuse_readiness("OpenSnitch effective unit")
+                finally: daemon[name] = old
+        # Fedora's global service.d timeout drop-in applies to every service.
+        self.ctx.write(common.VENDOR_DROPIN, VENDOR_CONTENT)
+        daemon["DropInPaths"] = common.DAEMON_DROPIN+" "+common.VENDOR_DROPIN
+        self.assertEqual(common.runtime_readiness(self.ctx)["defaultAction"], "allow")
+
+    def test_enabled_user_unit_under_a_symlinked_unit_dir_refuses(self):
+        # systemd follows a symlinked ~/.config/systemd/user (dotfile
+        # managers), so a wants link inside it enables the legacy bridge.
+        real = self.ctx.path("/var/home/gate/dotfiles/systemd/user/default.target.wants")
+        real.mkdir(parents=True);(real/"snitchwatch-bridge.service").symlink_to("/usr/lib/systemd/user/snitchwatch-bridge.service")
+        link = self.ctx.path("/var/home/gate/.config/systemd/user");link.parent.mkdir(parents=True)
+        link.symlink_to(self.ctx.path("/var/home/gate/dotfiles/systemd/user"))
+        with self.assertRaisesRegex(common.Refusal, "default.target.wants/snitchwatch-bridge.service"):common.local_conflicts(self.ctx)
+
+    def test_unlistable_user_unit_dir_refuses(self):
+        self.ctx.path("/var/home/gate/.config/systemd/user").mkdir(parents=True)
+        real = os.listdir
+        def denied(path):
+            if str(path).endswith("/var/home/gate/.config/systemd/user"):
+                raise PermissionError(13, "Permission denied", str(path))
+            return real(path)
+        with mock.patch.object(common.os, "listdir", side_effect=denied):
+            with self.assertRaisesRegex(common.Refusal, "cannot inspect"):common.local_conflicts(self.ctx)
+
+    def test_unreadable_override_path_refuses(self):
+        # An override that readiness cannot inspect must not count as absent.
+        # (An unlistable user unit directory: test_unlistable_user_unit_dir_refuses.)
+        for target in ("/etc/systemd/system/opensnitch.service.d", "/etc/systemd/system/"+common.SERVICE,
+                       "/var/home/gate/.config/systemd/user/snitchwatch-bridge.service"):
+            with self.subTest(target=target):
+                real = self.ctx.stat
+                def denied(name, real=real, target=target):
+                    if name == target:
+                        raise PermissionError(13, "Permission denied", name)
+                    return real(name)
+                with mock.patch.object(self.ctx, "stat", side_effect=denied):
+                    with self.assertRaisesRegex(common.Refusal, "cannot inspect"):common.local_conflicts(self.ctx)
+
+    def test_populated_or_unsafe_dropin_directory_refuses(self):
+        directory = "/etc/systemd/system/opensnitch.service.d"
+        path = self.ctx.path(directory)
+        elsewhere = self.ctx.path("/tmp/empty-elsewhere");elsewhere.mkdir(parents=True);elsewhere.chmod(0o755)
+        for fault in ("conf", "other-file", "subdir", "dangling-link", "group-writable", "world-writable", "user-owned", "group-owned", "symlink", "file"):
+            with self.subTest(fault=fault):
+                if fault == "symlink": path.parent.mkdir(parents=True, exist_ok=True);path.symlink_to(elsewhere)
+                elif fault == "file": self.ctx.write(directory, "")
+                else:
+                    path.mkdir(parents=True);path.chmod(0o755)
+                    if fault == "conf": (path/"override.conf").write_text("[Service]\nExecStart=/unsafe\n")
+                    elif fault == "other-file": (path/"notes.txt").write_text("not loaded, still refused\n")
+                    elif fault == "subdir": (path/"nested").mkdir()
+                    elif fault == "dangling-link": (path/"gone.conf").symlink_to(self.ctx.path("/nonexistent"))
+                    elif fault == "group-writable": path.chmod(0o775)
+                    elif fault == "world-writable": path.chmod(0o777)
+                    elif fault == "user-owned": self.ctx.owners[directory] = (1000, 1000)
+                    elif fault == "group-owned": self.ctx.owners[directory] = (0, 1000)
+                try:
+                    with self.assertRaisesRegex(common.Refusal, "local unit override"):common.local_conflicts(self.ctx)
+                finally:
+                    self.ctx.owners.pop(directory, None)
+                    if path.is_symlink() or path.is_file(): path.unlink()
+                    else:
+                        for entry in path.iterdir():
+                            entry.rmdir() if entry.is_dir() and not entry.is_symlink() else entry.unlink()
+                        path.rmdir()
 
     def test_native_property_request_keeps_explicit_empty_values(self):
         commands = []

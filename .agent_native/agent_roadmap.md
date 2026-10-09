@@ -12,7 +12,7 @@ prior worked example of an agent-driven hardware-bug investigation
 Ranked by **Human-Attention-Saved per Unit of Effort** (highest first).
 
 **Status (2026-08-07): 6 of 6 resolved. Nothing open.** (2026-10-07: item 7
-added and open.)
+added and resolved the same day.)
 
 Every item in this audit is closed. Two things are worth carrying forward more
 than the individual fixes:
@@ -566,21 +566,26 @@ structural entanglement (item 4).
 
 ---
 
-## 7. Run the downstream OpenSnitch patch's tests somewhere automatic — OPEN (2026-10-07)
+## 7. Run the downstream OpenSnitch patch's tests somewhere automatic — DONE (2026-10-07)
 
 `build_files/firewall/snitchwatch-system-daemon-shutdown.patch` carries Go and
 C tests (`queue_shutdown_test.go`, `queue_reader_failure_test.go`,
-`testdata/queue_run.c`, `reader_failure_test.go`, …). The daemon factory and
-CI apply and build the patch but never run `go test`. The October 6 reader-exit
+`testdata/queue_run.c`, `reader_failure_test.go`, …). Until this item, the
+daemon factory and CI applied and built the patch but never ran `go test`. The October 6 reader-exit
 stall shipped in a reviewed patch and was caught only by the VM's cold-boot
 gate; the tests that would have caught it were written afterwards and run only
 by hand in a cached offline builder.
 
 | Acceptance criterion | Status |
 |---|---|
-| A `just` recipe applies the pinned patch to upstream `b404c4c` and runs the targeted `-race` suites plus `go test ./netfilter ./firewall/nftables` offline | Open |
-| CI runs it on PRs that touch `build_files/firewall/snitchwatch-system-daemon-*` | Open |
-| The known upstream `ui` race failures (`TestClientReloadingConfig`, `TestClientInvalidProcMon`) are excluded explicitly, not silently | Open |
+| A `just` recipe applies the pinned patch to upstream `b404c4c` and runs the targeted `-race` suites plus `go test ./netfilter ./firewall/nftables` offline | Done — `just test-snitchwatch-daemon-patch` (`tests/test-snitchwatch-daemon-patch.sh`). It goes further than targeted suites: whole root/netfilter/nftables/ui packages under `-race` (Go code; the C harness binaries run without a sanitizer, and upstream's privileged nftables tests skip), then a plain pass. `go vet` covers netfilter/nftables in full and root/ui without the three analyzers upstream code trips. Source goes through the factory's own `check-source` gates; tests run in a `--network=none` container with `GOPROXY=off` |
+| CI runs it on PRs that touch `build_files/firewall/snitchwatch-system-daemon-*` | Done — `.github/workflows/snitchwatch-daemon-patch.yml` (PR + push to main on those paths, dispatch). Not a required check, because it is path-filtered |
+| The known upstream `ui` race failures (`TestClientReloadingConfig`, `TestClientInvalidProcMon`) are excluded explicitly, not silently | Done — skipped by name in the `-race` pass only, and still run in the plain pass. The 2026-10-07 check found a third (`TestClientDefaultConfig`, intermittent). All three fail under `-race` on pristine `b404c4c` too, and they are upstream's entire `ui` suite |
+
+Proof the gate fails when it should (2026-10-07): putting back the r2 bug
+(`if (nfq_handle_packet(...) < 0) return EIO;` in `queue.h`) makes
+`TestRunContinuesPastFailedNetlinkMessage` fail, and the recipe exits 1. A
+drifted Go toolchain exits 3 with `TOOLCHAIN DRIFT (not a test failure)`.
 
 See `docs/research/snitchwatch-system-bridge.md` (Target-image validation) for
 the failure and the other open daemon items.

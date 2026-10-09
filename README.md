@@ -567,6 +567,10 @@ Runs shfmt on all Bash scripts.
 
 Runs fixture-based tests for `ci/base-diff.py` against committed manifest pairs under `tests/fixtures/base-diff/` — offline, no live upstream manifests needed.
 
+### `just test-snitchwatch-daemon-patch`
+
+Runs `tests/test-snitchwatch-daemon-patch.sh`: applies the pinned downstream OpenSnitch patch to its pinned upstream commit (through the daemon factory's own source checks) and runs the patch's Go tests (with `-race`; the C harness tests it builds run without a sanitizer), in two throwaway containers from the pinned Fedora builder — one with network to fetch, one with `--network=none` to test. No image build. Exit 3 means the Fedora toolchain drifted from the pins, not a test failure. Upstream's three `ui` tests that also fail under `-race` on the unpatched commit are skipped by name in the `-race` pass only. Upstream's privileged nftables tests skip too, as they need `PRIVILEGED_TESTS` and namespace creation.
+
 ## Additional resources
 
 For additional driver support, ublue maintains a set of scripts and container images at [ublue-akmods](https://github.com/ublue-os/akmods). These images include scripts to install multiple kernel drivers within the container (Nvidia, OpenRazer, Framework, etc.) — useful if you need to extend `bazzite-tower` with additional hardware support.

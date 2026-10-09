@@ -347,6 +347,14 @@ system)
         /usr/libexec/snitchwatch/verify-system-manifest.py --root /
     check "downstream daemon source, patch, binary and licenses verify" \
         /usr/libexec/snitchwatch/verify-system-daemon.py --root /
+    # The one opensnitchd rule Snitchwatch ships (its hash is pinned and
+    # checked by the verifier above); the RPM's own rules dir stays 0755.
+    # shellcheck disable=SC2016 # Expanded by the inner shell.
+    check "system ships the bridge fetch rule as a regular 0644 file" \
+        bash -c 'f=/etc/opensnitchd/rules/000-snitchwatch-bridge-fetch.json; [[ -f "$f" && ! -L "$f" && "$(stat -c %a "$f")" == 644 ]]'
+    # shellcheck disable=SC2016 # Expanded by the inner shell.
+    check "opensnitchd rules dir keeps the RPM's 0755 root:root" \
+        bash -c '[[ "$(stat -c %a:%U:%G /etc/opensnitchd/rules)" == 755:root:root ]]'
     check "native bridge is executable" test -x /usr/bin/snitchwatch-bridge-cli
     check "native bridge is an ELF executable" \
         bash -c 'file /usr/bin/snitchwatch-bridge-cli | grep -q "ELF 64-bit.*executable"'

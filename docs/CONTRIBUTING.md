@@ -33,6 +33,7 @@ pieces fit together read [docs/CODEMAPS/](./CODEMAPS/architecture.md).
 | `just format` | `shfmt --write` every `*.sh` — **not** a required gate, see "Code style" |
 | `just check` / `just fix` | Check / auto-format Just syntax |
 | `just test-ci` | Fixture-based tests for `ci/base-diff.py` (offline, no live upstream manifests needed) |
+| `just test-snitchwatch-daemon-patch` | Apply the pinned OpenSnitch patch to upstream and run its Go tests (with `-race`) and C harness tests in throwaway containers — no image build |
 | `just clean` | Remove build artifacts (`output/`, manifests, `*_build*`) |
 <!-- END AUTO-GENERATED:commands -->
 

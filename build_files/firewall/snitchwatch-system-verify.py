@@ -10,18 +10,23 @@ import sys
 
 MANIFEST = '/usr/share/snitchwatch/system-bridge-manifest.json'
 PINS = '/usr/share/snitchwatch/build-pins.json'
-EXPECTED_PINS_SHA256 = 'd80616f64ac372959882cf32f0dc14fc50fcb48eb6329b7e0924f71439ebe71b'
+EXPECTED_PINS_SHA256 = '2ff98aba31e85f60716b043d53edc3627f47a47ba83797397352a3a9b5b3a7d9'
 BINARY = '/usr/bin/snitchwatch-bridge-cli'
 PROFILE = '/usr/share/bazzite-tower/snitchwatch-bridge-profile'
 CONFIG = '/usr/share/bazzite-tower/opensnitchd-system-bridge-config.json'
 LEGACY_CONFIG = '/usr/share/bazzite-tower/opensnitchd-default-config.json'
 DROPIN = '/usr/lib/systemd/system/opensnitch.service.d/20-system-bridge.conf'
+# The one opensnitchd rule Snitchwatch ships, and the only path outside /usr
+# this verifier reads.  /etc is mutable on a booted system, but this file is
+# reserved and pinned: an admin edit or delete makes verification refuse.
+FETCH_RULE = '/etc/opensnitchd/rules/000-snitchwatch-bridge-fetch.json'
 SOURCE_FILES = {
     '/usr/lib/systemd/system/snitchwatch-system-bridge.service': 'packaging/system/snitchwatch-system-bridge.service',
     '/usr/lib/systemd/system/snitchwatch-system-bridge-grpc.socket': 'packaging/system/snitchwatch-system-bridge-grpc.socket',
     '/usr/lib/systemd/system/snitchwatch-system-bridge-gui.socket': 'packaging/system/snitchwatch-system-bridge-gui.socket',
     '/usr/lib/tmpfiles.d/snitchwatch.conf': 'packaging/system/snitchwatch.conf',
     '/usr/lib/sysusers.d/snitchwatch.conf': 'packaging/system/snitchwatch.conf.sysusers',
+    FETCH_RULE: 'packaging/bluebuild/files/system/etc/opensnitchd/rules/000-snitchwatch-bridge-fetch.json',
 }
 LICENSES = {'LICENSE', 'LICENSE.opensnitch', 'THIRD-PARTY-LICENSES.md'}
 RECEIPTS = {
@@ -41,18 +46,27 @@ def digest(data):
     return hashlib.sha256(data).hexdigest()
 
 
+def describe(name):
+    if name == FETCH_RULE:
+        return name + ' (the shipped, image-pinned Snitchwatch opensnitchd rule; it is reserved: restore it, do not edit or delete it)'
+    return name
+
+
 def read_file(root, name, mode=0o644):
-    if not isinstance(name, str) or not name.startswith('/usr/') or '..' in Path(name).parts:
+    if not isinstance(name, str) or not (name.startswith('/usr/') or name == FETCH_RULE) or '..' in Path(name).parts:
         raise ValueError('invalid immutable file path')
     path = root / name.lstrip('/')
     cursor = path
     while cursor != root:
         if cursor.is_symlink():
-            raise ValueError('symlink in immutable file path: ' + name)
+            raise ValueError('symlink in immutable file path: ' + describe(name))
         cursor = cursor.parent
-    info = path.stat()
+    try:
+        info = path.stat()
+    except FileNotFoundError:
+        raise ValueError('missing immutable file: ' + describe(name)) from None
     if not stat.S_ISREG(info.st_mode) or stat.S_IMODE(info.st_mode) != mode:
-        raise ValueError('incorrect file type/mode: ' + name)
+        raise ValueError('incorrect file type/mode: ' + describe(name))
     return path.read_bytes()
 
 
@@ -80,7 +94,7 @@ def verify(root):
         mode = 0o755 if name in {BINARY, '/usr/libexec/snitchwatch/verify-system-manifest.py'} else 0o644
         contents[name] = read_file(root, name, mode)
         if digest(contents[name]) != expected:
-            raise ValueError('immutable file hash mismatch: ' + name)
+            raise ValueError('immutable file hash mismatch: ' + describe(name))
     if manifest.get('binary') != {'path': BINARY, 'sha256': files[BINARY], 'version': pins['bridgeVersion']}:
         raise ValueError('binary identity differs from immutable inventory')
     if contents[BINARY][:6] != b'\x7fELF\x02\x01':
@@ -93,7 +107,7 @@ def verify(root):
         raise ValueError('legacy user unit is not image-masked')
     for name, original in SOURCE_FILES.items():
         if files[name] != pins['sourceFiles'][original]:
-            raise ValueError('system overlay differs from pinned source: ' + name)
+            raise ValueError('system overlay differs from pinned source: ' + describe(name))
     if files[LEGACY_CONFIG] != pins['legacyConfigSha256']:
         raise ValueError('legacy image-intent reference differs from pinned migration baseline')
     config = json.loads(contents[CONFIG])
@@ -103,7 +117,7 @@ def verify(root):
         raise ValueError('system candidate changes more than the daemon address')
     if config.get('DefaultAction') != 'allow' or config.get('ProcMonitorMethod') != 'proc' or config.get('Server', {}).get('Address') != 'unix:opensnitchd.sock':
         raise ValueError('incorrect system candidate policy/transport')
-    expected_dropin = b'[Unit]\nRequires=snitchwatch-system-bridge-grpc.socket\nAfter=snitchwatch-system-bridge-grpc.socket\n\n[Service]\nWorkingDirectory=/run/snitchwatch\n'
+    expected_dropin = b'[Unit]\nWants=snitchwatch-system-bridge-grpc.socket\nAfter=snitchwatch-system-bridge-grpc.socket\n\n[Service]\nWorkingDirectory=/run/snitchwatch\n'
     if contents[DROPIN] != expected_dropin or contents['/usr/share/bazzite-tower/snitchwatch/opensnitch.service.d/20-system-bridge.conf'] != expected_dropin:
         raise ValueError('incorrect daemon system-socket ordering/drop-in')
     artifact = json.loads(contents['/usr/share/snitchwatch/schema1-artifact-MANIFEST.json'])

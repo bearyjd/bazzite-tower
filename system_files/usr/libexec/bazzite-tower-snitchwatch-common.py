@@ -27,6 +27,10 @@ SOCKETS = ("snitchwatch-system-bridge-grpc.socket", "snitchwatch-system-bridge-g
 UNITS = (*SOCKETS, SERVICE, "opensnitch.service")
 APP = "org.snitchwatch.Snitchwatch"
 VENDOR_DROPIN = "/usr/lib/systemd/system/service.d/10-timeout-abort.conf"
+DAEMON_UNIT = "/usr/lib/systemd/system/opensnitch.service"
+DAEMON_DROPIN = "/usr/lib/systemd/system/opensnitch.service.d/20-system-bridge.conf"
+# The one opensnitchd rule Snitchwatch ships; the only manifest entry outside /usr.
+FETCH_RULE = "/etc/opensnitchd/rules/000-snitchwatch-bridge-fetch.json"
 BASE_GLOBAL_OVERRIDE = "/var/lib/flatpak/overrides/global"
 BASE_GLOBAL_OVERRIDE_SHA256 = "85e2bf73515c8da8950f1afbbfaedfeca453777eeb0be0ea869f4db6c779bd80"
 VENDOR_DROPIN_SHA256 = "ae6b234f92bc22f1201a7572b59b454c9809f33c80d13f361b9674e1801acc37"
@@ -85,6 +89,30 @@ class Context:
     def stat(self, absolute):
         return self.path(absolute).lstat()
 
+    def lookup(self, absolute):
+        # One lstat decides. Absent only when the kernel says so; a path
+        # readiness cannot inspect (EACCES, ELOOP, EIO) may hold an override,
+        # so it is refused.
+        try:
+            return self.stat(absolute)
+        except (FileNotFoundError, NotADirectoryError):
+            return None
+        except OSError as error:
+            raise Refusal("cannot inspect "+absolute+": "+(error.strerror or str(error))) from error
+
+    def present(self, absolute):
+        return self.lookup(absolute) is not None
+
+    def listdir(self, absolute):
+        # Follows a symlinked directory, as systemd does; absent or not a
+        # directory lists as empty.
+        try:
+            return sorted(os.listdir(self.path(absolute)))
+        except (FileNotFoundError, NotADirectoryError):
+            return []
+        except OSError as error:
+            raise Refusal("cannot inspect "+absolute+": "+(error.strerror or str(error))) from error
+
     def homes(self):
         records = self.command(["getent", "passwd"]).stdout.splitlines()
         return sorted({record.split(":")[5] for record in records if len(record.split(":")) == 7 and record.split(":")[5].startswith("/")})
@@ -107,11 +135,15 @@ def immutable(ctx):
             and re.fullmatch(r"[0-9a-f]{40}", source.get("commit", "")) and re.fullmatch(r"[0-9a-f]{40}", source.get("submoduleCommit", "")), "unexpected source provenance")
     require(manifest.get("binary", {}).get("path") == BINARY, "unexpected manifest executable path")
     files = manifest.get("files", {})
-    mandatory = {BINARY, REFERENCE, LEGACY_REFERENCE, PINS, "/usr/lib/sysusers.d/snitchwatch.conf", "/usr/lib/tmpfiles.d/snitchwatch.conf", "/usr/lib/systemd/system/opensnitch.service.d/20-system-bridge.conf"}
+    mandatory = {BINARY, REFERENCE, LEGACY_REFERENCE, PINS, FETCH_RULE, "/usr/lib/sysusers.d/snitchwatch.conf", "/usr/lib/tmpfiles.d/snitchwatch.conf", "/usr/lib/systemd/system/opensnitch.service.d/20-system-bridge.conf"}
     mandatory.update("/usr/lib/systemd/system/"+unit for unit in (SERVICE, *SOCKETS))
     require(isinstance(files, dict) and mandatory <= files.keys(), "system manifest lacks required installed assets")
     for name, expected in files.items():
-        require(name.startswith("/usr/") and ".." not in Path(name).parts and re.fullmatch(r"[0-9a-f]{64}", expected or ""), "unsafe system manifest entry")
+        require((name.startswith("/usr/") or name == FETCH_RULE) and ".." not in Path(name).parts and re.fullmatch(r"[0-9a-f]{64}", expected or ""), "unsafe system manifest entry")
+        if name == FETCH_RULE:
+            # /etc is mutable: no directory on the way may be a symlink either.
+            require(not any(stat.S_ISLNK(ctx.stat(str(parent)).st_mode) for parent in Path(name).parents if str(parent) != "/"),
+                    "symlink in the path of the shipped Snitchwatch fetch rule")
         info = ctx.stat(name)
         require(stat.S_ISREG(info.st_mode) and info.st_uid == 0 and not info.st_mode & 0o022, "mutable/non-root installed asset: "+name)
         require(digest(ctx.path(name)) == expected, "installed asset hash mismatch: "+name)
@@ -165,8 +197,9 @@ def unit_contract(ctx):
                     ProtectKernelModules="yes", ProtectControlGroups="yes", ReadWritePaths="/run/snitchwatch-auth", StateDirectory="snitchwatch",
                     StateDirectoryMode="0700", SupplementaryGroups="", EnvironmentFiles="", RootDirectory="", RootImage="",
                     BindPaths="", BindReadOnlyPaths="", FragmentPath="/usr/lib/systemd/system/"+SERVICE, DropInPaths="", ExecStartPre="", ExecStartPost="", ExecStop="", ExecStopPost="", ExecCondition="")
-    names = [*expected, "ExecStart", "Environment", "TriggeredBy", "RestrictAddressFamilies", "MainPID"]
+    names = [*expected, "ExecStart", "Environment", "TriggeredBy", "RestrictAddressFamilies", "MainPID", "NeedDaemonReload"]
     actual = ctx.props(SERVICE, names)
+    loaded_current(SERVICE, actual)
     vendor_dropin_contract(ctx, actual["DropInPaths"])
     for name, value in expected.items():
         if name == "DropInPaths":
@@ -180,12 +213,34 @@ def unit_contract(ctx):
     require(set(actual["TriggeredBy"].split()) == set(SOCKETS), "effective bridge socket association drift")
     require(set(actual["RestrictAddressFamilies"].split()) == {"AF_UNIX", "AF_INET", "AF_INET6"}, "effective bridge address-family restriction drift")
     for unit, path, group, mode in ((SOCKETS[0], "/run/snitchwatch/opensnitchd.sock", "root", "0600"), (SOCKETS[1], "/run/snitchwatch/bridge.sock", "snitchwatch-ui", "0660")):
-        props = ctx.props(unit, ["Listen", "SocketUser", "SocketGroup", "SocketMode", "Accept", "Triggers", "FragmentPath", "DropInPaths"])
-        require(props == dict(Listen=path+" (Stream)", SocketUser="root", SocketGroup=group, SocketMode=mode, Accept="no", Triggers=SERVICE, FragmentPath="/usr/lib/systemd/system/"+unit, DropInPaths=""), "effective socket contract drift: "+unit)
-    daemon = ctx.props("opensnitch.service", ["WorkingDirectory", "Requires", "After", "ExecStart"])
+        props = ctx.props(unit, ["Listen", "SocketUser", "SocketGroup", "SocketMode", "Accept", "Triggers", "FragmentPath", "DropInPaths", "NeedDaemonReload"])
+        loaded_current(unit, props)
+        require({k: v for k, v in props.items() if k != "NeedDaemonReload"} == dict(Listen=path+" (Stream)", SocketUser="root", SocketGroup=group, SocketMode=mode, Accept="no", Triggers=SERVICE, FragmentPath="/usr/lib/systemd/system/"+unit, DropInPaths=""), "effective socket contract drift: "+unit)
+    daemon = ctx.props("opensnitch.service", ["WorkingDirectory", "Wants", "After", "Requires", "Requisite", "BindsTo", "PartOf", "ExecStart", "FragmentPath", "DropInPaths", "NeedDaemonReload"])
+    loaded_current("opensnitch.service", daemon)
+    daemon_unit_contract(ctx, daemon)
     daemon_exec_contract(daemon["ExecStart"])
-    require(daemon["WorkingDirectory"] == "/run/snitchwatch" and SOCKETS[0] in daemon["Requires"].split() and SOCKETS[0] in daemon["After"].split(), "OpenSnitch effective Unix socket CWD/dependencies drift")
+    require(daemon["WorkingDirectory"] == "/run/snitchwatch" and SOCKETS[0] in daemon["Wants"].split() and SOCKETS[0] in daemon["After"].split(), "OpenSnitch effective Unix socket CWD/dependencies drift")
+    # A stop of the gRPC socket must never take the firewall down with it.
+    require(not any(SOCKETS[0] in daemon[key].split() for key in ("Requires", "Requisite", "BindsTo", "PartOf")), "OpenSnitch must only Want the bridge gRPC socket: a socket stop would stop the firewall")
     return actual
+
+
+def loaded_current(unit, props):
+    # systemd reports yes when a unit file or drop-in was added, changed or
+    # deleted on disk since it was loaded, including in directories the
+    # local-override scan does not list.
+    require(props["NeedDaemonReload"] == "no", unit+" changed on disk since systemd loaded it; review it, then run systemctl daemon-reload")
+
+
+def daemon_unit_contract(ctx, props):
+    # The image's unit file plus its system-bridge drop-in, and at most
+    # Fedora's global service.d timeout drop-in; nothing else may be loaded.
+    dropins = props["DropInPaths"].split()
+    require(props["FragmentPath"] == DAEMON_UNIT and DAEMON_DROPIN in dropins and len(dropins) == len(set(dropins))
+            and set(dropins) <= {DAEMON_DROPIN, VENDOR_DROPIN}, "OpenSnitch effective unit file/drop-in drift: "+props["FragmentPath"]+" + "+props["DropInPaths"])
+    if VENDOR_DROPIN in dropins:
+        vendor_dropin_contract(ctx, VENDOR_DROPIN)
 
 
 def vendor_dropin_contract(ctx, value):
@@ -213,6 +268,17 @@ def config_contract(ctx, address="unix:opensnitchd.sock"):
     return config
 
 
+def inert_dropin_directory(ctx, name):
+    # systemd loads nothing from an empty drop-in directory, so under a
+    # root-only unit directory it is not an override. One lstat decides: a real
+    # directory, root:root, not group/world-writable, with no entries.
+    info = ctx.lookup(name)
+    if info is None:
+        return False
+    return (stat.S_ISDIR(info.st_mode) and info.st_uid == 0 and info.st_gid == 0
+            and not info.st_mode & 0o022 and not ctx.listdir(name))
+
+
 def local_conflicts(ctx):
     # Include control/transient/generator and default XDG search paths; an
     # immutable /usr/lib mask alone cannot defeat higher-priority user units.
@@ -221,6 +287,10 @@ def local_conflicts(ctx):
                    "/run/systemd/generator", "/usr/local/lib/systemd/system", "/run/systemd/generator.late")
     paths = [directory+"/"+unit+suffix for directory in system_dirs for unit in UNITS for suffix in ("", ".d")]
     paths.extend(directory+"/service.d" for directory in system_dirs)
+    # Only root can add or replace entries here. User-unit drop-in directories
+    # are never exempt: under a home directory the user owns the parent, so an
+    # empty one there proves nothing.
+    system_dropins = {name for name in paths if name.endswith(".d")}
     user_dirs = {"/etc/systemd/user", "/run/systemd/user", "/etc/xdg/systemd/user",
                  "/usr/local/lib/systemd/user", "/usr/local/share/systemd/user", "/usr/share/systemd/user"}
     records = ctx.command(["getent", "passwd"]).stdout.splitlines()
@@ -234,12 +304,12 @@ def local_conflicts(ctx):
         user_dirs.update(runtime+suffix for suffix in ("user.control", "transient", "generator.early", "user", "generator", "generator.late"))
     for directory in user_dirs:
         paths.extend(directory+"/snitchwatch-bridge.service"+suffix for suffix in ("", ".d"))
-        userdir = ctx.path(directory)
-        if userdir.exists():
-            for kind in ("wants", "requires", "upholds"):
-                paths.extend("/"+str(item.relative_to(ctx.root)) for item in userdir.glob("*."+kind+"/snitchwatch-bridge.service"))
+        paths.extend(directory+"/"+entry+"/snitchwatch-bridge.service" for entry in ctx.listdir(directory)
+                     if entry.rsplit(".", 1)[-1] in ("wants", "requires", "upholds"))
     for name in paths:
-        require(not ctx.path(name).exists() and not ctx.path(name).is_symlink(), "local unit override/enabled legacy user service: "+name)
+        if name in system_dropins and inert_dropin_directory(ctx, name):
+            continue
+        require(not ctx.present(name), "local unit override/enabled legacy user service: "+name)
     global_state = ctx.command(["systemctl", "--global", "is-enabled", "snitchwatch-bridge.service"], okay=(0, 1, 3, 4)).stdout.strip()
     require(global_state in ("disabled", "masked", "not-found"), "legacy global user service remains enabled: "+global_state)
 

@@ -119,6 +119,9 @@ else:
  assert open("/proc/"+str(pid)+"/cmdline","rb").read()==b"/usr/bin/opensnitchd\0"
  status=dict(line.split(":",1) for line in open("/proc/"+str(pid)+"/status") if ":" in line)
  assert status.get("Uid","").split()==["0"]*4'
+    # shellcheck disable=SC2016 # Expanded by the inner shell.
+    hard "shipped bridge fetch rule is a regular 0644 file" \
+        bash -c 'f=/etc/opensnitchd/rules/000-snitchwatch-bridge-fetch.json; [[ -f "$f" && ! -L "$f" && "$(stat -c %a "$f")" == 644 ]]'
     hard "system bridge user resolves" id snitchwatch
     hard "system GUI group resolves" getent group snitchwatch-ui
     hard "sysusers and tmpfiles setup completed" \
@@ -156,7 +159,8 @@ assert set(p.get("TriggeredBy","").split())=={"snitchwatch-system-bridge-grpc.so
 import re, subprocess
 p=dict(line.split("=",1) for line in subprocess.check_output(["systemctl","show","opensnitch.service"],text=True,timeout=5).splitlines() if "=" in line)
 assert p.get("WorkingDirectory")=="/run/snitchwatch"
-assert "snitchwatch-system-bridge-grpc.socket" in p.get("Requires","").split()
+assert "snitchwatch-system-bridge-grpc.socket" in p.get("Wants","").split()
+assert not any("snitchwatch-system-bridge-grpc.socket" in p.get(k,"").split() for k in ("Requires","Requisite","BindsTo","PartOf"))
 assert "snitchwatch-system-bridge-grpc.socket" in p.get("After","").split()
 assert re.findall(r"(?:^|[ {])path=([^ ;}]+)",p.get("ExecStart",""))==["/usr/bin/opensnitchd"]
 assert re.findall(r"argv\[\]=([^;]+)",p.get("ExecStart",""))==["/usr/bin/opensnitchd "]'

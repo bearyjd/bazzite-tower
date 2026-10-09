@@ -20,6 +20,13 @@ Environment=HOME=/var/lib/snitchwatch
 Environment=XDG_STATE_HOME=/var/lib
 # Explicitly associate both units so manual starts get both descriptors too.
 Sockets=snitchwatch-system-bridge-grpc.socket snitchwatch-system-bridge-gui.socket
+# Memory ceiling (issue #45). The largest legitimate load is one blocklist
+# refresh at a time: a 64 MiB body plus at most 1,000,000 parsed hosts
+# (~100 MB) and their SQLite write, i.e. a ~250 MB peak next to the
+# connection cache. 512M leaves about 2x headroom for that while keeping a
+# runaway well below a desktop's RAM; if it is ever hit, only the bridge is
+# killed and Restart=on-failure brings it back.
+MemoryMax=512M
 Restart=on-failure
 RestartSec=2s
 KillSignal=SIGTERM

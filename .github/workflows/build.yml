@@ -475,9 +475,13 @@ jobs:
             echo "::endgroup::"
           }
           # Bound each command so a stuck lookup reports what it was doing.
+          # stdout is discarded: cosign prints the verified payload there, and
+          # for the SBOM attestation that is the whole base64 SPDX document,
+          # which stalled the runner's log streaming (the check itself had
+          # already passed). The verification summary goes to stderr.
           run_bounded() {
             echo "+ $*"
-            timeout 180 "$@" && return 0
+            timeout 180 "$@" >/dev/null && return 0
             rc=$?
             echo "::error::'$*' exited ${rc} (124 = no answer within 180 s)"
             diagnose

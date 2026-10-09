@@ -691,6 +691,33 @@ the prompt, and with the window closed a new prompt raised the window
 without posting a notification; Snitchwatch is fixing both. Evidence:
 `output/snitchwatch-fresh-vm-r11.OBAPBX/R11-VM-ACCEPTANCE-RESULT.json`.
 
+Status for the r12 candidate (2026-10-09): image `sha256:48528857…` from
+`21adea3` (the 50-file daemon patch with #89 and #91's refusal of rule files
+with invalid names + Snitchwatch `9f5e2d6`; merged as #92) passed its
+independent review and the VM gate: first boot, headless, the r10/r11
+regression checks, #98 auto-answer, E2 busy drops, #99 rule editor, a root-written
+rule file named `""` refused on both live reload and restart (#91), #104
+profiles and #94 rule hits across a reboot, #107 blocklist files removed about
+890 s after unsubscribing (limit 900 s), E3 default-action rows now carrying
+`decidedByDefault` with no blank-name matched rule and no new hit-count gap
+(#108), and the GUI checks #93, #99, #101, #106, #108 and #100/#112:
+notification and history "Allow once" and "Deny" answer the prompt.
+(r11's captures also show no ActionInvoked, which a popup under a resting
+pointer reproduces, so that finding may have been a test artefact; unconfirmed.)
+The reboot loop was reduced to 2 boots by the owner (no stalls). A real
+`rpm-ostree upgrade` against `ghcr.io/bearyjd/bazzite-tower:latest` was
+captured with DefaultAction allow-and-log (asks to `ghcr.io` and
+`pkg-containers.githubusercontent.com`), then rolled back with
+`rpm-ostree cleanup --pending`; a plain `rpm-ostree upgrade --check` reached
+only localhost. Findings:
+the #105 recommended-rule cleanup after a failed `DELETE_RULE` (the daemon drops
+the rule from memory but leaves the file; stock v1.8.0 does the same, so the
+bridge is being fixed in Snitchwatch and the daemon keeps the rule in a
+follow-up PR); the Docker engine moved 29.8.2 → 29.9.0 between r11 and r12 only
+because `30-docker-ce.sh` installs whatever the Docker repo currently has.
+Evidence: `output/snitchwatch-fresh-vm-r12.F20JIs/R12-VM-ACCEPTANCE-RESULT.json`
+(sha256 `c5d48fd5…`).
+
 The fixed target-image acceptance limits are 5 seconds for no-GUI fallback,
 2 seconds for pending cleanup and 15 seconds for daemon stop. Preserve the
 shutdown warnings even when exit status and stop timing pass. A container

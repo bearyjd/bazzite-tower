@@ -462,6 +462,8 @@ jobs:
 
       - name: Verify signed image and SBOM
         if: github.event_name != 'pull_request' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+        # A stuck lookup must fail with a log, not hang until the job limit.
+        timeout-minutes: 10
         run: |
           image="${IMAGE_REGISTRY}/${IMAGE_NAME}@${DIGEST}"
           cosign verify --key cosign.pub "${image}"
@@ -479,6 +481,7 @@ jobs:
 
       - name: Verify GitHub provenance
         if: github.event_name != 'pull_request' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+        timeout-minutes: 10
         run: gh attestation verify "oci://${IMAGE_REGISTRY}/${IMAGE_NAME}@${DIGEST}" --repo "${GITHUB_REPOSITORY}"
         env:
           DIGEST: ${{ steps.push_candidate.outputs.digest }}

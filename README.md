@@ -587,7 +587,7 @@ Runs fixture-based tests for `ci/base-diff.py` against committed manifest pairs 
 
 ### `just test-snitchwatch-daemon-patch`
 
-Runs `tests/test-snitchwatch-daemon-patch.sh`: applies the pinned downstream OpenSnitch patch to its pinned upstream commit (through the daemon factory's own source checks) and runs the patch's Go tests (with `-race`; the C harness tests it builds run without a sanitizer), in two throwaway containers from the pinned Fedora builder — one with network to fetch, one with `--network=none` to test. No image build. Exit 3 means the Fedora toolchain drifted from the pins, not a test failure. Upstream's three `ui` tests that also fail under `-race` on the unpatched commit are skipped by name in the `-race` pass only. Upstream's privileged nftables tests skip too, as they need `PRIVILEGED_TESTS` and namespace creation.
+Runs `tests/test-snitchwatch-daemon-patch.sh`: applies the pinned downstream OpenSnitch patch to its pinned upstream commit (through the daemon factory's own source checks) and runs the patch's Go tests (with `-race`; the C harness tests it builds run without a sanitizer), in two throwaway containers from the pinned Fedora builder — one with network to fetch, one with `--network=none` to test. No image build. The Go/protoc/libnetfilter_queue toolchain is the same pinned, signature-verified Koji RPM set the image build uses (fetched with network, installed offline); exit 3 would mean the installed toolchain disagrees with the pins, not a test failure. Upstream's three `ui` tests that also fail under `-race` on the unpatched commit are skipped by name in the `-race` pass only. Upstream's privileged nftables tests skip too, as they need `PRIVILEGED_TESTS` and namespace creation.
 
 ## Additional resources
 

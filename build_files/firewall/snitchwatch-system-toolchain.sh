@@ -2,14 +2,20 @@
 # Install the reviewed Go/protoc/libnetfilter_queue toolchain from pinned,
 # Fedora-signed Koji RPMs instead of whatever the live repos currently serve.
 # Usage: snitchwatch-system-toolchain.sh install <pins.json> <workdir> [extra-live-dnf-pkgs...]
+#        snitchwatch-system-toolchain.sh fetch   <pins.json> <workdir>
 # Each RPM must match its pinned size and sha256, carry a valid Fedora
 # signature (plain "digests OK" means unsigned and is refused) and report the
 # pinned NEVRA before one dnf transaction installs them with the extra packages.
+# "fetch" does the same verification but leaves the RPMs in <workdir>/rpms and
+# installs nothing (for a later offline install).
 set -euo pipefail
 
 die() { printf 'snitchwatch-toolchain: %s\n' "$*" >&2; exit 1; }
 
-[[ "${1:-}" == install && $# -ge 3 ]] || die 'usage: install <pins.json> <workdir> [extra-dnf-pkgs...]'
+[[ "${1:-}" == install || "${1:-}" == fetch ]] && [[ $# -ge 3 ]] ||
+    die 'usage: install <pins.json> <workdir> [extra-dnf-pkgs...] | fetch <pins.json> <workdir>'
+mode=$1
+[[ "$mode" == install || $# -eq 3 ]] || die 'fetch takes no extra packages'
 pins=$2
 work=$3
 shift 3
@@ -76,6 +82,8 @@ while IFS=$'\t' read -r name file path want_sha want_size nevra; do
     hdrs+=("$(rpm -qp --qf '%{SHA256HEADER}' "$dest")")
 done < <(tail -n +2 "$tmp/pins.tsv")
 [[ ${#files[@]} -gt 0 ]] || die 'no toolchainRpms pinned'
+
+[[ "$mode" == install ]] || exit 0
 
 timeout 240 dnf -y --setopt=install_weak_deps=False install "${files[@]}" "${extras[@]}" || die 'dnf install failed'
 

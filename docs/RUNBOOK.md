@@ -177,7 +177,7 @@ overrides before selecting it.
 The daemon build toolchain (Go, protoc, libnetfilter_queue) is installed from
 pinned, Fedora-signed Koji RPMs (`toolchainRpms` in
 `build_files/firewall/snitchwatch-system-daemon-pins.json`), not live repos, so
-Fedora repo updates cannot change the Go, protoc and libnetfilter_queue RPMs (7 pinned, signed). They can still change what is installed live and ungated: gcc, binutils, libnfnetlink-devel, pkgconf, git, python3, the pinned RPMs' own dependencies, and the bridge build's rust/cargo (install-deps.sh must stay byte-identical to the upstream copy). Phase 2 would cover Rust. Koji is therefore a build-time
+Fedora repo updates cannot change the Go, protoc and libnetfilter_queue RPMs (7 pinned, signed). They can still change what is installed live and ungated: gcc, binutils, libnfnetlink-devel, pkgconf, git, python3, the pinned RPMs' own dependencies, and the bridge build's rust/cargo (install-deps.sh must stay byte-identical to the upstream copy). Phase 2 would cover Rust. `just test-snitchwatch-daemon-patch` uses the same pinned RPMs (helper `fetch` mode). Koji is therefore a build-time
 dependency: if `kojipkgs.fedoraproject.org` is unreachable the build fails
 closed. To re-pin: download each RPM from
 `https://kojipkgs.fedoraproject.org/packages/<name>/<ver>/<rel>/data/signed/6d9f90a6/<arch>/`

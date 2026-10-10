@@ -11,7 +11,6 @@
 | `bazzite-tower-firstboot.service` | oneshot, RemainAfterExit | `After=systemd-user-sessions`; `ConditionPathExists=!/var/lib/.bazzite-tower-groups-done` | `…/firstboot` | add first uid≥1000 user to kvm,libvirt only; retries each boot until a user exists, then drops the marker |
 | `bazzite-tower-wifi-backend-guard.service` | oneshot, RemainAfterExit | `After=local-fs`; `Before=NetworkManager` | `…/wifi-backend-guard` | force wpa_supplicant if `wifi.backend=iwd` is selected but iwd isn't enabled |
 | `bazzite-tower-power-tuning.service` | oneshot, RemainAfterExit | `After=basic.target` | `…/power-tuning` | set `platform_profile=balanced` + EPP=`balance_performance` on every core (was firmware low-power) |
-| `i915-resume-fix-check.service` | oneshot | `After=systemd-journald.service`; triggered by its `.timer` | `…/i915-resume-fix-check` | pre-7.0 kernel: no-op; 7.0+: grep this boot's journal for the cx0 DPLL s2idle-resume regression signature, warn if found |
 | `docker-libvirt-forwarding.path` | path, `WantedBy=multi-user.target` | `PathChanged=/run/libvirt/network` (any change in libvirt's network state dir); `TriggerLimitBurst=1000`/10s | activates the `.service` | libvirt-side reconciliation trigger |
 | `docker-libvirt-forwarding.service` | oneshot | `ExecCondition` docker.service active and virtnetworkd.service active/activating/reloading; `StartLimitIntervalSec=0`; sleep 1, helper, sleep 2, helper (second pass catches merged events); `UnsetEnvironment` of test overrides | `/usr/local/libexec/docker-libvirt-forwarding` | reconcile DOCKER-USER NAT rules |
 | `docker-libvirt-forwarding.timer` | timer, `WantedBy=timers.target` | `OnBootSec=2min`, `OnUnitInactiveSec=10min` | the `.service` | self-heal if an event was missed |
@@ -20,14 +19,6 @@
 Docker, Cockpit, and Waydroid are explicitly disabled in the image; Tailscale
 is enabled without a node identity. Other listed services are enabled in
 build.sh except the disabled `portmaster.service` VM spike.
-
-## systemd timers (`/usr/lib/systemd/system/`)
-
-| Timer | Schedule | Purpose |
-|---|---|---|
-| `i915-resume-fix-check.timer` | `OnBootSec=5min`, `OnUnitActiveSec=1d`, `Persistent=true` | periodic trigger for `i915-resume-fix-check.service` — the machine-checkable signal Containerfile's kernel-pin comment points at |
-
-`WantedBy=timers.target`, enabled in build.sh (`systemctl enable i915-resume-fix-check.timer`).
 
 ## systemd-sleep hooks (`/usr/lib/systemd/system-sleep/`)
 
@@ -43,7 +34,6 @@ build.sh except the disabled `portmaster.service` VM spike.
 - `bazzite-tower-snitchwatch-migrate` — explicit `check|apply|rollback` transaction; detects legacy conflicts and drift, records baseline state and supports restoration without changing fail-open policy
 - `docker-libvirt-forwarding` — Docker `ExecStartPost` helper: takes a bounded-wait `/run` lock, discovers only active libvirt XML NAT bridges, derives each live IPv4 network and default uplink, and idempotently adds tagged `NEW,ESTABLISHED,RELATED` / `RELATED,ESTABLISHED` `DOCKER-USER` pairs; removes only stale rules bearing its own prefix and fails if Docker did not create that chain
 - `bazzite-tower-power-tuning` — write platform_profile + per-CPU EPP; skips absent/read-only knobs
-- `i915-resume-fix-check` — kernel-version-gated check for the Meteor Lake cx0 DPLL s2idle-resume regression signature in the current boot's journal
 (The former `bazzite-tower-portmaster-seed` helper is gone. Portmaster's config is no longer copied into `/var`: the unit `BindReadOnlyPaths=`-mounts `/usr/share/bazzite-tower/portmaster-config.default.json` over `/var/lib/portmaster/config.json`, so the update pin is image-managed and reverts with a rollback. systemd creates the mount destination itself, and a missing source fails the unit before `ExecStart` — fail closed.)
 
 ## Firewall selector (`build.d/95-firewall.sh`, `FIREWALL_DAEMON` build-arg)

@@ -656,6 +656,19 @@ Verify the signed SBOM attached to that image:
 cosign verify-attestation --key cosign.pub --type spdxjson ghcr.io/bearyjd/bazzite-tower:latest
 ```
 
+**Newer cosign may fail this with `no matching attestations: expected key
+signature, not certificate`** (seen 2026-10-10). The image also carries a keyless
+GitHub build-provenance bundle (a `sigstore.bundle.v0.3` DSSE envelope with a
+Fulcio certificate, stored under the `sha256-<digest>` fallback tag because ghcr
+lacks the OCI referrers API). Our `.sig`/`.att` tags are key-signed and valid;
+the likely cause is that a newer cosign also evaluates the certificate-signed
+bundle and `--key` cannot match it. This is inferred from the registry contents,
+not reproduced against a specific cosign version. CI verifies with the pinned
+`cosign v2.6.3` (`build.yml`), which passes. If your local cosign fails, either
+use that version or check what the host actually enforces: switching with
+`--enforce-container-sigpolicy` (below) verifies the key signature through
+`/etc/containers/policy.json` and does not use the cosign CLI at all.
+
 The repository policy uses `matchRepository`: it proves a digest was signed by
 this repository key, but it does not guarantee freshness. A registry (or a
 compromised signing process) could point `:latest` at an older, still-signed

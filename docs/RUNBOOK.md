@@ -619,7 +619,7 @@ Each guard workflow opens — and later auto-closes — a labelled tracking issu
 <!-- AUTO-GENERATED:ci-labels (from .github/workflows/) -->
 | Label | Workflow | Meaning |
 |---|---|---|
-| `ci-failure-<variant>` | `build.yml` | build or smoke gate failed for that matrix leg (`safe-pin` or `latest-kernel`); nothing published for that leg. Per-leg so one leg's success never auto-closes the other's issue |
+| `ci-failure-<variant>` | `build.yml` | build or smoke gate failed for that matrix leg (`safe-pin`, `latest-kernel` or `snitchwatch-system`); nothing published for that leg. Per-leg so one leg's success never auto-closes the other's issue |
 | `boot-test-failure` | `boot-test.yml` | image built but misbehaved at runtime |
 | `base-bump` | `base-watch.yml` | upstream base changed a blast-radius package |
 | `iso-failure` | `build-iso.yml` | titanoboa live/installer ISO build failed |

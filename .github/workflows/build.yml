@@ -47,11 +47,14 @@ jobs:
           - variant: latest-kernel
             build_args: "BASE_IMAGE=ghcr.io/ublue-os/bazzite-nvidia-open:stable"
             tag_base: verify-latest-kernel
-          # Opt-in system bridge: local PR candidate only, never a release leg.
+          # Opt-in system bridge: a local, credential-free PR candidate. The
+          # release job publishes the same configuration as `:snitchwatch-system`;
+          # IMAGE_TAG matches it so this leg also exercises the MOTD assertion.
           - variant: snitchwatch-system
             build_args: |
               FIREWALL_DAEMON=opensnitch
               SNITCHWATCH_BRIDGE=system
+              IMAGE_TAG=snitchwatch-system
             tag_base: verify-snitchwatch-system
 
     steps:
@@ -183,6 +186,20 @@ jobs:
               IMAGE_TAG=latest-kernel
             tag_base: latest-kernel
             tag_prefix: "latest-kernel-"
+          # Opt-in — the pinned safe-pin base plus the native Snitchwatch system
+          # bridge and the reviewed OpenSnitch daemon patch (SNITCHWATCH_BRIDGE=
+          # system; docs/RUNBOOK.md "OpenSnitch / Snitchwatch deployment status").
+          # Never the default tag: `latest` keeps the legacy user bridge. Like
+          # latest-kernel it adds no BASE_IMAGE, so the Containerfile pin stays
+          # the single source of truth, and every tag is namespaced under
+          # tag_prefix so it cannot collide with the other legs' tags.
+          - variant: snitchwatch-system
+            build_args: |
+              FIREWALL_DAEMON=opensnitch
+              SNITCHWATCH_BRIDGE=system
+              IMAGE_TAG=snitchwatch-system
+            tag_base: snitchwatch-system
+            tag_prefix: "snitchwatch-system-"
 
     steps:
       - name: Prepare environment
@@ -234,9 +251,9 @@ jobs:
         with:
           # tag_prefix is "" for the safe-pin leg, so these four lines produce
           # exactly the pre-matrix tag strings for that leg (latest,
-          # latest.$date, $date, $sha). The latest-kernel leg gets everything
-          # namespaced under "latest-kernel-" so it can never collide with a
-          # safe-pin tag in the registry.
+          # latest.$date, $date, $sha). Every non-default leg (latest-kernel,
+          # snitchwatch-system) gets everything namespaced under its own
+          # tag_prefix so it can never collide with a safe-pin tag in the registry.
           tags: |
             type=raw,value=${{ matrix.tag_base }}
             type=raw,value=${{ matrix.tag_base }}.{{date 'YYYYMMDD'}}
@@ -604,7 +621,7 @@ jobs:
             // tag_base mirrors the `release` job's matrix, purely for the
             // human-readable message below — not a build input, so drifting
             // is cosmetic, not a correctness risk.
-            const TAG_BASE = { 'safe-pin': 'latest', 'latest-kernel': 'latest-kernel' };
+            const TAG_BASE = { 'safe-pin': 'latest', 'latest-kernel': 'latest-kernel', 'snitchwatch-system': 'snitchwatch-system' };
             const jobs = await github.paginate(github.rest.actions.listJobsForWorkflowRun, {
               owner, repo, run_id: runId, per_page: 100,
             });

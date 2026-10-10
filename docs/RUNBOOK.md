@@ -174,6 +174,19 @@ This does not install a GUI or grant any user the GUI group. Install the reviewe
 system-profile Flatpak per user and inspect existing same-ID installations and
 overrides before selecting it.
 
+The daemon build toolchain (Go, protoc, libnetfilter_queue) is installed from
+pinned, Fedora-signed Koji RPMs (`toolchainRpms` in
+`build_files/firewall/snitchwatch-system-daemon-pins.json`), not live repos, so
+Fedora repo updates cannot change the Go, protoc and libnetfilter_queue RPMs (7 pinned, signed). They can still change what is installed live and ungated: gcc, binutils, libnfnetlink-devel, pkgconf, git, python3, the pinned RPMs' own dependencies, and the bridge build's rust/cargo (install-deps.sh must stay byte-identical to the upstream copy). Phase 2 would cover Rust. Koji is therefore a build-time
+dependency: if `kojipkgs.fedoraproject.org` is unreachable the build fails
+closed. To re-pin: download each RPM from
+`https://kojipkgs.fedoraproject.org/packages/<name>/<ver>/<rel>/data/signed/6d9f90a6/<arch>/`
+(never the unsigned `/packages/.../<arch>/` copy), confirm `rpm -K` reports
+`digests signatures OK` against `/etc/pki/rpm-gpg/RPM-GPG-KEY-fedora-44-primary`,
+record sha256/size/NEVRA, update `goVersion`/`protocVersion`/
+`libnetfilterQueueVersion` to match, then update `EXPECTED_PINS_SHA256` in
+`snitchwatch-system-daemon-verify.py`.
+
 Run `ujust opensnitch-readiness` for the image's selected profile. The legacy
 profile retains the [release-install contract](../README.md#opensnitch-application-firewall).
 System readiness requires an explicit privileged read for cross-account

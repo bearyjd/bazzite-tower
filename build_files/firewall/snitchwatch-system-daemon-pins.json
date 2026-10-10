@@ -7,6 +7,7 @@
     "ui_grpc.pb.go": "55ae171accdac281e34f22fcc9939ec74751e2b625b8a0de0b10b2f264a1842e"
   },
   "goVersion": "go version go1.26.8-X:nodwarf5 linux/amd64",
+  "kojiBase": "https://kojipkgs.fedoraproject.org/packages/",
   "libnetfilterQueueVersion": "1.0.5",
   "licenseSha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
   "moduleLocks": {
@@ -68,10 +69,74 @@
   },
   "protoSourceSha256": "62de7d3661c33558daeae1092cd7eb98cdc05179695f5d41f166b1c8f7ffbd06",
   "protocVersion": "libprotoc 3.19.6",
+  "rpmSigningKey": {
+    "fingerprint": "36F612DCF27F7D1A48A835E4DBFCF71C6D9F90A6",
+    "path": "/etc/pki/rpm-gpg/RPM-GPG-KEY-fedora-44-primary",
+    "sha256": "93642aec521a1e5e96dd715f7ae0ec0850ebc9de09a94ce03cae5263f26cc18a"
+  },
   "schemaVersion": 1,
+  "signedKeyId": "6d9f90a6",
   "sourceCommit": "b404c4c6316760fa7bc415509d3f8d747f7dc9cc",
   "sourceRepository": "https://github.com/evilsocket/opensnitch.git",
   "sourceTree": "21593ba74c55b6f7ad7f220692c33477b65a3686",
+  "toolchainRpms": [
+    {
+      "file": "golang-1.26.8-2.fc44.x86_64.rpm",
+      "kojiPath": "golang/1.26.8/2.fc44/data/signed/6d9f90a6/x86_64/golang-1.26.8-2.fc44.x86_64.rpm",
+      "name": "golang",
+      "nevra": "golang-0:1.26.8-2.fc44.x86_64",
+      "sha256": "1e040d55833b11412529d730416520fa1e6c7848315bff3bff04aeb3d5189c0c",
+      "size": 1499186
+    },
+    {
+      "file": "golang-bin-1.26.8-2.fc44.x86_64.rpm",
+      "kojiPath": "golang/1.26.8/2.fc44/data/signed/6d9f90a6/x86_64/golang-bin-1.26.8-2.fc44.x86_64.rpm",
+      "name": "golang-bin",
+      "nevra": "golang-bin-0:1.26.8-2.fc44.x86_64",
+      "sha256": "2966d1cdec3b400ac7e2c138cb7f24ac6d74bd97df90a7bb01efddd007f478cc",
+      "size": 22080032
+    },
+    {
+      "file": "golang-src-1.26.8-2.fc44.noarch.rpm",
+      "kojiPath": "golang/1.26.8/2.fc44/data/signed/6d9f90a6/noarch/golang-src-1.26.8-2.fc44.noarch.rpm",
+      "name": "golang-src",
+      "nevra": "golang-src-0:1.26.8-2.fc44.noarch",
+      "sha256": "11966507e87786a04df48b7259a505489ca9e0d9d814b9bbb7a888a1110fefa6",
+      "size": 15289793
+    },
+    {
+      "file": "protobuf-3.19.6-20.fc44.x86_64.rpm",
+      "kojiPath": "protobuf/3.19.6/20.fc44/data/signed/6d9f90a6/x86_64/protobuf-3.19.6-20.fc44.x86_64.rpm",
+      "name": "protobuf",
+      "nevra": "protobuf-0:3.19.6-20.fc44.x86_64",
+      "sha256": "f1237999a0fc0e7e780da26ba5e0cad3defb130d51645ae8b7918b497f909607",
+      "size": 1088474
+    },
+    {
+      "file": "protobuf-compiler-3.19.6-20.fc44.x86_64.rpm",
+      "kojiPath": "protobuf/3.19.6/20.fc44/data/signed/6d9f90a6/x86_64/protobuf-compiler-3.19.6-20.fc44.x86_64.rpm",
+      "name": "protobuf-compiler",
+      "nevra": "protobuf-compiler-0:3.19.6-20.fc44.x86_64",
+      "sha256": "4129d67d4270d6c1f64908625628836fc6385d890992d6925b1fc4cfe8df1caa",
+      "size": 814843
+    },
+    {
+      "file": "libnetfilter_queue-1.0.5-13.fc44.x86_64.rpm",
+      "kojiPath": "libnetfilter_queue/1.0.5/13.fc44/data/signed/6d9f90a6/x86_64/libnetfilter_queue-1.0.5-13.fc44.x86_64.rpm",
+      "name": "libnetfilter_queue",
+      "nevra": "libnetfilter_queue-0:1.0.5-13.fc44.x86_64",
+      "sha256": "ebd80fb61f002f944d9ca981fab16a67f10f116085833ff99684de5a0aef5de8",
+      "size": 29050
+    },
+    {
+      "file": "libnetfilter_queue-devel-1.0.5-13.fc44.x86_64.rpm",
+      "kojiPath": "libnetfilter_queue/1.0.5/13.fc44/data/signed/6d9f90a6/x86_64/libnetfilter_queue-devel-1.0.5-13.fc44.x86_64.rpm",
+      "name": "libnetfilter_queue-devel",
+      "nevra": "libnetfilter_queue-devel-0:1.0.5-13.fc44.x86_64",
+      "sha256": "fc4b5805a1088bd69c23a57887d59e30aa6eca957a945762f7227f818067b0cb",
+      "size": 13071
+    }
+  ],
   "tools": {
     "protoc-gen-go": {
       "module": "google.golang.org/protobuf",

@@ -47,6 +47,10 @@ build at `5c2b44a` now passed on supported KDE 6.11 / Qt 6.11.2 with Rust
 1.98.1 and mold 2.42.0; actual default KDE behavior requires fresh VM proof.
 The GUI crate remains 0.1.0, separate from native bridge 0.1.1. See [system bridge research](../research/snitchwatch-system-bridge.md).
 
+Snitchwatch daemon build toolchain: 7 Fedora 44 RPMs pinned by sha256 in
+`build_files/firewall/snitchwatch-system-daemon-pins.json` and fetched from Koji
+(signed copies, key sha256 pinned); see [image-build](image-build.md).
+
 ## KDE Plasma package-family pin
 
 `05-pin-kde-packages.sh` (runs first, before any other `dnf install` in

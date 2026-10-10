@@ -5,9 +5,10 @@ factory=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 bash "$factory/snitchwatch-system-mode.sh"
 [[ "${SNITCHWATCH_BRIDGE:-legacy}" == system && $# == 1 && "$1" != / ]] || exit 1
 [[ -e /run/.containerenv || -e /.dockerenv ]] && [[ ! -e /run/.toolboxenv && ! -e /run/host ]] || exit 1
-timeout 240 dnf -y --setopt=install_weak_deps=False install \
-    golang libnetfilter_queue-devel libnfnetlink-devel pkgconf-pkg-config \
-    protobuf-compiler git gcc python3 binutils coreutils diffutils findutils
+# Go, protoc and libnetfilter_queue come from pinned, signature-checked Koji RPMs;
+# only the remaining build tools are installed live.
+bash "$factory/snitchwatch-system-toolchain.sh" install "$factory/snitchwatch-system-daemon-pins.json" /work/toolchain \
+    libnfnetlink-devel pkgconf-pkg-config git gcc python3 binutils coreutils diffutils findutils
 mkdir -p /work
 work=$(mktemp -d /work/snitchwatch-daemon.XXXXXX)
 pins="$factory/snitchwatch-system-daemon-pins.json"

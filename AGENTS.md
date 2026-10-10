@@ -12,6 +12,7 @@ Full detail lives in `CLAUDE.md` (same rules, longer), `README.md`, `docs/RUNBOO
 ## Commands (from `Justfile`; do not invent others)
 - `just lint` (shellcheck over all `*.sh`; may fail on root-owned dirs under `output/`, so run `shellcheck <file>` on what you touched)
 - `just check` (Justfile syntax), `just lint-containerfile` (hadolint, seconds)
+- `just token-report [--since YYYY-MM-DD] [--project substring] [--json]` (read-only Claude/Codex local usage aggregates; last seven days by default, text <=40 lines, no message content)
 - `just smoke` (asserts a BUILT image; the CI gate) — needs `just build` first
 - `just test-snitchwatch-daemon-patch` (patch + Go/C tests in throwaway containers, minutes, needs network)
 - Offline tests: `bash tests/test-snitchwatch-toolchain.sh`, `python3 tests/test-snitchwatch-image-build-daemon.py`, `python3 tests/test-snitchwatch-image-build.py`, `tests/test-snitchwatch-system.sh`, `tests/check-supply-chain.sh`

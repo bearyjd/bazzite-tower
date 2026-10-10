@@ -186,6 +186,86 @@ class ImageBuildContracts(unittest.TestCase):
         self.manifest['source']['commit'] = '0' * 40
         self.check()
 
+    def test_rust_pin_authentication(self):
+        name = 'usr/share/snitchwatch/build-pins.json'
+        for field, value in [('sha256', '0' * 64), ('size', 1),
+                             ('nevra', 'rust-0:1.99.0-1.fc44.x86_64'),
+                             ('kojiPath', 'unsigned/rust.rpm')]:
+            with self.subTest(field=field):
+                pins = json.loads((FACTORY / 'snitchwatch-system-pins.json').read_text())
+                pins['toolchainRpms'][0][field] = value
+                self.write(name, json.dumps(pins)); self.update_hash(name)
+                self.assertIn('build pins differ from reviewed integration inputs', self.check().stderr)
+
+    def test_reviewed_rust_rpm_inputs(self):
+        daemon = json.loads((FACTORY / 'snitchwatch-system-daemon-pins.json').read_text())
+        for key in ('rpmSigningKey', 'kojiBase'):
+            self.assertEqual(self.pins[key], daemon[key])
+        expected = {
+            'rust': ('4f4a346f18eddff7ee512850a65e9a0a6b0f1ccfe96b1e665a99b6d02dacfa76', 31568956),
+            'cargo': ('b32e8b630c55c5ae0df6a3efdf58173974d4dc462a2e2be7a10cd18ea365d30f', 8292119),
+            'rust-std-static': ('612185594cb772f5320d5c9a97dd226390fb32972389a47a99b3cb07786c39c4', 42066597),
+        }
+        rpms = self.pins['toolchainRpms']
+        self.assertEqual(len(rpms), 3)
+        self.assertEqual({r['name'] for r in rpms}, set(expected))
+        for rpm in rpms:
+            name = rpm['name']
+            filename = f'{name}-1.98.1-1.fc44.x86_64.rpm'
+            self.assertEqual((rpm['sha256'], rpm['size']), expected[name])
+            self.assertEqual(rpm['file'], filename)
+            self.assertEqual(rpm['nevra'], f'{name}-0:1.98.1-1.fc44.x86_64')
+            self.assertEqual(rpm['kojiPath'], 'rust/1.98.1/1.fc44/data/signed/6d9f90a6/x86_64/' + filename)
+        installer = (FACTORY / 'snitchwatch-system-install-deps.sh').read_bytes()
+        self.assertEqual(sha(installer), '247a396c0f3d504023f001c33bb1211f5f0f9bfd2c6685077d4bd312ac95f8cb')
+
+    def test_rust_install_precedes_version_gate(self):
+        # Execute the actual setup fragment with transaction/tool stubs. The gate
+        # succeeds only after the helper, and a helper failure must stop it.
+        script = (FACTORY / 'snitchwatch-system-build.sh').read_text()
+        fragment = script[script.index('bash "$factory/snitchwatch-system-install-deps.sh"'):
+                          script.index('git init "$work/source"')]
+        fragment = fragment.replace('/work', str(self.root / 'build-work'))
+        stubs = r'''set -euo pipefail
+bash() {
+    case "$1" in
+        */snitchwatch-system-install-deps.sh) echo upstream >> "$events" ;;
+        */snitchwatch-system-toolchain.sh)
+            [[ "$(cat "$events")" == $'upstream\ncurl' && "$2" == install ]]
+            [[ "$3" == "$factory/snitchwatch-system-pins.json" && -d "${4%/toolchain}" ]]
+            echo helper >> "$events"
+            [[ "$fail_helper" == 0 ]] || return 19
+            touch "$installed" ;;
+        *) return 99 ;;
+    esac
+}
+command() {
+    [[ "$*" != '-v curl' ]] || return 1
+    builtin command "$@"
+}
+timeout() { [[ "$1" == 240 ]]; shift; "$@"; }
+dnf() {
+    [[ "$*" == '-y --setopt=install_weak_deps=False install curl' ]]
+    echo curl >> "$events"
+}
+rustc() {
+    echo rustc >> "$events"
+    [[ -f "$installed" ]] || return 1
+    echo 'rustc 1.98.1 (fixture)'
+}
+protoc() { echo 'libprotoc 3.19.6'; }
+'''
+        for failure in (0, 1):
+            with self.subTest(helper_failure=failure):
+                events = self.root / f'events-{failure}'
+                env = {**os.environ, 'factory': str(FACTORY), 'events': str(events),
+                       'installed': str(self.root / f'installed-{failure}'), 'fail_helper': str(failure)}
+                result = subprocess.run(['bash', '-c', stubs + fragment], env=env,
+                                        capture_output=True, text=True)
+                self.assertEqual(result.returncode, 19 if failure else 0, result.stderr)
+                self.assertEqual(events.read_text().splitlines(),
+                                 ['upstream', 'curl', 'helper'] + ([] if failure else ['rustc']))
+
     def test_self_consistent_policy_drift(self):
         name = 'usr/share/bazzite-tower/opensnitchd-system-bridge-config.json'
         self.write(name, json.dumps({'DefaultAction': 'deny', 'ProcMonitorMethod': 'proc', 'Server': {'Address': 'unix:opensnitchd.sock'}})); self.update_hash(name)

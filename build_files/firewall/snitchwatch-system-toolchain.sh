@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Install the reviewed Go/protoc/libnetfilter_queue toolchain from pinned,
+# Install the reviewed build toolchain from pinned,
 # Fedora-signed Koji RPMs instead of whatever the live repos currently serve.
 # Usage: snitchwatch-system-toolchain.sh install <pins.json> <workdir> [extra-live-dnf-pkgs...]
 #        snitchwatch-system-toolchain.sh fetch   <pins.json> <workdir>

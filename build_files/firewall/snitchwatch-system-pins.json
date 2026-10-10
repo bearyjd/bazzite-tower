@@ -16,8 +16,14 @@
     "--persist=.local/state/snitchwatch"
   ],
   "flatpakRuntimeRef": "org.kde.Platform/x86_64/6.11",
+  "kojiBase": "https://kojipkgs.fedoraproject.org/packages/",
   "legacyConfigSha256": "4df22dca00a0c08d5b843946bbc50154f0e0529724840b12df623f565768fe3d",
   "protocVersion": "3.19.6",
+  "rpmSigningKey": {
+    "fingerprint": "36F612DCF27F7D1A48A835E4DBFCF71C6D9F90A6",
+    "path": "/etc/pki/rpm-gpg/RPM-GPG-KEY-fedora-44-primary",
+    "sha256": "93642aec521a1e5e96dd715f7ae0ec0850ebc9de09a94ce03cae5263f26cc18a"
+  },
   "rustVersion": "1.98.1",
   "schemaVersion": 1,
   "sourceCommit": "9f5e2d64ffc7914df90b580392323041141c0bb2",
@@ -38,5 +44,31 @@
   },
   "sourceRepository": "https://github.com/bearyjd/snitchwatch.git",
   "sourceTree": "a306a02ac0114d04b2363bc52e42409f7d8daa83",
-  "submoduleCommit": "b404c4c6316760fa7bc415509d3f8d747f7dc9cc"
+  "submoduleCommit": "b404c4c6316760fa7bc415509d3f8d747f7dc9cc",
+  "toolchainRpms": [
+    {
+      "file": "rust-1.98.1-1.fc44.x86_64.rpm",
+      "kojiPath": "rust/1.98.1/1.fc44/data/signed/6d9f90a6/x86_64/rust-1.98.1-1.fc44.x86_64.rpm",
+      "name": "rust",
+      "nevra": "rust-0:1.98.1-1.fc44.x86_64",
+      "sha256": "4f4a346f18eddff7ee512850a65e9a0a6b0f1ccfe96b1e665a99b6d02dacfa76",
+      "size": 31568956
+    },
+    {
+      "file": "cargo-1.98.1-1.fc44.x86_64.rpm",
+      "kojiPath": "rust/1.98.1/1.fc44/data/signed/6d9f90a6/x86_64/cargo-1.98.1-1.fc44.x86_64.rpm",
+      "name": "cargo",
+      "nevra": "cargo-0:1.98.1-1.fc44.x86_64",
+      "sha256": "b32e8b630c55c5ae0df6a3efdf58173974d4dc462a2e2be7a10cd18ea365d30f",
+      "size": 8292119
+    },
+    {
+      "file": "rust-std-static-1.98.1-1.fc44.x86_64.rpm",
+      "kojiPath": "rust/1.98.1/1.fc44/data/signed/6d9f90a6/x86_64/rust-std-static-1.98.1-1.fc44.x86_64.rpm",
+      "name": "rust-std-static",
+      "nevra": "rust-std-static-0:1.98.1-1.fc44.x86_64",
+      "sha256": "612185594cb772f5320d5c9a97dd226390fb32972389a47a99b3cb07786c39c4",
+      "size": 42066597
+    }
+  ]
 }

@@ -50,6 +50,14 @@ The GUI crate remains 0.1.0, separate from native bridge 0.1.1. See [system brid
 Snitchwatch daemon build toolchain: 7 Fedora 44 RPMs pinned by sha256 in
 `build_files/firewall/snitchwatch-system-daemon-pins.json` and fetched from Koji
 (signed copies, key sha256 pinned); see [image-build](image-build.md).
+Phase 2 separately pins three signed Koji bridge RPMs (rust, cargo,
+rust-std-static 1.98.1-1.fc44) in `build_files/firewall/snitchwatch-system-pins.json`.
+The shared toolchain helper runs after the byte-identical upstream installer
+and before the Rust gate; the daemon retains its seven pins. Remaining live
+toolchain and transitive dependencies, including LLVM, are not fully hermetic.
+Re-pin `EXPECTED_PINS_SHA256` in the respective bridge
+`snitchwatch-system-verify.py` or daemon `snitchwatch-system-daemon-verify.py`
+whenever its pins manifest changes, and rerun relevant tests.
 
 ## KDE Plasma package-family pin
 

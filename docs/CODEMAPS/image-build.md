@@ -77,6 +77,15 @@ NEVRA, then installs them in one dnf transaction. The version-string gate in
 `snitchwatch-system-daemon-build.sh` remains. Koji is a build-time dependency
 (fails closed). A `fetch` mode does the same verification without installing; `tests/test-snitchwatch-daemon-patch.sh` uses it in its network phase so the offline test phase installs the same pinned RPMs. Test: `tests/test-snitchwatch-toolchain.sh`.
 
+Phase 2 adds three signed Koji RPMs (rust, cargo, rust-std-static
+1.98.1-1.fc44) to `snitchwatch-system-pins.json` for the bridge. The same helper
+runs after the byte-identical upstream installer and before the Rust version
+gate in `snitchwatch-system-build.sh`; the daemon retains its seven pins.
+Remaining live toolchain and transitive dependencies, including LLVM, are not
+fully hermetic. Re-pinning either manifest requires updating
+`EXPECTED_PINS_SHA256` in its corresponding bridge `snitchwatch-system-verify.py`
+or daemon `snitchwatch-system-daemon-verify.py` and rerunning relevant tests.
+
 `just build-snitchwatch-system` builds the local candidate.
 `just build-snitchwatch-system-vm` additionally opts into `VM_GATE_SSH=1` for a
 disposable VM. Fresh build/first-boot/SELinux evidence remains distinct from

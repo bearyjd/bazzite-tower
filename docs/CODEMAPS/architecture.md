@@ -18,7 +18,7 @@ rather than `:stable` for reproducibility, same as every base pin here.
 recommendation to boot it. See the `Containerfile` header comment for the
 full history.
 **Publishes:** `ghcr.io/bearyjd/bazzite-tower:{latest, latest.YYYYMMDD, YYYYMMDD, <sha>}`
-and the same shape under `latest-kernel-*`, cosign-signed by digest.
+and the same shape under `latest-kernel-*` and `snitchwatch-system-*` (opt-in system bridge), cosign-signed by digest.
 
 ## Lifecycle (source → running OS)
 

@@ -121,8 +121,10 @@ Build locally with `just build-snitchwatch-system`. For a disposable SSH test
 image, use `just build-snitchwatch-system-vm`, then `just run-vm-ssh
 localhost/bazzite-tower snitchwatch-system-vm <unused-port>`; `VM_GATE_SSH=1`
 belongs only to this test image. Pull-request CI builds a local
-`verify-snitchwatch-system` candidate with read-only publishing permissions;
-release tags continue to use the two legacy variants.
+`verify-snitchwatch-system` candidate with read-only publishing permissions.
+Releases publish it as the opt-in `:snitchwatch-system` tag (see [Tags](#tags));
+`:latest` and `:latest-kernel` keep the legacy bridge. The GUI is a separate
+per-user Flatpak and is **not** part of that image.
 
 October 4–5 disposable-VM results cover the reviewed bridge/GUI artifacts,
 including conditional rendered-GUI decisions and bounded request cleanup.
@@ -311,8 +313,8 @@ upgrades retain the policy in `/etc`.
 
 ## Tags
 
-Two variants are built from the same `Containerfile` (base image selected via
-the `BASE_IMAGE` build-arg — see the comment above `FROM` in `Containerfile`):
+Three variants are built from the same `Containerfile` (selected via build-args:
+`BASE_IMAGE` for the kernel channel, `SNITCHWATCH_BRIDGE` for the bridge profile — see the comment above `FROM` in `Containerfile`):
 
 **`latest` — default/primary, pinned base (what `bootc upgrade` pulls with no explicit tag)**
 - `latest` — current build of `main`
@@ -331,9 +333,25 @@ the `BASE_IMAGE` build-arg — see the comment above `FROM` in `Containerfile`):
   repo targets. Never the default — `bootc switch` to it explicitly if you
   want to track it.
 
+**`snitchwatch-system` — opt-in, pinned base plus the native Snitchwatch system bridge**
+- `snitchwatch-system` / `snitchwatch-system.YYYYMMDD` / `snitchwatch-system-YYYYMMDD` / `snitchwatch-system-<short-sha>`
+- Same pinned base as `latest`, built with `SNITCHWATCH_BRIDGE=system` and
+  `FIREWALL_DAEMON=opensnitch`: the reviewed OpenSnitch daemon patch, the native
+  system bridge and its socket units. Never the default. It is gated by the same
+  smoke and boot checks as the other legs, but the daemon has so far only passed
+  disposable-VM gates (see the OpenSnitch / Snitchwatch status in the RUNBOOK).
+- **Switching is not just `bootc switch`.** `/etc` survives `bootc rollback`, so the
+  profile change has its own transaction (RUNBOOK, "OpenSnitch / Snitchwatch
+  deployment status"). Order: `sudo bootc switch --enforce-container-sigpolicy
+  ghcr.io/bearyjd/bazzite-tower:snitchwatch-system`, reboot, `ujust
+  snitchwatch-system-migrate check`, then `apply`. **To go back, run `ujust
+  snitchwatch-system-migrate rollback` first**, then switch to `:latest` or `bootc
+  rollback`; otherwise the legacy image boots with the system socket address in
+  `/etc/opensnitchd/default-config.json` and the firewall silently fails open.
+
 CI rebuilds weekly (Sunday 06:00 UTC) and on every push to `main`, building
-and smoke-testing both variants independently (a break in one never blocks
-or affects the other's publish).
+and smoke-testing all three variants independently (a break in one never blocks
+or affects the others' publish).
 
 ## Hardware target
 

@@ -213,13 +213,16 @@ host() {
         echo 'podman is required' >&2
         exit 1
     }
-    python3 - "$factory/snitchwatch-system-daemon-build.sh" "${TOOLCHAIN_RPMS[@]}" <<'PY'
-import re, sys
+    # The pinned Koji RPMs are installed by the toolchain helper; the factory's
+    # live dnf extras plus those pinned names must cover TOOLCHAIN_RPMS.
+    python3 - "$factory/snitchwatch-system-daemon-build.sh" "$factory/snitchwatch-system-daemon-pins.json" "${TOOLCHAIN_RPMS[@]}" <<'PY'
+import json, re, sys
 text = open(sys.argv[1]).read()
-match = re.search(r'dnf -y --setopt=install_weak_deps=False install \\\n((?:[^\n]*\\\n)*[^\n]*)', text)
-factory = set(match.group(1).replace('\\', ' ').split()) if match else set()
-if factory != set(sys.argv[2:]):
-    raise SystemExit('TOOLCHAIN_RPMS differs from the factory dnf list: ' + ' '.join(sorted(factory)))
+match = re.search(r'snitchwatch-system-toolchain\.sh" install [^\n]*\\\n([^\n]*)', text)
+factory = set(match.group(1).split()) if match else set()
+pinned = {r['name'] for r in json.load(open(sys.argv[2]))['toolchainRpms']}
+if factory != set(sys.argv[3:]) - pinned:
+    raise SystemExit('TOOLCHAIN_RPMS differs from the factory live dnf list: ' + ' '.join(sorted(factory)))
 PY
     image=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["builderImage"])' \
         "$factory/snitchwatch-system-daemon-pins.json")

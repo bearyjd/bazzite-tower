@@ -68,6 +68,15 @@ Only the system candidate changes the image-intent OpenSnitch address to
 and socket startup. Existing live bootc `/etc` drift is a migration decision,
 not an implicit policy overwrite. Both profiles remain fail open.
 
+Daemon toolchain (golang, golang-bin, golang-src, protobuf, protobuf-compiler,
+libnetfilter_queue, libnetfilter_queue-devel) is not installed from live repos:
+`snitchwatch-system-toolchain.sh` downloads the exact Koji RPMs pinned in
+`snitchwatch-system-daemon-pins.json` (`toolchainRpms`, signed copies only),
+checks size, sha256, the Fedora signature (`rpm -K` must say `signatures`) and
+NEVRA, then installs them in one dnf transaction. The version-string gate in
+`snitchwatch-system-daemon-build.sh` remains. Koji is a build-time dependency
+(fails closed). Test: `tests/test-snitchwatch-toolchain.sh`.
+
 `just build-snitchwatch-system` builds the local candidate.
 `just build-snitchwatch-system-vm` additionally opts into `VM_GATE_SSH=1` for a
 disposable VM. Fresh build/first-boot/SELinux evidence remains distinct from

@@ -32,9 +32,7 @@ echo
 echo "== Included monitoring and timers =="
 unit_status smartd.service
 unit_status rasdaemon.service
-for unit in bazzite-tower-power-tuning.service i915-resume-fix-check.timer; do
-    unit_status "${unit}"
-done
+unit_status bazzite-tower-power-tuning.service
 
 echo
 echo "== Firmware and security availability =="

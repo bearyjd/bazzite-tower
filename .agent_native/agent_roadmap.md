@@ -592,6 +592,30 @@ the failure and the other open daemon items.
 
 ---
 
+## 8. Retire the i915 resume-regression watcher (item 1) — DONE (2026-10-10)
+
+**Resolution: removed.** `i915-resume-fix-check.{service,timer}`, its libexec
+helper, `build.d/85-i915-watcher.sh`, the `tests/smoke.sh` assertions, the
+`bazzite-tower-health` line and the codemap rows are gone.
+
+Why: the watcher existed to flag the cx0 DPLL regression "once the kernel moves
+past the 6.19.x pin". That move happened deliberately on 2026-08-28 (`bc7ba80`,
+kernel 7.2 carries the fix; `docs/research/i915-bug-report/UPSTREAM-FIX-STATUS-2026-08-28.md`),
+so its premise was gone. It was also never effective: on 2026-10-10 the timer
+started ~10 min after kernel boot, `OnBootSec=5min` had already elapsed, and the
+service had zero runs on a 7.2 boot until started by hand (the smoke test only
+asserted the timer was *enabled*, so nothing noticed). `OnUnitActiveSec=1d` never
+began because it counts from a first run. The helper itself worked when run by hand.
+
+If resume trouble is suspected on 7.2: `journalctl -k -b | grep -iE 'flip_done|dpll'`,
+and `bootc rollback` is the documented mitigation. A resume-triggered check that
+raises a visible notification would be a better design than a daily log line, but
+is a feature, not a repair.
+
+**Lesson:** an "is it enabled" assertion cannot catch a timer that never fires.
+
+---
+
 ## Items considered and deliberately not ranked above
 
 - **Base-image digest pinning (Section 4 of `downstream-change-tracking.md`):**

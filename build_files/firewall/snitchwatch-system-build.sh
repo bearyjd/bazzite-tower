@@ -13,6 +13,9 @@ bash "$factory/snitchwatch-system-mode.sh"
 bash "$factory/snitchwatch-system-install-deps.sh"
 mkdir -p /work
 work=$(mktemp -d /work/snitchwatch-native.XXXXXX)
+# The unchanged upstream dependency list omits the RPM helper downloader.
+command -v curl > /dev/null || timeout 240 dnf -y --setopt=install_weak_deps=False install curl
+bash "$factory/snitchwatch-system-toolchain.sh" install "$factory/snitchwatch-system-pins.json" "$work/toolchain"
 readarray -t pin < <(python3 - "$factory/snitchwatch-system-pins.json" <<'PY'
 import json,sys
 p=json.load(open(sys.argv[1]))

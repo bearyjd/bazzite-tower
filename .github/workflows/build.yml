@@ -12,6 +12,8 @@ on:
     paths-ignore:
       - '**/README.md'
       - 'docs/**'
+      - 'AGENTS.md'
+      - 'CLAUDE.md'
   workflow_dispatch:
 
 env:

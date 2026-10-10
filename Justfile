@@ -598,6 +598,12 @@ test-ci:
 test-snitchwatch-daemon-patch:
     tests/test-snitchwatch-daemon-patch.sh
 
+# Read-only local agent usage aggregates; pass --since, --project, or --json.
+[group('Diagnostics')]
+[positional-arguments]
+token-report *args:
+    python3 scripts/agent-token-report.py "$@"
+
 # Privileged, opt-in host check: restarts Docker, verifies the narrow
 # DOCKER-USER rules for active libvirt NAT bridges, then probes Docker bridge
 # networking. It may pull a small probe image; it is not a required CI test.

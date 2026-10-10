@@ -35,6 +35,7 @@ any of it.
 | `just format` | `shfmt --write` every `*.sh` — **not** a required gate; do not run it over existing files (see "Code style") |
 | `just test-snitchwatch-daemon-patch` | Apply the pinned OpenSnitch patch to upstream and run its Go tests (with `-race`) and C harness tests in throwaway containers (network to fetch, `--network=none` to test). No image build; minutes. Run it after touching `build_files/firewall/snitchwatch-system-daemon-*`. CI runs it as `snitchwatch-daemon-patch.yml` (path-filtered, not required) |
 | `just check` / `just fix` | Check / auto-format `Justfile`/`*.just` syntax |
+| `just token-report [--since YYYY-MM-DD] [--project substring] [--json]` | Read-only Claude/Codex usage aggregates from local session logs; defaults to the last seven days, text stays under 40 lines, JSON includes all groups. No message content is emitted |
 | `just clean` | Remove build artifacts (`output/`, manifests, `*_build*`) |
 
 Run `just` with no arguments for the live list (`Justfile` is the source of

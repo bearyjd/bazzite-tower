@@ -83,6 +83,7 @@ jobs:
           tests/test-opensnitch-readiness.sh
           tests/test-snitchwatch-system.sh
           tests/test-snitchwatch-toolchain.sh
+          python3 tests/test-snitchwatch-gate.py
           python3 tests/test-snitchwatch-image-build.py
           python3 tests/test-snitchwatch-image-build-daemon.py
           tests/test-container-templates.sh
@@ -230,6 +231,7 @@ jobs:
           tests/test-opensnitch-readiness.sh
           tests/test-snitchwatch-system.sh
           tests/test-snitchwatch-toolchain.sh
+          python3 tests/test-snitchwatch-gate.py
           python3 tests/test-snitchwatch-image-build.py
           python3 tests/test-snitchwatch-image-build-daemon.py
           tests/test-container-templates.sh

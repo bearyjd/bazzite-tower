@@ -591,6 +591,12 @@ test-ci:
     set -euo pipefail
     bash tests/test-base-diff.sh
 
+# Offline fixture checks with hashed inputs and retained evidence; no runtime claim.
+[group('Test')]
+[positional-arguments]
+snitchwatch-gate *args:
+    python3 scripts/snitchwatch-gate.py "$@"
+
 # Apply the pinned OpenSnitch patch to upstream and run its Go/C tests with
 # -race in throwaway containers (fetch with network, test with --network=none).
 # No image build. Exit 3 means the Fedora toolchain drifted from the pins.

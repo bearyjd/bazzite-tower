@@ -39,6 +39,11 @@ auto-closes — each leg's labelled tracking issue, independently of whether
 
 ## Test scripts (`tests/`)
 
+- `test-snitchwatch-gate.py` — offline wrapper reporting, failure propagation,
+  prerequisites, network isolation and timeout contracts; both image
+  validation jobs run it. `just snitchwatch-gate` snapshots exact inputs and
+  retains per-check logs/hashes; offline PASS leaves runtime UNVERIFIED.
+
 - `smoke.sh` — offline, `podman run -i <img> bash -s <`. Asserts the virtualisation and monitoring intent plus Docker/Cockpit/Waydroid disabled by default, a baked Docker group without user membership, Cockpit's loopback drop-in, and the reporting-only health helper. It retains the existing firewall, kernel-argument, firmware, and desktop contracts; reports every failure, not just the first.
 - `boot-check.sh` — runtime, inside the booted image. HARD = qemu user resolves, virtqemud/virtnetworkd active, `virsh -c qemu:///system` connects, wifi-guard active + not-failed, optional Docker/Cockpit/Waydroid services disabled, and no SOF storm in the boot journal. SOFT (container limits) = NetworkManager and firstboot.
 - `test-rpm-inventory-spdx.sh` — fixture contract for the standard-library SPDX generator: deterministic ordering and valid EVRA/SPDX structure, while malformed, empty, and duplicate RPM inventories fail closed.
@@ -55,13 +60,14 @@ October 5 follow-up also passed an isolated clean source build of the corrected
 system manifest, bounded request cleanup and conditional rendered-GUI tests.
 Default KDE startup, daemon shutdown and runtime lifecycle remain gates; these
 results do not establish immutable image installation or an automated image
-release gate. The new PR-only system candidate adds immutable manifest,
+release gate. The opt-in system candidate adds immutable manifest,
 native loader, named-account, socket/token and resolved-unit checks. The
 separate patched-daemon verifier checks the installed executable even when
 rootless boot containers cannot start NFQUEUE; an active daemon additionally
 requires the reviewed process hash, arguments and root UID. Fresh
-enforcing-SELinux image VM evidence remains a separate gate; the publishing
-release variants still select legacy TCP `127.0.0.1:50051`/`allow`.
+enforcing-SELinux image VM evidence remains a separate gate. Default release
+variants retain legacy TCP `127.0.0.1:50051`/`allow`; the opt-in
+`:snitchwatch-system` release leg selects the system bridge and patched daemon.
 
 ## Diff filter (`ci/base-diff.py`)
 

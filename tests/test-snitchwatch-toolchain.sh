@@ -106,7 +106,10 @@ run_case() {
     rm -f -- "$T/curl.log" "$T/dnf.log" "$T/err.txt"
     rm -f -- "$T/installed/"* 2> /dev/null || true
     mkpins "$mut"
-    env PATH="$T/bin:$PATH" STUB_DIR="$T" "$@" bash "$helper" install "$T/pins.json" "$T/work" extra-pkg > /dev/null 2> "$T/err.txt"
+    rm -rf -- "$T/work" 2> /dev/null || true
+    local -a extras=(extra-pkg)
+    [[ "${MODE:-install}" == install ]] || extras=()
+    env PATH="$T/bin:$PATH" STUB_DIR="$T" "$@" bash "$helper" "${MODE:-install}" "$T/pins.json" "$T/work" "${extras[@]}" > /dev/null 2> "$T/err.txt"
     rc=$?
     case $expect in
         ok)
@@ -133,6 +136,26 @@ run_case 'malformed key sha256 pin is refused' refuse badkeyfmt 'malformed signi
 run_case 'malformed key fingerprint pin is refused' refuse badfprfmt 'malformed signing-key fingerprint'
 run_case 'imported key not matching the pinned fingerprint is refused' refuse none 'does not match the pinned fingerprint' STUB_OTHERKEY=1
 run_case 'installed package from another origin (header differs) is refused' dnffail none 'not the verified file' STUB_BADORIGIN=1
+
+# fetch mode: verifies and leaves RPMs in <workdir>/rpms, never runs dnf
+fetch_case() {
+    local name=$1 expect=$2 mut=$3 frag=$4
+    shift 4
+    MODE=fetch run_case "fetch: $name" "$expect" "$mut" "$frag" "$@"
+}
+fetch_case 'wrong rpm sha256 is refused' refuse badsha 'sha256 mismatch'
+fetch_case 'unsigned rpm is refused' refuse none 'unsigned or not signed' STUB_UNSIGNED=1
+fetch_case 'NEVRA mismatch is refused' refuse none 'NEVRA mismatch' STUB_BADNEVRA=1
+fetch_case 'wrong signing-key sha256 is refused' refuse badkey 'signing key does not match'
+rm -f -- "$T/curl.log" "$T/dnf.log"; mkpins none; rm -rf -- "$T/work" 2> /dev/null || true
+if env PATH="$T/bin:$PATH" STUB_DIR="$T" bash "$helper" fetch "$T/pins.json" "$T/work" > /dev/null 2> "$T/err.txt" \
+    && [[ ! -f "$T/dnf.log" && -s "$T/work/rpms/one-1.0-1.fc44.x86_64.rpm" && -s "$T/work/rpms/two-2.0-1.fc44.noarch.rpm" ]]; then
+    good 'fetch: verified RPMs left in workdir/rpms, dnf never ran'
+else bad "fetch happy path: $(cat "$T/err.txt")"; fi
+if env PATH="$T/bin:$PATH" STUB_DIR="$T" bash "$helper" fetch "$T/pins.json" "$T/work" extra-pkg > /dev/null 2> "$T/err.txt"; then
+    bad 'fetch with extra packages should be refused'
+elif grep -q 'fetch takes no extra packages' "$T/err.txt"; then good 'fetch: extra packages refused'
+else bad "fetch extras msg: $(cat "$T/err.txt")"; fi
 
 ((fails == 0)) || { echo "snitchwatch-toolchain: $fails failure(s)" >&2; exit 1; }
 echo 'snitchwatch-toolchain: pass'

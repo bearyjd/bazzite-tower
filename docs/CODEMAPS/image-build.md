@@ -75,7 +75,7 @@ libnetfilter_queue, libnetfilter_queue-devel) is not installed from live repos:
 checks size, sha256, the Fedora signature (`rpm -K` must say `signatures`) and
 NEVRA, then installs them in one dnf transaction. The version-string gate in
 `snitchwatch-system-daemon-build.sh` remains. Koji is a build-time dependency
-(fails closed). Test: `tests/test-snitchwatch-toolchain.sh`.
+(fails closed). A `fetch` mode does the same verification without installing; `tests/test-snitchwatch-daemon-patch.sh` uses it in its network phase so the offline test phase installs the same pinned RPMs. Test: `tests/test-snitchwatch-toolchain.sh`.
 
 `just build-snitchwatch-system` builds the local candidate.
 `just build-snitchwatch-system-vm` additionally opts into `VM_GATE_SSH=1` for a

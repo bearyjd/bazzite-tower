@@ -10,7 +10,9 @@
 # See .agent_native/agent_roadmap.md item 7.
 #
 # Two phases, both from the pins' builderImage digest:
-#   prepare  (network)       download the toolchain RPMs, refuse toolchain drift,
+#   prepare  (network)       fetch the pinned, signature-verified Koji toolchain
+#                            RPMs (snitchwatch-system-toolchain.sh fetch) plus
+#                            the live dependency RPMs, refuse toolchain drift,
 #                            fetch + verify upstream, apply the patch through the
 #                            factory's own check-source gates, generate the gRPC
 #                            protocol, download Go modules.
@@ -23,7 +25,8 @@ set -euo pipefail
 
 FACTORY_FILES=(snitchwatch-system-daemon-pins.json snitchwatch-system-daemon-shutdown.patch
     snitchwatch-system-daemon-stage.py)
-# Must equal the dnf list in snitchwatch-system-daemon-build.sh (checked in host).
+# Pinned names come from toolchainRpms (Koji, verified by the helper); the rest
+# are live. Together they must cover the factory's dnf list (checked in host).
 TOOLCHAIN_RPMS=(golang libnetfilter_queue-devel libnfnetlink-devel pkgconf-pkg-config
     protobuf-compiler git gcc python3 binutils coreutils diffutils findutils)
 # Upstream b404c4c's entire ui test suite. On the pristine commit these fail
@@ -92,10 +95,29 @@ install_toolchain() {
 
 prepare() {
     in_container prepare
-    # dnf5: --resolve fetches every dependency the base image lacks; --arch
-    # keeps i686 multilib out.
+    # Live dependencies the base image lacks. dnf5 --resolve also fetches the
+    # live copies of the pinned names; those are discarded so only the verified
+    # pinned files reach /work/rpms. --arch keeps i686 multilib out.
+    mkdir -p /work/live
     retry timeout 300 dnf -y --setopt=install_weak_deps=False download --resolve --arch=x86_64 --arch=noarch \
-        --destdir=/work/rpms "${TOOLCHAIN_RPMS[@]}"
+        --destdir=/work/live "${TOOLCHAIN_RPMS[@]}"
+    local pinned_names rpm
+    # The helper and the pin reader need python3, which the builder image lacks.
+    # Installed only after the dependency download above, so the downloaded set
+    # still contains everything the offline phase needs.
+    retry timeout 300 dnf -y --setopt=install_weak_deps=False install python3
+    # The reviewed toolchain: exact Fedora-signed Koji RPMs, verified by the
+    # same helper the image build uses, left in /work/rpms.
+    retry bash /work/factory/snitchwatch-system-toolchain.sh fetch /work/factory/snitchwatch-system-daemon-pins.json /work
+    pinned_names=$(python3 - /work/factory/snitchwatch-system-daemon-pins.json <<'PY'
+import json, sys
+for r in json.load(open(sys.argv[1]))['toolchainRpms']:
+    print(r['name'])
+PY
+)
+    for rpm in /work/live/*.rpm; do
+        grep -qxF -- "$(rpm -qp --qf '%{NAME}' "$rpm")" <<< "$pinned_names" || cp -- "$rpm" /work/rpms/
+    done
     install_toolchain
     local pins=/work/factory/snitchwatch-system-daemon-pins.json
     local patch=/work/factory/snitchwatch-system-daemon-shutdown.patch
@@ -236,6 +258,7 @@ PY
     for name in "${FACTORY_FILES[@]}"; do
         cp "$factory/$name" "$work/factory/$name"
     done
+    cp "$factory/snitchwatch-system-toolchain.sh" "$work/factory/snitchwatch-system-toolchain.sh"
     cp "${BASH_SOURCE[0]}" "$work/factory/test-snitchwatch-daemon-patch.sh"
     names=("snitchwatch-daemon-patch-$$-prepare" "snitchwatch-daemon-patch-$$-test")
     # A private copy relabelled with :Z, so SELinux hosts never relabel the repo.

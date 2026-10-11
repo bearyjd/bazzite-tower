@@ -108,3 +108,19 @@ bytes/hash/security metadata, service/socket state and journal bytes/modes, and
 exclude unit mutations and journal writes. JSON decode failures are ValueError
 and missing required fields are KeyError; the migration CLI catches both and
 reports REFUSED. These are offline fixture guarantees, not host runtime evidence.
+
+## Offline Snitchwatch gate
+
+`just snitchwatch-gate` wraps the existing toolchain, image, daemon image, system
+fixture and supply-chain tests. `scripts/snitchwatch-gate.py` snapshots the exact
+input bytes/modes into a unique `/tmp/snitchwatch-gate.*` evidence directory
+(or a new `--evidence PATH`). `inputs.json` records SHA-256 hashes, including
+separate hashes of two scratch copies whose recursive shell cleanup is replaced
+with bounded Python cleanup. Original files and assertions remain unchanged.
+Each check runs in a fresh network namespace; unavailable isolation/tools or
+a 120-second timeout is BLOCKED. No package fetch, container/image/VM build or
+real daemon is invoked. `summary.json` records per-check PASS/FAIL/BLOCKED,
+commands, exit codes, log hashes and concise first diagnostics; complete logs
+and executed inputs remain alongside it. Exit codes: 0 PASS, 1 FAIL, 2 BLOCKED.
+Offline PASS never certifies runtime: runtime is always UNVERIFIED (GUI,
+NFQUEUE, SELinux and deployment require separate owner-controlled evidence).

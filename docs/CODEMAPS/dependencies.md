@@ -60,8 +60,8 @@ Re-pin `EXPECTED_PINS_SHA256` in the respective bridge
 whenever its pins manifest changes, and rerun relevant tests.
 
 The r13 bridge candidate source is frozen at
-`461eac1ad866f63254eebbb84ed9502e2cec2549` (tree
-`3c8181f17923d8372c1772b4c8f61e23fc049697`, unchanged OpenSnitch gitlink
+`eb6ca4c129c71ac08b112d479748c3b7c111dc7f` (tree
+`792e6e970c7945af4befa9f4909a02473ff9aaaa`, unchanged OpenSnitch gitlink
 `b404c4c6316760fa7bc415509d3f8d747f7dc9cc`). Bridge packaging input hashes and
 the pins verifier are refreshed from that committed snapshot. Source and
 workflow review/runtime acceptance remain publication gates; the candidate pin

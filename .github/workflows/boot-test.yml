@@ -32,7 +32,6 @@ on:
 
 permissions:
   contents: read
-  issues: write   # open/close the boot-test-failure issue on scheduled runs
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -45,9 +44,26 @@ jobs:
   boot-test:
     name: Boot image and check runtime behaviour
     runs-on: ubuntu-24.04
+    permissions:
+      contents: read
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Prove exact checked-out source head
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          [[ "$EXPECTED_HEAD" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$(git rev-parse HEAD)" == "$EXPECTED_HEAD" ]]
+          tree="$(git rev-parse 'HEAD^{tree}')"
+          [[ "$tree" =~ ^[0-9a-f]{40}$ ]]
+          echo "VERIFIED_SOURCE_HEAD=$EXPECTED_HEAD" >> "$GITHUB_STEP_SUMMARY"
+          echo "VERIFIED_SOURCE_TREE=$tree" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Maximize build space
         uses: ublue-os/remove-unwanted-software@695eb75bc387dbcd9685a8e72d23439d8686cba6
@@ -99,8 +115,18 @@ jobs:
           podman rm -f bztest >/dev/null 2>&1 || true
           exit "${rc}"
 
+  # Candidate image/source execution stays read-only, including same-repo PRs.
+  # Notification credentials live in a fresh job that runs no candidate code.
+  notify:
+    name: Report boot test result
+    needs: boot-test
+    if: always() && github.event_name != 'pull_request' && (needs.boot-test.result == 'failure' || needs.boot-test.result == 'success')
+    runs-on: ubuntu-24.04
+    permissions:
+      issues: write
+    steps:
       - name: Open/refresh boot-test issue on failure
-        if: failure() && github.event_name != 'pull_request'
+        if: needs.boot-test.result == 'failure'
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         with:
           script: |
@@ -122,7 +148,7 @@ jobs:
             }
 
       - name: Close boot-test issue on success
-        if: success() && github.event_name != 'pull_request' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+        if: needs.boot-test.result == 'success' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         with:
           script: |

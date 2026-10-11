@@ -263,6 +263,40 @@ class Publication(unittest.TestCase):
 
 
 class WorkflowContracts(unittest.TestCase):
+    def test_pr_head_proof_refuses_synthetic_merge_and_missing_head(self):
+        import yaml
+        for filename, job in [('build.yml', 'verify'), ('boot-test.yml', 'boot-test')]:
+            workflow = yaml.safe_load((ROOT / '.github/workflows' / filename).read_text())
+            steps = workflow['jobs'][job]['steps']
+            checkout = next(s for s in steps if s.get('name') == 'Checkout')
+            self.assertEqual(checkout['with'], {'ref': '${{ github.event.pull_request.head.sha || github.sha }}', 'persist-credentials': False})
+            proof = next(s for s in steps if s.get('name') == 'Prove exact checked-out source head')
+            self.assertEqual(proof['env']['EXPECTED_HEAD'], checkout['with']['ref'])
+            self.assertEqual(workflow['jobs'][job]['permissions'], {'contents': 'read'})
+            self.assertLess(steps.index(proof), next(i for i,s in enumerate(steps) if 'Build' in s.get('name', '') or s.get('name') == 'Build image'))
+            with tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp); fake_git = root / 'git'
+                fake_git.write_text('#!/bin/sh\n[ "$1" = rev-parse ] || exit 2\ncase "$2" in HEAD) echo "$TEST_GIT_HEAD";; "HEAD^{tree}") echo "$TEST_GIT_TREE";; *) exit 2;; esac\n')
+                fake_git.chmod(0o755)
+                for expected, actual, success in [('a' * 40, 'a' * 40, True), ('a' * 40, 'b' * 40, False), ('', 'a' * 40, False), ('a;echo unsafe', 'a' * 40, False)]:
+                    summary = root / 'summary'; summary.write_text('')
+                    env = dict(os.environ, PATH=tmp + os.pathsep + os.environ['PATH'], EXPECTED_HEAD=expected,
+                               TEST_GIT_HEAD=actual, TEST_GIT_TREE='c' * 40, GITHUB_STEP_SUMMARY=str(summary))
+                    result = subprocess.run(['bash', '-c', proof['run']], env=env, capture_output=True, text=True)
+                    with self.subTest(workflow=filename, expected=expected, actual=actual):
+                        self.assertEqual(result.returncode == 0, success, result.stderr)
+                        self.assertEqual(bool(summary.read_text()), success)
+            if filename == 'boot-test.yml':
+                self.assertEqual(workflow['permissions'], {'contents': 'read'})
+                notifier = workflow['jobs']['notify']
+                self.assertIn("github.event_name != 'pull_request'", notifier['if'])
+                self.assertEqual(notifier['permissions'], {'issues': 'write'})
+                self.assertFalse(any('checkout@' in s.get('uses', '') for s in notifier['steps']))
+                self.assertFalse(any('run' in s for s in notifier['steps']))
+            else:
+                release_checkout = next(s for s in workflow['jobs']['release']['steps'] if s.get('name') == 'Checkout')
+                self.assertEqual(release_checkout['with']['ref'], '${{ github.sha }}')
+
     def test_yaml_and_privilege_boundaries(self):
         # PyYAML is a local static-check convenience, not a runtime dependency.
         import yaml

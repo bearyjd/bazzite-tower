@@ -42,6 +42,36 @@ not. Optional manual dispatch becomes available when the workflow exists on the
 default branch. Unset/stale variables leave the publication jobs held. First
 attempt only: a rerun requires a new independently recorded identity.
 
+The fixed candidate branch already published an unarmed draft head; pushing
+that identical head again emits no new push event. Bootstrap the final head as
+follows, with all authority still held during source review:
+
+1. Finish the source pin, workflow changes and independent exact-head reviews.
+   Push the final tower head on a separate review branch and open/update its
+   read-only PR against main. This is primary work, not automatic publication.
+2. Require fresh green `build.yml` PR verification for that exact head, including
+   all three image variants. PR checkout explicitly uses
+   `github.event.pull_request.head.sha || github.sha`, proves actual Git HEAD,
+   and records the checked-out head/tree. A synthetic merge checkout or older
+   run cannot count. When counted, boot-test uses the same actual-head proof
+   and a read-only build job; its issue notifier cannot run on PRs.
+3. Record trusted native review/CI evidence and the independently reviewed
+   immutable control commit. Only the primary may then set the reviewed head
+   and control variables. Stable promotion variables remain absent until real
+   accepted-artifact runtime receipts exist.
+4. Fast-forward the existing fixed candidate branch to that exact tested and
+   reviewed head. The head change emits a new push event and enables the
+   candidate build/publication flow. Do not force-push, delete/recreate the
+   branch, or merge release-affecting code to main for registration. If it is
+   already at the reviewed head, hold and wait for a necessary reviewed successor;
+   do not manufacture a push event or treat the skipped run as artifact CI.
+
+The ordinary verify job is PR-only; dispatching `build.yml` on a detached review
+head does not run it. Workflow-dispatch registration on main is not a bootstrap
+prerequisite. This procedure does not configure variables or claim remote green
+CI itself. Refresh the old stable-writer inventory before eventual promotion;
+the writer lock and refusal remain enforced.
+
 The credential-free builder checks clean commit/tree/workflow/pin identities,
 builds the system profile in OCI format, executes the unchanged smoke and boot
 assertions, collects the installed bridge/daemon manifests and actual binary
@@ -86,8 +116,8 @@ pins hashes and candidate workflow hash. Its independent-workflow-review
 receipt binds the SHA256 of that canonical identity object. The control commit
 records this after the candidate commit exists, avoiding a self-referential Git
 commit/hash. The frozen bridge candidate pin is
-`131868b9345a13a47ba3434722c558490663e95b` (tree
-`e3bb10858804afbcd82da90b5df1014a85930b6b`, unchanged OpenSnitch gitlink
+`461eac1ad866f63254eebbb84ed9502e2cec2549` (tree
+`3c8181f17923d8372c1772b4c8f61e23fc049697`, unchanged OpenSnitch gitlink
 `b404c4c6316760fa7bc415509d3f8d747f7dc9cc`). This is a candidate identity,
 not source review approval. Any review-driven source change requires another
 pin/input/verifier refresh and relevant offline checks before publication.

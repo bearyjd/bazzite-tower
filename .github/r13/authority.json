@@ -1,5 +1,1 @@
-{
-  "schemaVersion": 1,
-  "candidate": null,
-  "accepted": null
-}
+{"accepted":null,"candidate":{"identities":{"bridgePinsSha256":"31a2e2480cf9d3a801ac441dbe41ae031afa6a63f85ed5b061e1598a2ad4d264","daemonPinsSha256":"3f9ab19e9ed855002379645e24e5bc1fde8ce02e0359872e4d1de6aa6a15cf3f","sourceCommit":"eb6ca4c129c71ac08b112d479748c3b7c111dc7f","sourceTree":"792e6e970c7945af4befa9f4909a02473ff9aaaa","submoduleCommit":"b404c4c6316760fa7bc415509d3f8d747f7dc9cc","towerCommit":"2fb08fa8f9c6102be831cca03e9bccec6bab597c","towerTree":"bdbd40e7bf23e3176deafd03315f001c327b4357","workflowSha256":"4b74d2c58caddb3e1bf077c27a4cf25f79cab50eb9639816b128ed52e10eb3c1"},"reviewReceiptSha256":"e4f3f3d7b60dbb25ac10e403e711fa2f765f04d930ed5456e33059ea709477e5"},"schemaVersion":1}

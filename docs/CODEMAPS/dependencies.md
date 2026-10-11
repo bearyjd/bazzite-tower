@@ -59,6 +59,14 @@ Re-pin `EXPECTED_PINS_SHA256` in the respective bridge
 `snitchwatch-system-verify.py` or daemon `snitchwatch-system-daemon-verify.py`
 whenever its pins manifest changes, and rerun relevant tests.
 
+The r13 bridge candidate source is frozen at
+`131868b9345a13a47ba3434722c558490663e95b` (tree
+`e3bb10858804afbcd82da90b5df1014a85930b6b`, unchanged OpenSnitch gitlink
+`b404c4c6316760fa7bc415509d3f8d747f7dc9cc`). Bridge packaging input hashes and
+the pins verifier are refreshed from that committed snapshot. Source and
+workflow review/runtime acceptance remain publication gates; the candidate pin
+confers no stable release authority. See [r13 publication](../r13-publication.md).
+
 ## KDE Plasma package-family pin
 
 `05-pin-kde-packages.sh` (runs first, before any other `dnf install` in

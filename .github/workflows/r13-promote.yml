@@ -1,0 +1,312 @@
+# Primary-reviewed immutable workflow heads are mandatory; unset variables HOLD.
+permissions: {}
+concurrency:
+  group: bazzite-tower-stable-writers
+  cancel-in-progress: false
+defaults:
+  run:
+    shell: bash
+name: r13 accepted digest promotion
+'on':
+  workflow_dispatch:
+    inputs:
+      packet_sha256:
+        description: Primary-accepted canonical packet SHA256 (no refs or targets)
+        required: true
+        type: string
+jobs:
+  validate:
+    if: github.repository == 'bearyjd/bazzite-tower' && github.ref == 'refs/heads/main' && vars.R13_PROMOTION_HEAD != '' && github.sha == vars.R13_PROMOTION_HEAD && vars.R13_CONTROL_HEAD != '' && vars.R13_ACCEPTED_PACKET_SHA256 != '' && inputs.packet_sha256 == vars.R13_ACCEPTED_PACKET_SHA256
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      actions: read
+    env:
+      R13_CONTROL_HEAD: ${{ vars.R13_CONTROL_HEAD }}
+      R13_CANDIDATE_HEAD: ${{ vars.R13_CANDIDATE_HEAD }}
+      R13_PROMOTION_HEAD: ${{ vars.R13_PROMOTION_HEAD }}
+    outputs:
+      digest: ${{ steps.validate.outputs.digest }}
+      hashes: ${{ steps.validate.outputs.hashes }}
+      candidate_head: ${{ steps.validate.outputs.candidate_head }}
+      candidate_run_id: ${{ steps.validate.outputs.candidate_run_id }}
+      artifact_id: ${{ steps.validate.outputs.artifact_id }}
+      gui_run_id: ${{ steps.validate.outputs.gui_run_id }}
+      gui_artifact_id: ${{ steps.validate.outputs.gui_artifact_id }}
+      gui_sha256: ${{ steps.validate.outputs.gui_sha256 }}
+      packet_sha256: ${{ steps.validate.outputs.packet_sha256 }}
+    steps:
+    - name: Require immutable externally reviewed workflow/control heads
+      run: |
+        set -euo pipefail
+        [[ "$R13_CONTROL_HEAD" =~ ^[0-9a-f]{40}$ ]]
+        [[ "$R13_CANDIDATE_HEAD" =~ ^[0-9a-f]{40}$ ]]
+    - name: Require promotion workflow and primary accepted hash
+      run: |
+        set -euo pipefail
+        [[ "$R13_PROMOTION_HEAD" =~ ^[0-9a-f]{40}$ ]]
+        [[ "$PACKET_SHA256" =~ ^[0-9a-f]{64}$ ]]
+        [[ "$PACKET_SHA256" == "$ACCEPTED_PACKET_SHA256" ]]
+      env:
+        R13_CONTROL_HEAD: ${{ vars.R13_CONTROL_HEAD }}
+        R13_CANDIDATE_HEAD: ${{ vars.R13_CANDIDATE_HEAD }}
+        R13_PROMOTION_HEAD: ${{ vars.R13_PROMOTION_HEAD }}
+        PACKET_SHA256: ${{ inputs.packet_sha256 }}
+        ACCEPTED_PACKET_SHA256: ${{ vars.R13_ACCEPTED_PACKET_SHA256 }}
+    - name: Checkout primary-reviewed control data only
+      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      with:
+        ref: ${{ vars.R13_CONTROL_HEAD }}
+        path: control
+        persist-credentials: false
+    - name: Validate primary packet and native independent/runtime receipts before acquisition
+      run: |
+        python3 - <<'PY'
+        import importlib.util,os,pathlib
+        s=importlib.util.spec_from_file_location('pub','control/ci/r13-publication.py');p=importlib.util.module_from_spec(s);s.loader.exec_module(p)
+        p.context('promote',os.environ['R13_PROMOTION_HEAD'],os.environ['GITHUB_REF'],os.environ['GITHUB_WORKFLOW_REF'],os.environ['R13_CONTROL_HEAD'])
+        p.accepted(pathlib.Path('control'),os.environ['PACKET_SHA256'])
+        PY
+      env:
+        R13_CONTROL_HEAD: ${{ vars.R13_CONTROL_HEAD }}
+        R13_CANDIDATE_HEAD: ${{ vars.R13_CANDIDATE_HEAD }}
+        R13_PROMOTION_HEAD: ${{ vars.R13_PROMOTION_HEAD }}
+        PACKET_SHA256: ${{ inputs.packet_sha256 }}
+    - uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
+      id: fetch
+      env:
+        PACKET_SHA256: ${{ inputs.packet_sha256 }}
+      with:
+        script: |
+          const fs=require('fs');
+          const path=require('path');
+          const hash=process.env.PACKET_SHA256;
+          if (!/^[a-f0-9]{64}$/.test(hash)) throw new Error('invalid packet hash');
+          const packet=JSON.parse(fs.readFileSync('control/.github/r13/packets/'+hash+'.json','utf8'));
+          const dir=process.env.RUNNER_TEMP+'/r13-input'; fs.mkdirSync(dir);
+          const c=packet.candidate,g=packet.gui;
+          for (const [prefix,owner,repo,runId,artifactId] of [['tower','bearyjd','bazzite-tower',c.runId,c.artifactId],['gui','bearyjd','snitchwatch',g.runId,g.artifactId]]) {
+            if (!Number.isSafeInteger(runId)||runId<=0||!Number.isSafeInteger(artifactId)||artifactId<=0) throw new Error('invalid IDs');
+            const run=await github.rest.actions.getWorkflowRun({owner,repo,run_id:runId});
+            const artifact=await github.rest.actions.getArtifact({owner,repo,artifact_id:artifactId});
+            fs.writeFileSync(path.join(dir,prefix+'-run.json'),JSON.stringify(run.data));
+            fs.writeFileSync(path.join(dir,prefix+'-artifact.json'),JSON.stringify(artifact.data));
+            core.setOutput(prefix+'_run_id',String(runId)); core.setOutput(prefix+'_artifact_id',String(artifactId));
+          }
+    - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0
+      with:
+        path: ${{ runner.temp }}/r13-input/tower
+        artifact-ids: ${{ steps.fetch.outputs.tower_artifact_id }}
+        run-id: ${{ steps.fetch.outputs.tower_run_id }}
+        github-token: ${{ github.token }}
+    - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0
+      with:
+        path: ${{ runner.temp }}/r13-input/gui
+        artifact-ids: ${{ steps.fetch.outputs.gui_artifact_id }}
+        run-id: ${{ steps.fetch.outputs.gui_run_id }}
+        repository: bearyjd/snitchwatch
+        github-token: ${{ github.token }}
+    - name: Revalidate exact green CI, accepted OCI/GUI bytes and artifact identities
+      run: python3 control/ci/r13-publication.py promote --control control --data "$RUNNER_TEMP/r13-input" --packet-sha256 "$PACKET_SHA256"
+      id: validate
+      env:
+        PACKET_SHA256: ${{ inputs.packet_sha256 }}
+  promote:
+    needs: validate
+    if: github.repository == 'bearyjd/bazzite-tower' && github.ref == 'refs/heads/main' && vars.R13_PROMOTION_HEAD != '' && github.sha == vars.R13_PROMOTION_HEAD && vars.R13_CONTROL_HEAD != '' && vars.R13_ACCEPTED_PACKET_SHA256 != '' && inputs.packet_sha256 == vars.R13_ACCEPTED_PACKET_SHA256
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      actions: read
+      packages: write
+      attestations: read
+      artifact-metadata: write
+      id-token: write
+    steps:
+    - name: Install data transport
+      run: |
+        sudo apt-get update -qq
+        sudo apt-get install -y skopeo python3-yaml
+    - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0
+      with:
+        path: ${{ runner.temp }}/data
+        artifact-ids: ${{ needs.validate.outputs.artifact_id }}
+        run-id: ${{ needs.validate.outputs.candidate_run_id }}
+        github-token: ${{ github.token }}
+    - name: Revalidate bounded artifact bytes and fixed repository policy
+      run: |
+        python3 - <<'PY'
+        import hashlib,json,os,pathlib,re,stat
+        root=pathlib.Path(os.environ['DATA'])
+        expected=json.loads(os.environ['HASHES'])
+        files={'image.oci.tar','candidate.json','sbom.json','build-provenance.json','bridge-manifest.json','daemon-manifest.json','cosign.pub','policy.json','bazzite-tower.yaml'}
+        assert set(expected)==files and set(p.name for p in root.iterdir())==files
+        for name,value in expected.items():
+            assert isinstance(value,str) and re.fullmatch('[0-9a-f]{64}',value)
+            p=root/name
+            assert not p.is_symlink() and p.is_file()
+            assert p.stat().st_size <= (40*1024**3 if name=='image.oci.tar' else 16*1024**2)
+            with p.open('rb') as f: assert hashlib.file_digest(f,'sha256').hexdigest()==value
+        assert re.fullmatch('sha256:[0-9a-f]{64}',os.environ['DIGEST'])
+        trust=pathlib.Path(os.environ['RUNNER_TEMP'])/'r13-trust'
+        trust.mkdir()
+        (trust/'registries.d').mkdir()
+        key=root/'cosign.pub'
+        policy=json.loads((root/'policy.json').read_bytes())
+        assert policy['default']==[{'type':'reject'}]
+        rule=policy['transports']['docker']['ghcr.io/bearyjd/bazzite-tower']
+        assert rule==[{'type':'sigstoreSigned','keyPath':'/etc/pki/containers/bazzite-tower-cosign.pub','signedIdentity':{'type':'matchRepository'}}]
+        rule[0]['keyPath']=str(key)
+        # Job-local candidate policy is scoped to the fixed candidate package only;
+        # the installed host/stable policy is never edited.
+        repo='ghcr.io/bearyjd/bazzite-tower' if os.environ['MODE']=='stable' else 'ghcr.io/bearyjd/bazzite-tower-r13-candidate'
+        (trust/'policy.json').write_text(json.dumps({'default':[{'type':'reject'}],'transports':{'docker':{repo:rule}}}))
+        (trust/'registries.d/repository.yaml').write_text('docker:\n  '+repo+':\n    use-sigstore-attachments: true\n')
+        PY
+      env:
+        DIGEST: ${{ needs.validate.outputs.digest }}
+        DATA: ${{ runner.temp }}/data
+        HASHES: ${{ needs.validate.outputs.hashes }}
+        MODE: stable
+    - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6
+      with:
+        cosign-release: v2.6.3
+    - uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee
+      with:
+        registry: ghcr.io
+        username: ${{ github.actor }}
+        password: ${{ github.token }}
+    - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0
+      with:
+        path: ${{ runner.temp }}/gui
+        artifact-ids: ${{ needs.validate.outputs.gui_artifact_id }}
+        run-id: ${{ needs.validate.outputs.gui_run_id }}
+        repository: bearyjd/snitchwatch
+        github-token: ${{ github.token }}
+    - name: Verify accepted matching GUI bytes before any stable write
+      run: |
+        python3 - <<'PY'
+        import hashlib,os,pathlib,re
+        p=pathlib.Path(os.environ['RUNNER_TEMP'])/'gui/snitchwatch-system-r13-candidate.flatpak'
+        assert p.is_file() and not p.is_symlink() and p.stat().st_size <= 8*1024**3
+        assert re.fullmatch('[0-9a-f]{64}',os.environ['GUI_SHA256'])
+        with p.open('rb') as f: assert hashlib.file_digest(f,'sha256').hexdigest()==os.environ['GUI_SHA256']
+        PY
+      env:
+        GUI_SHA256: ${{ needs.validate.outputs.gui_sha256 }}
+    - name: Verify exact candidate repository policy and original build provenance
+      run: |
+        set -euo pipefail
+        image="ghcr.io/bearyjd/bazzite-tower-r13-candidate@$DIGEST"
+        timeout 180 cosign verify --key "$DATA/cosign.pub" "$image" >/dev/null
+        timeout 180 cosign verify-attestation --key "$DATA/cosign.pub" --type spdxjson "$image" > "$RUNNER_TEMP/candidate-sbom.verified.json"
+        timeout 180 cosign verify-attestation --key "$DATA/cosign.pub" --type https://github.com/bearyjd/bazzite-tower/attestations/r13-candidate-build/v1 "$image" > "$RUNNER_TEMP/candidate-provenance.verified.json"
+        gh attestation verify "oci://$image" --repo bearyjd/bazzite-tower \
+          --signer-workflow bearyjd/bazzite-tower/.github/workflows/r13-candidate.yml \
+          --source-digest "$CANDIDATE_HEAD" --source-ref refs/heads/ci/r13-candidate-hold-promotion --deny-self-hosted-runners
+        python3 - <<'PY'
+        import base64,json,os,pathlib
+        root=pathlib.Path(os.environ['RUNNER_TEMP']); data=pathlib.Path(os.environ['DATA'])
+        for name,file,kind in [('sbom','sbom.json','https://spdx.dev/Document'),('provenance','build-provenance.json','https://github.com/bearyjd/bazzite-tower/attestations/r13-candidate-build/v1')]:
+            verified=[json.loads(line) for line in (root/('candidate-'+name+'.verified.json')).read_text().splitlines() if line.strip()]
+            expected=json.loads((data/file).read_bytes())
+            assert any((lambda v:v['predicateType']==kind and v['predicate']==expected and any(s['name']==os.environ['DESTINATION'] and s['digest']=={'sha256':os.environ['DIGEST'][7:]} for s in v['subject']))(json.loads(base64.b64decode(item['payload'],validate=True))) for item in verified)
+        PY
+      env:
+        DIGEST: ${{ needs.validate.outputs.digest }}
+        DATA: ${{ runner.temp }}/data
+        HASHES: ${{ needs.validate.outputs.hashes }}
+        MODE: stable
+        CANDIDATE_HEAD: ${{ needs.validate.outputs.candidate_head }}
+        GH_TOKEN: ${{ github.token }}
+        DESTINATION: ghcr.io/bearyjd/bazzite-tower-r13-candidate
+    - name: Refuse queued or running previous automatic writers
+      run: |
+        set -euo pipefail
+        for status in queued in_progress waiting requested pending; do
+          gh api --paginate "repos/bearyjd/bazzite-tower/actions/workflows/build.yml/runs?per_page=100&status=$status" \
+            --jq '.workflow_runs[] | select(.event != "pull_request") | .id'
+        done > "$RUNNER_TEMP/active-writers"
+        [[ ! -s "$RUNNER_TEMP/active-writers" ]] || { echo 'HOLD: automatic writers remain'; exit 1; }
+      env:
+        GH_TOKEN: ${{ github.token }}
+    - name: Stage unchanged digest at fixed nonpublic-by-convention tag
+      run: |
+        set -euo pipefail
+        skopeo copy --all --preserve-digests --digestfile "$RUNNER_TEMP/staged.digest" \
+          "docker://ghcr.io/bearyjd/bazzite-tower-r13-candidate@$DIGEST" "docker://ghcr.io/bearyjd/bazzite-tower:promotion-candidate-r13-${{ github.run_id }}"
+        [[ "$(cat "$RUNNER_TEMP/staged.digest")" == "$DIGEST" ]]
+      env:
+        DIGEST: ${{ needs.validate.outputs.digest }}
+        DATA: ${{ runner.temp }}/data
+        HASHES: ${{ needs.validate.outputs.hashes }}
+        MODE: stable
+    - name: Sign fixed destination and retain original RPM/build predicates
+      run: |
+        set -euo pipefail
+        [[ -n "$COSIGN_PRIVATE_KEY" ]]
+        image="ghcr.io/bearyjd/bazzite-tower@$DIGEST"
+        cosign sign -y --key env://COSIGN_PRIVATE_KEY "$image"
+        cosign attest -y --key env://COSIGN_PRIVATE_KEY --type spdxjson --predicate "$DATA/sbom.json" "$image"
+        cosign attest -y --key env://COSIGN_PRIVATE_KEY --type https://github.com/bearyjd/bazzite-tower/attestations/r13-candidate-build/v1 \
+          --predicate "$DATA/build-provenance.json" "$image"
+      env:
+        DIGEST: ${{ needs.validate.outputs.digest }}
+        DATA: ${{ runner.temp }}/data
+        HASHES: ${{ needs.validate.outputs.hashes }}
+        MODE: stable
+        COSIGN_PRIVATE_KEY: ${{ secrets.SIGNING_SECRET }}
+        COSIGN_PASSWORD: ''
+    - name: Verify destination-bound signature, SPDX, original provenance and policy
+      run: |
+        set -euo pipefail
+        image="ghcr.io/bearyjd/bazzite-tower@$DIGEST"
+        timeout 180 cosign verify --key "$DATA/cosign.pub" "$image" >/dev/null
+        timeout 180 cosign verify-attestation --key "$DATA/cosign.pub" --type spdxjson "$image" > "$RUNNER_TEMP/sbom.verified.json"
+        timeout 180 cosign verify-attestation --key "$DATA/cosign.pub" --type https://github.com/bearyjd/bazzite-tower/attestations/r13-candidate-build/v1 "$image" > "$RUNNER_TEMP/provenance.verified.json"
+        python3 - <<'PY'
+        import base64,json,os,pathlib
+        root=pathlib.Path(os.environ['RUNNER_TEMP']); data=pathlib.Path(os.environ['DATA'])
+        for name,file,kind in [('sbom','sbom.json','https://spdx.dev/Document'),('provenance','build-provenance.json','https://github.com/bearyjd/bazzite-tower/attestations/r13-candidate-build/v1')]:
+            verified=[json.loads(line) for line in (root/(name+'.verified.json')).read_text().splitlines() if line.strip()]
+            expected=json.loads((data/file).read_bytes())
+            assert any((lambda v:v['predicateType']==kind and v['predicate']==expected and any(s['name']==os.environ['DESTINATION'] and s['digest']=={'sha256':os.environ['DIGEST'][7:]} for s in v['subject']))(json.loads(base64.b64decode(item['payload'],validate=True))) for item in verified)
+        PY
+        skopeo --policy "$RUNNER_TEMP/r13-trust/policy.json" --registries.d "$RUNNER_TEMP/r13-trust/registries.d" \
+          copy --all --preserve-digests --digestfile "$RUNNER_TEMP/policy.digest" "docker://$image" "oci:$RUNNER_TEMP/policy-verified:r13"
+        [[ "$(cat "$RUNNER_TEMP/policy.digest")" == "$DIGEST" ]]
+      env:
+        DIGEST: ${{ needs.validate.outputs.digest }}
+        DATA: ${{ runner.temp }}/data
+        HASHES: ${{ needs.validate.outputs.hashes }}
+        MODE: stable
+        DESTINATION: ghcr.io/bearyjd/bazzite-tower
+        GH_TOKEN: ${{ github.token }}
+      timeout-minutes: 20
+    - name: Move fixed system tag only after destination policy PASS
+      run: |
+        set -euo pipefail
+        skopeo copy --all --preserve-digests --digestfile "$RUNNER_TEMP/public.digest" \
+          "docker://ghcr.io/bearyjd/bazzite-tower@$DIGEST" "docker://ghcr.io/bearyjd/bazzite-tower:snitchwatch-system"
+        [[ "$(cat "$RUNNER_TEMP/public.digest")" == "$DIGEST" ]]
+        skopeo inspect --raw "docker://ghcr.io/bearyjd/bazzite-tower:snitchwatch-system" > "$RUNNER_TEMP/public-manifest.json"
+        [[ "sha256:$(sha256sum "$RUNNER_TEMP/public-manifest.json" | cut -d' ' -f1)" == "$DIGEST" ]]
+        # Matching GUI stable publication belongs to the source workflow. Joint PASS
+        # requires the primary to compare both public identities afterwards.
+        echo "IMAGE_PROMOTED_GUI_PENDING packet=$PACKET_SHA256 image=$DIGEST gui=$GUI_SHA256" >> "$GITHUB_STEP_SUMMARY"
+      env:
+        DIGEST: ${{ needs.validate.outputs.digest }}
+        DATA: ${{ runner.temp }}/data
+        HASHES: ${{ needs.validate.outputs.hashes }}
+        MODE: stable
+        PACKET_SHA256: ${{ needs.validate.outputs.packet_sha256 }}
+        GUI_SHA256: ${{ needs.validate.outputs.gui_sha256 }}
+    - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      with:
+        name: r13-destination-policy-receipt
+        path: |-
+          ${{ runner.temp }}/*.verified.json
+          ${{ runner.temp }}/*.digest
+        if-no-files-found: error
+        retention-days: 30
+        compression-level: 0

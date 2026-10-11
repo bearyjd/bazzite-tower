@@ -124,3 +124,15 @@ commands, exit codes, log hashes and concise first diagnostics; complete logs
 and executed inputs remain alongside it. Exit codes: 0 PASS, 1 FAIL, 2 BLOCKED.
 Offline PASS never certifies runtime: runtime is always UNVERIFIED (GUI,
 NFQUEUE, SELinux and deployment require separate owner-controlled evidence).
+
+## r13 publication boundary
+
+The frozen r13 bridge candidate is `131868b9345a13a47ba3434722c558490663e95b`,
+tree `e3bb10858804afbcd82da90b5df1014a85930b6b`, with unchanged OpenSnitch
+gitlink `b404c4c6316760fa7bc415509d3f8d747f7dc9cc`. The bridge pins record
+this identity and hashes of all 13 committed packaging inputs; the installed
+verifier authenticates the refreshed pins hash. Upstream installer bytes and
+signed Koji/toolchain/daemon pins remain unchanged. This candidate pin does not
+establish independent review or runtime acceptance; authority remains held.
+
+The system profile remains PR-tested but is removed from automatic stable release builds. `r13-candidate.yml` builds/tests a reviewed source in a credential-free job, records actual installed binary/manifest/pins identities through `ci/r13-candidate-data.py`, and exports digest-preserving OCI data. Separate checkout-free publishers and `ci/r13-publication.py` trusted control gates enforce fixed targets, accepted packet hashes and native independent/runtime receipts. Promotion copies the accepted digest and reissues destination-bound metadata without an image rebuild. Base-image/toolchain pins and smoke/boot assertions are preserved. See [r13-publication.md](../r13-publication.md) for the trust bootstrap, immutable identity schemas and GUI partial-publication status.

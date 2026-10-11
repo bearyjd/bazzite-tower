@@ -25,8 +25,9 @@ env:
   DEFAULT_TAG: "latest"
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref || github.run_id }}-${{ inputs.brand_name}}-${{ inputs.stream_name }}
-  cancel-in-progress: true
+  # Every stable OCI writer, including r13 promotion, shares this lock.
+  group: ${{ github.event_name == 'pull_request' && format('verify-{0}', github.ref) || 'bazzite-tower-stable-writers' }}
+  cancel-in-progress: false
 
 jobs:
   verify:
@@ -50,7 +51,7 @@ jobs:
             build_args: "BASE_IMAGE=ghcr.io/ublue-os/bazzite-nvidia-open:stable"
             tag_base: verify-latest-kernel
           # Opt-in system bridge: a local, credential-free PR candidate. The
-          # release job publishes the same configuration as `:snitchwatch-system`;
+          # r13 candidate flow builds the accepted `:snitchwatch-system` target;
           # IMAGE_TAG matches it so this leg also exercises the MOTD assertion.
           - variant: snitchwatch-system
             build_args: |
@@ -74,6 +75,9 @@ jobs:
       - name: Maximize build space
         uses: ublue-os/remove-unwanted-software@695eb75bc387dbcd9685a8e72d23439d8686cba6
 
+      - name: Install workflow static-check dependency
+        run: sudo apt-get update -qq && sudo apt-get install -y python3-yaml
+
       - name: Validate source safety contracts
         run: |
           tests/check-supply-chain.sh
@@ -83,6 +87,7 @@ jobs:
           tests/test-opensnitch-readiness.sh
           tests/test-snitchwatch-system.sh
           tests/test-snitchwatch-toolchain.sh
+          python3 tests/test-r13-publication.py
           python3 tests/test-snitchwatch-gate.py
           python3 tests/test-snitchwatch-image-build.py
           python3 tests/test-snitchwatch-image-build-daemon.py
@@ -189,20 +194,8 @@ jobs:
               IMAGE_TAG=latest-kernel
             tag_base: latest-kernel
             tag_prefix: "latest-kernel-"
-          # Opt-in — the pinned safe-pin base plus the native Snitchwatch system
-          # bridge and the reviewed OpenSnitch daemon patch (SNITCHWATCH_BRIDGE=
-          # system; docs/RUNBOOK.md "OpenSnitch / Snitchwatch deployment status").
-          # Never the default tag: `latest` keeps the legacy user bridge. Like
-          # latest-kernel it adds no BASE_IMAGE, so the Containerfile pin stays
-          # the single source of truth, and every tag is namespaced under
-          # tag_prefix so it cannot collide with the other legs' tags.
-          - variant: snitchwatch-system
-            build_args: |
-              FIREWALL_DAEMON=opensnitch
-              SNITCHWATCH_BRIDGE=system
-              IMAGE_TAG=snitchwatch-system
-            tag_base: snitchwatch-system
-            tag_prefix: "snitchwatch-system-"
+          # r13 HOLD: the system variant has no automatic stable writer.
+          # Candidate builds and accepted-digest promotion have separate workflows.
 
     steps:
       - name: Prepare environment
@@ -222,6 +215,9 @@ jobs:
       - name: Maximize build space
         uses: ublue-os/remove-unwanted-software@695eb75bc387dbcd9685a8e72d23439d8686cba6
 
+      - name: Install workflow static-check dependency
+        run: sudo apt-get update -qq && sudo apt-get install -y python3-yaml
+
       - name: Validate source safety contracts
         run: |
           tests/check-supply-chain.sh
@@ -231,6 +227,7 @@ jobs:
           tests/test-opensnitch-readiness.sh
           tests/test-snitchwatch-system.sh
           tests/test-snitchwatch-toolchain.sh
+          python3 tests/test-r13-publication.py
           python3 tests/test-snitchwatch-gate.py
           python3 tests/test-snitchwatch-image-build.py
           python3 tests/test-snitchwatch-image-build-daemon.py
@@ -625,7 +622,7 @@ jobs:
             // tag_base mirrors the `release` job's matrix, purely for the
             // human-readable message below — not a build input, so drifting
             // is cosmetic, not a correctness risk.
-            const TAG_BASE = { 'safe-pin': 'latest', 'latest-kernel': 'latest-kernel', 'snitchwatch-system': 'snitchwatch-system' };
+            const TAG_BASE = { 'safe-pin': 'latest', 'latest-kernel': 'latest-kernel' };
             const jobs = await github.paginate(github.rest.actions.listJobsForWorkflowRun, {
               owner, repo, run_id: runId, per_page: 100,
             });

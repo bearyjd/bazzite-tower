@@ -127,8 +127,8 @@ NFQUEUE, SELinux and deployment require separate owner-controlled evidence).
 
 ## r13 publication boundary
 
-The frozen r13 bridge candidate is `eb6ca4c129c71ac08b112d479748c3b7c111dc7f`,
-tree `792e6e970c7945af4befa9f4909a02473ff9aaaa`, with unchanged OpenSnitch
+The frozen r13 bridge candidate is `1527fd4df9070704ae9b98f8c3011461919812e4`,
+tree `cc9fa429825b18a592fe4e721d51a0dec42b2476`, with unchanged OpenSnitch
 gitlink `b404c4c6316760fa7bc415509d3f8d747f7dc9cc`. The bridge pins record
 this identity and hashes of all 13 committed packaging inputs; the installed
 verifier authenticates the refreshed pins hash. Upstream installer bytes and

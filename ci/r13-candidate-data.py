@@ -25,7 +25,9 @@ def main():
     args.out.mkdir(parents=True)
     run = lambda *values: subprocess.run(values, check=True)
     image = 'localhost/bazzite-tower:r13-build'
-    cid = subprocess.check_output(['podman', 'create', image], text=True).strip()
+    # bootc OS images can omit CMD/ENTRYPOINT. This command only satisfies
+    # creation; the extraction container is never started.
+    cid = subprocess.check_output(['podman', 'create', image, '/usr/bin/true'], text=True).strip()
     try:
         for kind in ('bridge', 'daemon'):
             run('podman', 'cp', cid + ':/usr/share/snitchwatch/system-' + kind + '-manifest.json', str(args.out / (kind + '-manifest.json')))

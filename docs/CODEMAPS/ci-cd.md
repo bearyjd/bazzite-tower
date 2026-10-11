@@ -41,6 +41,13 @@ auto-closes — each leg's labelled tracking issue, independently of whether
 
 All stable OCI workflows share `bazzite-tower-stable-writers` with cancellation disabled; the r13 promoter also refuses pending old automatic writers. Trust bootstrap, packet/receipt schemas, artifact identities and partial-publication semantics: [r13-publication.md](../r13-publication.md). `ci/r13-publication.py` is the read-only gate and `ci/r13-candidate-data.py` captures installed/OCI/RPM identity only in the credential-free builder. The primary-reviewed control store starts with null authority. Final tower heads first receive independent review and actual-head green PR CI on a separate review branch; only then may the primary record variables and fast-forward the existing fixed candidate branch to that exact tested head. Same-head pushes and detached dispatch do not supply fresh verify/artifact CI; no force/delete/main-registration shortcut. The full sequence is in the publication document.
 
+The candidate collector creates its extraction container with an explicit
+`/usr/bin/true` command, supporting bootc images without CMD/ENTRYPOINT. It
+never starts that container and removes it in `finally`; the separate RPM
+inventory run and digest-preserving OCI export are unchanged. Full collector
+regressions execute the real artifact validation and SPDX generation with
+offline Podman/Skopeo fixtures, including removal after collection failures.
+
 ## Test scripts (`tests/`)
 
 - `test-r13-publication.py` — packet/hash/ref/target/source/profile/receipt/CI/artifact and OCI tamper refusals, privilege boundaries, automatic system hold and no-rebuild workflow checks; actual PR-head proof rejects synthetic-merge/missing identities and boot PR tokens cannot write issues. Offline fixtures only.

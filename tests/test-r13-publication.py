@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 import tarfile
 import tempfile
 import unittest
@@ -122,6 +123,101 @@ class Publication(unittest.TestCase):
     def test_valid_candidate_and_primary_packet(self):
         self.assertEqual(pub.validate_candidate(self.root, self.data, self.ids['towerCommit'], 100), self.candidate)
         self.assertEqual(pub.accepted(self.root, self.packet_hash), self.packet)
+
+    def collect_commandless_image(self, failure=None):
+        spec = importlib.util.spec_from_file_location('collector', ROOT / 'ci/r13-candidate-data.py')
+        collector = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(collector)
+        out = Path(self.tmp.name) / ('collector-' + str(failure))
+        binaries = {'/usr/bin/snitchwatch-bridge-cli': b'installed bridge fixture',
+                    '/usr/bin/opensnitchd': b'installed daemon fixture'}
+        manifests = {'bridge': copy.deepcopy(self.bridge), 'daemon': copy.deepcopy(self.daemon)}
+        for manifest in manifests.values():
+            manifest['binary']['sha256'] = pub.sha(binaries[manifest['binary']['path']])
+        if failure == 'profile':
+            manifests['bridge']['profile'] = 'legacy'
+        calls = []
+        real_run = subprocess.run
+
+        def check_output(argv, **kwargs):
+            calls.append(list(argv))
+            if argv[:2] == ['podman', 'create']:
+                # This image has neither CMD nor ENTRYPOINT; draft container
+                # creation must supply a command but must never execute it.
+                if len(argv) == 3:
+                    raise subprocess.CalledProcessError(125, argv, stderr='no command or entrypoint provided')
+                self.assertEqual(argv, ['podman', 'create', 'localhost/bazzite-tower:r13-build', '/usr/bin/true'])
+                return 'extraction-container\n'
+            self.assertEqual(argv, ['git', '-C', str(ROOT), 'log', '-1', '--format=%cI'])
+            return '2026-10-11T00:00:00+00:00\n'
+
+        def run(argv, **kwargs):
+            argv = list(argv)
+            calls.append(argv)
+            if argv[:2] == ['podman', 'cp']:
+                self.assertTrue(argv[2].startswith('extraction-container:/'))
+                if failure == 'copy':
+                    raise subprocess.CalledProcessError(125, argv)
+                source = argv[2].split(':', 1)[1]
+                if source.startswith('/usr/share/snitchwatch/system-'):
+                    kind = source.removeprefix('/usr/share/snitchwatch/system-').removesuffix('-manifest.json')
+                    data = pub.canonical(manifests[kind])
+                else:
+                    data = b'tampered binary' if failure == 'binary' else binaries[source]
+                Path(argv[3]).write_bytes(data)
+            elif argv[:2] == ['podman', 'run']:
+                self.assertEqual(argv[:6], ['podman', 'run', '--rm', '--entrypoint', '/usr/bin/rpm',
+                                           'localhost/bazzite-tower:r13-build'])
+                self.assertEqual(argv[6:], ['-qa', '--qf', '%{NAME}\t%{EPOCHNUM}\t%{VERSION}\t%{RELEASE}\t%{ARCH}\n'])
+                kwargs['stdout'].write('fixture-rpm\t0\t1.0\t1.fc44\tx86_64\n')
+            elif argv[0] == 'python3':
+                return real_run(argv, **kwargs)
+            elif argv[0] == 'skopeo':
+                self.assertEqual(argv[:5], ['skopeo', 'copy', '--all', '--preserve-digests',
+                                           'containers-storage:localhost/bazzite-tower:r13-build'])
+                self.assertEqual(argv[5], 'oci-archive:' + str(out / 'image.oci.tar') + ':r13-build')
+                archive(out / 'image.oci.tar', tamper=failure == 'archive')
+            else:
+                self.assertEqual(argv, ['podman', 'rm', 'extraction-container'])
+            return subprocess.CompletedProcess(argv, 0)
+
+        argv = ['collector', '--source', str(ROOT), '--control', str(self.root), '--out', str(out)]
+        with patch.object(sys, 'argv', argv), patch.dict(os.environ, {'GITHUB_SHA': self.ids['towerCommit'], 'GITHUB_RUN_ID': '100'}), \
+                patch.object(collector.subprocess, 'check_output', side_effect=check_output), \
+                patch.object(collector.subprocess, 'run', side_effect=run):
+            if failure:
+                error = subprocess.CalledProcessError if failure == 'copy' else ValueError
+                with self.assertRaises(error):
+                    collector.main()
+            else:
+                collector.main()
+        self.assertEqual(calls[-1], ['podman', 'rm', 'extraction-container'])
+        self.assertFalse(any(call[:2] == ['podman', 'start'] for call in calls))
+        self.assertEqual(sum(call[:2] == ['podman', 'create'] for call in calls), 1)
+        return out, calls
+
+    def test_complete_collector_with_no_image_command(self):
+        out, calls = self.collect_commandless_image()
+        candidate = pub.validate_candidate(self.root, out, self.ids['towerCommit'], 100)
+        self.assertEqual(set(p.name for p in out.iterdir()), pub.FILES)
+        self.assertEqual(candidate['image'], self.image)
+        self.assertEqual(candidate['files']['image.oci.tar'], pub.file_sha(out / 'image.oci.tar'))
+        self.assertEqual(sum(call[:2] == ['podman', 'run'] for call in calls), 1)
+
+    def test_collector_copy_failure_removes_unstarted_container(self):
+        out, calls = self.collect_commandless_image('copy')
+        self.assertFalse((out / 'candidate.json').exists())
+        self.assertFalse(any(call[:2] == ['podman', 'run'] for call in calls))
+
+    def test_collector_binary_or_archive_drift_removes_container(self):
+        for failure in ('binary', 'archive'):
+            with self.subTest(failure=failure):
+                out, _ = self.collect_commandless_image(failure)
+                self.assertFalse((out / 'candidate.json').exists())
+
+    def test_collector_final_validation_failure_removes_container(self):
+        out, _ = self.collect_commandless_image('profile')
+        self.assertTrue((out / 'candidate.json').exists(), 'failed candidate evidence must remain')
 
     def test_complete_unmodified_promotion_entrypoint(self):
         inputs = Path(self.tmp.name) / 'inputs'; inputs.mkdir()

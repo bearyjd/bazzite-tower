@@ -674,6 +674,91 @@ class SystemBehavior(unittest.TestCase):
             operator.rollback()
         self.assertFalse(any(cmd[:2] in (["systemctl","start"],["systemctl","stop"]) for cmd in self.ctx.commands[count:]))
 
+    def assert_journal_refusal_preserves_baseline(self, operator, action, error, message):
+        def baseline():
+            config = self.ctx.path(common.CONFIG).read_bytes()
+            journal = {
+                str(path.relative_to(operator.directory)): (
+                    path.read_bytes() if path.is_file() else None,
+                    stat.S_IMODE(path.stat().st_mode),
+                )
+                for path in (operator.directory, *sorted(operator.directory.rglob("*")))
+            }
+            return (config, common.digest(self.ctx.path(common.CONFIG)),
+                    migration.config_metadata(self.ctx), copy.deepcopy(self.ctx.states),
+                    copy.deepcopy(self.ctx.properties), journal)
+
+        before = baseline()
+        count = len(self.ctx.commands)
+        with mock.patch.object(operator, "mutate", wraps=operator.mutate) as mutate, \
+                mock.patch.object(migration, "conditional_config_write", wraps=migration.conditional_config_write) as publish, \
+                mock.patch.object(operator, "save", wraps=operator.save) as save:
+            with self.assertRaisesRegex(error, message):
+                getattr(operator, action)()
+            mutate.assert_not_called()
+            publish.assert_not_called()
+            save.assert_not_called()
+        self.assertEqual(baseline(), before)
+        if action == "rollback":
+            self.assertEqual(self.ctx.commands[count:], [])
+        mutations = {"start", "stop", "restart", "reload", "enable", "disable", "mask", "unmask"}
+        self.assertFalse(any(cmd[0] == "systemctl" and any(arg in mutations for arg in cmd[1:])
+                             for cmd in self.ctx.commands[count:]))
+
+    def test_rollback_refuses_malformed_or_truncated_journal_without_mutation(self):
+        operator = migration.Migration(self.ctx)
+        operator.apply()
+        for data in (b"{not-json}", b'{"schemaVersion": 1, "status": "applied",'):
+            with self.subTest(journal=data):
+                operator.current.write_bytes(data)
+                self.assert_journal_refusal_preserves_baseline(
+                    operator, "rollback", ValueError, "Expecting")
+
+    def test_rollback_refuses_unknown_journal_schema_or_status_without_mutation(self):
+        operator = migration.Migration(self.ctx)
+        original = operator.apply()
+        for key, value in (("schemaVersion", 2), ("status", "unknown")):
+            with self.subTest(field=key):
+                record = copy.deepcopy(original)
+                record[key] = value
+                operator.save(record)
+                self.assert_journal_refusal_preserves_baseline(
+                    operator, "rollback", common.Refusal, "no active recorded transaction")
+
+    def test_rollback_refuses_missing_recorded_config_before_mutation(self):
+        operator = migration.Migration(self.ctx)
+        record = operator.apply()
+        del record["configBytes"]
+        operator.save(record)
+        self.assert_journal_refusal_preserves_baseline(
+            operator, "rollback", KeyError, "configBytes")
+
+    def test_repeated_rollback_refuses_and_preserves_restored_baseline(self):
+        operator = migration.Migration(self.ctx)
+        config = self.ctx.path(common.CONFIG).read_bytes()
+        states = copy.deepcopy(self.ctx.states)
+        operator.apply()
+        self.assertEqual(operator.rollback()["status"], "rolled-back")
+        self.assertEqual(self.ctx.path(common.CONFIG).read_bytes(), config)
+        self.assertEqual(self.ctx.states, states)
+        self.assert_journal_refusal_preserves_baseline(
+            operator, "rollback", common.Refusal, "no active recorded transaction")
+
+    def test_repeated_apply_refuses_without_mutating_active_transaction(self):
+        operator = migration.Migration(self.ctx)
+        record = operator.apply()
+        self.assert_journal_refusal_preserves_baseline(
+            operator, "apply", common.Refusal, "already system-configured")
+        # Restore only the recorded policy so preflight reaches the active-journal
+        # guard, as after interruption before policy publication.
+        self.ctx.path(common.CONFIG).write_bytes(migration.base64.b64decode(record["configBytes"]))
+        for status in ("applied", "prepared", "recovery-required"):
+            with self.subTest(status=status):
+                record["status"] = status
+                operator.save(record)
+                self.assert_journal_refusal_preserves_baseline(
+                    operator, "apply", common.Refusal, "transaction already exists")
+
     def test_missing_privileged_proc_visibility_refuses(self):
         self.ctx.system_config();proc=self.ctx.path("/proc/999");proc.mkdir();(proc/"exe").symlink_to("../../usr/bin/snitchwatch-bridge-cli")
         with mock.patch.object(common.os,"readlink",side_effect=PermissionError("no permission")):

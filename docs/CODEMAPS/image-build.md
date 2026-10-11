@@ -97,6 +97,18 @@ the [historical bridge tests](../research/snitchwatch-system-bridge.md).
 `tests/smoke.sh` (offline, post-build) asserts each of the above survived the build;
 `tests/boot-check.sh` proves the QEMU path works + no SOF storm at runtime. See [ci-cd.md](ci-cd.md).
 
+## Migration journal refusal coverage
+
+`tests/test-snitchwatch-system.py` checks rollback refusal for malformed or
+truncated `current.json`, unknown schema/status and missing recorded config
+bytes before any service command or policy publication. It also checks repeated
+rollback preserves the restored baseline and repeated apply refuses an active
+`applied`/`prepared`/`recovery-required` journal. Assertions preserve exact policy
+bytes/hash/security metadata, service/socket state and journal bytes/modes, and
+exclude unit mutations and journal writes. JSON decode failures are ValueError
+and missing required fields are KeyError; the migration CLI catches both and
+reports REFUSED. These are offline fixture guarantees, not host runtime evidence.
+
 ## Offline Snitchwatch gate
 
 `just snitchwatch-gate` wraps the existing toolchain, image, daemon image, system

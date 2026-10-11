@@ -1,0 +1,523 @@
+{
+  "accepted": null,
+  "actualExport": "UNVERIFIED",
+  "candidateImage": null,
+  "candidateOnlyAuthorityPreparation": "Allowed only after sole primary observes actual completed PASS; exact control review remains mandatory before any remote effect",
+  "candidateRunId": null,
+  "ci": {
+    "actualAuthenticatedAPIMatchesSuppliedRunAndJobEvidence": true,
+    "bootRunId": 38149317117,
+    "buildRunId": 38149317111,
+    "runtimeAcceptance": "UNVERIFIED",
+    "status": "PASS_EXACT_HEAD_ALL3_AND_BOOT_FIRST_ATTEMPT"
+  },
+  "controlHead": null,
+  "controlTree": null,
+  "evidence": [
+    {
+      "bytes": 578,
+      "hashBasis": "RAW_FILE_BYTES",
+      "path": "/tmp/r13-canonical-proposed-identities.json",
+      "sha256": "74fea99f275a8347991570defdd026c42b34775ef34319167ec6c9faff7fbb7d"
+    },
+    {
+      "bytes": 16065,
+      "hashBasis": "RAW_FILE_BYTES",
+      "path": "/tmp/r13-canonical-readiness-review.json",
+      "sha256": "2a1806a8876b203b51abf4418fef903d3ad13e5a82677d1dce7cfb8cfb09f646"
+    },
+    {
+      "bytes": 982,
+      "hashBasis": "RAW_FILE_BYTES",
+      "path": "/tmp/r13-canonical-review-primary-completion.json",
+      "sha256": "dfa7ca18223c5a16374967c26df8cb340efcdeccc678a00539e12b5e43634b0c"
+    },
+    {
+      "bytes": 643,
+      "hashBasis": "RAW_FILE_BYTES",
+      "path": "/tmp/r13-canonical-readiness-review-native-final.txt",
+      "sha256": "77457203a1380cc20c4d283a3e8477abc4472064138ffdba259e803a36b0f082"
+    },
+    {
+      "bytes": 55188,
+      "hashBasis": "RAW_FILE_BYTES",
+      "path": "/tmp/r13-canonical-ci-final.json",
+      "sha256": "cdccdf998ae521a1fbd2ac77b3bc196bad55eba62039a6de47198a565c3394c8"
+    },
+    {
+      "bytes": 15319,
+      "hashBasis": "RAW_FILE_BYTES",
+      "path": "/tmp/r13-integration-real-review.json",
+      "sha256": "ce6f6461925d9d3cda631121277c1dbe93972c14d4195da71265a44a95e7722b"
+    },
+    {
+      "bytes": 2015,
+      "hashBasis": "RAW_FILE_BYTES",
+      "path": "/tmp/r13-integration-protected-inputs.json",
+      "sha256": "c2eca73ecd2a13a342ba5bd2438c6f923c98a21eb235e9db8c74a198fd8b968f"
+    },
+    {
+      "bytes": 6324,
+      "hashBasis": "RAW_FILE_BYTES",
+      "path": "/tmp/r13-canonical-review-protected.json",
+      "sha256": "bb936f2048e88cba48180393fabf6190b5d3653a3a25d9b6cec945b0de43d74f"
+    },
+    {
+      "bytes": 8940,
+      "hashBasis": "RAW_FILE_BYTES",
+      "path": "/tmp/r13-canonical-review-adversarial.json",
+      "sha256": "fa973c63de48eeb9e9a31e1c17cd0c3d4ecec828fba3be00025508b1aa65558b"
+    },
+    {
+      "bytes": 1808,
+      "hashBasis": "RAW_FILE_BYTES",
+      "path": "/tmp/r13-resume-public-gui-observed.json",
+      "sha256": "2c9d261af28db0f8fbdb84279463c607562eeb742cd99d493c64d4722f8419fb"
+    },
+    {
+      "bytes": 5197,
+      "hashBasis": "RAW_FILE_BYTES",
+      "path": "/tmp/r13-b2-workflow-independent-review.md",
+      "sha256": "4430206e090ff67c9fc3ffb0d40f250364cea754df76f69ac25d9170eaea27e7"
+    },
+    {
+      "bytes": 1218,
+      "hashBasis": "RAW_FILE_BYTES",
+      "path": "/tmp/r13-b2-workflow-independent-active-writers.log",
+      "sha256": "02f3e2729efcb5ed9b3eb3b90e162a8fe92e8978fa76f9fb0487cb7e34f0f2c7"
+    },
+    {
+      "bytes": 69475,
+      "hashBasis": "RAW_FILE_BYTES",
+      "path": "/tmp/r13-b2-workflow-independent-api-jobs-writers.log",
+      "sha256": "45c3de94841c51cacc0ff2f9d24d151d9eaf688208a3403bbac42f7784cd461f"
+    },
+    {
+      "bytes": 60916,
+      "hashBasis": "RAW_FILE_BYTES",
+      "path": "/tmp/r13-b2-workflow-independent-api-live.log",
+      "sha256": "a52be01ec695462ed93bc3eecb75b2accd68d2aaf96d4be4327982192745f589"
+    },
+    {
+      "bytes": 266,
+      "hashBasis": "RAW_FILE_BYTES",
+      "path": "/tmp/r13-b2-workflow-independent-api.log",
+      "sha256": "bd9fcccd8e6afd92d2da58a5c80e9eec3c6137179c986d37fd46138fc8c4f84b"
+    },
+    {
+      "bytes": 615,
+      "hashBasis": "RAW_FILE_BYTES",
+      "path": "/tmp/r13-b2-workflow-independent-local-faults.log",
+      "sha256": "5691be572a1c186c86c0fb10dd07eec97443e394db06ce313bfacd15352ca35b"
+    },
+    {
+      "bytes": 130,
+      "hashBasis": "RAW_FILE_BYTES",
+      "path": "/tmp/r13-b2-workflow-independent-publication.log",
+      "sha256": "ba868c36bd312eafc204441feb6d0111556f2b9756c1a9c65dc2465fe5ae33fe"
+    },
+    {
+      "bytes": 556,
+      "hashBasis": "RAW_FILE_BYTES",
+      "path": "/tmp/r13-b2-workflow-independent-rpm-inventory.log",
+      "sha256": "7c8678468bae61d5e518a3f3fff886beae1c37edd1f1ecb3d062d090f91ebcd7"
+    },
+    {
+      "bytes": 117,
+      "hashBasis": "RAW_FILE_BYTES",
+      "path": "/tmp/r13-b2-workflow-independent-source-publication.log",
+      "sha256": "f1ca95b08c29c3eae53e82d1ec10eef273de0b01c741c94019bc5762d5b28868"
+    },
+    {
+      "bytes": 3558,
+      "hashBasis": "RAW_FILE_BYTES",
+      "path": "/tmp/r13-b2-workflow-independent-static.log",
+      "sha256": "d2663d1f8bb0f9eeb6410e010ac4ce6aff4db89738d022c93c9c4c0d98eceb8b"
+    },
+    {
+      "bytes": 76,
+      "hashBasis": "RAW_FILE_BYTES",
+      "path": "/tmp/r13-b2-workflow-independent-supply-chain.log",
+      "sha256": "22b3d10fa7b60e131a6c4d5e7d8bcaf1d3c26d42923ea762906f85351c90775a"
+    },
+    {
+      "bytes": 1733,
+      "hashBasis": "RAW_FILE_BYTES",
+      "path": "/tmp/r13-b2-workflow-independent-verification.log",
+      "sha256": "39670e1d7a97013fa3c22bfa38aebd3ba1cdb5e8a4dfea1223b8ab7672f9e345"
+    },
+    {
+      "bytes": 15794,
+      "hashBasis": "RAW_FILE_BYTES",
+      "path": "/tmp/bazzite-tower-r13-canonical-readiness-20261011/.github/workflows/r13-candidate.yml",
+      "sha256": "4b74d2c58caddb3e1bf077c27a4cf25f79cab50eb9639816b128ed52e10eb3c1"
+    },
+    {
+      "bytes": 34151,
+      "hashBasis": "RAW_FILE_BYTES",
+      "path": "/tmp/bazzite-tower-r13-canonical-readiness-20261011/.github/workflows/r13-promote.yml",
+      "sha256": "5dd153301110256df815afb237f1b607799b8458d22334efe99b2e7c024d18f7"
+    },
+    {
+      "bytes": 36538,
+      "hashBasis": "RAW_FILE_BYTES",
+      "path": "/tmp/bazzite-tower-r13-canonical-readiness-20261011/.github/workflows/build.yml",
+      "sha256": "5117bfbed0cab947614683cbb7a22a2c40efe4a3b8e5e52eab0f6b977f329587"
+    },
+    {
+      "bytes": 7303,
+      "hashBasis": "RAW_FILE_BYTES",
+      "path": "/tmp/bazzite-tower-r13-canonical-readiness-20261011/.github/workflows/boot-test.yml",
+      "sha256": "40badc68b9a0505b729dafc7f71616669cf5e6dd5752eeacb3bf35613928e9bb"
+    },
+    {
+      "bytes": 4447,
+      "hashBasis": "RAW_FILE_BYTES",
+      "path": "/tmp/bazzite-tower-r13-canonical-readiness-20261011/ci/r13-candidate-data.py",
+      "sha256": "254f9e843fa6453590152c1289462a30ae323def9e69288f7b32286755c518ba"
+    },
+    {
+      "bytes": 20020,
+      "hashBasis": "RAW_FILE_BYTES",
+      "path": "/tmp/bazzite-tower-r13-canonical-readiness-20261011/ci/r13-publication.py",
+      "sha256": "720a574733853063dd96e7ee46f5f6d8da4fd2c618fbd732153c2b79821b457c"
+    },
+    {
+      "bytes": 52071,
+      "hashBasis": "RAW_FILE_BYTES",
+      "path": "/tmp/bazzite-tower-r13-canonical-readiness-20261011/tests/test-r13-publication.py",
+      "sha256": "7eb0a9ef8a647d2cafb7ecfb71070e3300da3bbea40ff1e505dbdabf8e062d8c"
+    },
+    {
+      "bytes": 13711,
+      "hashBasis": "RAW_FILE_BYTES",
+      "path": "/tmp/bazzite-tower-r13-canonical-readiness-20261011/docs/r13-publication.md",
+      "sha256": "8e3b7852e6176004e6a2c88610f19a52601c42763c50f07358ad75bc85b0b20c"
+    },
+    {
+      "bytes": 9442,
+      "hashBasis": "RAW_FILE_BYTES",
+      "path": "/tmp/bazzite-tower-r13-canonical-readiness-20261011/Containerfile",
+      "sha256": "eada92d5f8e1d47cd09a8492a8454973760cafbac7aa609b9aa6276cf9954605"
+    },
+    {
+      "bytes": 4057,
+      "hashBasis": "RAW_FILE_BYTES",
+      "path": "/tmp/bazzite-tower-r13-canonical-readiness-20261011/build_files/firewall/snitchwatch-system-pins.json",
+      "sha256": "72b81e61338262aadb43dc4982b3e24f150695dda07e3bb58ec7f3685d7cd07b"
+    },
+    {
+      "bytes": 10188,
+      "hashBasis": "RAW_FILE_BYTES",
+      "path": "/tmp/bazzite-tower-r13-canonical-readiness-20261011/build_files/firewall/snitchwatch-system-daemon-pins.json",
+      "sha256": "3f9ab19e9ed855002379645e24e5bc1fde8ce02e0359872e4d1de6aa6a15cf3f"
+    },
+    {
+      "bytes": 4279,
+      "hashBasis": "RAW_FILE_BYTES",
+      "path": "/tmp/bazzite-tower-r13-canonical-readiness-20261011/build_files/firewall/snitchwatch-system-build.sh",
+      "sha256": "385f08fa9cf2b27646f376933514dcf483654f0042bf76f6237681a2a834b7ef"
+    },
+    {
+      "bytes": 1701,
+      "hashBasis": "RAW_FILE_BYTES",
+      "path": "/tmp/bazzite-tower-r13-canonical-readiness-20261011/build_files/firewall/snitchwatch-system-install-deps.sh",
+      "sha256": "247a396c0f3d504023f001c33bb1211f5f0f9bfd2c6685077d4bd312ac95f8cb"
+    },
+    {
+      "bytes": 30442,
+      "hashBasis": "RAW_FILE_BYTES",
+      "path": "/tmp/bazzite-tower-r13-canonical-readiness-20261011/tests/smoke.sh",
+      "sha256": "7179b81d43424fed7f9640452881e12666857cb597b6428df60c5e5e58bf8594"
+    },
+    {
+      "bytes": 13941,
+      "hashBasis": "RAW_FILE_BYTES",
+      "path": "/tmp/bazzite-tower-r13-canonical-readiness-20261011/tests/boot-check.sh",
+      "sha256": "e4786015c6041013c4dfca90071cabdcb436a7287265f8fcfdb407ceb6796e15"
+    },
+    {
+      "bytes": 391,
+      "hashBasis": "RAW_FILE_BYTES",
+      "path": "/tmp/bazzite-tower-r13-canonical-readiness-20261011/system_files/usr/share/bazzite-tower/containers/policy.json",
+      "sha256": "c58ead3f7d11c0845480b41f16c7b8a657c46bd1c55e72ca9360582447139bcd"
+    },
+    {
+      "bytes": 76,
+      "hashBasis": "RAW_FILE_BYTES",
+      "path": "/tmp/bazzite-tower-r13-canonical-readiness-20261011/system_files/usr/share/bazzite-tower/containers/registries.d/bazzite-tower.yaml",
+      "sha256": "899610a6f2e4548dfb6eee147ed8fbb4d97af8a0381d263ac49ecca57169fbc9"
+    },
+    {
+      "bytes": 16842,
+      "hashBasis": "RAW_FILE_BYTES",
+      "path": "/tmp/snitchwatch-r13-20261011/.github/workflows/candidate-gui.yml",
+      "sha256": "095c74cbbb32b4501f1748f27feb7aaebca2110d9cb59083d6b96560b3841465"
+    },
+    {
+      "bytes": 9638,
+      "hashBasis": "RAW_FILE_BYTES",
+      "path": "/tmp/snitchwatch-r13-20261011/.github/workflows/ci.yml",
+      "sha256": "c12877dcde758a449a10225adcf5ed648a2114a6bbe03cc7b7eb4f5fb0fb2ecf"
+    },
+    {
+      "bytes": 15483,
+      "hashBasis": "RAW_FILE_BYTES",
+      "path": "/tmp/snitchwatch-r13-20261011/.github/workflows/release.yml",
+      "sha256": "e3e02c35b83f1f96aa7b990ae175ab16ccfd483f3c55cf9465f68cf4e4653158"
+    },
+    {
+      "bytes": 9865,
+      "hashBasis": "RAW_FILE_BYTES",
+      "path": "/tmp/snitchwatch-r13-20261011/packaging/flatpak/build-candidate.py",
+      "sha256": "70ee5db61d56e63b47924d902aa0d516440083156a7d797fd75b627df4e8a7ad"
+    },
+    {
+      "bytes": 19056,
+      "hashBasis": "RAW_FILE_BYTES",
+      "path": "/tmp/snitchwatch-r13-20261011/packaging/flatpak/test-candidate-publication.py",
+      "sha256": "15e0a18d2db545241f263d6300ded69b366ac87a64c7c608e8e8dd624e2bcbec"
+    },
+    {
+      "bytes": 6810,
+      "hashBasis": "RAW_FILE_BYTES",
+      "path": "/tmp/snitchwatch-r13-20261011/packaging/flatpak/org.snitchwatch.Snitchwatch.system.yml",
+      "sha256": "a170b2ecb6ef191cca2b4571ea1f6b4a8bf09cd58bd5ad4c7ec9db57100da8ae"
+    },
+    {
+      "bytes": 1701,
+      "hashBasis": "RAW_FILE_BYTES",
+      "path": "/tmp/snitchwatch-r13-20261011/packaging/release/install-deps.sh",
+      "sha256": "247a396c0f3d504023f001c33bb1211f5f0f9bfd2c6685077d4bd312ac95f8cb"
+    },
+    {
+      "bytes": 3769,
+      "hashBasis": "RAW_FILE_BYTES",
+      "path": "/var/home/user/Documents/vibe-code/bazzite-tower/output/r13-session-scratch-20261011/candidate-artifacts/successor-gui-38143664905-independent/independent-successor-gui-result.json",
+      "sha256": "75a47fc562e88cd580af885da38789639d9395afb70aa03bbd059083d817e1dd"
+    },
+    {
+      "bytes": 14467,
+      "hashBasis": "RAW_FILE_BYTES",
+      "path": "/var/home/user/Documents/vibe-code/bazzite-tower/output/r13-session-scratch-20261011/candidate-artifacts/successor-gui-38143664905-independent/bundle-attestation-verified.json",
+      "sha256": "1b54578914cb9eb84f007ad151173516fabaaec97b77e1a66eda93a03c86946e"
+    },
+    {
+      "bytes": 14467,
+      "hashBasis": "RAW_FILE_BYTES",
+      "path": "/var/home/user/Documents/vibe-code/bazzite-tower/output/r13-session-scratch-20261011/candidate-artifacts/successor-gui-38143664905-independent/packet-attestation-verified.json",
+      "sha256": "1b54578914cb9eb84f007ad151173516fabaaec97b77e1a66eda93a03c86946e"
+    },
+    {
+      "bytes": 980,
+      "hashBasis": "RAW_FILE_BYTES",
+      "path": "/var/home/user/Documents/vibe-code/bazzite-tower/output/r13-session-scratch-20261011/candidate-artifacts/successor-gui-38143664905-independent/bundle-attestation-receipt.json",
+      "sha256": "242ffcdb9666264fe41baee52e3f3e3b7943db9c8cfb66d5d0c71f512617007a"
+    },
+    {
+      "bytes": 954,
+      "hashBasis": "RAW_FILE_BYTES",
+      "path": "/var/home/user/Documents/vibe-code/bazzite-tower/output/r13-session-scratch-20261011/candidate-artifacts/successor-gui-38143664905-independent/packet-attestation-receipt.json",
+      "sha256": "59c7aa9c7a90c8c59770debc4742a1d54f19641d831ec4e89a5aad7f9a9a5bcf"
+    }
+  ],
+  "externalIntegrationHelpers": {
+    "approved": false,
+    "executed": false,
+    "fiveFindingsUnresolvedByThisReview": true,
+    "proposedWorkflowAuthority": false,
+    "review": "/tmp/r13-integration-real-review.json",
+    "status": "FAIL_NEEDS_FIX"
+  },
+  "finalExactSnapshots": {
+    "source": {
+      "head": "1527fd4df9070704ae9b98f8c3011461919812e4",
+      "status": "",
+      "tree": "cc9fa429825b18a592fe4e721d51a0dec42b2476"
+    },
+    "tower": {
+      "head": "b2f6e24131de06117a00fb727e5cb7166d4e77da",
+      "status": "",
+      "tree": "379895eef11de0539de415ed43e78d88ddab2b79"
+    }
+  },
+  "findings": [],
+  "identities": {
+    "bridgePinsSha256": "72b81e61338262aadb43dc4982b3e24f150695dda07e3bb58ec7f3685d7cd07b",
+    "daemonPinsSha256": "3f9ab19e9ed855002379645e24e5bc1fde8ce02e0359872e4d1de6aa6a15cf3f",
+    "sourceCommit": "1527fd4df9070704ae9b98f8c3011461919812e4",
+    "sourceTree": "cc9fa429825b18a592fe4e721d51a0dec42b2476",
+    "submoduleCommit": "b404c4c6316760fa7bc415509d3f8d747f7dc9cc",
+    "towerCommit": "b2f6e24131de06117a00fb727e5cb7166d4e77da",
+    "towerTree": "379895eef11de0539de415ed43e78d88ddab2b79",
+    "workflowSha256": "4b74d2c58caddb3e1bf077c27a4cf25f79cab50eb9639816b128ed52e10eb3c1"
+  },
+  "identitiesCanonicalSha256": "0bc22107a2c25067d9739fa429487d460f892ca6aa322bedb87859a642f39a76",
+  "migrationAcceptance": "UNVERIFIED",
+  "modelProvenance": "Owner requested; runtime model/effort not independently introspected",
+  "mutations": "Only requested review files/own logs and ephemeral test scratch. Incidental probe bytecode removed; no tracked edits, remote writes, guest/build/cosign/private-key operations. Dirty primary checkout untouched.",
+  "nativeCompletion": null,
+  "nativeStaticContracts": {
+    "exportDelta": "exact podman unshare prefix/comment; no changed flags/storage user/predicates/policy",
+    "installerCmp": "PASS",
+    "nullCandidateAndAcceptanceRefuse": true,
+    "protectedByteIdenticalParent": 16,
+    "sourceInputs": 13,
+    "status": "PASS"
+  },
+  "nativeTranscriptHash": "Not self-sealed while CLI is running; sole primary must capture actual completion/final/transcript evidence after exit",
+  "nestedAgents": false,
+  "observedRemoteState": {
+    "activeAutomaticBuildWriters": [],
+    "candidateHead": "e1f432755b6d1a3566a40406a9ed43b21ade76be",
+    "configuredControlHead": "051e06d412db7e4a52e12bd81c7c8656844b61b9",
+    "inventoryIsPointInTimeOnly": true,
+    "mainHead": "d0f1da1356c722c5f03dc6dd6eaad413de0bf21e",
+    "mainLegacyAutomaticSystemWriterStillPresent": true,
+    "mainUsesReviewedSharedLock": false,
+    "stableVariablesAbsent": true
+  },
+  "officialSources": [
+    {
+      "url": "https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/control-workflow-concurrency",
+      "use": "same-group serialization, pending cancellation semantics"
+    },
+    {
+      "url": "https://docs.github.com/en/actions/concepts/security/github_token",
+      "use": "job-scoped token lifetime and permissions"
+    },
+    {
+      "url": "https://docs.podman.io/en/latest/markdown/podman-unshare.1.html",
+      "use": "user namespace and existing storage context"
+    },
+    {
+      "url": "https://github.com/podman-container-tools/skopeo/blob/main/docs/skopeo-copy.1.md",
+      "use": "all-image copy and preserved digests"
+    }
+  ],
+  "parent": "bec5c529e7155e92a874953bf3b7db6fae5ad67c",
+  "priorProductEvidence": {
+    "actualPrimaryCompletionVerified": true,
+    "adversarialProbes": 49,
+    "completionExitCode": 0,
+    "referencedRawEvidenceHashesMatched": 40,
+    "rerunHere": false,
+    "runtimeAcceptance": "UNVERIFIED",
+    "status": "PASS_CODE_SECURITY_PREPARATION_ONLY",
+    "tests": 174
+  },
+  "releaseAcceptance": false,
+  "remoteActionApprovedByThisReceipt": false,
+  "requestedAbsentPath": {
+    "actualPublisher": ".github/workflows/r13-candidate.yml::jobs.publish",
+    "path": ".github/workflows/r13-publish-candidate.yml",
+    "status": "ABSENT_AT_EXACT_TOWER_TREE"
+  },
+  "requestedModel": "gpt-6.1-sol",
+  "requestedReasoningEffort": "high",
+  "requiredControls": [
+    {
+      "before": "Any candidate authority construction",
+      "id": "C1",
+      "requirement": "Sole primary observes this actual independent CLI completing successfully, verifies raw JSON/Markdown/final hashes and actual reviewer identity, and retains the genuine prior primary completion unchanged. No native completion or tool-wait adapter is manufactured. This review does not observe its own process completion."
+    },
+    {
+      "before": "Any remote control/ref/variable/candidate push",
+      "id": "C2",
+      "requirement": "Prepare candidate-only control authority for these exact eight identities with accepted:null. Store a truthful canonical independent-workflow-review binding to SHA256(canonical(identities)), this raw review SHA256 as evidence, and the actual reviewer string. Retain raw review/primary completion/product review/CI evidence as evidence, without relabeling runtime or adding invented identities. Separately review the final exact control commit/tree and every delta before any remote effects."
+    },
+    {
+      "before": "Exact control approval",
+      "id": "C3",
+      "requirement": "Control gate ci/r13-publication.py and collector ci/r13-candidate-data.py must be byte-identical to reviewed b2; preserve trust inputs and all protected source/toolchain/policy/assertion bindings. External /tmp preparation/acquisition helpers remain FAIL, excluded and unauthorized; this review does not resolve their five findings."
+    },
+    {
+      "before": "Candidate run and artifact reliance",
+      "id": "C4",
+      "requirement": "After separate exact-control PASS only, primary may set exact reviewed candidate/control variables and fast-forward the existing fixed candidate branch to b2; verify explicit GitHub remote/ref ancestry. Use a new first-attempt run, no old-head rerun or synthetic push, and retain authenticated exact repository/ref/head/workflow/attempt/job/artifact hashes. Freeze configuration through the run and obtain authenticated proof of the actual control checkout SHA in approval/build/validate jobs. Existing candidate metadata/provenance has no controlHead: do not invent that field or infer it from current variables."
+    },
+    {
+      "before": "Runtime import/acquisition",
+      "id": "C5",
+      "requirement": "Require actual successful rootless export, preserved archive/manifest/platform/layer identities, installed binary-manifest agreement, original SPDX/build predicate, destination-bound signatures and registry policy PASS at fixed ghcr.io/bearyjd/bazzite-tower-r13-candidate. The podman unshare change and offline mocks establish preparation only. Acquisition payload, transport, scratch/dependencies, expiry and real execution channel need their own exact independent review; do not use excluded helpers."
+    },
+    {
+      "before": "Every dependent action",
+      "id": "C6",
+      "requirement": "Preserve raw TTL/expiry/security metadata and enforce actual freshness/artifact unexpired checks. Lifting the operational cutoff does not remove security expiry. Unknown control head, candidate run/image and runtime facts stay null/UNVERIFIED; no evidence field invention, expiry stripping or fabricated receipt provenance."
+    },
+    {
+      "before": "Any release-affecting merge, main rebuild or stable configuration",
+      "id": "C7",
+      "requirement": "Keep R13_PROMOTION_HEAD and R13_ACCEPTED_PACKET_SHA256 absent and accepted:null throughout candidate preparation/runtime verification; no release-affecting main merge to register a candidate. Live main retains the legacy system writer/different lock, while b2 excludes its automatic system leg. Current active automatic inventory is empty, not a durable guarantee. Refresh/drain/refuse prior writers before future stable use and require the reviewed shared lock deployed; no automatic system stable rebuild may substitute for accepted-byte promotion."
+    },
+    {
+      "before": "GUI or stable promotion",
+      "id": "C8",
+      "requirement": "Preserve source1527 and public release409694735/tag r13-candidate plus all nine exact immutable assets, authenticated run38143664905 and original attestation bytes. No replacement/rebuild/relabel. GUI bytes/attestation acquisition remains separate from effective sandbox/runtime proof. Real runtime, migration, rollback and all eleven acceptance receipts plus independent acceptance are required before accepted packet or stable variables; image-only promotion remains GUI_PENDING and a matching stable GUI publisher needs its own review."
+    }
+  ],
+  "reviewedAt": "2026-10-11T15:34:14.732534+00:00",
+  "reviewer": "01a12b91-26ae-7031-97fb-c044b54526b0",
+  "reviewerIdentitySource": "Actual CODEX_SESSION_ID; identical CODEX_THREAD_ID",
+  "rollbackAcceptance": "UNVERIFIED",
+  "runtimeAcceptance": "UNVERIFIED",
+  "runtimeRun": null,
+  "scope": [
+    ".github/workflows/r13-candidate.yml::approval/build/validate/publish",
+    "ci/r13-candidate-data.py",
+    "ci/r13-publication.py",
+    ".github/workflows/r13-promote.yml",
+    ".github/workflows/build.yml",
+    "frozen source candidate GUI/source contracts"
+  ],
+  "sourceGui": {
+    "artifactExpired": false,
+    "artifactId": 11703693722,
+    "cryptographicVerificationRerunHere": false,
+    "nineAssetsUnchanged": true,
+    "prerelease": true,
+    "public": true,
+    "releaseId": 409694735,
+    "retainedAttestationRawHashesMatch": true,
+    "runAttempt": 1,
+    "runId": 38143664905,
+    "runtimeAcceptance": "UNVERIFIED",
+    "sourceHead": "1527fd4df9070704ae9b98f8c3011461919812e4",
+    "status": "PRESERVED_AUTHENTIC_ACQUISITION_EVIDENCE_ONLY"
+  },
+  "sourceHead": "1527fd4df9070704ae9b98f8c3011461919812e4",
+  "sourceTree": "cc9fa429825b18a592fe4e721d51a0dec42b2476",
+  "stableAcceptance": "HOLD",
+  "status": "PASS_WORKFLOW_PREPARATION_ONLY",
+  "tests": [
+    {
+      "command": "PYTHONDONTWRITEBYTECODE=1 python3 tests/test-r13-publication.py",
+      "cwd": "/tmp/bazzite-tower-r13-canonical-readiness-20261011",
+      "exitCode": 0,
+      "status": "PASS",
+      "tests": 31
+    },
+    {
+      "command": "PYTHONDONTWRITEBYTECODE=1 python3 packaging/flatpak/test-candidate-publication.py",
+      "cwd": "/tmp/snitchwatch-r13-20261011",
+      "exitCode": 0,
+      "status": "PASS",
+      "tests": 18
+    },
+    {
+      "command": "bash tests/check-supply-chain.sh",
+      "cwd": "/tmp/bazzite-tower-r13-canonical-readiness-20261011",
+      "exitCode": 0,
+      "status": "PASS"
+    },
+    {
+      "command": "bash tests/test-rpm-inventory-spdx.sh",
+      "cwd": "/tmp/bazzite-tower-r13-canonical-readiness-20261011",
+      "exitCode": 0,
+      "status": "PASS"
+    }
+  ],
+  "towerHead": "b2f6e24131de06117a00fb727e5cb7166d4e77da",
+  "towerTree": "379895eef11de0539de415ed43e78d88ddab2b79"
+}

@@ -1,0 +1,139 @@
+name: r13 immutable candidate policy recovery
+'on':
+  push:
+    branches:
+      - ci/r13-candidate-policy-recovery
+permissions: {}
+concurrency:
+  group: bazzite-tower-stable-writers
+  cancel-in-progress: false
+defaults:
+  run:
+    shell: bash
+jobs:
+  recover-policy:
+    if: github.repository == 'bearyjd/bazzite-tower' && github.event_name == 'push' && github.ref == 'refs/heads/ci/r13-candidate-policy-recovery' && vars.R13_RECOVERY_HEAD != '' && github.sha == vars.R13_RECOVERY_HEAD && vars.R13_ACCEPTED_PACKET_SHA256 == '' && vars.R13_PROMOTION_HEAD == ''
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      actions: read
+      packages: write
+      attestations: read
+    env:
+      R13_RECOVERY_HEAD: ${{ vars.R13_RECOVERY_HEAD }}
+      DIGEST: sha256:88f8ff0052c27fcc71379f2b43e06ddd7218419b2d90c8fcf8392af5292b8454
+      ORIGINAL_HEAD: b2f6e24131de06117a00fb727e5cb7166d4e77da
+      ORIGINAL_RUN_ID: '38153505376'
+      DESTINATION: ghcr.io/bearyjd/bazzite-tower-r13-candidate
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Require exact independently reviewed recovery head and first attempt
+        run: |
+          set -euo pipefail
+          [[ "$R13_RECOVERY_HEAD" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$GITHUB_SHA" == "$R13_RECOVERY_HEAD" && "$GITHUB_RUN_ATTEMPT" == 1 ]]
+      - name: Checkout exact reviewed recovery code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          repository: bearyjd/bazzite-tower
+          ref: ${{ github.sha }}
+          path: recovery
+          persist-credentials: false
+      - name: Checkout original reviewed control data only
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          repository: bearyjd/bazzite-tower
+          ref: 70825044d78c133da0dad61c9ac651b561c747b6
+          path: control
+          persist-credentials: false
+      - name: Install OCI data transport
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y skopeo
+      - name: Acquire and validate exact original immutable build artifact
+        run: python3 recovery/ci/r13-candidate-policy-recovery.py acquire --control control --out "$RUNNER_TEMP/r13-recovery"
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6
+        with:
+          cosign-release: v2.6.3
+      - uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - name: Verify existing original b2 GitHub build provenance before recovery writes
+        run: |
+          set -euo pipefail
+          timeout 180 gh attestation verify "oci://$DESTINATION@$DIGEST" --repo bearyjd/bazzite-tower \
+            --signer-workflow bearyjd/bazzite-tower/.github/workflows/r13-candidate.yml \
+            --source-digest "$ORIGINAL_HEAD" --source-ref refs/heads/ci/r13-candidate-hold-promotion \
+            --deny-self-hosted-runners --format json > "$RUNNER_TEMP/r13-recovery/original-github-provenance.verified.json"
+      - name: Stage original unchanged digest at fixed recovery tag
+        run: |
+          set -euo pipefail
+          DATA="$RUNNER_TEMP/r13-recovery/data"
+          skopeo copy --all --preserve-digests --digestfile "$RUNNER_TEMP/r13-recovery/staged.digest" \
+            "oci-archive:$DATA/image.oci.tar:r13-build" "docker://$DESTINATION:r13-policy-recovery-$GITHUB_RUN_ID"
+          [[ "$(cat "$RUNNER_TEMP/r13-recovery/staged.digest")" == "$DIGEST" ]]
+      - name: Retain legacy signature and add same-key typed bundle with original predicates
+        run: |
+          set -euo pipefail
+          DATA="$RUNNER_TEMP/r13-recovery/data"
+          [[ -n "$COSIGN_PRIVATE_KEY" ]]
+          image="$DESTINATION@$DIGEST"
+          cosign sign -y --key env://COSIGN_PRIVATE_KEY "$image"
+          cosign sign -y --new-bundle-format --key env://COSIGN_PRIVATE_KEY "$image"
+          cosign attest -y --new-bundle-format --key env://COSIGN_PRIVATE_KEY --type spdxjson --predicate "$DATA/sbom.json" "$image"
+          cosign attest -y --new-bundle-format --key env://COSIGN_PRIVATE_KEY \
+            --type https://github.com/bearyjd/bazzite-tower/attestations/r13-candidate-build/v1 \
+            --predicate "$DATA/build-provenance.json" "$image"
+        env:
+          COSIGN_PRIVATE_KEY: ${{ secrets.SIGNING_SECRET }}
+          COSIGN_PASSWORD: ''
+      - name: Verify keyed sign-v1, original SPDX and provenance, fixed destination policy
+        timeout-minutes: 25
+        run: |
+          set -euo pipefail
+          DATA="$RUNNER_TEMP/r13-recovery/data"
+          image="$DESTINATION@$DIGEST"
+          receipt="$RUNNER_TEMP/r13-recovery"
+          timeout 180 cosign verify --key "$DATA/cosign.pub" "$image" >/dev/null
+          timeout 180 cosign verify-attestation --new-bundle-format --key "$DATA/cosign.pub" \
+            --type https://sigstore.dev/cosign/sign/v1 "$image" > "$receipt/sign-v1.verified.json"
+          timeout 180 cosign verify-attestation --new-bundle-format --key "$DATA/cosign.pub" \
+            --type spdxjson "$image" > "$receipt/sbom.verified.json"
+          timeout 180 cosign verify-attestation --new-bundle-format --key "$DATA/cosign.pub" \
+            --type https://github.com/bearyjd/bazzite-tower/attestations/r13-candidate-build/v1 "$image" > "$receipt/provenance.verified.json"
+          python3 recovery/ci/r13-candidate-policy-recovery.py predicates --control control --out "$receipt"
+          skopeo --policy "$receipt/trust/policy.json" --registries.d "$receipt/trust/registries.d" \
+            copy --all --preserve-digests --digestfile "$receipt/policy.digest" "docker://$image" "oci:$RUNNER_TEMP/policy-verified:r13"
+          [[ "$(cat "$receipt/policy.digest")" == "$DIGEST" ]]
+          timeout 180 gh attestation verify "oci://$image" --repo bearyjd/bazzite-tower \
+            --signer-workflow bearyjd/bazzite-tower/.github/workflows/r13-candidate.yml \
+            --source-digest "$ORIGINAL_HEAD" --source-ref refs/heads/ci/r13-candidate-hold-promotion \
+            --deny-self-hosted-runners --format json > "$receipt/original-github-provenance-final.verified.json"
+      - name: Recheck immutable original run and artifact before candidate pointer
+        run: python3 recovery/ci/r13-candidate-policy-recovery.py final-original-check --control control --out "$RUNNER_TEMP/r13-recovery"
+      - name: Publish fixed candidate pointer only after recovery policy PASS
+        run: |
+          set -euo pipefail
+          receipt="$RUNNER_TEMP/r13-recovery"
+          skopeo copy --all --preserve-digests --digestfile "$receipt/public.digest" \
+            "docker://$DESTINATION@$DIGEST" "docker://$DESTINATION:r13-candidate"
+          [[ "$(cat "$receipt/public.digest")" == "$DIGEST" ]]
+          echo "CANDIDATE_POLICY_RECOVERY_PASS repository=$DESTINATION digest=$DIGEST original_head=$ORIGINAL_HEAD original_run=$ORIGINAL_RUN_ID recovery_head=$GITHUB_SHA recovery_run=$GITHUB_RUN_ID" >> "$GITHUB_STEP_SUMMARY"
+      - name: Retain separate immutable policy recovery evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: r13-destination-policy-recovery-receipt
+          path: |
+            ${{ runner.temp }}/r13-recovery/*.verified.json
+            ${{ runner.temp }}/r13-recovery/*.digest
+            ${{ runner.temp }}/r13-recovery/*.observation.json
+            ${{ runner.temp }}/r13-recovery/*.raw
+            ${{ runner.temp }}/r13-recovery/*.stderr
+            ${{ runner.temp }}/r13-recovery/*-receipt.json
+            ${{ runner.temp }}/r13-recovery/original-image-data-validation.json
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0

@@ -94,6 +94,23 @@ the [historical bridge tests](../research/snitchwatch-system-bridge.md).
 
 ## Verified by
 
+`r13-candidate-policy-recovery.yml` is a separate, reviewed-head-gated recovery
+on `ci/r13-candidate-policy-recovery`. It never builds an image: its helper
+`ci/r13-candidate-policy-recovery.py` authenticates the original failed run
+38153505376 attempt 1, its successful build/validate/control checkouts and exact
+artifact 11708196868 ZIP/digest, then uses the unchanged original control
+validator to inspect OCI blobs, installed manifests, SPDX and original b2
+predicates. A job-local verified ZIP is discarded after safe extraction to bound
+scratch use; the original remote artifact stays immutable.
+
+Recovery retains legacy keyed signing for the unchanged repository policy,
+adds same-key Cosign 2.6.3 bundles and requires typed `sign/v1`, original SPDX and
+predicate verification before the candidate pointer. Existing original b2
+GitHub provenance is verified before registry writes and again before the
+pointer; recovery head/run are recorded separately. No new recovery attestation
+is presented as original build provenance. Stable, GUI and runtime authority
+remain separate. Offline test: `tests/test-r13-candidate-policy-recovery.py`.
+
 `tests/smoke.sh` (offline, post-build) asserts each of the above survived the build;
 `tests/boot-check.sh` proves the QEMU path works + no SOF storm at runtime. See [ci-cd.md](ci-cd.md).
 

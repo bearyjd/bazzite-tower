@@ -173,9 +173,15 @@ class Publication(unittest.TestCase):
             elif argv[0] == 'python3':
                 return real_run(argv, **kwargs)
             elif argv[0] == 'skopeo':
-                self.assertEqual(argv[:5], ['skopeo', 'copy', '--all', '--preserve-digests',
+                # Rootless containers-storage reexec is denied on this runner;
+                # the existing Podman namespace helper must own the export.
+                raise subprocess.CalledProcessError(1, argv, stderr='unshare: Operation not permitted')
+            elif argv[:3] == ['podman', 'unshare', 'skopeo']:
+                self.assertEqual(argv[:7], ['podman', 'unshare', 'skopeo', 'copy', '--all', '--preserve-digests',
                                            'containers-storage:localhost/bazzite-tower:r13-build'])
-                self.assertEqual(argv[5], 'oci-archive:' + str(out / 'image.oci.tar') + ':r13-build')
+                self.assertEqual(argv[7], 'oci-archive:' + str(out / 'image.oci.tar') + ':r13-build')
+                if failure == 'namespace':
+                    raise subprocess.CalledProcessError(125, argv)
                 archive(out / 'image.oci.tar', tamper=failure == 'archive')
             else:
                 self.assertEqual(argv, ['podman', 'rm', 'extraction-container'])
@@ -186,7 +192,7 @@ class Publication(unittest.TestCase):
                 patch.object(collector.subprocess, 'check_output', side_effect=check_output), \
                 patch.object(collector.subprocess, 'run', side_effect=run):
             if failure:
-                error = subprocess.CalledProcessError if failure == 'copy' else ValueError
+                error = subprocess.CalledProcessError if failure in ('copy', 'namespace') else ValueError
                 with self.assertRaises(error):
                     collector.main()
             else:
@@ -214,6 +220,12 @@ class Publication(unittest.TestCase):
             with self.subTest(failure=failure):
                 out, _ = self.collect_commandless_image(failure)
                 self.assertFalse((out / 'candidate.json').exists())
+
+    def test_collector_namespace_copy_failure_removes_container(self):
+        out, calls = self.collect_commandless_image('namespace')
+        self.assertFalse((out / 'candidate.json').exists())
+        self.assertTrue(any(call[:3] == ['podman', 'unshare', 'skopeo'] for call in calls))
+        self.assertFalse(any(call[0] == 'sudo' for call in calls))
 
     def test_collector_final_validation_failure_removes_container(self):
         out, _ = self.collect_commandless_image('profile')

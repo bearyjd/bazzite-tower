@@ -144,3 +144,10 @@ allowlisted redirects. Tower tokens remain scoped to tower artifacts. Missing
 public GUI data holds promotion. `tests/test-r13-publication.py` executes the
 unmodified promotion entrypoint and actual inline downloader refusal paths;
 remote CI/acquisition and runtime still require independent evidence.
+
+The candidate collector exports the current user's containers-storage image
+through `podman unshare skopeo copy --all --preserve-digests`. This uses the
+existing Podman user namespace and image store, without sudo or runner security
+changes. The full collector regression models direct Skopeo unshare refusal and
+checks namespace-export failure cleanup. Actual runner success requires fresh CI.
+See [Podman unshare](https://docs.podman.io/en/latest/markdown/podman-unshare.1.html).

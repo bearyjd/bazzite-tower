@@ -44,7 +44,8 @@ def main():
             '--output', str(args.out / 'sbom.json'), '--created', created)
         (args.out / 'rpms.tsv').unlink()
         # A conversion that changes the manifest is a hard HOLD.
-        run('skopeo', 'copy', '--all', '--preserve-digests', 'containers-storage:' + image,
+        # Use Podman's existing rootless namespace and the same user's image store.
+        run('podman', 'unshare', 'skopeo', 'copy', '--all', '--preserve-digests', 'containers-storage:' + image,
             'oci-archive:' + str(args.out / 'image.oci.tar') + ':r13-build')
         installed = pub.image_identity(args.out / 'image.oci.tar')
         for name, source in [('cosign.pub', 'cosign.pub'), ('policy.json', 'system_files/usr/share/bazzite-tower/containers/policy.json'),

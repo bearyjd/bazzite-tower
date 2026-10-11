@@ -97,3 +97,10 @@ SSH gate. Neither recipe publishes an image or installs a GUI.
 `just smoke` = the build.yml gate. Also `just build`, `just build-qcow2`,
 `just run-vm-qcow2`, `just spawn-vm`, `just build-iso-live` (payload + titanoboa
 ISO), `just check`/`lint`/`format`.
+
+The candidate collector exports the current user's containers-storage image
+through `podman unshare skopeo copy --all --preserve-digests`. This uses the
+existing Podman user namespace and image store, without sudo or runner security
+changes. The full collector regression models direct Skopeo unshare refusal and
+checks namespace-export failure cleanup. Actual runner success requires fresh CI.
+See [Podman unshare](https://docs.podman.io/en/latest/markdown/podman-unshare.1.html).

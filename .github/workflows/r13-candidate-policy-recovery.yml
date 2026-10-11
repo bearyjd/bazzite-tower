@@ -105,8 +105,9 @@ jobs:
           timeout 180 cosign verify-attestation --new-bundle-format --key "$DATA/cosign.pub" \
             --type https://github.com/bearyjd/bazzite-tower/attestations/r13-candidate-build/v1 "$image" > "$receipt/provenance.verified.json"
           python3 recovery/ci/r13-candidate-policy-recovery.py predicates --control control --out "$receipt"
+          # Source policy still verifies signatures; local OCI cannot store them.
           skopeo --policy "$receipt/trust/policy.json" --registries.d "$receipt/trust/registries.d" \
-            copy --all --preserve-digests --digestfile "$receipt/policy.digest" "docker://$image" "oci:$RUNNER_TEMP/policy-verified:r13"
+            copy --all --preserve-digests --remove-signatures --digestfile "$receipt/policy.digest" "docker://$image" "oci:$RUNNER_TEMP/policy-verified:r13"
           [[ "$(cat "$receipt/policy.digest")" == "$DIGEST" ]]
           timeout 180 gh attestation verify "oci://$image" --repo bearyjd/bazzite-tower \
             --signer-workflow bearyjd/bazzite-tower/.github/workflows/r13-candidate.yml \

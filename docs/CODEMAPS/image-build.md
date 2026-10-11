@@ -105,9 +105,12 @@ scratch use; the original remote artifact stays immutable.
 
 Recovery retains legacy keyed signing for the unchanged repository policy,
 adds same-key Cosign 2.6.3 bundles and requires typed `sign/v1`, original SPDX and
-predicate verification before the candidate pointer. Existing original b2
-GitHub provenance is verified before registry writes and again before the
-pointer; recovery head/run are recorded separately. No new recovery attestation
+predicate verification before the candidate pointer.
+The policy-gated local OCI export uses `--remove-signatures` only to suppress
+signature propagation to OCI, which cannot store them; Skopeo still checks the
+source against the explicit repository policy and preserves/checks its digest.
+Existing original b2 GitHub provenance is verified before registry writes and
+again before the pointer; recovery head/run are recorded separately. No new recovery attestation
 is presented as original build provenance. Stable, GUI and runtime authority
 remain separate. Offline test: `tests/test-r13-candidate-policy-recovery.py`.
 

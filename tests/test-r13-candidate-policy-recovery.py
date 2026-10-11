@@ -155,6 +155,18 @@ class Recovery(unittest.TestCase):
         self.assertIn('skopeo --policy "$receipt/trust/policy.json"',verify)
         self.assertIn('--source-digest "$ORIGINAL_HEAD"',verify)
 
+    def test_local_oci_export_removes_only_propagated_signatures(self):
+        workflow=yaml.safe_load((ROOT/r.RECOVERY_WORKFLOW).read_text())
+        steps=workflow['jobs']['recover-policy']['steps']
+        verify=next(s['run'] for s in steps if s.get('name','').startswith('Verify keyed sign-v1'))
+        export=('skopeo --policy "$receipt/trust/policy.json" --registries.d "$receipt/trust/registries.d" \\\n'
+                '  copy --all --preserve-digests --remove-signatures --digestfile "$receipt/policy.digest" '
+                '"docker://$image" "oci:$RUNNER_TEMP/policy-verified:r13"')
+        self.assertIn(export,verify)
+        self.assertLess(verify.index('predicates --control control'),verify.index(export))
+        self.assertLess(verify.index(export),verify.index('[[ "$(cat "$receipt/policy.digest")" == "$DIGEST" ]]'))
+        self.assertEqual(sum(s.get('run','').count('--remove-signatures') for s in steps),1)
+
     def test_recovery_trigger_cannot_rebuild_original_image(self):
         workflow=yaml.safe_load((ROOT/r.RECOVERY_WORKFLOW).read_text())
         self.assertEqual(workflow['on'],{'push':{'branches':['ci/r13-candidate-policy-recovery']}})

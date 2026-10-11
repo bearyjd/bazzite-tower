@@ -127,8 +127,8 @@ NFQUEUE, SELinux and deployment require separate owner-controlled evidence).
 
 ## r13 publication boundary
 
-The frozen r13 bridge candidate is `461eac1ad866f63254eebbb84ed9502e2cec2549`,
-tree `3c8181f17923d8372c1772b4c8f61e23fc049697`, with unchanged OpenSnitch
+The frozen r13 bridge candidate is `eb6ca4c129c71ac08b112d479748c3b7c111dc7f`,
+tree `792e6e970c7945af4befa9f4909a02473ff9aaaa`, with unchanged OpenSnitch
 gitlink `b404c4c6316760fa7bc415509d3f8d747f7dc9cc`. The bridge pins record
 this identity and hashes of all 13 committed packaging inputs; the installed
 verifier authenticates the refreshed pins hash. Upstream installer bytes and
@@ -136,3 +136,11 @@ signed Koji/toolchain/daemon pins remain unchanged. This candidate pin does not
 establish independent review or runtime acceptance; authority remains held.
 
 The system profile remains PR-tested but is removed from automatic stable release builds. `r13-candidate.yml` builds/tests a reviewed source in a credential-free job, records actual installed binary/manifest/pins identities through `ci/r13-candidate-data.py`, and exports digest-preserving OCI data. Separate checkout-free publishers and `ci/r13-publication.py` trusted control gates enforce fixed targets, accepted packet hashes and native independent/runtime receipts. Promotion copies the accepted digest and reissues destination-bound metadata without an image rebuild. Base-image/toolchain pins and smoke/boot assertions are preserved. See [r13-publication.md](../r13-publication.md) for the trust bootstrap, immutable identity schemas and GUI partial-publication status.
+
+`r13-promote.yml` contains identical guarded inline public GUI acquisition in
+validation and promotion: fixed source prerelease/tag/asset, anonymous exact
+run/artifact metadata, source/asset/hash checks, bounded HTTPS download and
+allowlisted redirects. Tower tokens remain scoped to tower artifacts. Missing
+public GUI data holds promotion. `tests/test-r13-publication.py` executes the
+unmodified promotion entrypoint and actual inline downloader refusal paths;
+remote CI/acquisition and runtime still require independent evidence.

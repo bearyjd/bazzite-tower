@@ -11,6 +11,8 @@ import subprocess
 import tarfile
 import tempfile
 import unittest
+import urllib.error
+import urllib.request
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -88,8 +90,8 @@ class Publication(unittest.TestCase):
                        'publication': {'runId': 100, 'workflowCommit': self.ids['towerCommit'], 'workflow': pub.CANDIDATE_WORKFLOW, 'ref': pub.CANDIDATE_REF},
                        'gui': {'repository': 'bearyjd/snitchwatch', 'sourceCommit': self.ids['sourceCommit'], 'sourceTree': self.ids['sourceTree'],
                                'submoduleCommit': self.ids['submoduleCommit'], 'profile': 'system', 'runtimeRef': 'org.kde.Platform/x86_64/6.11',
-                               'manifestSha256': 'b' * 64, 'bundleSha256': 'e' * 64, 'runId': 200, 'workflow': '.github/workflows/r13-candidate.yml',
-                               'ref': 'refs/heads/r13/candidate', 'artifactId': 201, 'artifactSha256': 'f' * 64}}
+                               'manifestSha256': 'b' * 64, 'bundleSha256': 'e' * 64, 'runId': 200, 'workflow': '.github/workflows/candidate-gui.yml',
+                               'ref': 'refs/heads/r13-candidate', 'artifactId': 201, 'artifactSha256': 'f' * 64}}
         self.accept_packet()
 
     def store(self, category, value):
@@ -120,6 +122,64 @@ class Publication(unittest.TestCase):
     def test_valid_candidate_and_primary_packet(self):
         self.assertEqual(pub.validate_candidate(self.root, self.data, self.ids['towerCommit'], 100), self.candidate)
         self.assertEqual(pub.accepted(self.root, self.packet_hash), self.packet)
+
+    def test_complete_unmodified_promotion_entrypoint(self):
+        inputs = Path(self.tmp.name) / 'inputs'; inputs.mkdir()
+        shutil.copytree(self.data, inputs / 'tower'); (inputs / 'gui').mkdir()
+        bundle = inputs / 'gui/snitchwatch-system-r13-candidate.flatpak'
+        bundle.write_bytes(b'accepted GUI fixture')
+        self.packet['gui']['bundleSha256'] = pub.file_sha(bundle); self.accept_packet()
+        for prefix, repository, head, kind in [('tower', pub.REPOSITORY, self.ids['towerCommit'], 'candidate'),
+                                               ('gui', 'bearyjd/snitchwatch', self.ids['sourceCommit'], 'gui')]:
+            item = self.packet[kind]
+            run = {'id': item['runId'], 'head_sha': head, 'head_branch': item['ref'].removeprefix('refs/heads/'),
+                   'path': item['workflow'], 'repository': {'full_name': repository}, 'head_repository': {'full_name': repository},
+                   'event': 'push', 'status': 'completed', 'conclusion': 'success', 'run_attempt': 1}
+            artifact = {'id': item['artifactId'], 'name': 'r13-image-data' if prefix == 'tower' else 'r13-system-gui-candidate',
+                        'expired': False, 'digest': 'sha256:' + item['artifactSha256'], 'workflow_run': {'id': item['runId']}}
+            (inputs / (prefix + '-run.json')).write_bytes(pub.canonical(run))
+            (inputs / (prefix + '-artifact.json')).write_bytes(pub.canonical(artifact))
+        output = inputs / 'output'; output.write_text('')
+        env = dict(os.environ, GITHUB_REPOSITORY=pub.REPOSITORY, GITHUB_EVENT_NAME='workflow_dispatch', GITHUB_SHA='9' * 40,
+                   GITHUB_REF='refs/heads/main', GITHUB_WORKFLOW_REF=pub.REPOSITORY + '/' + pub.PROMOTION_WORKFLOW + '@refs/heads/main',
+                   GITHUB_RUN_ATTEMPT='1', R13_CONTROL_HEAD='a' * 40, R13_PROMOTION_HEAD='9' * 40, GITHUB_OUTPUT=str(output))
+        def invoke():
+            return subprocess.run(['python3', str(ROOT / 'ci/r13-publication.py'), 'promote', '--control', str(self.root),
+                                   '--data', str(inputs), '--packet-sha256', self.packet_hash], env=env, capture_output=True, text=True)
+        result = invoke(); self.assertEqual(result.returncode, 0, result.stderr)
+        values = dict(line.split('=', 1) for line in output.read_text().splitlines())
+        self.assertEqual(set(values), {'digest', 'hashes', 'candidate_head', 'candidate_run_id', 'artifact_id',
+                                      'gui_run_id', 'gui_artifact_id', 'gui_sha256', 'gui_identity', 'packet_sha256'})
+        self.assertEqual(values['digest'], self.image['manifestDigest'])
+        self.assertEqual(values['gui_sha256'], pub.file_sha(bundle))
+        self.assertEqual(values['packet_sha256'], self.packet_hash)
+        self.assertEqual(json.loads(values['gui_identity']), self.packet['gui'])
+        self.assertEqual(json.loads(values['hashes']), {p.name: pub.file_sha(p) for p in (inputs / 'tower').iterdir()})
+        for file, key, value in [('tower-run.json', 'head_sha', 'f' * 40), ('gui-run.json', 'head_repository', {'full_name': 'attacker/repo'}),
+                                 ('gui-run.json', 'status', 'in_progress'), ('gui-artifact.json', 'digest', 'sha256:' + '0' * 64),
+                                 ('tower-artifact.json', 'workflow_run', {'id': 999})]:
+            p = inputs / file; old = p.read_bytes(); changed = json.loads(old); changed[key] = value
+            p.write_bytes(pub.canonical(changed)); output.write_text('')
+            with self.subTest(file=file, key=key):
+                self.assertNotEqual(invoke().returncode, 0)
+                self.assertEqual(output.read_text(), '')
+            p.write_bytes(old)
+        bundle.write_bytes(b'substituted GUI'); output.write_text('')
+        self.assertNotEqual(invoke().returncode, 0); self.assertEqual(output.read_text(), '')
+
+    def test_output_names_and_values_refuse_injection(self):
+        output = Path(self.tmp.name) / 'output'; output.write_text('')
+        with patch.dict(os.environ, {'GITHUB_OUTPUT': str(output)}):
+            pub.output({'gui_sha256': 'a' * 64, 'packet_sha256': 'b' * 64})
+            self.assertIn('gui_sha256=', output.read_text())
+            for key in ('', '1key', 'UPPER', 'bad-key', 'key=value', 'key\nnext', 'key\rnext', '../path', 42):
+                output.write_text('')
+                with self.subTest(key=key), self.assertRaises(ValueError): pub.output({key: 'value'})
+                self.assertEqual(output.read_text(), '')
+            for value in ('a\nb', 'a\rb'):
+                output.write_text('')
+                with self.subTest(value=value), self.assertRaises(ValueError): pub.output({'gui_sha256': value})
+                self.assertEqual(output.read_text(), '')
 
     def test_candidate_target_and_identity_refusals(self):
         cases = [('repository', pub.STABLE_REPOSITORY), ('repository', 'ghcr.io/attacker/target'),
@@ -260,6 +320,148 @@ class Publication(unittest.TestCase):
                 with self.subTest(key=key), self.assertRaises(ValueError): pub.verify_source(source, bad)
         with patch.object(pub.subprocess, 'check_output', side_effect=[ids['towerCommit'], ids['towerTree'], ' M code']):
             with self.assertRaises(ValueError): pub.verify_source(source, ids)
+
+
+class PublicGuiAcquisition(unittest.TestCase):
+    def setUp(self):
+        import yaml
+        workflow = yaml.safe_load((ROOT / '.github/workflows/r13-promote.yml').read_text())
+        self.steps = [next(s for s in workflow['jobs'][job]['steps'] if s.get('name') == 'Acquire accepted GUI from fixed public candidate release')
+                      for job in ('validate', 'promote')]
+        self.programs = [s['run'].split("python3 - <<'PY'\n", 1)[1].split('\nPY', 1)[0] for s in self.steps]
+        self.assertEqual(self.programs[0], self.programs[1])
+        for job in ('validate', 'promote'):
+            self.assertFalse(any(s.get('with', {}).get('repository') == 'bearyjd/snitchwatch' for s in workflow['jobs'][job]['steps']))
+        self.assertNotIn("['gui','bearyjd','snitchwatch'", next(s for s in workflow['jobs']['validate']['steps'] if s.get('id') == 'fetch')['with']['script'])
+        self.bundle = b'accepted public GUI bytes'
+        self.name = 'snitchwatch-system-r13-candidate.flatpak'
+        self.api = 'https://api.github.com/repos/bearyjd/snitchwatch'
+        self.download = 'https://github.com/bearyjd/snitchwatch/releases/download/r13-candidate/' + self.name
+        self.storage = 'https://release-assets.githubusercontent.com/github-production-release-asset/fixture?signature=opaque'
+        self.g = {'repository': 'bearyjd/snitchwatch', 'sourceCommit': '1' * 40, 'sourceTree': '2' * 40, 'submoduleCommit': '3' * 40,
+                  'profile': 'system', 'runtimeRef': 'org.kde.Platform/x86_64/6.11', 'manifestSha256': '4' * 64,
+                  'bundleSha256': pub.sha(self.bundle), 'runId': 100, 'workflow': '.github/workflows/candidate-gui.yml',
+                  'ref': 'refs/heads/r13-candidate', 'artifactId': 101, 'artifactSha256': '5' * 64}
+        self.repo = {'full_name': 'bearyjd/snitchwatch', 'private': False}
+        self.run = {'id': 100, 'head_sha': self.g['sourceCommit'], 'head_branch': 'r13-candidate', 'path': self.g['workflow'],
+                    'repository': {'full_name': 'bearyjd/snitchwatch'}, 'head_repository': {'full_name': 'bearyjd/snitchwatch'},
+                    'event': 'push', 'status': 'completed', 'conclusion': 'success', 'run_attempt': 1}
+        self.artifact = {'id': 101, 'name': 'r13-system-gui-candidate', 'expired': False, 'digest': 'sha256:' + self.g['artifactSha256'],
+                         'workflow_run': {'id': 100}}
+        self.ref = {'ref': 'refs/tags/r13-candidate', 'object': {'type': 'commit', 'sha': self.g['sourceCommit'],
+                    'url': self.api + '/git/commits/' + self.g['sourceCommit']}}
+        self.asset = {'id': 400, 'name': self.name, 'state': 'uploaded', 'size': len(self.bundle), 'digest': 'sha256:' + self.g['bundleSha256'],
+                      'url': self.api + '/releases/assets/400', 'browser_download_url': self.download}
+        self.release = {'id': 300, 'tag_name': 'r13-candidate', 'target_commitish': self.g['sourceCommit'], 'draft': False, 'prerelease': True,
+                        'published_at': '2026-10-11T05:00:00Z', 'url': self.api + '/releases/300',
+                        'html_url': 'https://github.com/bearyjd/snitchwatch/releases/tag/r13-candidate', 'assets': [self.asset]}
+
+    def execute(self, *, program=0, redirect=None, redirect_loop=False, status=200, raw=None, content_length=None,
+                unavailable=None, mutate_after=None, metadata_raw=None, slow=False, preexisting=None, input_symlink=False):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp); requests = []; release_reads = 0
+            if preexisting:
+                (root / 'gui').symlink_to(root) if preexisting == 'symlink' else (root / 'gui').mkdir()
+            if input_symlink:
+                link = root / 'input'; link.symlink_to(root, target_is_directory=True); input_dir = link
+            else:
+                input_dir = root
+            class Response(io.BytesIO):
+                def __init__(self, data, url, code=200, headers=None):
+                    super().__init__(data); self.url = url; self.status = code; self.headers = headers or {}
+                def geturl(self): return self.url
+            def open_request(request, timeout):
+                nonlocal release_reads
+                requests.append(request)
+                self.assertFalse(any(k.lower() == 'authorization' for k in request.headers))
+                self.assertGreater(timeout, 0); self.assertLessEqual(timeout, 30)
+                url = request.full_url
+                if unavailable and url == self.api + unavailable:
+                    raise urllib.error.HTTPError(url, 404, 'not found', {}, io.BytesIO())
+                if url == self.download or (redirect_loop and url == self.storage):
+                    target = redirect or self.storage
+                    raise urllib.error.HTTPError(url, 302, 'redirect', {'Location': target}, io.BytesIO())
+                if url == self.storage:
+                    data = self.bundle if raw is None else raw
+                    headers = {} if content_length is None else {'Content-Length': content_length}
+                    return Response(data, url, status, headers)
+                values = {'': self.repo, '/actions/runs/100': self.run, '/actions/artifacts/101': self.artifact,
+                          '/git/ref/tags/r13-candidate': self.ref, '/releases/tags/r13-candidate': self.release}
+                path = url.removeprefix(self.api)
+                self.assertIn(path, values)
+                if path == '/releases/tags/r13-candidate':
+                    release_reads += 1
+                    if release_reads == 2 and mutate_after: mutate_after()
+                data = pub.canonical(values[path])
+                if metadata_raw is not None and path == '': data = metadata_raw
+                return Response(data, url)
+            opener = unittest.mock.Mock(); opener.open.side_effect = open_request
+            handlers = []
+            def build_opener(*args):
+                handlers.extend(args); return opener
+            env = {'GUI_IDENTITY': json.dumps(self.g), 'GUI_INPUT_DIR': str(input_dir), 'GH_TOKEN': 'must-not-transmit', 'GITHUB_TOKEN': 'must-not-transmit'}
+            clock = [0, 0, 0, 0, 0, 0, 601] if slow else None
+            with patch.dict(os.environ, env), patch.object(urllib.request, 'build_opener', side_effect=build_opener):
+                timer = patch('time.monotonic', side_effect=clock) if slow else patch('time.monotonic', return_value=0)
+                try:
+                    with timer: exec(compile(self.programs[program], 'actual-public-gui-inline', 'exec'), {})
+                except Exception:
+                    self.assertFalse((root / 'gui' / self.name).exists())
+                    self.assertFalse((root / 'gui' / (self.name + '.partial')).exists())
+                    raise
+            self.assertEqual((root / 'gui' / self.name).read_bytes(), self.bundle)
+            self.assertEqual(json.loads((root / 'gui-run.json').read_bytes()), self.run)
+            self.assertEqual(json.loads((root / 'gui-artifact.json').read_bytes()), self.artifact)
+            self.assertEqual(handlers[0].proxies, {})
+            self.assertIsNone(handlers[1].redirect_request(None, None, 302, '', {}, self.storage))
+            self.assertTrue(any(r.full_url == self.storage for r in requests))
+
+    def test_actual_inline_both_jobs_success_without_authorization(self):
+        for program in (0, 1):
+            with self.subTest(job=program): self.execute(program=program, content_length=str(len(self.bundle)))
+
+    def test_public_metadata_and_accepted_identity_refusals(self):
+        cases = [(self.repo, 'private', True), (self.repo, 'full_name', 'attacker/repo'),
+                 (self.g, 'repository', 'attacker/repo'), (self.g, 'profile', 'legacy'), (self.g, 'runtimeRef', 'latest'),
+                 (self.g, 'workflow', '.github/workflows/release.yml'), (self.g, 'ref', 'refs/heads/main'),
+                 (self.g, 'sourceCommit', '1;touch /tmp/escape'), (self.g, 'runId', True),
+                 (self.run, 'head_sha', 'f' * 40), (self.run, 'path', '.github/workflows/release.yml'), (self.run, 'head_branch', 'main'),
+                 (self.run, 'conclusion', 'failure'), (self.run, 'status', 'queued'), (self.run, 'event', 'pull_request'),
+                 (self.run, 'run_attempt', 2), (self.run, 'head_repository', {'full_name': 'attacker/repo'}),
+                 (self.artifact, 'id', 999), (self.artifact, 'name', 'other'), (self.artifact, 'expired', True),
+                 (self.artifact, 'digest', 'sha256:' + '0' * 64), (self.artifact, 'workflow_run', {'id': 999}),
+                 (self.ref, 'ref', 'refs/heads/r13-candidate'), (self.ref, 'object', dict(self.ref['object'], sha='f' * 40)),
+                 (self.ref, 'object', dict(self.ref['object'], type='tag')),
+                 (self.release, 'tag_name', 'stable'), (self.release, 'target_commitish', 'main'),
+                 (self.release, 'draft', True), (self.release, 'prerelease', False), (self.release, 'published_at', None),
+                 (self.release, 'url', 'https://evil.example/releases/300'), (self.release, 'assets', []),
+                 (self.release, 'assets', [self.asset, self.asset]), (self.asset, 'state', 'new'),
+                 (self.asset, 'size', 0), (self.asset, 'size', 512 * 1024**2 + 1), (self.asset, 'size', True),
+                 (self.asset, 'digest', 'sha256:' + '0' * 64), (self.asset, 'url', self.api + '/releases/assets/999'),
+                 (self.asset, 'browser_download_url', 'https://evil.example/' + self.name)]
+        for mapping, key, value in cases:
+            old = mapping[key]; mapping[key] = value
+            with self.subTest(key=key, value=value), self.assertRaises(ValueError): self.execute()
+            mapping[key] = old
+
+    def test_actual_inline_redirects_bounds_changed_bytes_and_missing_data_refuse(self):
+        cases = [dict(redirect=url) for url in ('http://release-assets.githubusercontent.com/asset', 'https://evil.example/asset',
+                  'https://github.com/attacker/repo/asset', 'https://release-assets.githubusercontent.com.evil.example/asset',
+                  'https://user@release-assets.githubusercontent.com/asset', 'https://release-assets.githubusercontent.com:443/asset',
+                  'https://release-assets.githubusercontent.com/asset#fragment', 'file:///etc/passwd')]
+        cases += [dict(redirect_loop=True), dict(status=206), dict(raw=b'changed'), dict(raw=self.bundle[:-1]),
+                  dict(raw=self.bundle + b'extra'), dict(content_length='999'), dict(slow=True), dict(input_symlink=True),
+                  dict(metadata_raw=b'{"private":false,"private":true}'), dict(metadata_raw=b'x' * (16 * 1024**2 + 1))]
+        cases += [dict(unavailable=path) for path in ('/releases/tags/r13-candidate', '/actions/runs/100', '/actions/artifacts/101')]
+        for case in cases:
+            with self.subTest(case=list(case)), self.assertRaises(ValueError): self.execute(**case)
+        for kind in ('symlink', 'directory'):
+            with self.subTest(preexisting=kind), self.assertRaises(FileExistsError): self.execute(preexisting=kind)
+        for target, key, value in [(self.release, 'id', 301), (self.asset, 'id', 401)]:
+            old = target[key]
+            with self.subTest(changed_during_download=key), self.assertRaises(ValueError):
+                self.execute(mutate_after=lambda: target.update({key: value}))
+            target[key] = old
 
 
 class WorkflowContracts(unittest.TestCase):

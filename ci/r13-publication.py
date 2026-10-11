@@ -274,7 +274,7 @@ def artifact_receipt(value, expected, run_id, name):
 def output(values):
     with open(os.environ['GITHUB_OUTPUT'], 'a') as stream:
         for key, value in values.items():
-            require(re.fullmatch('[a-z_]+', key), 'invalid output name')
+            require(isinstance(key, str) and re.fullmatch('[a-z_][a-z0-9_]*', key), 'invalid output name')
             text = value if isinstance(value, str) else json.dumps(value, sort_keys=True, separators=(',', ':'))
             require('\n' not in text and '\r' not in text, 'output injection')
             stream.write(key + '=' + text + '\n')
@@ -316,6 +316,7 @@ def main():
         output({'digest': c['image']['manifestDigest'], 'hashes': {p.name: file_sha(p) for p in data.iterdir()},
                 'candidate_head': ids['towerCommit'], 'candidate_run_id': str(c['runId']), 'artifact_id': str(c['artifactId']),
                 'gui_run_id': str(g['runId']), 'gui_artifact_id': str(g['artifactId']), 'gui_sha256': g['bundleSha256'],
+                'gui_identity': g,
                 'packet_sha256': args.packet_sha256})
 
 

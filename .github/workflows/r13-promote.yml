@@ -35,6 +35,7 @@ jobs:
       gui_artifact_id: ${{ steps.validate.outputs.gui_artifact_id }}
       gui_sha256: ${{ steps.validate.outputs.gui_sha256 }}
       packet_sha256: ${{ steps.validate.outputs.packet_sha256 }}
+      gui_identity: ${{ steps.validate.outputs.gui_identity }}
     steps:
     - name: Require immutable externally reviewed workflow/control heads
       run: |
@@ -60,12 +61,13 @@ jobs:
         path: control
         persist-credentials: false
     - name: Validate primary packet and native independent/runtime receipts before acquisition
+      id: packet
       run: |
         python3 - <<'PY'
         import importlib.util,os,pathlib
         s=importlib.util.spec_from_file_location('pub','control/ci/r13-publication.py');p=importlib.util.module_from_spec(s);s.loader.exec_module(p)
         p.context('promote',os.environ['R13_PROMOTION_HEAD'],os.environ['GITHUB_REF'],os.environ['GITHUB_WORKFLOW_REF'],os.environ['R13_CONTROL_HEAD'])
-        p.accepted(pathlib.Path('control'),os.environ['PACKET_SHA256'])
+        p.output({'gui_identity':p.accepted(pathlib.Path('control'),os.environ['PACKET_SHA256'])['gui']})
         PY
       env:
         R13_CONTROL_HEAD: ${{ vars.R13_CONTROL_HEAD }}
@@ -84,8 +86,8 @@ jobs:
           if (!/^[a-f0-9]{64}$/.test(hash)) throw new Error('invalid packet hash');
           const packet=JSON.parse(fs.readFileSync('control/.github/r13/packets/'+hash+'.json','utf8'));
           const dir=process.env.RUNNER_TEMP+'/r13-input'; fs.mkdirSync(dir);
-          const c=packet.candidate,g=packet.gui;
-          for (const [prefix,owner,repo,runId,artifactId] of [['tower','bearyjd','bazzite-tower',c.runId,c.artifactId],['gui','bearyjd','snitchwatch',g.runId,g.artifactId]]) {
+          const c=packet.candidate;
+          for (const [prefix,owner,repo,runId,artifactId] of [['tower','bearyjd','bazzite-tower',c.runId,c.artifactId]]) {
             if (!Number.isSafeInteger(runId)||runId<=0||!Number.isSafeInteger(artifactId)||artifactId<=0) throw new Error('invalid IDs');
             const run=await github.rest.actions.getWorkflowRun({owner,repo,run_id:runId});
             const artifact=await github.rest.actions.getArtifact({owner,repo,artifact_id:artifactId});
@@ -99,13 +101,130 @@ jobs:
         artifact-ids: ${{ steps.fetch.outputs.tower_artifact_id }}
         run-id: ${{ steps.fetch.outputs.tower_run_id }}
         github-token: ${{ github.token }}
-    - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0
-      with:
-        path: ${{ runner.temp }}/r13-input/gui
-        artifact-ids: ${{ steps.fetch.outputs.gui_artifact_id }}
-        run-id: ${{ steps.fetch.outputs.gui_run_id }}
-        repository: bearyjd/snitchwatch
-        github-token: ${{ github.token }}
+    - name: Acquire accepted GUI from fixed public candidate release
+      run: |
+        timeout 600 python3 - <<'PY'
+        import hashlib,json,os,pathlib,re,time,urllib.error,urllib.parse,urllib.request
+
+        def require(ok, message):
+            if not ok:
+                raise ValueError(message)
+
+        def pairs(items):
+            result={}
+            for key,value in items:
+                require(key not in result,'duplicate JSON field')
+                result[key]=value
+            return result
+
+        g=json.loads(os.environ['GUI_IDENTITY'],object_pairs_hook=pairs)
+        fields={'repository','sourceCommit','sourceTree','submoduleCommit','profile','runtimeRef','manifestSha256','bundleSha256','runId','workflow','ref','artifactId','artifactSha256'}
+        require(set(g)==fields,'invalid accepted GUI identity')
+        require(g['repository']=='bearyjd/snitchwatch' and g['profile']=='system' and g['runtimeRef']=='org.kde.Platform/x86_64/6.11','wrong GUI source/profile/runtime')
+        require(g['workflow']=='.github/workflows/candidate-gui.yml' and g['ref']=='refs/heads/r13-candidate','wrong GUI workflow/ref')
+        for key in ('sourceCommit','sourceTree','submoduleCommit','manifestSha256','bundleSha256','artifactSha256'):
+            require(isinstance(g[key],str) and re.fullmatch('[0-9a-f]{'+('40' if key.endswith('Commit') or key=='sourceTree' else '64')+'}',g[key]),'invalid GUI hash')
+        for key in ('runId','artifactId'):
+            require(type(g[key]) is int and g[key]>0,'invalid GUI API ID')
+        api='https://api.github.com/repos/bearyjd/snitchwatch'
+        name='snitchwatch-system-r13-candidate.flatpak'
+        download='https://github.com/bearyjd/snitchwatch/releases/download/r13-candidate/'+name
+        deadline=time.monotonic()+600
+
+        class NoRedirect(urllib.request.HTTPRedirectHandler):
+            def redirect_request(self, req, fp, code, msg, headers, newurl):
+                return None
+
+        # No job token, inherited proxy, candidate module or automatic redirect handler.
+        opener=urllib.request.build_opener(urllib.request.ProxyHandler({}),NoRedirect())
+
+        def response(url, *, binary=False):
+            allowed={'github.com','release-assets.githubusercontent.com','objects.githubusercontent.com'} if binary else {'api.github.com'}
+            for attempt in range(5):
+                u=urllib.parse.urlsplit(url)
+                require(u.scheme=='https' and u.hostname in allowed and u.netloc==u.hostname and not u.fragment,'unsafe GUI URL')
+                require(binary or url.startswith(api+'/') or url==api,'foreign GUI API URL')
+                require(not binary or u.hostname!='github.com' or url==download,'foreign GUI download URL')
+                remaining=deadline-time.monotonic()
+                require(remaining>0,'GUI acquisition timeout')
+                request=urllib.request.Request(url,headers={'Accept':'application/octet-stream' if binary else 'application/vnd.github+json','User-Agent':'bazzite-tower-r13-public-data','X-GitHub-Api-Version':'2022-11-28'})
+                try:
+                    result=opener.open(request,timeout=min(30,remaining))
+                except urllib.error.HTTPError as error:
+                    try:
+                        require(binary and error.code in {301,302,303,307,308},'GUI public data unavailable; HOLD')
+                        target=error.headers.get('Location')
+                        require(isinstance(target,str) and target,'missing GUI redirect')
+                        url=urllib.parse.urljoin(url,target)
+                    finally:
+                        error.close()
+                    continue
+                require(result.status==200 and result.geturl()==url,'unexpected GUI HTTP response')
+                return result
+            raise ValueError('too many GUI redirects')
+
+        def metadata(path):
+            with response(api+path) as stream:
+                raw=stream.read(16*1024**2+1)
+            require(len(raw)<=16*1024**2,'oversized GUI metadata')
+            return json.loads(raw,object_pairs_hook=pairs)
+
+        repo=metadata('')
+        require(repo['full_name']=='bearyjd/snitchwatch' and repo['private'] is False,'GUI repository is not public')
+        run=metadata('/actions/runs/'+str(g['runId']))
+        require(run['id']==g['runId'] and run['head_sha']==g['sourceCommit'] and run['head_branch']=='r13-candidate' and run['path']==g['workflow'],'stale GUI CI identity')
+        require(run['repository']['full_name']==run['head_repository']['full_name']=='bearyjd/snitchwatch' and run['event'] in {'push','workflow_dispatch'},'foreign GUI CI')
+        require(run['status']=='completed' and run['conclusion']=='success' and run['run_attempt']==1,'GUI CI not exact green first attempt')
+        artifact=metadata('/actions/artifacts/'+str(g['artifactId']))
+        require(artifact['id']==g['artifactId'] and artifact['name']=='r13-system-gui-candidate' and artifact['expired'] is False,'missing/substituted GUI artifact')
+        require(artifact['digest']=='sha256:'+g['artifactSha256'] and artifact['workflow_run']['id']==g['runId'],'GUI artifact/run hash substitution')
+
+        def public_release():
+            ref=metadata('/git/ref/tags/r13-candidate')
+            require(ref['ref']=='refs/tags/r13-candidate' and ref['object']=={'type':'commit','sha':g['sourceCommit'],'url':api+'/git/commits/'+g['sourceCommit']},'GUI candidate tag/source mismatch')
+            release=metadata('/releases/tags/r13-candidate')
+            require(type(release['id']) is int and release['id']>0 and release['tag_name']=='r13-candidate' and release['target_commitish']==g['sourceCommit'],'GUI release/source mismatch')
+            require(release['draft'] is False and release['prerelease'] is True and isinstance(release['published_at'],str) and release['published_at'],'GUI release not public prerelease')
+            require(release['url']==api+'/releases/'+str(release['id']) and release['html_url']=='https://github.com/bearyjd/snitchwatch/releases/tag/r13-candidate','foreign GUI release URL')
+            assets=[item for item in release['assets'] if item['name']==name]
+            require(len(assets)==1,'missing/duplicate public GUI asset; HOLD')
+            asset=assets[0]
+            require(type(asset['id']) is int and asset['id']>0 and asset['state']=='uploaded' and type(asset['size']) is int and 0<asset['size']<=512*1024**2,'invalid GUI release asset')
+            require(asset['digest']=='sha256:'+g['bundleSha256'] and asset['url']==api+'/releases/assets/'+str(asset['id']) and asset['browser_download_url']==download,'GUI release asset identity mismatch')
+            return release['id'],asset
+
+        release_id,asset=public_release()
+        root=pathlib.Path(os.environ['GUI_INPUT_DIR'])
+        require(root.is_dir() and not root.is_symlink(),'invalid GUI input directory')
+        directory=root/'gui'
+        directory.mkdir()
+        temporary=directory/(name+'.partial')
+        try:
+            h=hashlib.sha256(); size=0
+            with response(download,binary=True) as stream,temporary.open('xb') as dest:
+                content_length=stream.headers.get('Content-Length')
+                require(content_length is None or content_length==str(asset['size']),'GUI content length mismatch')
+                while True:
+                    require(time.monotonic()<deadline,'GUI acquisition timeout')
+                    chunk=stream.read(min(1024**2,asset['size']-size+1))
+                    if not chunk:
+                        break
+                    size+=len(chunk)
+                    require(size<=asset['size'],'oversized GUI bundle')
+                    h.update(chunk);dest.write(chunk)
+            require(size==asset['size'] and h.hexdigest()==g['bundleSha256'],'accepted GUI bytes changed')
+            require(public_release()==(release_id,asset),'GUI release changed during acquisition')
+            temporary.rename(directory/name)
+            for prefix,value in [('gui-run',run),('gui-artifact',artifact)]:
+                with (root/(prefix+'.json')).open('x') as dest:
+                    json.dump(value,dest,sort_keys=True,separators=(',',':'))
+        finally:
+            if temporary.exists():
+                temporary.unlink()
+        PY
+      env:
+        GUI_IDENTITY: ${{ steps.packet.outputs.gui_identity }}
+        GUI_INPUT_DIR: ${{ runner.temp }}/r13-input
     - name: Revalidate exact green CI, accepted OCI/GUI bytes and artifact identities
       run: python3 control/ci/r13-publication.py promote --control control --data "$RUNNER_TEMP/r13-input" --packet-sha256 "$PACKET_SHA256"
       id: validate
@@ -176,13 +295,130 @@ jobs:
         registry: ghcr.io
         username: ${{ github.actor }}
         password: ${{ github.token }}
-    - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0
-      with:
-        path: ${{ runner.temp }}/gui
-        artifact-ids: ${{ needs.validate.outputs.gui_artifact_id }}
-        run-id: ${{ needs.validate.outputs.gui_run_id }}
-        repository: bearyjd/snitchwatch
-        github-token: ${{ github.token }}
+    - name: Acquire accepted GUI from fixed public candidate release
+      run: |
+        timeout 600 python3 - <<'PY'
+        import hashlib,json,os,pathlib,re,time,urllib.error,urllib.parse,urllib.request
+
+        def require(ok, message):
+            if not ok:
+                raise ValueError(message)
+
+        def pairs(items):
+            result={}
+            for key,value in items:
+                require(key not in result,'duplicate JSON field')
+                result[key]=value
+            return result
+
+        g=json.loads(os.environ['GUI_IDENTITY'],object_pairs_hook=pairs)
+        fields={'repository','sourceCommit','sourceTree','submoduleCommit','profile','runtimeRef','manifestSha256','bundleSha256','runId','workflow','ref','artifactId','artifactSha256'}
+        require(set(g)==fields,'invalid accepted GUI identity')
+        require(g['repository']=='bearyjd/snitchwatch' and g['profile']=='system' and g['runtimeRef']=='org.kde.Platform/x86_64/6.11','wrong GUI source/profile/runtime')
+        require(g['workflow']=='.github/workflows/candidate-gui.yml' and g['ref']=='refs/heads/r13-candidate','wrong GUI workflow/ref')
+        for key in ('sourceCommit','sourceTree','submoduleCommit','manifestSha256','bundleSha256','artifactSha256'):
+            require(isinstance(g[key],str) and re.fullmatch('[0-9a-f]{'+('40' if key.endswith('Commit') or key=='sourceTree' else '64')+'}',g[key]),'invalid GUI hash')
+        for key in ('runId','artifactId'):
+            require(type(g[key]) is int and g[key]>0,'invalid GUI API ID')
+        api='https://api.github.com/repos/bearyjd/snitchwatch'
+        name='snitchwatch-system-r13-candidate.flatpak'
+        download='https://github.com/bearyjd/snitchwatch/releases/download/r13-candidate/'+name
+        deadline=time.monotonic()+600
+
+        class NoRedirect(urllib.request.HTTPRedirectHandler):
+            def redirect_request(self, req, fp, code, msg, headers, newurl):
+                return None
+
+        # No job token, inherited proxy, candidate module or automatic redirect handler.
+        opener=urllib.request.build_opener(urllib.request.ProxyHandler({}),NoRedirect())
+
+        def response(url, *, binary=False):
+            allowed={'github.com','release-assets.githubusercontent.com','objects.githubusercontent.com'} if binary else {'api.github.com'}
+            for attempt in range(5):
+                u=urllib.parse.urlsplit(url)
+                require(u.scheme=='https' and u.hostname in allowed and u.netloc==u.hostname and not u.fragment,'unsafe GUI URL')
+                require(binary or url.startswith(api+'/') or url==api,'foreign GUI API URL')
+                require(not binary or u.hostname!='github.com' or url==download,'foreign GUI download URL')
+                remaining=deadline-time.monotonic()
+                require(remaining>0,'GUI acquisition timeout')
+                request=urllib.request.Request(url,headers={'Accept':'application/octet-stream' if binary else 'application/vnd.github+json','User-Agent':'bazzite-tower-r13-public-data','X-GitHub-Api-Version':'2022-11-28'})
+                try:
+                    result=opener.open(request,timeout=min(30,remaining))
+                except urllib.error.HTTPError as error:
+                    try:
+                        require(binary and error.code in {301,302,303,307,308},'GUI public data unavailable; HOLD')
+                        target=error.headers.get('Location')
+                        require(isinstance(target,str) and target,'missing GUI redirect')
+                        url=urllib.parse.urljoin(url,target)
+                    finally:
+                        error.close()
+                    continue
+                require(result.status==200 and result.geturl()==url,'unexpected GUI HTTP response')
+                return result
+            raise ValueError('too many GUI redirects')
+
+        def metadata(path):
+            with response(api+path) as stream:
+                raw=stream.read(16*1024**2+1)
+            require(len(raw)<=16*1024**2,'oversized GUI metadata')
+            return json.loads(raw,object_pairs_hook=pairs)
+
+        repo=metadata('')
+        require(repo['full_name']=='bearyjd/snitchwatch' and repo['private'] is False,'GUI repository is not public')
+        run=metadata('/actions/runs/'+str(g['runId']))
+        require(run['id']==g['runId'] and run['head_sha']==g['sourceCommit'] and run['head_branch']=='r13-candidate' and run['path']==g['workflow'],'stale GUI CI identity')
+        require(run['repository']['full_name']==run['head_repository']['full_name']=='bearyjd/snitchwatch' and run['event'] in {'push','workflow_dispatch'},'foreign GUI CI')
+        require(run['status']=='completed' and run['conclusion']=='success' and run['run_attempt']==1,'GUI CI not exact green first attempt')
+        artifact=metadata('/actions/artifacts/'+str(g['artifactId']))
+        require(artifact['id']==g['artifactId'] and artifact['name']=='r13-system-gui-candidate' and artifact['expired'] is False,'missing/substituted GUI artifact')
+        require(artifact['digest']=='sha256:'+g['artifactSha256'] and artifact['workflow_run']['id']==g['runId'],'GUI artifact/run hash substitution')
+
+        def public_release():
+            ref=metadata('/git/ref/tags/r13-candidate')
+            require(ref['ref']=='refs/tags/r13-candidate' and ref['object']=={'type':'commit','sha':g['sourceCommit'],'url':api+'/git/commits/'+g['sourceCommit']},'GUI candidate tag/source mismatch')
+            release=metadata('/releases/tags/r13-candidate')
+            require(type(release['id']) is int and release['id']>0 and release['tag_name']=='r13-candidate' and release['target_commitish']==g['sourceCommit'],'GUI release/source mismatch')
+            require(release['draft'] is False and release['prerelease'] is True and isinstance(release['published_at'],str) and release['published_at'],'GUI release not public prerelease')
+            require(release['url']==api+'/releases/'+str(release['id']) and release['html_url']=='https://github.com/bearyjd/snitchwatch/releases/tag/r13-candidate','foreign GUI release URL')
+            assets=[item for item in release['assets'] if item['name']==name]
+            require(len(assets)==1,'missing/duplicate public GUI asset; HOLD')
+            asset=assets[0]
+            require(type(asset['id']) is int and asset['id']>0 and asset['state']=='uploaded' and type(asset['size']) is int and 0<asset['size']<=512*1024**2,'invalid GUI release asset')
+            require(asset['digest']=='sha256:'+g['bundleSha256'] and asset['url']==api+'/releases/assets/'+str(asset['id']) and asset['browser_download_url']==download,'GUI release asset identity mismatch')
+            return release['id'],asset
+
+        release_id,asset=public_release()
+        root=pathlib.Path(os.environ['GUI_INPUT_DIR'])
+        require(root.is_dir() and not root.is_symlink(),'invalid GUI input directory')
+        directory=root/'gui'
+        directory.mkdir()
+        temporary=directory/(name+'.partial')
+        try:
+            h=hashlib.sha256(); size=0
+            with response(download,binary=True) as stream,temporary.open('xb') as dest:
+                content_length=stream.headers.get('Content-Length')
+                require(content_length is None or content_length==str(asset['size']),'GUI content length mismatch')
+                while True:
+                    require(time.monotonic()<deadline,'GUI acquisition timeout')
+                    chunk=stream.read(min(1024**2,asset['size']-size+1))
+                    if not chunk:
+                        break
+                    size+=len(chunk)
+                    require(size<=asset['size'],'oversized GUI bundle')
+                    h.update(chunk);dest.write(chunk)
+            require(size==asset['size'] and h.hexdigest()==g['bundleSha256'],'accepted GUI bytes changed')
+            require(public_release()==(release_id,asset),'GUI release changed during acquisition')
+            temporary.rename(directory/name)
+            for prefix,value in [('gui-run',run),('gui-artifact',artifact)]:
+                with (root/(prefix+'.json')).open('x') as dest:
+                    json.dump(value,dest,sort_keys=True,separators=(',',':'))
+        finally:
+            if temporary.exists():
+                temporary.unlink()
+        PY
+      env:
+        GUI_IDENTITY: ${{ needs.validate.outputs.gui_identity }}
+        GUI_INPUT_DIR: ${{ runner.temp }}
     - name: Verify accepted matching GUI bytes before any stable write
       run: |
         python3 - <<'PY'

@@ -116,8 +116,8 @@ pins hashes and candidate workflow hash. Its independent-workflow-review
 receipt binds the SHA256 of that canonical identity object. The control commit
 records this after the candidate commit exists, avoiding a self-referential Git
 commit/hash. The frozen bridge candidate pin is
-`461eac1ad866f63254eebbb84ed9502e2cec2549` (tree
-`3c8181f17923d8372c1772b4c8f61e23fc049697`, unchanged OpenSnitch gitlink
+`eb6ca4c129c71ac08b112d479748c3b7c111dc7f` (tree
+`792e6e970c7945af4befa9f4909a02473ff9aaaa`, unchanged OpenSnitch gitlink
 `b404c4c6316760fa7bc415509d3f8d747f7dc9cc`). This is a candidate identity,
 not source review approval. Any review-driven source change requires another
 pin/input/verifier refresh and relevant offline checks before publication.
@@ -144,9 +144,31 @@ artifact ID+hash. It uses source artifact `r13-system-gui-candidate` and file
 `snitchwatch-system-r13-candidate.flatpak`. The image's recorded GUI manifest and
 runtime must match. Exact head/ref/workflow/repository, green first-attempt CI,
 artifact digest/run and retained artifact availability are re-resolved from
-GitHub before publication. `tests/test-r13-publication.py` provides executable
+GitHub before publication. Source-repository run/artifact metadata is requested
+anonymously from the public API, preserving those accepted IDs and hashes.
+Tower's repository-scoped job token is used only for tower artifacts.
+
+Both validation and the checkout-free promoter acquire GUI bytes from the fixed
+public `bearyjd/snitchwatch` prerelease `r13-candidate`, asset
+`snitchwatch-system-r13-candidate.flatpak`, using identical inline trusted code.
+Each checks public repository/prerelease state, the tag's exact accepted source
+commit, uploaded asset name/size/digest and fixed API/download URLs. HTTPS
+redirects are bounded and restricted to GitHub and its allowlisted asset storage
+hosts; these requests carry no Authorization header or inherited proxy. The
+download is limited to 512 MiB and ten minutes, and its size and accepted SHA256
+must match before use. Release/tag/asset metadata is checked again after
+download, and the promoter rehashes the bundle before any stable write. Missing
+public assets, inaccessible metadata, changed refs or bytes remain HOLD; no
+cross-repository credential or Actions archive-download fallback is provided.
+The accepted Actions artifact archive hash remains a separate metadata binding;
+it is never compared to or replaced by the release bundle's SHA256.
+
+`tests/test-r13-publication.py` provides executable
 schemas/fixtures and refusals. CI installs PyYAML for its workflow static checks;
-the runtime gate/collector use only Python's standard library.
+the runtime gate/collector and inline downloader use only Python's standard
+library. Regressions execute the complete unmodified promotion entrypoint and
+both actual inline downloaders with mocked HTTP transport, including refusal
+paths. Offline success does not establish remote acquisition or runtime success.
 
 ## No-rebuild promotion
 
@@ -178,9 +200,12 @@ The tower job records `IMAGE_PROMOTED_GUI_PENDING`. The matching source lane
 must publish its accepted GUI bytes without invoking the old v* rebuild path.
 Primary compares both public identities and policy receipts before declaring
 joint stable PASS. Partial publication remains partial/HOLD. Retain both CI
-artifacts (currently 30 days) and candidate attachments until promotion; expired
+artifacts (currently 30 days), public candidate GUI release assets and candidate
+attachments until promotion; expired
 artifacts require a new candidate/acceptance, never a rebuild shortcut.
 
 Official references: [Skopeo digest-preserving copy](https://github.com/podman-container-tools/skopeo/blob/main/docs/skopeo-copy.1.md),
+[public release asset acquisition](https://docs.github.com/en/rest/releases/assets#get-a-release-asset),
+[repository-scoped GITHUB_TOKEN](https://docs.github.com/en/actions/concepts/security/github_token),
 [GitHub provenance verification](https://cli.github.com/manual/gh_attestation_verify),
 [cosign attestation predicates](https://docs.sigstore.dev/cosign/system_config/specifications/).

@@ -178,6 +178,8 @@ org.kde.StatusNotifierWatcher=talk
             out = self.daemon_version+"\n"
         elif argv == ["flatpak", "--installations"]:
             out = "/var/lib/flatpak\n"
+        elif argv == ["flatpak", "--version"]:
+            out = "Flatpak 1.18.1\n"
         elif argv[:2] == ["getent", "passwd"]:
             service = f"snitchwatch:x:{self.uid}:{self.gid}:Bridge:/var/lib/snitchwatch:/usr/sbin/nologin"
             out = service+"\n" if len(argv)==3 else service+"\nroot:x:0:0:Root:/root:/bin/bash\ngate:x:1000:1000:Gate:/var/home/gate:/bin/bash\n"
@@ -611,6 +613,80 @@ class SystemBehavior(unittest.TestCase):
                 self.ctx.runner=original_runner
                 if other is not None:other.unlink()
                 if path.is_symlink():path.unlink()
+
+    def canonical_flatpak(self):
+        fixture = json.loads((REPO/"tests/fixtures/r13-installed-branch-metadata.json").read_text())
+        text = fixture["app/"+common.APP+"/x86_64/r13-candidate"]["--show-metadata"]
+        self.ctx.manifest["flatpak"]["runtimeRef"] = "org.kde.Platform/x86_64/6.11"
+        self.ctx.write(common.MANIFEST, json.dumps(self.ctx.manifest))
+        return self.ctx.flatpak(text)
+
+    def test_flatpak_historical_sockets_do_not_require_version_detection(self):
+        self.ctx.system_config();self.ctx.flatpak()
+        original = self.ctx.runner
+        def no_version(argv, **kwargs):
+            if argv == ["flatpak", "--version"]:
+                raise FileNotFoundError("Flatpak version unavailable")
+            return original(argv, **kwargs)
+        self.ctx.runner = no_version
+        common.runtime_readiness(self.ctx)
+        self.assertNotIn(["flatpak", "--version"], self.ctx.commands)
+
+    def test_flatpak_actual_canonical_metadata_on_reviewed_version(self):
+        self.ctx.system_config();self.canonical_flatpak()
+        common.runtime_readiness(self.ctx)
+        self.assertIn(["flatpak", "--version"], self.ctx.commands)
+
+    def test_flatpak_canonical_sockets_refuse_unreviewed_or_failed_version(self):
+        self.canonical_flatpak()
+        original = self.ctx.runner
+        cases = ["Flatpak 1.14.6\n", "Flatpak 1.18.0\n", "Flatpak 1.18.2\n",
+                 "Flatpak 1.20.0\n", "Flatpak 1.18.1.vendor\n", "1.18.1\n", "",
+                 "Flatpak 1.18.1\nFlatpak 1.18.2\n", "Flatpak 1.18.1 \n",
+                 "failed", FileNotFoundError("missing"), subprocess.TimeoutExpired("flatpak", 5)]
+        for reply in cases:
+            with self.subTest(reply=str(reply)):
+                def version(argv, **kwargs):
+                    if argv == ["flatpak", "--version"]:
+                        if isinstance(reply, Exception):raise reply
+                        return SimpleNamespace(stdout=reply, stderr="version failure" if reply == "failed" else "",
+                                               returncode=1 if reply == "failed" else 0)
+                    return original(argv, **kwargs)
+                self.ctx.runner = version
+                with self.assertRaises(common.Refusal):common.flatpak_profiles(self.ctx)
+
+    def test_flatpak_socket_authority_variants_refuse(self):
+        path = self.canonical_flatpak();text = path.read_text()
+        for sockets in ("x11", "wayland;x11", "fallback-x11;x11", "wayland", "fallback-x11", "",
+                        "wayland;fallback-x11;x11;pulseaudio", "wayland;fallback-x11;x11;unknown",
+                        "wayland;fallback-x11;!x11", "wayland;!fallback-x11;x11",
+                        "wayland;if:has-wayland:x11;fallback-x11", "wayland;fallback-x11;x11:!has-wayland"):
+            with self.subTest(sockets=sockets):
+                path.write_text(text.replace("sockets=x11;wayland;fallback-x11;", "sockets="+sockets+";"))
+                with self.assertRaisesRegex(common.Refusal, "network/socket/device authority"):
+                    common.flatpak_profiles(self.ctx)
+
+    def test_flatpak_canonical_metadata_preserves_other_authority_refusals(self):
+        path = self.canonical_flatpak();text = path.read_text()
+        changes = [text.replace("shared=ipc;", "shared=ipc;network;"),
+                   text.replace("devices=dri;", "devices=dri;all;"),
+                   text.replace("/run/snitchwatch:ro", "/run/snitchwatch:rw"),
+                   text.replace("/run/snitchwatch-auth:ro", "/run/snitchwatch-auth:rw"),
+                   text.replace("persistent=.local/share/snitchwatch;.local/state/snitchwatch;", "persistent=.;"),
+                   text.replace("SNITCHWATCH_SYSTEM_BRIDGE=1", "SNITCHWATCH_SYSTEM_BRIDGE=1\nSNITCHWATCH_WS_TOKEN_PATH=/tmp/token"),
+                   text.replace("org.freedesktop.Notifications=talk", "org.freedesktop.Notifications=own"),
+                   text+"\n[System Bus Policy]\norg.freedesktop.systemd1=talk\n"]
+        for changed in changes:
+            with self.subTest(changed=changes.index(changed)):
+                path.write_text(changed)
+                with self.assertRaises(common.Refusal):common.flatpak_profiles(self.ctx)
+        path.write_text(text)
+        for store in ("/var/lib/flatpak", "/var/home/gate/.local/share/flatpak"):
+            for name in ("global", common.APP):
+                with self.subTest(store=store, name=name):
+                    override = self.ctx.write(store+"/overrides/"+name, "[Context]\nsockets=x11;\n")
+                    with self.assertRaises(common.Refusal):common.flatpak_profiles(self.ctx)
+                    override.unlink()
 
     def test_flatpak_mismatch_and_overrides(self):
         self.ctx.system_config();path=self.ctx.flatpak()

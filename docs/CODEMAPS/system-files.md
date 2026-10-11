@@ -71,6 +71,18 @@ profile and migration preserves a recorded legacy baseline. The GUI remains
 an explicitly selected per-user system Flatpak profile. See
 [validation and migration gates](../research/snitchwatch-system-bridge.md).
 
+Readiness retains the historical exact `wayland;fallback-x11` socket profile.
+The serialized `x11;wayland;fallback-x11` form is accepted only when the host
+`flatpak --version` reports exactly Flatpak 1.18.1, whose reviewed upstream
+socket evaluator makes X11 conditional on `!has-wayland` with fallback-X11.
+Unknown, ambiguous or failed version detection refuses that exception; other
+socket sets and all existing network, device, filesystem, persistence, IPC
+environment, bus and override checks retain their refusal rules. The actual
+installed branch metadata fixture and behavioral cases live in
+`tests/fixtures/r13-installed-branch-metadata.json` and
+`tests/test-snitchwatch-system.py`. These offline checks do not establish actual
+Wayland/X11 sandbox authority or runtime/release acceptance.
+
 `FIREWALL_DAEMON=portmaster` remains a disabled, isolated VM spike using
 `just build-portmaster-spike`; it cannot select the system bridge.
 

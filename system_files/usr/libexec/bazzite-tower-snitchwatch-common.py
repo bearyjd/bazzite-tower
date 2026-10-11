@@ -333,6 +333,24 @@ def legacy_absent(ctx, system_pid=0):
     require(not re.search(r"/run/user/[0-9]+/snitchwatch/bridge\.sock|/tmp/[^ ]*snitchwatch[^ ]*\.sock", unix), "legacy per-user bridge Unix listener remains")
 
 
+def flatpak_sockets_match(ctx, sockets):
+    normative = {"wayland", "fallback-x11"}
+    if sockets == normative:
+        return True
+    if sockets != normative | {"x11"}:
+        return False
+    # Flatpak 1.18.1 compute_allowed_sockets replaces X11 with !has-wayland
+    # when fallback-x11 is allowed, including serialized redundant X11.
+    # Only this reviewed evaluator version supports the canonical exception.
+    try:
+        version = ctx.command(["flatpak", "--version"]).stdout
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise Refusal("cannot detect Flatpak version for canonical sockets") from error
+    require(re.fullmatch(r"Flatpak 1\.18\.1\n?", version) is not None,
+            "unreviewed Flatpak version for canonical sockets")
+    return True
+
+
 def flatpak_profiles(ctx):
     system_stores = ctx.command(["flatpak", "--installations"]).stdout.splitlines()
     require(system_stores and all(name.startswith("/") and ".." not in Path(name).parts for name in system_stores), "cannot enumerate system Flatpak installations")
@@ -366,7 +384,7 @@ def flatpak_profiles(ctx):
             for name, expected in (("SNITCHWATCH_WS_SOCKET", "/run/snitchwatch/bridge.sock"), ("SNITCHWATCH_WS_TOKEN_PATH", "/run/snitchwatch-auth/token")):
                 require(not meta.has_option("Environment", name) or meta.get("Environment", name) == expected, "same-ID Flatpak redirects protected system IPC: "+name)
             require(meta.get("Application", "name", fallback="") == APP and meta.get("Application", "runtime", fallback="") == expected_runtime, "same-ID Flatpak runtime/application drift")
-            require(values("shared") == {"ipc"} and values("sockets") == {"wayland", "fallback-x11"} and values("devices") == {"dri"}, "same-ID Flatpak grants unexpected network/socket/device authority")
+            require(values("shared") == {"ipc"} and flatpak_sockets_match(ctx, values("sockets")) and values("devices") == {"dri"}, "same-ID Flatpak grants unexpected network/socket/device authority")
             required = {"/run/snitchwatch:ro", "/run/snitchwatch-auth:ro", "xdg-config/snitchwatch:create"}
             require(required <= values("filesystems") <= required|{"xdg-config/kdeglobals:ro"}, "same-ID Flatpak filesystem profile mismatch")
             require(values("persistent") == {".local/share/snitchwatch", ".local/state/snitchwatch"}, "same-ID Flatpak app-state persistence mismatch")

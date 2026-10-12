@@ -95,6 +95,102 @@ class Publication(unittest.TestCase):
                                'ref': 'refs/heads/r13-candidate', 'artifactId': 201, 'artifactSha256': 'f' * 64}}
         self.accept_packet()
 
+    def v2_fixture(self):
+        self.ids.update(towerCommit=pub.V2_PRODUCT,towerTree=pub.V2_TREE)
+        self.auth['candidate']['reviewReceiptSha256']=self.make_receipt('independent-workflow-review',pub.sha(pub.canonical(self.ids)))
+        self.packet.update(schemaVersion=2,ciBinding={'repository':pub.REPOSITORY,'pullRequest':107,'baseRef':'main','workflowHead':'a'*40,'workflowTree':'b'*40,'productHead':pub.V2_PRODUCT,'productTree':pub.V2_TREE,'changedFiles':[{'path':p,'originalBlob':None if p.endswith('/r13-immutable-ci.yml') else 'c'*40,'reviewedBlob':'d'*40} for p in sorted(pub.V2_PATHS)],'runs':[{'workflow':'.github/workflows/'+p,'runId':i,'attempt':1,'jobIds':[i+10]} for p,i in [('build.yml',1000),('boot-test.yml',2000)]]},policyRecovery={'originalRunId':38153505376,'originalAttempt':1,'originalJobs':pub.V2_JOBS.copy(),'recoveryHead':pub.V2_RECOVERY,'recoveryRunId':38168060273,'recoveryAttempt':1,'recoveryJobId':114554662264,'digest':pub.V2_DIGEST,'evidenceSha256':'e'*64})
+        self.packet['candidate'].update(runId=38153505376,artifactId=11708196868,artifactSha256='4e323596b62ce9d521c5a4f5f9c90fc9406cfc7ea6d065fa3516e9723776dec8')
+        self.packet['candidate']['image'].update(manifestDigest=pub.V2_DIGEST,platformDigest=pub.V2_DIGEST)
+        self.packet['publication'].update(runId=38153505376,workflowCommit=pub.V2_PRODUCT)
+        self.v2_accept()
+
+    def v2_accept(self):
+        self.packet_hash=self.store('packets',self.packet)
+        self.auth['accepted']={'packetSha256':self.packet_hash,'receipts':{k:self.make_receipt(k,self.packet_hash,schemaVersion=2,ciBindingSha256=pub.sha(pub.canonical(self.packet['ciBinding'])),policyRecoverySha256=pub.sha(pub.canonical(self.packet['policyRecovery'])),evidenceSha256=self.packet['policyRecovery']['evidenceSha256']) for k in pub.V2_KINDS}}
+        self.write_auth()
+
+    def test_v2_explicit_product_workflow_split(self):
+        self.v2_fixture()
+        result=pub.accepted(self.root,self.packet_hash)
+        self.assertEqual(result['identities']['towerCommit'],pub.V2_PRODUCT)
+        self.assertNotEqual(result['ciBinding']['workflowHead'],pub.V2_PRODUCT)
+
+    def test_v2_fixed_mapping_refusals(self):
+        self.v2_fixture(); baseline=copy.deepcopy(self.packet)
+        cases=[('ciBinding',k,v) for k,v in [('repository','evil/repo'),('pullRequest',108),('baseRef','other'),('productHead','f'*40),('productTree','f'*40),('workflowHead',pub.V2_PRODUCT),('runs',[])]]
+        cases += [('policyRecovery',k,v) for k,v in [('originalRunId',7),('originalAttempt',2),('originalJobs',{}),('recoveryHead','f'*40),('recoveryRunId',7),('recoveryAttempt',2),('recoveryJobId',7),('digest','sha256:'+'f'*64)]]
+        cases += [('candidate',k,v) for k,v in [('runId',7),('artifactId',7),('artifactSha256','f'*64)]]
+        for section,key,value in cases:
+            self.packet=copy.deepcopy(baseline);self.packet[section][key]=value;self.v2_accept()
+            with self.subTest(section=section,key=key),self.assertRaises(ValueError):pub.accepted(self.root,self.packet_hash)
+        for path in ['Containerfile','tests/smoke.sh','build_files/a','.github/workflows/r13-promote.yml']:
+            self.packet=copy.deepcopy(baseline);self.packet['ciBinding']['changedFiles'][0]['path']=path;self.v2_accept()
+            with self.subTest(path=path),self.assertRaises(ValueError):pub.accepted(self.root,self.packet_hash)
+
+    def test_v2_receipts_cannot_be_relabelled(self):
+        self.v2_fixture()
+        for kind in pub.V2_KINDS:
+            good=self.auth['accepted']['receipts'][kind]
+            self.auth['accepted']['receipts'][kind]=self.make_receipt(kind,self.packet_hash)
+            self.write_auth()
+            with self.subTest(kind=kind),self.assertRaises(ValueError):pub.accepted(self.root,self.packet_hash)
+            self.auth['accepted']['receipts'][kind]=good
+        kind='exact-head-ci'
+        self.auth['accepted']['receipts'][kind]=self.make_receipt(kind,self.packet_hash,schemaVersion=2,ciBindingSha256='f'*64,policyRecoverySha256=pub.sha(pub.canonical(self.packet['policyRecovery'])))
+        self.write_auth()
+        with self.assertRaises(ValueError):pub.accepted(self.root,self.packet_hash)
+
+    def test_v2_does_not_relax_original_publication_or_runtime_gates(self):
+        self.v2_fixture(); self.packet['publication']['workflowCommit']=self.packet['ciBinding']['workflowHead'];self.v2_accept()
+        with self.assertRaises(ValueError):pub.accepted(self.root,self.packet_hash)
+        self.packet['publication']['workflowCommit']=pub.V2_PRODUCT;self.v2_accept()
+        for kind in pub.V2_KINDS:
+            old=self.auth['accepted']['receipts'].pop(kind);self.write_auth()
+            with self.subTest(kind=kind),self.assertRaises(ValueError):pub.accepted(self.root,self.packet_hash)
+            self.auth['accepted']['receipts'][kind]=old
+
+    def test_v2_live_wrong_head_and_failed_run_refuse_before_git(self):
+        self.v2_fixture();b=self.packet['ciBinding']
+        pr={'head':{'sha':b['workflowHead'],'repo':{'full_name':pub.REPOSITORY}},'base':{'repo':{'full_name':pub.REPOSITORY},'ref':'main'}}
+        for status in ['failure','cancelled','skipped']:
+            run={'id':1000,'head_sha':b['workflowHead'],'path':'.github/workflows/build.yml','run_attempt':1,'status':'completed','conclusion':status,'event':'pull_request'}
+            with patch.object(pub.subprocess,'check_output',side_effect=[pub.canonical(pr),pub.canonical(run)]),self.subTest(status=status),self.assertRaises(ValueError):pub.verify_v2_live(self.packet)
+        pr['head']['sha']='f'*40
+        with patch.object(pub.subprocess,'check_output',return_value=pub.canonical(pr)),self.assertRaises(ValueError):pub.verify_v2_live(self.packet)
+
+    def test_v2_git_equivalence_checks_modes_blobs_and_full_delta(self):
+        self.v2_fixture();b=self.packet['ciBinding']
+        for bad in [None,'mode','blob','path','ancestor']:
+            def output(args,**kw):
+                op=args[3:]
+                if op[0]=='rev-parse':return (pub.V2_TREE if op[1].startswith(pub.V2_PRODUCT) else b['workflowTree']).encode()
+                if op[0]=='diff':return ('\0'.join(sorted(pub.V2_PATHS | ({'Containerfile'} if bad=='path' else set())))+'\0').encode()
+                if op[0]=='ls-tree':
+                    item=next(x for x in b['changedFiles'] if x['path']==op[-1]);key='originalBlob' if op[1]==pub.V2_PRODUCT else 'reviewedBlob'
+                    if item[key] is None:return b''
+                    return f"{'100755' if bad=='mode' else '100644'} blob {'f'*40 if bad=='blob' else item[key]}\t{item['path']}".encode()
+                raise AssertionError(args)
+            def run(args,**kw):
+                if bad=='ancestor':raise subprocess.CalledProcessError(1,args)
+            with patch.object(pub.subprocess,'check_output',side_effect=output),patch.object(pub.subprocess,'run',side_effect=run):
+                if bad is None:pub.v2_git_binding(self.root,b)
+                else:
+                    with self.subTest(bad=bad),self.assertRaises((ValueError,subprocess.CalledProcessError)):pub.v2_git_binding(self.root,b)
+
+    def test_v2_failed_dependency_or_foreign_check_refuses(self):
+        self.v2_fixture();b=self.packet['ciBinding'];b['runs'][0]['jobIds']=[1,2,3,4]
+        names=['Verify image (safe-pin)','Verify image (latest-kernel)','Verify image (snitchwatch-system)','Verify original r13 immutable candidate / verify-original']
+        for bad in ['skipped','failure','cancelled','app']:
+            def api(args,**kw):
+                endpoint=args[-1]
+                if endpoint.endswith('pulls/107'):v={'head':{'sha':b['workflowHead'],'repo':{'full_name':pub.REPOSITORY}},'base':{'repo':{'full_name':pub.REPOSITORY},'ref':'main'}}
+                elif endpoint.endswith('actions/runs/1000'):v={'id':1000,'head_sha':b['workflowHead'],'path':'.github/workflows/build.yml','run_attempt':1,'status':'completed','conclusion':'success','event':'pull_request','repository':{'full_name':pub.REPOSITORY},'head_repository':{'full_name':pub.REPOSITORY},'pull_requests':[{'number':107}]}
+                elif 'jobs?' in endpoint:v={'total_count':4,'jobs':[{'id':i,'name':name,'run_id':1000,'head_sha':b['workflowHead'],'run_attempt':1,'status':'completed','conclusion':bad if bad!='app' else 'success','check_run_url':'https://api.github.com/repos/'+pub.REPOSITORY+'/check-runs/'+str(i)} for i,name in enumerate(names,1)]}
+                elif '/check-runs/' in endpoint:v={'name':names[int(endpoint.rsplit('/',1)[1])-1],'head_sha':b['workflowHead'],'app':{'id':0},'status':'completed','conclusion':'success'}
+                else:raise AssertionError(endpoint)
+                return pub.canonical(v)
+            with patch.object(pub.subprocess,'check_output',side_effect=api),self.subTest(bad=bad),self.assertRaises(ValueError):pub.verify_v2_live(self.packet)
+
     def store(self, category, value):
         raw = pub.canonical(value); value_hash = pub.sha(raw)
         path = self.root / '.github/r13' / category / (value_hash + '.json')

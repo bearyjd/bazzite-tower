@@ -222,19 +222,132 @@ def validate_candidate(root, data, head, run_id):
     return candidate
 
 
+V2_PRODUCT = 'b2f6e24131de06117a00fb727e5cb7166d4e77da'
+V2_TREE = '379895eef11de0539de415ed43e78d88ddab2b79'
+V2_RECOVERY = 'fdfdfb0a6f80779d7e3ffc8d579bbea2c4c30b38'
+V2_DIGEST = 'sha256:88f8ff0052c27fcc71379f2b43e06ddd7218419b2d90c8fcf8392af5292b8454'
+V2_PATHS = {'.github/workflows/build.yml', '.github/workflows/boot-test.yml', '.github/workflows/r13-immutable-ci.yml'}
+V2_KINDS = RECEIPTS | {'independent-product-equivalence', 'independent-policy-recovery'}
+V2_JOBS = {'approval':114511635760, 'build':114511651930, 'validate':114516335933, 'publish':114517034908}
+
+
+def v2_mapping(packet):
+    b = packet['ciBinding']; r = packet['policyRecovery']; ids = packet['identities']
+    require(set(b) == {'repository','pullRequest','baseRef','workflowHead','workflowTree','productHead','productTree','changedFiles','runs'}, 'invalid CI binding fields')
+    require(b['repository'] == REPOSITORY and type(b['pullRequest']) is int and b['pullRequest'] == 107 and b['baseRef'] == 'main', 'wrong CI repository/PR/base')
+    require(b['productHead'] == ids['towerCommit'] == V2_PRODUCT and b['productTree'] == ids['towerTree'] == V2_TREE, 'original product substituted')
+    hex_value(b['workflowHead'],40); hex_value(b['workflowTree'],40)
+    require(b['workflowHead'] != V2_PRODUCT, 'workflow head is not descendant identity')
+    require(isinstance(b['changedFiles'],list) and len(b['changedFiles']) == 3, 'wrong workflow delta')
+    require({x['path'] for x in b['changedFiles']} == V2_PATHS, 'unapproved changed paths')
+    for x in b['changedFiles']:
+        require(set(x) == {'path','originalBlob','reviewedBlob'}, 'invalid changed file')
+        if x['path'].endswith('/r13-immutable-ci.yml'): require(x['originalBlob'] is None, 'new workflow existed')
+        else: hex_value(x['originalBlob'],40)
+        hex_value(x['reviewedBlob'],40)
+    require(isinstance(b['runs'],list) and len(b['runs']) == 2, 'missing exact CI runs')
+    require({x['workflow'] for x in b['runs']} == {'.github/workflows/build.yml','.github/workflows/boot-test.yml'}, 'wrong CI workflows')
+    for x in b['runs']:
+        require(set(x) == {'workflow','runId','attempt','jobIds'}, 'invalid CI run binding')
+        require(type(x['runId']) is int and x['runId'] > 0 and type(x['attempt']) is int and x['attempt'] == 1, 'invalid CI run/attempt')
+        require(isinstance(x['jobIds'],list) and x['jobIds'] and all(type(j) is int and j > 0 for j in x['jobIds']) and len(set(x['jobIds'])) == len(x['jobIds']), 'invalid CI jobs')
+    require(len({x['runId'] for x in b['runs']}) == 2, 'duplicate CI run')
+    require(set(r) == {'originalRunId','originalAttempt','originalJobs','recoveryHead','recoveryRunId','recoveryAttempt','recoveryJobId','digest','evidenceSha256'}, 'invalid recovery fields')
+    expected={'originalRunId':38153505376,'originalAttempt':1,'originalJobs':V2_JOBS,'recoveryHead':V2_RECOVERY,'recoveryRunId':38168060273,'recoveryAttempt':1,'recoveryJobId':114554662264,'digest':V2_DIGEST}
+    require(canonical({k:r[k] for k in expected}) == canonical(expected), 'recovery substitution')
+    hex_value(r['evidenceSha256'])
+    c=packet['candidate']
+    require(c['runId']==38153505376 and c['artifactId']==11708196868 and c['artifactSha256']=='4e323596b62ce9d521c5a4f5f9c90fc9406cfc7ea6d065fa3516e9723776dec8' and c['image']['manifestDigest']==V2_DIGEST, 'original artifact/image substitution')
+
+
+def receipt_v2(root, value, kind, packet_hash, packet):
+    r=hashed_json(root,'receipts',value)
+    require(set(r)=={'schemaVersion','kind','packetSha256','identities','reviewer','evidenceSha256','verdict','ciBindingSha256','policyRecoverySha256'}, 'invalid v2 receipt fields')
+    require(r['schemaVersion']==2 and r['kind']==kind and r['verdict']=='PASS', 'v2 receipt refused')
+    require(r['packetSha256']==packet_hash and r['identities']==packet['identities'], 'v2 receipt packet/product mismatch')
+    require(r['ciBindingSha256']==sha(canonical(packet['ciBinding'])) and r['policyRecoverySha256']==sha(canonical(packet['policyRecovery'])), 'v2 receipt mapping mismatch')
+    require(isinstance(r['reviewer'],str) and re.fullmatch('[A-Za-z0-9_.:/-]{1,160}',r['reviewer']), 'missing v2 reviewer')
+    hex_value(r['evidenceSha256'])
+    if kind=='independent-policy-recovery': require(r['evidenceSha256']==packet['policyRecovery']['evidenceSha256'], 'recovery evidence mismatch')
+
+
+def v2_git_binding(repo, binding):
+    def git(*args): return subprocess.check_output(['git','-C',str(repo),*args],timeout=90).decode().strip()
+    h=binding['workflowHead']
+    require(git('rev-parse',h+'^{tree}')==binding['workflowTree'] and git('rev-parse',V2_PRODUCT+'^{tree}')==V2_TREE, 'Git tree mismatch')
+    subprocess.run(['git','-C',str(repo),'merge-base','--is-ancestor',V2_PRODUCT,h],check=True,timeout=90)
+    changed=set(filter(None,git('diff','--no-renames','--name-only','-z',V2_PRODUCT,h).split('\0')))
+    require(changed==V2_PATHS, 'non-workflow Git delta')
+    for x in binding['changedFiles']:
+        for commit,key in ((V2_PRODUCT,'originalBlob'),(h,'reviewedBlob')):
+            entry=git('ls-tree',commit,'--',x['path'])
+            if x[key] is None: require(not entry,'unexpected original entry')
+            else: require(entry==f"100644 blob {x[key]}\t{x['path']}", 'blob or Git mode mismatch')
+
+
+def verify_v2_live(packet):
+    # Fresh observations only; no status writes, signing or authority mutation.
+    import importlib.util
+    import tempfile
+    v2_mapping(packet)
+    def api(endpoint):
+        raw=subprocess.check_output(['gh','api','repos/'+REPOSITORY+'/'+endpoint],timeout=90)
+        require(len(raw)<=16*1024**2,'oversized GitHub response')
+        return decode(raw)
+    b=packet['ciBinding']
+    pr=api('pulls/107')
+    require(pr['head']['sha']==b['workflowHead'] and pr['head']['repo']['full_name']==REPOSITORY and pr['base']['repo']['full_name']==REPOSITORY and pr['base']['ref']=='main','PR head/base changed')
+    for bound in b['runs']:
+        run=api(f"actions/runs/{bound['runId']}")
+        require(run['id']==bound['runId'] and run['head_sha']==b['workflowHead'] and run['path']==bound['workflow'] and run['run_attempt']==1 and run['status']=='completed' and run['conclusion']=='success' and run['event']=='pull_request','exact H CI failed/stale')
+        require(run['repository']['full_name']==run['head_repository']['full_name']==REPOSITORY and any(x['number']==107 for x in run['pull_requests']),'foreign CI')
+        jobs=api(f"actions/runs/{bound['runId']}/jobs?per_page=100")
+        require(jobs['total_count']==len(jobs['jobs']) and {x['id'] for x in jobs['jobs']}==set(bound['jobIds']),'CI job inventory mismatch')
+        required={'Verify image (safe-pin)','Verify image (latest-kernel)','Verify image (snitchwatch-system)'} if bound['workflow'].endswith('/build.yml') else set()
+        required.add('Verify original r13 immutable candidate / verify-original')
+        for name in required:
+            found=[j for j in jobs['jobs'] if j['name']==name]
+            require(len(found)==1,'required CI job absent/ambiguous')
+            j=found[0]
+            require(j['run_id']==bound['runId'] and j['head_sha']==b['workflowHead'] and j['run_attempt']==1 and j['status']=='completed' and j['conclusion']=='success','required dependency did not succeed')
+            url=j['check_run_url']; prefix='https://api.github.com/repos/'+REPOSITORY+'/check-runs/'
+            require(url.startswith(prefix) and url[len(prefix):].isdigit(),'foreign check URL')
+            check=api('check-runs/'+url[len(prefix):])
+            require(check['name']==name and check['head_sha']==b['workflowHead'] and check['app']['id']==15368 and check['status']=='completed' and check['conclusion']=='success','check ownership/result mismatch')
+    with tempfile.TemporaryDirectory(prefix='r13-v2-') as temp:
+        repo=Path(temp)/'objects'
+        subprocess.run(['git','init','--bare',str(repo)],check=True,stdout=subprocess.DEVNULL,timeout=30)
+        subprocess.run(['git','-C',str(repo),'fetch','--no-tags','https://github.com/'+REPOSITORY+'.git',V2_PRODUCT,b['workflowHead'],V2_RECOVERY],check=True,stdout=subprocess.DEVNULL,timeout=180)
+        v2_git_binding(repo,b)
+        code=subprocess.check_output(['git','-C',str(repo),'show',V2_RECOVERY+':ci/r13-candidate-policy-recovery.py'],timeout=30)
+        helper=Path(temp)/'recovery.py'; helper.write_bytes(code)
+        spec=importlib.util.spec_from_file_location('fixed_recovery',helper); r=importlib.util.module_from_spec(spec); spec.loader.exec_module(r)
+        original=api('actions/runs/38153505376'); jobs=api('actions/runs/38153505376/jobs?per_page=100'); artifact=api('actions/artifacts/11708196868')
+        r.original_metadata(original,jobs,artifact)
+        recovered=api('actions/runs/38168060273')
+        run_receipt(recovered,repository=REPOSITORY,head=V2_RECOVERY,workflow=r.RECOVERY_WORKFLOW,ref=r.RECOVERY_REF,run_id=38168060273)
+        j=api('actions/jobs/114554662264')
+        require(j['id']==114554662264 and j['run_id']==38168060273 and j['head_sha']==V2_RECOVERY and j['run_attempt']==1 and j['name']=='recover-policy' and j['status']=='completed' and j['conclusion']=='success','fixed recovery job mismatch')
+    # Refuse a head move during observations too.
+    require(api('pulls/107')['head']['sha']==b['workflowHead'],'PR head moved during validation')
+
+
 def accepted(root, packet_hash):
     hex_value(packet_hash)
     approved = authority(root)['accepted']
     require(isinstance(approved, dict) and set(approved) == {'packetSha256', 'receipts'}, 'stable HOLD: no accepted packet')
     require(approved['packetSha256'] == packet_hash, 'packet hash not primary accepted')
     packet = hashed_json(root, 'packets', packet_hash)
-    require(set(packet) == {'schemaVersion', 'identities', 'candidate', 'publication', 'gui'}, 'invalid acceptance packet')
-    require(packet['schemaVersion'] == 1, 'unsupported acceptance packet')
+    require(type(packet['schemaVersion']) is int and packet['schemaVersion'] in (1,2), 'unsupported acceptance packet')
+    v2 = packet['schemaVersion'] == 2
+    require(set(packet) == {'schemaVersion', 'identities', 'candidate', 'publication', 'gui'} | ({'ciBinding','policyRecovery'} if v2 else set()), 'invalid acceptance packet')
+    if v2: v2_mapping(packet)
     ids = packet['identities']; identity(ids)
     require(ids == candidate_approval(root, ids['towerCommit']), 'candidate review changed')
-    require(set(approved['receipts']) == RECEIPTS, 'missing trusted independent/runtime receipts')
+    require(set(approved['receipts']) == (V2_KINDS if v2 else RECEIPTS), 'missing trusted independent/runtime receipts')
     for kind, value in approved['receipts'].items():
-        receipt(root, value, kind, packet_hash, ids)
+        if v2: receipt_v2(root, value, kind, packet_hash, packet)
+        else: receipt(root, value, kind, packet_hash, ids)
     c = packet['candidate']
     require(set(c) == {'runId', 'artifactId', 'artifactSha256', 'metadataSha256', 'image', 'ref', 'workflow'}, 'invalid candidate packet')
     require(c['ref'] == CANDIDATE_REF and c['workflow'] == CANDIDATE_WORKFLOW, 'candidate ref/workflow mismatch')
@@ -302,7 +415,9 @@ def main():
     else:
         p = accepted(args.control, args.packet_sha256)
         c = p['candidate']; g = p['gui']; ids = p['identities']
-        run_receipt(decode(read(args.data / 'tower-run.json')), repository=REPOSITORY, head=ids['towerCommit'], workflow=c['workflow'], ref=c['ref'], run_id=c['runId'])
+        if p['schemaVersion'] == 2: verify_v2_live(p)
+        else:
+            run_receipt(decode(read(args.data / 'tower-run.json')), repository=REPOSITORY, head=ids['towerCommit'], workflow=c['workflow'], ref=c['ref'], run_id=c['runId'])
         run_receipt(decode(read(args.data / 'gui-run.json')), repository=g['repository'], head=g['sourceCommit'], workflow=g['workflow'], ref=g['ref'], run_id=g['runId'])
         artifact_receipt(decode(read(args.data / 'tower-artifact.json')), c, c['runId'], 'r13-image-data')
         artifact_receipt(decode(read(args.data / 'gui-artifact.json')), g, g['runId'], 'r13-system-gui-candidate')

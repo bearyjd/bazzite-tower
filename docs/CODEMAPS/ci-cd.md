@@ -104,3 +104,26 @@ existing Podman user namespace and image store, without sudo or runner security
 changes. The full collector regression models direct Skopeo unshare refusal and
 checks namespace-export failure cleanup. Actual runner success requires fresh CI.
 See [Podman unshare](https://docs.podman.io/en/latest/markdown/podman-unshare.1.html).
+
+## Recovered r13 acceptance (schema v2)
+
+V1 candidate identity and acceptance behavior remain available. V2 acceptance
+keeps product/publication at original b2 and digest88, and adds `ciBinding` for
+PR107 workflow head H plus `policyRecovery` for fixed recovery38168060273.
+Only the three immutable-CI workflow paths may differ; the validator recomputes
+Git ancestry, tree, modes and blob identities. Original failed run38153505376
+is checked by the pinned recovery helper, not accepted by generic run_receipt.
+
+All existing runtime receipt kinds remain mandatory. Every v2 receipt binds
+the packet hash, original identities, ciBinding hash and policyRecovery hash;
+independent-product-equivalence and independent-policy-recovery are additional
+required kinds. Old receipts cannot be silently converted or labelled H.
+Authority remains HOLD until independently endorsed actual evidence exists.
+
+The separately reviewed promotion workflow validates live exact-H CI, required
+job success/app ownership and fixed recovery before acquisition, before staging
+and immediately before the public pointer. CI failure/cancellation/skipping,
+PR-head movement or missing mappings refuses promotion. No image rebuild or
+provenance relabelling is authorized by this schema. Field layouts live in
+`v2_mapping` and `receipt_v2` in `ci/r13-publication.py`; offline refusal tests
+are in `tests/test-r13-publication.py`. Hosted checks remain mandatory.

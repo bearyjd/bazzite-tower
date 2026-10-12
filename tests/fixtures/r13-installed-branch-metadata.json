@@ -1,0 +1,17 @@
+{
+  "app/org.snitchwatch.Snitchwatch/x86_64/master": {
+    "--show-commit": "752e44d68dfc6aa5a6636b77713800c4817e8aacaeba37074e885b6d4ab1a6bc\n",
+    "--show-metadata": "[Application]\nname=org.snitchwatch.Snitchwatch\nruntime=org.kde.Platform/x86_64/6.11\nsdk=org.kde.Sdk/x86_64/6.11\ncommand=snitchwatch-kirigami\n\n[Context]\nshared=ipc;\nsockets=fallback-x11;wayland;\ndevices=dri;\nfilesystems=/run/snitchwatch:ro;xdg-config/kdeglobals:ro;/run/snitchwatch-auth:ro;xdg-config/snitchwatch:create;\npersistent=.local/share/snitchwatch;.local/state/snitchwatch;\n\n[Session Bus Policy]\ncom.canonical.AppMenu.Registrar=talk\norg.kde.kconfig.notify=talk\norg.kde.KGlobalSettings=talk\norg.kde.StatusNotifierWatcher=talk\norg.freedesktop.Notifications=talk\n\n[Environment]\nSNITCHWATCH_SYSTEM_BRIDGE=1\n\n[Extension org.snitchwatch.Snitchwatch.Debug]\ndirectory=lib/debug\nautodelete=true\nno-autodownload=true\n\n[Build]\nbuilt-extensions=org.snitchwatch.Snitchwatch.Debug;",
+    "--show-permissions": "[Context]\nshared=ipc;\nsockets=fallback-x11;wayland;\ndevices=dri;\nfilesystems=/run/snitchwatch:ro;xdg-config/kdeglobals:ro;/run/snitchwatch-auth:ro;xdg-config/snitchwatch:create;\npersistent=.local/share/snitchwatch;.local/state/snitchwatch;\n\n[Session Bus Policy]\ncom.canonical.AppMenu.Registrar=talk\norg.kde.kconfig.notify=talk\norg.kde.KGlobalSettings=talk\norg.kde.StatusNotifierWatcher=talk\norg.freedesktop.Notifications=talk\n\n[Environment]\nSNITCHWATCH_SYSTEM_BRIDGE=1\n"
+  },
+  "app/org.snitchwatch.Snitchwatch/x86_64/r13-candidate": {
+    "--show-commit": "1d5bdd5bf37b19db6c2021168de1e7c74e3604c46dda20a073d9531fdf985b01\n",
+    "--show-metadata": "[Application]\nname=org.snitchwatch.Snitchwatch\nruntime=org.kde.Platform/x86_64/6.11\nsdk=org.kde.Sdk/x86_64/6.11\ncommand=snitchwatch-kirigami\n\n[Context]\nshared=ipc;\nsockets=x11;wayland;fallback-x11;\ndevices=dri;\nfilesystems=/run/snitchwatch:ro;xdg-config/kdeglobals:ro;/run/snitchwatch-auth:ro;xdg-config/snitchwatch:create;\npersistent=.local/share/snitchwatch;.local/state/snitchwatch;\n\n[Session Bus Policy]\ncom.canonical.AppMenu.Registrar=talk\norg.kde.kconfig.notify=talk\norg.kde.KGlobalSettings=talk\norg.kde.StatusNotifierWatcher=talk\norg.freedesktop.Notifications=talk\n\n[Environment]\nSNITCHWATCH_SYSTEM_BRIDGE=1\n\n[Extension org.snitchwatch.Snitchwatch.Debug]\ndirectory=lib/debug\nautodelete=true\nno-autodownload=true\n\n[Build]\nbuilt-extensions=org.snitchwatch.Snitchwatch.Debug;",
+    "--show-permissions": "[Context]\nshared=ipc;\nsockets=fallback-x11;wayland;x11;\ndevices=dri;\nfilesystems=/run/snitchwatch:ro;xdg-config/kdeglobals:ro;/run/snitchwatch-auth:ro;xdg-config/snitchwatch:create;\npersistent=.local/share/snitchwatch;.local/state/snitchwatch;\n\n[Session Bus Policy]\ncom.canonical.AppMenu.Registrar=talk\norg.kde.kconfig.notify=talk\norg.kde.KGlobalSettings=talk\norg.kde.StatusNotifierWatcher=talk\norg.freedesktop.Notifications=talk\n\n[Environment]\nSNITCHWATCH_SYSTEM_BRIDGE=1\n"
+  },
+  "org.snitchwatch.Snitchwatch": {
+    "--show-commit": "",
+    "--show-metadata": "",
+    "--show-permissions": ""
+  }
+}

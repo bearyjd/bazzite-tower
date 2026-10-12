@@ -2,15 +2,17 @@
 <!-- Targeted update: 2026-10-07 | OpenSnitch patch-test workflow; not a full regeneration -->
 # CI / CD
 
-6 workflows + highlighted test scripts + 1 diff filter. Full failure model:
+8 workflows + highlighted test scripts + 1 diff filter. Full failure model:
 [`../downstream-change-tracking.md`](../downstream-change-tracking.md).
 
 ## Workflows (`.github/workflows/`)
 
 | Workflow | Triggers | Flow | Issue label |
 |---|---|---|---|
-| `build.yml` | push main (ignores README/docs/**), PR, Sun 06:00 UTC, dispatch | Two mutually exclusive jobs: PR-only **verify** has `contents: read`, credential-free SHA checkout, then builds/smokes/runtime-tests its own local legacy safe-pin/latest-kernel candidates and opt-in `verify-snitchwatch-system`; default-branch **release** publishes three variants (`safe-pin`→`:latest`, opt-in `latest-kernel`, opt-in `snitchwatch-system` = `SNITCHWATCH_BRIDGE=system` on the pinned base) and independently rebuilds/retests, queries the exact local candidate's RPM database into a deterministic SPDX installed-RPM inventory, pushes a unique candidate digest, requires cosign+signed SPDX+GitHub provenance verification, then promotes that unchanged digest to public tags. `fail-fast: false` — one leg failing never cancels the others. A separate **notify** job (`needs: release`, `if: always()`) reads each leg's actual conclusion from the Actions API and syncs its tracking issue — kept out of `release`'s own steps so a leg getting killed mid-step (not just failing cleanly) can't silently skip the notification | `ci-failure-<variant>` (release only; per-leg label, so one leg's success never auto-closes the other's issue) |
-| `boot-test.yml` | PR (build paths), Sun 07:00 UTC, dispatch | build → `podman run --systemd=always /sbin/init` → wait running/degraded → exec `tests/boot-check.sh` | `boot-test-failure` |
+| `build.yml` | push main (ignores README/docs/**), PR, Sun 06:00 UTC, dispatch | Two mutually exclusive jobs: PR-only **verify** has `contents: read`, credential-free actual PR-head SHA checkout with checked-out head/tree proof, then builds/smokes/runtime-tests its own local legacy safe-pin/latest-kernel candidates and opt-in `verify-snitchwatch-system`; default-branch **release** publishes two legacy variants (`safe-pin`→`:latest`, opt-in `latest-kernel`); `snitchwatch-system` is held on push/schedule/dispatch and only accepted-digest promotion may move it and independently rebuilds/retests, queries the exact local candidate's RPM database into a deterministic SPDX installed-RPM inventory, pushes a unique candidate digest, requires cosign+signed SPDX+GitHub provenance verification, then promotes that unchanged digest to public tags. `fail-fast: false` — one leg failing never cancels the others. A separate **notify** job (`needs: release`, `if: always()`) reads each leg's actual conclusion from the Actions API and syncs its tracking issue — kept out of `release`'s own steps so a leg getting killed mid-step (not just failing cleanly) can't silently skip the notification | `ci-failure-<variant>` (release only; per-leg label, so one leg's success never auto-closes the other's issue) |
+| `r13-candidate.yml` | reviewed exact-head candidate branch push; optional dispatch after main registration | read-only approval/build/test/OCI validation jobs → checkout-free fixed candidate-package publisher → existing automated signing/SPDX/provenance and scoped destination policy verification; no stable tag input | — |
+| `r13-promote.yml` | main dispatch with primary accepted packet hash | read-only trusted control/receipt/exact CI/artifact gate → checkout-free accepted-digest copy → destination-bound signatures/SPDX/original build predicate/policy verification → fixed system tag; no image rebuild, partial GUI status | — |
+| `boot-test.yml` | PR (build paths), Sun 07:00 UTC, dispatch | actual PR-head SHA checkout + head/tree proof in read-only boot job → build → `podman run --systemd=always /sbin/init` → wait running/degraded → exec `tests/boot-check.sh` | `boot-test-failure` (separate non-PR notifier only; no candidate code or checkout) |
 | `base-watch.yml` | daily 05:00 UTC, dispatch | pull `bazzite-nvidia-open:stable` → `rpm -qa` manifest → `ci/base-diff.py` vs last-seen baseline in `docs/manifests/` (written on first run) → commit refreshed manifest (and fail if every push retry fails) | `base-bump` |
 | `build-disk.yml` | dispatch (platform amd64/arm64), PR (disk.toml path) | resolve `:latest` once to an immutable digest → verify it with `cosign.pub` → pass that digest to bootc-image-builder → qcow2 disk image (rootfs=btrfs) → artifact or S3. anaconda-iso disabled: upstream BIB#1188 + bazzite#3418 | — |
 | `snitchwatch-daemon-patch.yml` | PR + push main (paths: `build_files/firewall/snitchwatch-system-daemon-*`, its script, itself), dispatch | `tests/test-snitchwatch-daemon-patch.sh`: pinned Fedora builder fetches the pinned, signature-verified Koji toolchain RPMs (helper `fetch` mode) plus live dependency RPMs, applies the pinned OpenSnitch patch to upstream `b404c4c` via the factory's check-source gates, then a `--network=none` container runs gofmt (patched files), `go vet` (netfilter/nftables in full; root/ui without the three analyzers upstream code trips), `go test -race` on root/netfilter/nftables/ui (three upstream ui race failures skipped by name; upstream's privileged nftables tests skip) and a plain `go test` pass. Not required (path-filtered). No image build | — |
@@ -37,7 +39,18 @@ last-good independently). The separate `notify` job opens — and later
 auto-closes — each leg's labelled tracking issue, independently of whether
 `release` finished cleanly or was cancelled/killed partway through.
 
+All stable OCI workflows share `bazzite-tower-stable-writers` with cancellation disabled; the r13 promoter also refuses pending old automatic writers. Trust bootstrap, packet/receipt schemas, artifact identities and partial-publication semantics: [r13-publication.md](../r13-publication.md). `ci/r13-publication.py` is the read-only gate and `ci/r13-candidate-data.py` captures installed/OCI/RPM identity only in the credential-free builder. The primary-reviewed control store starts with null authority. Final tower heads first receive independent review and actual-head green PR CI on a separate review branch; only then may the primary record variables and fast-forward the existing fixed candidate branch to that exact tested head. Same-head pushes and detached dispatch do not supply fresh verify/artifact CI; no force/delete/main-registration shortcut. The full sequence is in the publication document.
+
+The candidate collector creates its extraction container with an explicit
+`/usr/bin/true` command, supporting bootc images without CMD/ENTRYPOINT. It
+never starts that container and removes it in `finally`; the separate RPM
+inventory run and digest-preserving OCI export are unchanged. Full collector
+regressions execute the real artifact validation and SPDX generation with
+offline Podman/Skopeo fixtures, including removal after collection failures.
+
 ## Test scripts (`tests/`)
+
+- `test-r13-publication.py` — packet/hash/ref/target/source/profile/receipt/CI/artifact and OCI tamper refusals, privilege boundaries, automatic system hold and no-rebuild workflow checks; actual PR-head proof rejects synthetic-merge/missing identities and boot PR tokens cannot write issues. Offline fixtures only.
 
 - `test-snitchwatch-gate.py` — offline wrapper reporting, failure propagation,
   prerequisites, network isolation and timeout contracts; both image
@@ -67,7 +80,7 @@ rootless boot containers cannot start NFQUEUE; an active daemon additionally
 requires the reviewed process hash, arguments and root UID. Fresh
 enforcing-SELinux image VM evidence remains a separate gate. Default release
 variants retain legacy TCP `127.0.0.1:50051`/`allow`; the opt-in
-`:snitchwatch-system` release leg selects the system bridge and patched daemon.
+r13 candidate flow selects the system bridge and patched daemon; the system stable tag stays held until accepted-digest promotion.
 
 ## Diff filter (`ci/base-diff.py`)
 
@@ -84,3 +97,10 @@ SSH gate. Neither recipe publishes an image or installs a GUI.
 `just smoke` = the build.yml gate. Also `just build`, `just build-qcow2`,
 `just run-vm-qcow2`, `just spawn-vm`, `just build-iso-live` (payload + titanoboa
 ISO), `just check`/`lint`/`format`.
+
+The candidate collector exports the current user's containers-storage image
+through `podman unshare skopeo copy --all --preserve-digests`. This uses the
+existing Podman user namespace and image store, without sudo or runner security
+changes. The full collector regression models direct Skopeo unshare refusal and
+checks namespace-export failure cleanup. Actual runner success requires fresh CI.
+See [Podman unshare](https://docs.podman.io/en/latest/markdown/podman-unshare.1.html).

@@ -124,3 +124,30 @@ commands, exit codes, log hashes and concise first diagnostics; complete logs
 and executed inputs remain alongside it. Exit codes: 0 PASS, 1 FAIL, 2 BLOCKED.
 Offline PASS never certifies runtime: runtime is always UNVERIFIED (GUI,
 NFQUEUE, SELinux and deployment require separate owner-controlled evidence).
+
+## r13 publication boundary
+
+The frozen r13 bridge candidate is `1527fd4df9070704ae9b98f8c3011461919812e4`,
+tree `cc9fa429825b18a592fe4e721d51a0dec42b2476`, with unchanged OpenSnitch
+gitlink `b404c4c6316760fa7bc415509d3f8d747f7dc9cc`. The bridge pins record
+this identity and hashes of all 13 committed packaging inputs; the installed
+verifier authenticates the refreshed pins hash. Upstream installer bytes and
+signed Koji/toolchain/daemon pins remain unchanged. This candidate pin does not
+establish independent review or runtime acceptance; authority remains held.
+
+The system profile remains PR-tested but is removed from automatic stable release builds. `r13-candidate.yml` builds/tests a reviewed source in a credential-free job, records actual installed binary/manifest/pins identities through `ci/r13-candidate-data.py`, and exports digest-preserving OCI data. The collector supplies `/usr/bin/true` when creating its never-started extraction container because bootc images may omit CMD/ENTRYPOINT; its separate RPM inventory run remains unchanged. Extraction containers are removed on success and failure. Full collector tests in `tests/test-r13-publication.py` cover commandless images, installed-binary/archive drift and cleanup, preserving the actual artifact validator. Separate checkout-free publishers and `ci/r13-publication.py` trusted control gates enforce fixed targets, accepted packet hashes and native independent/runtime receipts. Promotion copies the accepted digest and reissues destination-bound metadata without an image rebuild. Base-image/toolchain pins and smoke/boot assertions are preserved. See [r13-publication.md](../r13-publication.md) for the trust bootstrap, immutable identity schemas and GUI partial-publication status.
+
+`r13-promote.yml` contains identical guarded inline public GUI acquisition in
+validation and promotion: fixed source prerelease/tag/asset, anonymous exact
+run/artifact metadata, source/asset/hash checks, bounded HTTPS download and
+allowlisted redirects. Tower tokens remain scoped to tower artifacts. Missing
+public GUI data holds promotion. `tests/test-r13-publication.py` executes the
+unmodified promotion entrypoint and actual inline downloader refusal paths;
+remote CI/acquisition and runtime still require independent evidence.
+
+The candidate collector exports the current user's containers-storage image
+through `podman unshare skopeo copy --all --preserve-digests`. This uses the
+existing Podman user namespace and image store, without sudo or runner security
+changes. The full collector regression models direct Skopeo unshare refusal and
+checks namespace-export failure cleanup. Actual runner success requires fresh CI.
+See [Podman unshare](https://docs.podman.io/en/latest/markdown/podman-unshare.1.html).

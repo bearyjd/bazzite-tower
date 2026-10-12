@@ -25,13 +25,47 @@ env:
   DEFAULT_TAG: "latest"
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref || github.run_id }}-${{ inputs.brand_name}}-${{ inputs.stream_name }}
-  cancel-in-progress: true
+  # Every stable OCI writer, including r13 promotion, shares this lock.
+  group: ${{ github.event_name == 'pull_request' && format('verify-{0}', github.ref) || 'bazzite-tower-stable-writers' }}
+  cancel-in-progress: false
 
 jobs:
-  verify:
+  immutable-r13:
+    name: Verify original r13 immutable candidate
+    if: github.event_name == 'pull_request' && github.repository == 'bearyjd/bazzite-tower' && github.event.pull_request.number == 107 && github.event.pull_request.head.repo.full_name == 'bearyjd/bazzite-tower'
+    permissions:
+      contents: read
+      actions: read
+      packages: read
+    uses: ./.github/workflows/r13-immutable-ci.yml
+  # Required contexts are dependency gates. PR107 verifies the original immutable
+  # product; its historical variant checks remain b2 evidence, not new builds.
+  verify-required:
     name: Verify image (${{ matrix.variant }})
-    if: github.event_name == 'pull_request'
+    needs: [verify, immutable-r13]
+    if: always() && github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    permissions: {}
+    strategy:
+      matrix:
+        variant: [safe-pin, latest-kernel, snitchwatch-system]
+    steps:
+      - name: Require the selected verification dependency to succeed
+        env:
+          IMMUTABLE_MODE: ${{ github.event_name == 'pull_request' && github.repository == 'bearyjd/bazzite-tower' && github.event.pull_request.number == 107 && github.event.pull_request.head.repo.full_name == 'bearyjd/bazzite-tower' }}
+          IMMUTABLE_RESULT: ${{ needs.immutable-r13.result }}
+          BUILD_RESULT: ${{ needs.verify.result }}
+        run: |
+          set -euo pipefail
+          if [[ "$IMMUTABLE_MODE" == true ]]; then
+            [[ "$IMMUTABLE_RESULT" == success && "$BUILD_RESULT" == skipped ]]
+            echo 'Verified original digest88; historical b2 variant evidence retained; no new variant build.' >> "$GITHUB_STEP_SUMMARY"
+          else
+            [[ "$BUILD_RESULT" == success && "$IMMUTABLE_RESULT" == skipped ]]
+          fi
+  verify:
+    name: Build and test image (${{ matrix.variant }})
+    if: github.event_name == 'pull_request' && !(github.event_name == 'pull_request' && github.repository == 'bearyjd/bazzite-tower' && github.event.pull_request.number == 107 && github.event.pull_request.head.repo.full_name == 'bearyjd/bazzite-tower')
     runs-on: ubuntu-24.04
 
     # Pull requests receive no token capable of publishing, attesting, signing,
@@ -50,7 +84,7 @@ jobs:
             build_args: "BASE_IMAGE=ghcr.io/ublue-os/bazzite-nvidia-open:stable"
             tag_base: verify-latest-kernel
           # Opt-in system bridge: a local, credential-free PR candidate. The
-          # release job publishes the same configuration as `:snitchwatch-system`;
+          # r13 candidate flow builds the accepted `:snitchwatch-system` target;
           # IMAGE_TAG matches it so this leg also exercises the MOTD assertion.
           - variant: snitchwatch-system
             build_args: |
@@ -68,11 +102,26 @@ jobs:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
+
+      - name: Prove exact checked-out source head
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          [[ "$EXPECTED_HEAD" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$(git rev-parse HEAD)" == "$EXPECTED_HEAD" ]]
+          tree="$(git rev-parse 'HEAD^{tree}')"
+          [[ "$tree" =~ ^[0-9a-f]{40}$ ]]
+          echo "VERIFIED_SOURCE_HEAD=$EXPECTED_HEAD" >> "$GITHUB_STEP_SUMMARY"
+          echo "VERIFIED_SOURCE_TREE=$tree" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Maximize build space
         uses: ublue-os/remove-unwanted-software@695eb75bc387dbcd9685a8e72d23439d8686cba6
+
+      - name: Install workflow static-check dependency
+        run: sudo apt-get update -qq && sudo apt-get install -y python3-yaml
 
       - name: Validate source safety contracts
         run: |
@@ -83,6 +132,7 @@ jobs:
           tests/test-opensnitch-readiness.sh
           tests/test-snitchwatch-system.sh
           tests/test-snitchwatch-toolchain.sh
+          python3 tests/test-r13-publication.py
           python3 tests/test-snitchwatch-gate.py
           python3 tests/test-snitchwatch-image-build.py
           python3 tests/test-snitchwatch-image-build-daemon.py
@@ -189,20 +239,8 @@ jobs:
               IMAGE_TAG=latest-kernel
             tag_base: latest-kernel
             tag_prefix: "latest-kernel-"
-          # Opt-in — the pinned safe-pin base plus the native Snitchwatch system
-          # bridge and the reviewed OpenSnitch daemon patch (SNITCHWATCH_BRIDGE=
-          # system; docs/RUNBOOK.md "OpenSnitch / Snitchwatch deployment status").
-          # Never the default tag: `latest` keeps the legacy user bridge. Like
-          # latest-kernel it adds no BASE_IMAGE, so the Containerfile pin stays
-          # the single source of truth, and every tag is namespaced under
-          # tag_prefix so it cannot collide with the other legs' tags.
-          - variant: snitchwatch-system
-            build_args: |
-              FIREWALL_DAEMON=opensnitch
-              SNITCHWATCH_BRIDGE=system
-              IMAGE_TAG=snitchwatch-system
-            tag_base: snitchwatch-system
-            tag_prefix: "snitchwatch-system-"
+          # r13 HOLD: the system variant has no automatic stable writer.
+          # Candidate builds and accepted-digest promotion have separate workflows.
 
     steps:
       - name: Prepare environment
@@ -222,6 +260,9 @@ jobs:
       - name: Maximize build space
         uses: ublue-os/remove-unwanted-software@695eb75bc387dbcd9685a8e72d23439d8686cba6
 
+      - name: Install workflow static-check dependency
+        run: sudo apt-get update -qq && sudo apt-get install -y python3-yaml
+
       - name: Validate source safety contracts
         run: |
           tests/check-supply-chain.sh
@@ -231,6 +272,7 @@ jobs:
           tests/test-opensnitch-readiness.sh
           tests/test-snitchwatch-system.sh
           tests/test-snitchwatch-toolchain.sh
+          python3 tests/test-r13-publication.py
           python3 tests/test-snitchwatch-gate.py
           python3 tests/test-snitchwatch-image-build.py
           python3 tests/test-snitchwatch-image-build-daemon.py
@@ -625,7 +667,7 @@ jobs:
             // tag_base mirrors the `release` job's matrix, purely for the
             // human-readable message below — not a build input, so drifting
             // is cosmetic, not a correctness risk.
-            const TAG_BASE = { 'safe-pin': 'latest', 'latest-kernel': 'latest-kernel', 'snitchwatch-system': 'snitchwatch-system' };
+            const TAG_BASE = { 'safe-pin': 'latest', 'latest-kernel': 'latest-kernel' };
             const jobs = await github.paginate(github.rest.actions.listJobsForWorkflowRun, {
               owner, repo, run_id: runId, per_page: 100,
             });

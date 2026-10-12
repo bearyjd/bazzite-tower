@@ -12,8 +12,6 @@ import sys
 import tarfile
 import tempfile
 import unittest
-import urllib.error
-import urllib.request
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -430,148 +428,6 @@ class Publication(unittest.TestCase):
             with self.assertRaises(ValueError): pub.verify_source(source, ids)
 
 
-class PublicGuiAcquisition(unittest.TestCase):
-    def setUp(self):
-        import yaml
-        workflow = yaml.safe_load((ROOT / '.github/workflows/r13-promote.yml').read_text())
-        self.steps = [next(s for s in workflow['jobs'][job]['steps'] if s.get('name') == 'Acquire accepted GUI from fixed public candidate release')
-                      for job in ('validate', 'promote')]
-        self.programs = [s['run'].split("python3 - <<'PY'\n", 1)[1].split('\nPY', 1)[0] for s in self.steps]
-        self.assertEqual(self.programs[0], self.programs[1])
-        for job in ('validate', 'promote'):
-            self.assertFalse(any(s.get('with', {}).get('repository') == 'bearyjd/snitchwatch' for s in workflow['jobs'][job]['steps']))
-        self.assertNotIn("['gui','bearyjd','snitchwatch'", next(s for s in workflow['jobs']['validate']['steps'] if s.get('id') == 'fetch')['with']['script'])
-        self.bundle = b'accepted public GUI bytes'
-        self.name = 'snitchwatch-system-r13-candidate.flatpak'
-        self.api = 'https://api.github.com/repos/bearyjd/snitchwatch'
-        self.download = 'https://github.com/bearyjd/snitchwatch/releases/download/r13-candidate/' + self.name
-        self.storage = 'https://release-assets.githubusercontent.com/github-production-release-asset/fixture?signature=opaque'
-        self.g = {'repository': 'bearyjd/snitchwatch', 'sourceCommit': '1' * 40, 'sourceTree': '2' * 40, 'submoduleCommit': '3' * 40,
-                  'profile': 'system', 'runtimeRef': 'org.kde.Platform/x86_64/6.11', 'manifestSha256': '4' * 64,
-                  'bundleSha256': pub.sha(self.bundle), 'runId': 100, 'workflow': '.github/workflows/candidate-gui.yml',
-                  'ref': 'refs/heads/r13-candidate', 'artifactId': 101, 'artifactSha256': '5' * 64}
-        self.repo = {'full_name': 'bearyjd/snitchwatch', 'private': False}
-        self.run = {'id': 100, 'head_sha': self.g['sourceCommit'], 'head_branch': 'r13-candidate', 'path': self.g['workflow'],
-                    'repository': {'full_name': 'bearyjd/snitchwatch'}, 'head_repository': {'full_name': 'bearyjd/snitchwatch'},
-                    'event': 'push', 'status': 'completed', 'conclusion': 'success', 'run_attempt': 1}
-        self.artifact = {'id': 101, 'name': 'r13-system-gui-candidate', 'expired': False, 'digest': 'sha256:' + self.g['artifactSha256'],
-                         'workflow_run': {'id': 100}}
-        self.ref = {'ref': 'refs/tags/r13-candidate', 'object': {'type': 'commit', 'sha': self.g['sourceCommit'],
-                    'url': self.api + '/git/commits/' + self.g['sourceCommit']}}
-        self.asset = {'id': 400, 'name': self.name, 'state': 'uploaded', 'size': len(self.bundle), 'digest': 'sha256:' + self.g['bundleSha256'],
-                      'url': self.api + '/releases/assets/400', 'browser_download_url': self.download}
-        self.release = {'id': 300, 'tag_name': 'r13-candidate', 'target_commitish': self.g['sourceCommit'], 'draft': False, 'prerelease': True,
-                        'published_at': '2026-10-11T05:00:00Z', 'url': self.api + '/releases/300',
-                        'html_url': 'https://github.com/bearyjd/snitchwatch/releases/tag/r13-candidate', 'assets': [self.asset]}
-
-    def execute(self, *, program=0, redirect=None, redirect_loop=False, status=200, raw=None, content_length=None,
-                unavailable=None, mutate_after=None, metadata_raw=None, slow=False, preexisting=None, input_symlink=False):
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp); requests = []; release_reads = 0
-            if preexisting:
-                (root / 'gui').symlink_to(root) if preexisting == 'symlink' else (root / 'gui').mkdir()
-            if input_symlink:
-                link = root / 'input'; link.symlink_to(root, target_is_directory=True); input_dir = link
-            else:
-                input_dir = root
-            class Response(io.BytesIO):
-                def __init__(self, data, url, code=200, headers=None):
-                    super().__init__(data); self.url = url; self.status = code; self.headers = headers or {}
-                def geturl(self): return self.url
-            def open_request(request, timeout):
-                nonlocal release_reads
-                requests.append(request)
-                self.assertFalse(any(k.lower() == 'authorization' for k in request.headers))
-                self.assertGreater(timeout, 0); self.assertLessEqual(timeout, 30)
-                url = request.full_url
-                if unavailable and url == self.api + unavailable:
-                    raise urllib.error.HTTPError(url, 404, 'not found', {}, io.BytesIO())
-                if url == self.download or (redirect_loop and url == self.storage):
-                    target = redirect or self.storage
-                    raise urllib.error.HTTPError(url, 302, 'redirect', {'Location': target}, io.BytesIO())
-                if url == self.storage:
-                    data = self.bundle if raw is None else raw
-                    headers = {} if content_length is None else {'Content-Length': content_length}
-                    return Response(data, url, status, headers)
-                values = {'': self.repo, '/actions/runs/100': self.run, '/actions/artifacts/101': self.artifact,
-                          '/git/ref/tags/r13-candidate': self.ref, '/releases/tags/r13-candidate': self.release}
-                path = url.removeprefix(self.api)
-                self.assertIn(path, values)
-                if path == '/releases/tags/r13-candidate':
-                    release_reads += 1
-                    if release_reads == 2 and mutate_after: mutate_after()
-                data = pub.canonical(values[path])
-                if metadata_raw is not None and path == '': data = metadata_raw
-                return Response(data, url)
-            opener = unittest.mock.Mock(); opener.open.side_effect = open_request
-            handlers = []
-            def build_opener(*args):
-                handlers.extend(args); return opener
-            env = {'GUI_IDENTITY': json.dumps(self.g), 'GUI_INPUT_DIR': str(input_dir), 'GH_TOKEN': 'must-not-transmit', 'GITHUB_TOKEN': 'must-not-transmit'}
-            clock = [0, 0, 0, 0, 0, 0, 601] if slow else None
-            with patch.dict(os.environ, env), patch.object(urllib.request, 'build_opener', side_effect=build_opener):
-                timer = patch('time.monotonic', side_effect=clock) if slow else patch('time.monotonic', return_value=0)
-                try:
-                    with timer: exec(compile(self.programs[program], 'actual-public-gui-inline', 'exec'), {})
-                except Exception:
-                    self.assertFalse((root / 'gui' / self.name).exists())
-                    self.assertFalse((root / 'gui' / (self.name + '.partial')).exists())
-                    raise
-            self.assertEqual((root / 'gui' / self.name).read_bytes(), self.bundle)
-            self.assertEqual(json.loads((root / 'gui-run.json').read_bytes()), self.run)
-            self.assertEqual(json.loads((root / 'gui-artifact.json').read_bytes()), self.artifact)
-            self.assertEqual(handlers[0].proxies, {})
-            self.assertIsNone(handlers[1].redirect_request(None, None, 302, '', {}, self.storage))
-            self.assertTrue(any(r.full_url == self.storage for r in requests))
-
-    def test_actual_inline_both_jobs_success_without_authorization(self):
-        for program in (0, 1):
-            with self.subTest(job=program): self.execute(program=program, content_length=str(len(self.bundle)))
-
-    def test_public_metadata_and_accepted_identity_refusals(self):
-        cases = [(self.repo, 'private', True), (self.repo, 'full_name', 'attacker/repo'),
-                 (self.g, 'repository', 'attacker/repo'), (self.g, 'profile', 'legacy'), (self.g, 'runtimeRef', 'latest'),
-                 (self.g, 'workflow', '.github/workflows/release.yml'), (self.g, 'ref', 'refs/heads/main'),
-                 (self.g, 'sourceCommit', '1;touch /tmp/escape'), (self.g, 'runId', True),
-                 (self.run, 'head_sha', 'f' * 40), (self.run, 'path', '.github/workflows/release.yml'), (self.run, 'head_branch', 'main'),
-                 (self.run, 'conclusion', 'failure'), (self.run, 'status', 'queued'), (self.run, 'event', 'pull_request'),
-                 (self.run, 'run_attempt', 2), (self.run, 'head_repository', {'full_name': 'attacker/repo'}),
-                 (self.artifact, 'id', 999), (self.artifact, 'name', 'other'), (self.artifact, 'expired', True),
-                 (self.artifact, 'digest', 'sha256:' + '0' * 64), (self.artifact, 'workflow_run', {'id': 999}),
-                 (self.ref, 'ref', 'refs/heads/r13-candidate'), (self.ref, 'object', dict(self.ref['object'], sha='f' * 40)),
-                 (self.ref, 'object', dict(self.ref['object'], type='tag')),
-                 (self.release, 'tag_name', 'stable'), (self.release, 'target_commitish', 'main'),
-                 (self.release, 'draft', True), (self.release, 'prerelease', False), (self.release, 'published_at', None),
-                 (self.release, 'url', 'https://evil.example/releases/300'), (self.release, 'assets', []),
-                 (self.release, 'assets', [self.asset, self.asset]), (self.asset, 'state', 'new'),
-                 (self.asset, 'size', 0), (self.asset, 'size', 512 * 1024**2 + 1), (self.asset, 'size', True),
-                 (self.asset, 'digest', 'sha256:' + '0' * 64), (self.asset, 'url', self.api + '/releases/assets/999'),
-                 (self.asset, 'browser_download_url', 'https://evil.example/' + self.name)]
-        for mapping, key, value in cases:
-            old = mapping[key]; mapping[key] = value
-            with self.subTest(key=key, value=value), self.assertRaises(ValueError): self.execute()
-            mapping[key] = old
-
-    def test_actual_inline_redirects_bounds_changed_bytes_and_missing_data_refuse(self):
-        cases = [dict(redirect=url) for url in ('http://release-assets.githubusercontent.com/asset', 'https://evil.example/asset',
-                  'https://github.com/attacker/repo/asset', 'https://release-assets.githubusercontent.com.evil.example/asset',
-                  'https://user@release-assets.githubusercontent.com/asset', 'https://release-assets.githubusercontent.com:443/asset',
-                  'https://release-assets.githubusercontent.com/asset#fragment', 'file:///etc/passwd')]
-        cases += [dict(redirect_loop=True), dict(status=206), dict(raw=b'changed'), dict(raw=self.bundle[:-1]),
-                  dict(raw=self.bundle + b'extra'), dict(content_length='999'), dict(slow=True), dict(input_symlink=True),
-                  dict(metadata_raw=b'{"private":false,"private":true}'), dict(metadata_raw=b'x' * (16 * 1024**2 + 1))]
-        cases += [dict(unavailable=path) for path in ('/releases/tags/r13-candidate', '/actions/runs/100', '/actions/artifacts/101')]
-        for case in cases:
-            with self.subTest(case=list(case)), self.assertRaises(ValueError): self.execute(**case)
-        for kind in ('symlink', 'directory'):
-            with self.subTest(preexisting=kind), self.assertRaises(FileExistsError): self.execute(preexisting=kind)
-        for target, key, value in [(self.release, 'id', 301), (self.asset, 'id', 401)]:
-            old = target[key]
-            with self.subTest(changed_during_download=key), self.assertRaises(ValueError):
-                self.execute(mutate_after=lambda: target.update({key: value}))
-            target[key] = old
-
-
 class WorkflowContracts(unittest.TestCase):
     def test_pr_head_proof_refuses_synthetic_merge_and_missing_head(self):
         import yaml
@@ -631,7 +487,6 @@ class WorkflowContracts(unittest.TestCase):
         candidate_code = '\n'.join(s.get('run', '') for s in candidate['jobs']['publish']['steps'])
         self.assertNotIn('docker://ghcr.io/bearyjd/bazzite-tower:', candidate_code)
         promotion = workflows['r13-promote.yml']
-        self.assertIn('vars.R13_ACCEPTED_PACKET_SHA256', promotion['jobs']['promote']['if'])
         self.assertNotIn('push', promotion.get('on', promotion.get(True, {})))
 
     def test_publisher_data_guard_executes_and_rejects_hash_target_path_tamper(self):
@@ -654,29 +509,159 @@ class WorkflowContracts(unittest.TestCase):
             with patch.dict(os.environ, dict(env, DIGEST='sha256:abc;touch /tmp/escape')), self.assertRaises(AssertionError):
                 exec(compile(program, 'publisher-data', 'exec'), {})
 
-    def test_original_verified_predicates_are_checked_before_stable_writes(self):
-        import base64
+    PROMOTER = ROOT / '.github/workflows/r13-promote.yml'
+    FIXED_DIGEST = 'sha256:88f8ff0052c27fcc71379f2b43e06ddd7218419b2d90c8fcf8392af5292b8454'
+
+    def promoter(self):
         import yaml
-        workflow = yaml.safe_load((ROOT / '.github/workflows/r13-promote.yml').read_text())
-        steps = workflow['jobs']['promote']['steps']
-        source_index = next(i for i,s in enumerate(steps) if s.get('name') == 'Verify exact candidate repository policy and original build provenance')
-        stage_index = next(i for i,s in enumerate(steps) if s.get('name') == 'Stage unchanged digest at fixed nonpublic-by-convention tag')
-        self.assertLess(source_index, stage_index)
-        text = steps[source_index]['run']
-        program = text.split("python3 - <<'PY'\n", 1)[1].split('\nPY', 1)[0]
+        workflow = yaml.safe_load(self.PROMOTER.read_text())
+        return workflow, workflow['jobs']['promote'], workflow['jobs']['promote']['steps']
+
+    def step_index(self, steps, fragment):
+        return next(i for i, s in enumerate(steps) if fragment in s.get('name', ''))
+
+    def test_promoter_is_dispatch_only_with_one_digest_input_and_main_guard(self):
+        workflow, job, _ = self.promoter()
+        self.assertEqual(workflow.get('on', workflow.get(True)), {'workflow_dispatch': {'inputs': {'digest': {
+            'description': 'Must equal the fixed r13 candidate digest in this workflow', 'required': True, 'type': 'string'}}}})
+        self.assertEqual(list(workflow['jobs']), ['promote'])
+        self.assertEqual(job['if'], "github.repository == 'bearyjd/bazzite-tower' && github.ref == 'refs/heads/main'")
+        self.assertFalse(workflow['concurrency']['cancel-in-progress'])
+        self.assertEqual(workflow['concurrency']['group'], 'bazzite-tower-stable-writers')
+        self.assertEqual(workflow['permissions'], {})
+        self.assertEqual(job['permissions'], {'contents': 'read', 'packages': 'write'})
+
+    def test_fixed_constants_and_first_step_requires_the_fixed_digest(self):
+        workflow, _, steps = self.promoter()
+        self.assertEqual(workflow['env'], {'SOURCE': 'ghcr.io/bearyjd/bazzite-tower-r13-candidate', 'DEST': 'ghcr.io/bearyjd/bazzite-tower',
+                                            'DIGEST': self.FIXED_DIGEST, 'TAG': 'snitchwatch-system'})
+        self.assertEqual(steps[0]['env'], {'INPUT_DIGEST': '${{ inputs.digest }}'})
+        for given, success in [(self.FIXED_DIGEST, True), ('sha256:' + '0' * 64, False), ('', False), (self.FIXED_DIGEST + ' ', False),
+                               (self.FIXED_DIGEST[7:], False)]:
+            result = subprocess.run(['bash', '-ec', steps[0]['run']], env=dict(os.environ, DIGEST=self.FIXED_DIGEST, INPUT_DIGEST=given),
+                                    capture_output=True, text=True)
+            with self.subTest(given=given): self.assertEqual(result.returncode == 0, success, result.stderr)
+
+    def test_promoter_has_no_checkout_pins_every_action_and_scopes_the_signing_secret(self):
+        text = self.PROMOTER.read_text()
+        _, _, steps = self.promoter()
+        self.assertNotIn('actions/checkout', text)
+        self.assertNotIn('R13_', text); self.assertNotIn('vars.', text)
+        uses = [s['uses'] for s in steps if 'uses' in s]
+        self.assertEqual(sorted(u.split('@')[0] for u in uses), ['docker/login-action', 'sigstore/cosign-installer'])
+        for use in uses: self.assertRegex(use, r'@[a-f0-9]{40}$')
+        self.assertEqual(text.count('SIGNING_SECRET'), 1)
+        holder = next(s for s in steps if 'SIGNING_SECRET' in str(s))
+        self.assertIn('cosign sign', holder['run']); self.assertIn('cosign attest', holder['run'])
+        self.assertEqual(sum('cosign sign' in s.get('run', '') or 'cosign attest' in s.get('run', '') for s in steps), 1)
+
+    def test_tag_moves_only_after_verification_and_only_the_system_tag_moves(self):
+        _, _, steps = self.promoter()
+        order = ['Require the fixed digest', 'Verify the source', 'Copy the digest', 'Sign the digest', 'Verify the destination',
+                 'Move the system tag', 'Verify the moved tag']
+        indexes = [self.step_index(steps, name) for name in order]
+        self.assertEqual(indexes, sorted(indexes))
+        self.assertLess(self.step_index(steps, 'Fetch host signature policy'), indexes[1])
+        source, copy_step, sign, dest, move, final = (steps[i]['run'] for i in indexes[1:])
+        self.assertEqual(steps[indexes[2]]['env']['STAGING_TAG'], 'r13-promotion-${{ github.run_id }}')
+        self.assertIn('--new-bundle-format', source); self.assertIn('--type spdxjson', source)
+        self.assertIn('cosign verify --key', dest); self.assertIn('verify-attestation --key', dest); self.assertNotIn('--new-bundle-format', dest)
+        for run in (copy_step, move): self.assertIn('skopeo copy --all --preserve-digests --digestfile', run)
+        for run in (dest, final): self.assertIn('--policy "${trust}/policy.json" --registries.d "${trust}/registries.d"', run)
+        # Every skopeo copy and its destination: staging tag, host-policy probes into local OCI dirs, then the one tag move.
+        copies = []
+        for index, step in enumerate(steps):
+            for line in step.get('run', '').replace('\\\n', ' ').splitlines():
+                if 'skopeo' in line and ' copy ' in line: copies.append((index, line.split()[-1]))
+        self.assertEqual(copies, [(indexes[2], '"docker://${DEST}:${STAGING_TAG}"'),
+                                  (indexes[4], '"oci:${RUNNER_TEMP}/host-policy-image:r13"'),
+                                  (indexes[5], '"docker://${DEST}:${TAG}"'),
+                                  (indexes[6], '"oci:${RUNNER_TEMP}/host-policy-tag:r13"')])
+        text = self.PROMOTER.read_text()
+        for other in (':latest', 'latest-kernel', 'safe-pin'): self.assertNotIn(other, text)
+
+    def run_step(self, step, tmp, tools, env):
+        for name, body in tools.items():
+            path = Path(tmp) / 'bin' / name; path.parent.mkdir(exist_ok=True); path.write_text('#!/bin/sh\n' + body); path.chmod(0o755)
+        base = dict(os.environ, PATH=str(Path(tmp) / 'bin') + os.pathsep + os.environ['PATH'], RUNNER_TEMP=tmp, GITHUB_SHA='c' * 40,
+                    GITHUB_REPOSITORY='bearyjd/bazzite-tower', SOURCE='ghcr.io/bearyjd/bazzite-tower-r13-candidate',
+                    DEST='ghcr.io/bearyjd/bazzite-tower', DIGEST=self.FIXED_DIGEST, TAG='snitchwatch-system')
+        return subprocess.run(['bash', '-ec', step['run']], env=dict(base, **env), capture_output=True, text=True)
+
+    def test_trust_fetch_rewrites_only_the_key_path_and_refuses_a_changed_host_rule(self):
+        _, _, steps = self.promoter()
+        step = steps[self.step_index(steps, 'Fetch host signature policy')]
+        host = ROOT / 'system_files/usr/share/bazzite-tower/containers'
+        fake_gh = 'for a in "$@"; do case "$a" in repos/*) path="${a#*/contents/}"; path="${path%%\\?*}";; esac; done\ncat "$ROOT_DIR/$path"\n'
         with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp); data = root / 'data'; data.mkdir()
-            for name,file,kind in [('sbom', 'sbom.json', 'https://spdx.dev/Document'), ('provenance', 'build-provenance.json', 'https://github.com/bearyjd/bazzite-tower/attestations/r13-candidate-build/v1')]:
-                expected = {'fixture': name}; (data / file).write_bytes(pub.canonical(expected))
-                statement = {'predicateType': kind, 'predicate': expected, 'subject': [{'name': pub.CANDIDATE_REPOSITORY, 'digest': {'sha256': 'a' * 64}}]}
-                envelope = {'payload': base64.b64encode(pub.canonical(statement)).decode()}
-                (root / ('candidate-' + name + '.verified.json')).write_bytes(pub.canonical(envelope))
-            env = {'RUNNER_TEMP': tmp, 'DATA': str(data), 'DESTINATION': pub.CANDIDATE_REPOSITORY, 'DIGEST': 'sha256:' + 'a' * 64}
-            with patch.dict(os.environ, env): exec(compile(program, 'original-predicate-check', 'exec'), {})
-            for bad in [dict(env, DESTINATION=pub.STABLE_REPOSITORY), dict(env, DIGEST='sha256:' + 'b' * 64)]:
-                with patch.dict(os.environ, bad), self.assertRaises(AssertionError): exec(compile(program, 'original-predicate-check', 'exec'), {})
-            (data / 'build-provenance.json').write_bytes(pub.canonical({'fixture': 'different-original-run'}))
-            with patch.dict(os.environ, env), self.assertRaises(AssertionError): exec(compile(program, 'original-predicate-check', 'exec'), {})
+            result = self.run_step(step, tmp, {'gh': fake_gh}, {'ROOT_DIR': str(ROOT)})
+            self.assertEqual(result.returncode, 0, result.stderr)
+            trust = Path(tmp) / 'trust'
+            policy = json.loads((trust / 'policy.json').read_text()); original = json.loads((host / 'policy.json').read_text())
+            self.assertEqual(policy['transports']['docker']['ghcr.io/bearyjd/bazzite-tower'][0]['keyPath'], str(trust / 'cosign.pub'))
+            policy['transports']['docker']['ghcr.io/bearyjd/bazzite-tower'][0]['keyPath'] = original['transports']['docker']['ghcr.io/bearyjd/bazzite-tower'][0]['keyPath']
+            self.assertEqual(policy, original)
+            self.assertEqual((trust / 'cosign.pub').read_bytes(), (ROOT / 'cosign.pub').read_bytes())
+            self.assertEqual((trust / 'registries.d/bazzite-tower.yaml').read_bytes(), (host / 'registries.d/bazzite-tower.yaml').read_bytes())
+        for mutate in (lambda p: p['transports']['docker']['ghcr.io/bearyjd/bazzite-tower'][0].update(keyPath='/tmp/other.pub'),
+                       lambda p: p['transports']['docker']['ghcr.io/bearyjd/bazzite-tower'][0].update(type='insecureAcceptAnything'),
+                       lambda p: p.update(default=[{'type': 'insecureAcceptAnything'}])):
+            changed = json.loads((host / 'policy.json').read_text()); mutate(changed)
+            with tempfile.TemporaryDirectory() as tmp:
+                fake_gh = 'case "$*" in *policy.json*) cat "$CHANGED";; *) cat "$ROOT_DIR/cosign.pub";; esac\n'
+                (Path(tmp) / 'changed.json').write_text(json.dumps(changed))
+                result = self.run_step(step, tmp, {'gh': fake_gh}, {'ROOT_DIR': str(ROOT), 'CHANGED': str(Path(tmp) / 'changed.json')})
+                self.assertNotEqual(result.returncode, 0)
+
+    def test_source_verification_keeps_one_key_signed_spdx_predicate_for_the_fixed_digest(self):
+        import base64
+        _, _, steps = self.promoter()
+        step = steps[self.step_index(steps, 'Verify the source')]
+        digest = self.FIXED_DIGEST[7:]
+        spdx = {'spdxVersion': 'SPDX-2.3', 'packages': [{'name': 'fixture'}]}
+
+        def line(kind=None, subject=digest, predicate=spdx, wrap=True):
+            statement = {'_type': 'https://in-toto.io/Statement/v0.1', 'predicateType': kind or 'https://spdx.dev/Document',
+                         'subject': [{'name': 'x', 'digest': {'sha256': subject}}], 'predicate': predicate}
+            envelope = {'payloadType': 'application/vnd.in-toto+json', 'payload': base64.b64encode(json.dumps(statement).encode()).decode()} if wrap else statement
+            return json.dumps(envelope)
+
+        cases = [([line()], True), ([line(), line()], True), ([line(wrap=False)], True),
+                 ([line('https://slsa.dev/provenance/v1'), line()], True),
+                 ([], False), ([line(subject='0' * 64)], False), ([line('https://slsa.dev/provenance/v1')], False),
+                 ([line(), line(predicate=dict(spdx, packages=[]))], False), ([line(predicate={'spdxVersion': 'x'})], False)]
+        for lines, success in cases:
+            with self.subTest(lines=len(lines), success=success), tempfile.TemporaryDirectory() as tmp:
+                (Path(tmp) / 'lines').write_text('\n'.join(lines) + '\n')
+                cosign = 'case "$1" in verify-attestation) cat "$LINES";; esac\n'
+                (Path(tmp) / 'trust').mkdir()
+                result = self.run_step(step, tmp, {'cosign': cosign, 'gh': self.FAKE_GH},
+                                       {'LINES': str(Path(tmp) / 'lines'), 'GHLOG': str(Path(tmp) / 'gh.log')})
+                self.assertEqual(result.returncode == 0, success, result.stderr)
+                if success:
+                    self.assertEqual(json.loads((Path(tmp) / 'spdx.json').read_text()), spdx)
+                    self.assertEqual((Path(tmp) / 'gh.log').read_text().split(), self.PROVENANCE_ARGS)
+                self.assertNotIn(base64.b64encode(json.dumps(spdx).encode()).decode()[:40], result.stdout)
+        with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp) / 'trust').mkdir()
+            result = self.run_step(step, tmp, {'cosign': 'case "$1" in verify) exit 1;; esac\n', 'gh': self.FAKE_GH},
+                                   {'GHLOG': str(Path(tmp) / 'gh.log')})
+            self.assertNotEqual(result.returncode, 0)
+        # A provenance mismatch must stop the step after an otherwise valid SPDX selection.
+        with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp) / 'lines').write_text(line() + '\n'); (Path(tmp) / 'trust').mkdir()
+            cosign = 'case "$1" in verify-attestation) cat "$LINES";; esac\n'
+            result = self.run_step(step, tmp, {'cosign': cosign, 'gh': self.FAKE_GH},
+                                   {'LINES': str(Path(tmp) / 'lines'), 'GHLOG': str(Path(tmp) / 'gh.log'), 'GH_RC': '1'})
+            self.assertNotEqual(result.returncode, 0)
+
+    FAKE_GH = 'echo "$*" >> "$GHLOG"; exit "${GH_RC:-0}"\n'
+    PROVENANCE_ARGS = ['attestation', 'verify',
+                       'oci://ghcr.io/bearyjd/bazzite-tower-r13-candidate@sha256:88f8ff0052c27fcc71379f2b43e06ddd7218419b2d90c8fcf8392af5292b8454',
+                       '--repo', 'bearyjd/bazzite-tower',
+                       '--signer-workflow', 'bearyjd/bazzite-tower/.github/workflows/r13-candidate.yml',
+                       '--source-digest', 'b2f6e24131de06117a00fb727e5cb7166d4e77da',
+                       '--source-ref', 'refs/heads/ci/r13-candidate-hold-promotion', '--deny-self-hosted-runners']
 
     def test_inline_shell_syntax_and_python_compile(self):
         import yaml

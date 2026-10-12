@@ -126,19 +126,51 @@ jobs:
         # Authenticate the registry source under the original rejecting policy before stripping signatures for local OCI transport.
         skopeo --policy "$receipt/trust/policy.json" --registries.d "$receipt/trust/registries.d" copy --all --preserve-digests --remove-signatures --digestfile "$receipt/policy.digest" "docker://$image" "oci:$RUNNER_TEMP/r13-policy-verified:r13"
         [[ "$(cat "$receipt/policy.digest")" == "$DIGEST" ]]
-        skopeo copy "oci:$RUNNER_TEMP/r13-policy-verified:r13" containers-storage:localhost/r13-immutable:verified
+        sudo skopeo copy --preserve-digests "oci:$RUNNER_TEMP/r13-policy-verified:r13" containers-storage:localhost/r13-immutable:verified
     - name: Smoke original immutable candidate
-      run: podman run --rm -i localhost/r13-immutable:verified bash -s < tests/smoke.sh
+      run: sudo podman run --rm -i localhost/r13-immutable:verified bash -s < tests/smoke.sh
     - name: Boot original immutable candidate and run unchanged assertions
-      run: "set -uo pipefail\n# Boot the image's own systemd as PID 1. --privileged maximises the\n# chance services (virtqemud) initialise; --systemd=always + /sbin/init\n\
-        # forces the systemd boot path regardless of the image's default CMD.\npodman run -d --name bztest --privileged --systemd=always \\\n  \"${TEST_IMAGE}\" /sbin/init\n\
-        \n# Wait for the boot to settle (running or degraded \u2014 some units can't\n# come up in a container, which is fine; the checks target specific ones).\n\
-        booted=\nfor i in $(seq 1 90); do\n  state=\"$(podman exec bztest systemctl is-system-running 2>/dev/null || true)\"\n  echo \"[${i}] is-system-running: ${state:-<none>}\"\
-        \n  case \"${state}\" in\n    running|degraded) booted=1; break ;;\n  esac\n  sleep 2\ndone\n\nif [[ -z \"${booted}\" ]]; then\n  echo \"::error::image systemd\
-        \ never reached running/degraded\"\n  echo \"===== journal (tail) =====\"\n  podman exec bztest journalctl --no-pager -n 120 2>/dev/null || podman logs bztest\
-        \ || true\n  podman rm -f bztest >/dev/null 2>&1 || true\n  exit 1\nfi\n\npodman cp tests/boot-check.sh bztest:/usr/local/bin/boot-check.sh\npodman exec bztest\
-        \ chmod +x /usr/local/bin/boot-check.sh\n\necho \"===== boot-check.sh =====\"\npodman exec bztest /usr/local/bin/boot-check.sh\nrc=$?\n\necho \"===== journal:\
-        \ virtqemud + wifi guard =====\"\npodman exec bztest journalctl --no-pager -n 80 \\\n  -u virtqemud.service -u virtqemud.socket \\\n  -u bazzite-tower-wifi-backend-guard.service\
-        \ 2>/dev/null || true\n\npodman rm -f bztest >/dev/null 2>&1 || true\nexit \"${rc}\"\n"
+      run: |
+        set -uo pipefail
+        # Boot the image's own systemd as PID 1. --privileged maximises the
+        # chance services (virtqemud) initialise; --systemd=always + /sbin/init
+        # forces the systemd boot path regardless of the image's default CMD.
+        sudo podman run -d --name bztest --privileged --systemd=always \
+          "${TEST_IMAGE}" /sbin/init
+
+        # Wait for the boot to settle (running or degraded — some units can't
+        # come up in a container, which is fine; the checks target specific ones).
+        booted=
+        for i in $(seq 1 90); do
+          state="$(sudo podman exec bztest systemctl is-system-running 2>/dev/null || true)"
+          echo "[${i}] is-system-running: ${state:-<none>}"
+          case "${state}" in
+            running|degraded) booted=1; break ;;
+          esac
+          sleep 2
+        done
+
+        if [[ -z "${booted}" ]]; then
+          echo "::error::image systemd never reached running/degraded"
+          echo "===== journal (tail) ====="
+          sudo podman exec bztest journalctl --no-pager -n 120 2>/dev/null || sudo podman logs bztest || true
+          sudo podman rm -f bztest >/dev/null 2>&1 || true
+          exit 1
+        fi
+
+        sudo podman cp tests/boot-check.sh bztest:/usr/local/bin/boot-check.sh
+        sudo podman exec bztest chmod +x /usr/local/bin/boot-check.sh
+
+        echo "===== boot-check.sh ====="
+        sudo podman exec bztest /usr/local/bin/boot-check.sh
+        rc=$?
+
+        echo "===== journal: virtqemud + wifi guard ====="
+        sudo podman exec bztest journalctl --no-pager -n 80 \
+          -u virtqemud.service -u virtqemud.socket \
+          -u bazzite-tower-wifi-backend-guard.service 2>/dev/null || true
+
+        sudo podman rm -f bztest >/dev/null 2>&1 || true
+        exit "${rc}"
       env:
         TEST_IMAGE: localhost/r13-immutable:verified

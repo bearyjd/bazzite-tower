@@ -52,6 +52,7 @@ jobs:
         R13_CONTROL_HEAD: ${{ vars.R13_CONTROL_HEAD }}
         R13_CANDIDATE_HEAD: ${{ vars.R13_CANDIDATE_HEAD }}
         R13_PROMOTION_HEAD: ${{ vars.R13_PROMOTION_HEAD }}
+        GH_TOKEN: ${{ github.token }}
         PACKET_SHA256: ${{ inputs.packet_sha256 }}
         ACCEPTED_PACKET_SHA256: ${{ vars.R13_ACCEPTED_PACKET_SHA256 }}
     - name: Checkout primary-reviewed control data only
@@ -67,16 +68,20 @@ jobs:
         import importlib.util,os,pathlib
         s=importlib.util.spec_from_file_location('pub','control/ci/r13-publication.py');p=importlib.util.module_from_spec(s);s.loader.exec_module(p)
         p.context('promote',os.environ['R13_PROMOTION_HEAD'],os.environ['GITHUB_REF'],os.environ['GITHUB_WORKFLOW_REF'],os.environ['R13_CONTROL_HEAD'])
-        p.output({'gui_identity':p.accepted(pathlib.Path('control'),os.environ['PACKET_SHA256'])['gui']})
+        packet=p.accepted(pathlib.Path('control'),os.environ['PACKET_SHA256'])
+        if packet['schemaVersion']==2: p.verify_v2_live(packet)
+        p.output({'gui_identity':packet['gui']})
         PY
       env:
         R13_CONTROL_HEAD: ${{ vars.R13_CONTROL_HEAD }}
         R13_CANDIDATE_HEAD: ${{ vars.R13_CANDIDATE_HEAD }}
         R13_PROMOTION_HEAD: ${{ vars.R13_PROMOTION_HEAD }}
+        GH_TOKEN: ${{ github.token }}
         PACKET_SHA256: ${{ inputs.packet_sha256 }}
     - uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
       id: fetch
       env:
+        GH_TOKEN: ${{ github.token }}
         PACKET_SHA256: ${{ inputs.packet_sha256 }}
       with:
         script: |
@@ -229,6 +234,7 @@ jobs:
       run: python3 control/ci/r13-publication.py promote --control control --data "$RUNNER_TEMP/r13-input" --packet-sha256 "$PACKET_SHA256"
       id: validate
       env:
+        GH_TOKEN: ${{ github.token }}
         PACKET_SHA256: ${{ inputs.packet_sha256 }}
   promote:
     needs: validate
@@ -435,8 +441,8 @@ jobs:
         set -euo pipefail
         image="ghcr.io/bearyjd/bazzite-tower-r13-candidate@$DIGEST"
         timeout 180 cosign verify --key "$DATA/cosign.pub" "$image" >/dev/null
-        timeout 180 cosign verify-attestation --key "$DATA/cosign.pub" --type spdxjson "$image" > "$RUNNER_TEMP/candidate-sbom.verified.json"
-        timeout 180 cosign verify-attestation --key "$DATA/cosign.pub" --type https://github.com/bearyjd/bazzite-tower/attestations/r13-candidate-build/v1 "$image" > "$RUNNER_TEMP/candidate-provenance.verified.json"
+        timeout 180 cosign verify-attestation --new-bundle-format --key "$DATA/cosign.pub" --type spdxjson "$image" > "$RUNNER_TEMP/candidate-sbom.verified.json"
+        timeout 180 cosign verify-attestation --new-bundle-format --key "$DATA/cosign.pub" --type https://github.com/bearyjd/bazzite-tower/attestations/r13-candidate-build/v1 "$image" > "$RUNNER_TEMP/candidate-provenance.verified.json"
         gh attestation verify "oci://$image" --repo bearyjd/bazzite-tower \
           --signer-workflow bearyjd/bazzite-tower/.github/workflows/r13-candidate.yml \
           --source-digest "$CANDIDATE_HEAD" --source-ref refs/heads/ci/r13-candidate-hold-promotion --deny-self-hosted-runners
@@ -466,10 +472,47 @@ jobs:
         [[ ! -s "$RUNNER_TEMP/active-writers" ]] || { echo 'HOLD: automatic writers remain'; exit 1; }
       env:
         GH_TOKEN: ${{ github.token }}
+    - name: Checkout reviewed release control for final identity checks
+      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      with:
+        ref: ${{ vars.R13_CONTROL_HEAD }}
+        path: control
+        persist-credentials: false
+    - name: Recheck accepted packet and live v2 product mapping
+      run: |
+        python3 - <<'PYCODE'
+        import importlib.util,os,pathlib
+        s=importlib.util.spec_from_file_location('pub','control/ci/r13-publication.py');p=importlib.util.module_from_spec(s);s.loader.exec_module(p)
+        p.context('promote',os.environ['R13_PROMOTION_HEAD'],os.environ['GITHUB_REF'],os.environ['GITHUB_WORKFLOW_REF'],os.environ['R13_CONTROL_HEAD'])
+        packet=p.accepted(pathlib.Path('control'),os.environ['PACKET_SHA256'])
+        if packet['schemaVersion']==2: p.verify_v2_live(packet)
+        PYCODE
+      env:
+        R13_CONTROL_HEAD: ${{ vars.R13_CONTROL_HEAD }}
+        R13_PROMOTION_HEAD: ${{ vars.R13_PROMOTION_HEAD }}
+        PACKET_SHA256: ${{ inputs.packet_sha256 }}
+        GH_TOKEN: ${{ github.token }}
     - name: Stage unchanged digest at fixed nonpublic-by-convention tag
       run: |
         set -euo pipefail
-        skopeo copy --all --preserve-digests --digestfile "$RUNNER_TEMP/staged.digest" \
+        # Derive a separate rejecting candidate-source policy from the verified
+        # original policy. Never reuse the stable-only policy for this read.
+        python3 - <<'PYCODE'
+        import json,os,pathlib
+        data=pathlib.Path(os.environ['DATA'])
+        policy=json.loads((data/'policy.json').read_bytes())
+        assert policy['default']==[{'type':'reject'}]
+        rule=policy['transports']['docker']['ghcr.io/bearyjd/bazzite-tower']
+        assert rule==[{'type':'sigstoreSigned','keyPath':'/etc/pki/containers/bazzite-tower-cosign.pub','signedIdentity':{'type':'matchRepository'}}]
+        rule[0]['keyPath']=str(data/'cosign.pub')
+        root=pathlib.Path(os.environ['RUNNER_TEMP'])/'r13-candidate-trust'
+        root.mkdir();(root/'registries.d').mkdir()
+        repo='ghcr.io/bearyjd/bazzite-tower-r13-candidate'
+        (root/'policy.json').write_text(json.dumps({'default':[{'type':'reject'}],'transports':{'docker':{repo:rule}}}))
+        (root/'registries.d/repository.yaml').write_text('docker:\n  '+repo+':\n    use-sigstore-attachments: true\n')
+        PYCODE
+        # Skopeo validates this fixed source under rejecting policy before writing.
+        skopeo --policy "$RUNNER_TEMP/r13-candidate-trust/policy.json" --registries.d "$RUNNER_TEMP/r13-candidate-trust/registries.d" copy --all --preserve-digests --digestfile "$RUNNER_TEMP/staged.digest" \
           "docker://ghcr.io/bearyjd/bazzite-tower-r13-candidate@$DIGEST" "docker://ghcr.io/bearyjd/bazzite-tower:promotion-candidate-r13-${{ github.run_id }}"
         [[ "$(cat "$RUNNER_TEMP/staged.digest")" == "$DIGEST" ]]
       env:
@@ -483,8 +526,9 @@ jobs:
         [[ -n "$COSIGN_PRIVATE_KEY" ]]
         image="ghcr.io/bearyjd/bazzite-tower@$DIGEST"
         cosign sign -y --key env://COSIGN_PRIVATE_KEY "$image"
-        cosign attest -y --key env://COSIGN_PRIVATE_KEY --type spdxjson --predicate "$DATA/sbom.json" "$image"
-        cosign attest -y --key env://COSIGN_PRIVATE_KEY --type https://github.com/bearyjd/bazzite-tower/attestations/r13-candidate-build/v1 \
+        cosign sign -y --new-bundle-format --key env://COSIGN_PRIVATE_KEY "$image"
+        cosign attest -y --new-bundle-format --key env://COSIGN_PRIVATE_KEY --type spdxjson --predicate "$DATA/sbom.json" "$image"
+        cosign attest -y --new-bundle-format --key env://COSIGN_PRIVATE_KEY --type https://github.com/bearyjd/bazzite-tower/attestations/r13-candidate-build/v1 \
           --predicate "$DATA/build-provenance.json" "$image"
       env:
         DIGEST: ${{ needs.validate.outputs.digest }}
@@ -498,8 +542,8 @@ jobs:
         set -euo pipefail
         image="ghcr.io/bearyjd/bazzite-tower@$DIGEST"
         timeout 180 cosign verify --key "$DATA/cosign.pub" "$image" >/dev/null
-        timeout 180 cosign verify-attestation --key "$DATA/cosign.pub" --type spdxjson "$image" > "$RUNNER_TEMP/sbom.verified.json"
-        timeout 180 cosign verify-attestation --key "$DATA/cosign.pub" --type https://github.com/bearyjd/bazzite-tower/attestations/r13-candidate-build/v1 "$image" > "$RUNNER_TEMP/provenance.verified.json"
+        timeout 180 cosign verify-attestation --new-bundle-format --key "$DATA/cosign.pub" --type spdxjson "$image" > "$RUNNER_TEMP/sbom.verified.json"
+        timeout 180 cosign verify-attestation --new-bundle-format --key "$DATA/cosign.pub" --type https://github.com/bearyjd/bazzite-tower/attestations/r13-candidate-build/v1 "$image" > "$RUNNER_TEMP/provenance.verified.json"
         python3 - <<'PY'
         import base64,json,os,pathlib
         root=pathlib.Path(os.environ['RUNNER_TEMP']); data=pathlib.Path(os.environ['DATA'])
@@ -509,7 +553,7 @@ jobs:
             assert any((lambda v:v['predicateType']==kind and v['predicate']==expected and any(s['name']==os.environ['DESTINATION'] and s['digest']=={'sha256':os.environ['DIGEST'][7:]} for s in v['subject']))(json.loads(base64.b64decode(item['payload'],validate=True))) for item in verified)
         PY
         skopeo --policy "$RUNNER_TEMP/r13-trust/policy.json" --registries.d "$RUNNER_TEMP/r13-trust/registries.d" \
-          copy --all --preserve-digests --digestfile "$RUNNER_TEMP/policy.digest" "docker://$image" "oci:$RUNNER_TEMP/policy-verified:r13"
+          copy --all --preserve-digests --remove-signatures --digestfile "$RUNNER_TEMP/policy.digest" "docker://$image" "oci:$RUNNER_TEMP/policy-verified:r13"
         [[ "$(cat "$RUNNER_TEMP/policy.digest")" == "$DIGEST" ]]
       env:
         DIGEST: ${{ needs.validate.outputs.digest }}
@@ -519,6 +563,20 @@ jobs:
         DESTINATION: ghcr.io/bearyjd/bazzite-tower
         GH_TOKEN: ${{ github.token }}
       timeout-minutes: 20
+    - name: Recheck accepted packet and live v2 product mapping
+      run: |
+        python3 - <<'PYCODE'
+        import importlib.util,os,pathlib
+        s=importlib.util.spec_from_file_location('pub','control/ci/r13-publication.py');p=importlib.util.module_from_spec(s);s.loader.exec_module(p)
+        p.context('promote',os.environ['R13_PROMOTION_HEAD'],os.environ['GITHUB_REF'],os.environ['GITHUB_WORKFLOW_REF'],os.environ['R13_CONTROL_HEAD'])
+        packet=p.accepted(pathlib.Path('control'),os.environ['PACKET_SHA256'])
+        if packet['schemaVersion']==2: p.verify_v2_live(packet)
+        PYCODE
+      env:
+        R13_CONTROL_HEAD: ${{ vars.R13_CONTROL_HEAD }}
+        R13_PROMOTION_HEAD: ${{ vars.R13_PROMOTION_HEAD }}
+        PACKET_SHA256: ${{ inputs.packet_sha256 }}
+        GH_TOKEN: ${{ github.token }}
     - name: Move fixed system tag only after destination policy PASS
       run: |
         set -euo pipefail

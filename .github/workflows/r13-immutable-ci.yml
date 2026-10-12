@@ -1,0 +1,144 @@
+name: r13 original immutable candidate verification
+'on':
+  workflow_call: {}
+permissions:
+  contents: read
+  actions: read
+  packages: read
+jobs:
+  verify-original:
+    if: github.event_name == 'pull_request' && github.repository == 'bearyjd/bazzite-tower' && github.event.pull_request.number == 107 && github.event.pull_request.head.repo.full_name
+      == 'bearyjd/bazzite-tower'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    env:
+      GH_TOKEN: ${{ github.token }}
+      DIGEST: sha256:88f8ff0052c27fcc71379f2b43e06ddd7218419b2d90c8fcf8392af5292b8454
+      DESTINATION: ghcr.io/bearyjd/bazzite-tower-r13-candidate
+    steps:
+    - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      with:
+        ref: ${{ github.event.pull_request.head.sha }}
+        fetch-depth: 0
+        persist-credentials: false
+    - name: Require exact PR107 head and original product equivalence
+      run: |-
+        python3 - <<'PYCODE'
+        import os, re, subprocess
+        original='b2f6e24131de06117a00fb727e5cb7166d4e77da'
+        head=os.environ['EXPECTED_HEAD']
+        def git(*args): return subprocess.check_output(['git',*args]).decode().strip()
+        assert re.fullmatch('[0-9a-f]{40}',head)
+        assert git('rev-parse','HEAD')==head
+        subprocess.run(['git','merge-base','--is-ancestor',original,head],check=True)
+        allowed={'.github/workflows/build.yml','.github/workflows/boot-test.yml','.github/workflows/r13-immutable-ci.yml'}
+        changed=set(filter(None,subprocess.check_output(['git','diff','--no-renames','--name-only','-z',original,head]).decode().split('\0')))
+        assert changed and changed<=allowed, 'non-workflow product changes'
+        assert not git('status','--porcelain','--untracked-files=all'), 'dirty source'
+        print('PR_HEAD='+head+' ORIGINAL_PRODUCT_HEAD='+original)
+        PYCODE
+      env:
+        EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
+    - uses: ublue-os/remove-unwanted-software@695eb75bc387dbcd9685a8e72d23439d8686cba6
+    - name: Install verification transport
+      run: |-
+        sudo apt-get update -qq
+        sudo apt-get install -y skopeo python3-yaml
+    - name: Validate source safety contracts
+      run: |
+        tests/check-supply-chain.sh
+        tests/test-rpm-inventory-spdx.sh
+        tests/test-firstboot-no-docker.sh
+        tests/test-tower-health.sh
+        tests/test-opensnitch-readiness.sh
+        tests/test-snitchwatch-system.sh
+        tests/test-snitchwatch-toolchain.sh
+        python3 tests/test-r13-publication.py
+        python3 tests/test-snitchwatch-gate.py
+        python3 tests/test-snitchwatch-image-build.py
+        python3 tests/test-snitchwatch-image-build-daemon.py
+        tests/test-container-templates.sh
+        tests/test-docker-libvirt-forwarding.sh
+        tests/test-docker-libvirt-forwarding-hooks.sh
+    - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      with:
+        repository: bearyjd/bazzite-tower
+        ref: fdfdfb0a6f80779d7e3ffc8d579bbea2c4c30b38
+        path: recovery
+        persist-credentials: false
+    - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      with:
+        repository: bearyjd/bazzite-tower
+        ref: 70825044d78c133da0dad61c9ac651b561c747b6
+        path: control
+        persist-credentials: false
+    - name: Validate immutable original artifact and successful recovery
+      run: |-
+        python3 - <<'PYCODE'
+        import importlib.util, json, os, pathlib, subprocess
+        spec=importlib.util.spec_from_file_location('recovery','recovery/ci/r13-candidate-policy-recovery.py')
+        r=importlib.util.module_from_spec(spec); spec.loader.exec_module(r)
+        assert subprocess.check_output(['git','-C','recovery','rev-parse','HEAD'],text=True).strip()=='fdfdfb0a6f80779d7e3ffc8d579bbea2c4c30b38'
+        def api(path): return json.loads(subprocess.check_output(['gh','api','repos/'+r.REPO+'/'+path]))
+        x=api('actions/runs/38168060273')
+        assert x['id']==38168060273 and x['head_sha']=='fdfdfb0a6f80779d7e3ffc8d579bbea2c4c30b38'
+        assert x['repository']['full_name']==x['head_repository']['full_name']==r.REPO
+        assert x['event']=='push' and x['head_branch']=='ci/r13-candidate-policy-recovery'
+        assert x['path']==r.RECOVERY_WORKFLOW and x['status']=='completed' and x['conclusion']=='success' and x['run_attempt']==1
+        j=api('actions/jobs/114554662264')
+        assert j['id']==114554662264 and j['run_id']==x['id'] and j['head_sha']==x['head_sha'] and j['run_attempt']==1 and j['name']=='recover-policy' and j['status']=='completed' and j['conclusion']=='success'
+        out=pathlib.Path(os.environ['RUNNER_TEMP'])/'r13-immutable'; out.mkdir(mode=0o700)
+        control=pathlib.Path('control'); pub=r.validator(control)
+        artifact=r.snapshot(out,'before')
+        for name in ('approval','build','validate'):
+         r.control_log(r.capture(f'repos/{r.REPO}/actions/jobs/{r.JOBS[name]}/logs',out,name+'-control',True))
+        data=r.download(out)
+        candidate=pub.validate_candidate(control,data,r.HEAD,r.RUN)
+        assert candidate['image']['manifestDigest']==r.DIGEST
+        for name,value in r.PINNED_FILES.items(): assert r.file_sha(data/name)==value
+        assert r.snapshot(out,'after')==artifact
+        r.prepare_trust(data,out)
+        PYCODE
+    - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6
+      with:
+        cosign-release: v2.6.3
+    - name: Verify existing signatures, original predicates and original b2 provenance
+      run: |
+        set -euo pipefail
+        receipt="$RUNNER_TEMP/r13-immutable"
+        image="$DESTINATION@$DIGEST"
+        timeout 180 cosign verify --key "$receipt/data/cosign.pub" "$image" >/dev/null
+        for item in 'sign-v1 https://sigstore.dev/cosign/sign/v1' 'sbom spdxjson' 'provenance https://github.com/bearyjd/bazzite-tower/attestations/r13-candidate-build/v1'; do
+          read -r name kind <<< "$item"
+          timeout 180 cosign verify-attestation --new-bundle-format --key "$receipt/data/cosign.pub" --type "$kind" "$image" > "$receipt/$name.verified.json"
+        done
+        python3 - <<'PYCODE'
+        import importlib.util, os, pathlib
+        spec=importlib.util.spec_from_file_location('r','recovery/ci/r13-candidate-policy-recovery.py')
+        r=importlib.util.module_from_spec(spec); spec.loader.exec_module(r)
+        out=pathlib.Path(os.environ['RUNNER_TEMP'])/'r13-immutable'
+        r.predicates(out/'data',out)
+        PYCODE
+        timeout 180 gh attestation verify "oci://$image" --repo bearyjd/bazzite-tower --signer-workflow bearyjd/bazzite-tower/.github/workflows/r13-candidate.yml --source-digest b2f6e24131de06117a00fb727e5cb7166d4e77da --source-ref refs/heads/ci/r13-candidate-hold-promotion --deny-self-hosted-runners
+        # Authenticate the registry source under the original rejecting policy before stripping signatures for local OCI transport.
+        skopeo --policy "$receipt/trust/policy.json" --registries.d "$receipt/trust/registries.d" copy --all --preserve-digests --remove-signatures --digestfile "$receipt/policy.digest" "docker://$image" "oci:$RUNNER_TEMP/r13-policy-verified:r13"
+        [[ "$(cat "$receipt/policy.digest")" == "$DIGEST" ]]
+        skopeo copy "oci:$RUNNER_TEMP/r13-policy-verified:r13" containers-storage:localhost/r13-immutable:verified
+    - name: Smoke original immutable candidate
+      run: podman run --rm -i localhost/r13-immutable:verified bash -s < tests/smoke.sh
+    - name: Boot original immutable candidate and run unchanged assertions
+      run: "set -uo pipefail\n# Boot the image's own systemd as PID 1. --privileged maximises the\n# chance services (virtqemud) initialise; --systemd=always + /sbin/init\n\
+        # forces the systemd boot path regardless of the image's default CMD.\npodman run -d --name bztest --privileged --systemd=always \\\n  \"${TEST_IMAGE}\" /sbin/init\n\
+        \n# Wait for the boot to settle (running or degraded \u2014 some units can't\n# come up in a container, which is fine; the checks target specific ones).\n\
+        booted=\nfor i in $(seq 1 90); do\n  state=\"$(podman exec bztest systemctl is-system-running 2>/dev/null || true)\"\n  echo \"[${i}] is-system-running: ${state:-<none>}\"\
+        \n  case \"${state}\" in\n    running|degraded) booted=1; break ;;\n  esac\n  sleep 2\ndone\n\nif [[ -z \"${booted}\" ]]; then\n  echo \"::error::image systemd\
+        \ never reached running/degraded\"\n  echo \"===== journal (tail) =====\"\n  podman exec bztest journalctl --no-pager -n 120 2>/dev/null || podman logs bztest\
+        \ || true\n  podman rm -f bztest >/dev/null 2>&1 || true\n  exit 1\nfi\n\npodman cp tests/boot-check.sh bztest:/usr/local/bin/boot-check.sh\npodman exec bztest\
+        \ chmod +x /usr/local/bin/boot-check.sh\n\necho \"===== boot-check.sh =====\"\npodman exec bztest /usr/local/bin/boot-check.sh\nrc=$?\n\necho \"===== journal:\
+        \ virtqemud + wifi guard =====\"\npodman exec bztest journalctl --no-pager -n 80 \\\n  -u virtqemud.service -u virtqemud.socket \\\n  -u bazzite-tower-wifi-backend-guard.service\
+        \ 2>/dev/null || true\n\npodman rm -f bztest >/dev/null 2>&1 || true\nexit \"${rc}\"\n"
+      env:
+        TEST_IMAGE: localhost/r13-immutable:verified

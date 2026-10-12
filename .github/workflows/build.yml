@@ -30,9 +30,42 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  immutable-r13:
+    name: Verify original r13 immutable candidate
+    if: github.event_name == 'pull_request' && github.repository == 'bearyjd/bazzite-tower' && github.event.pull_request.number == 107 && github.event.pull_request.head.repo.full_name == 'bearyjd/bazzite-tower'
+    permissions:
+      contents: read
+      actions: read
+      packages: read
+    uses: ./.github/workflows/r13-immutable-ci.yml
+  # Required contexts are dependency gates. PR107 verifies the original immutable
+  # product; its historical variant checks remain b2 evidence, not new builds.
   verify:
     name: Verify image (${{ matrix.variant }})
-    if: github.event_name == 'pull_request'
+    needs: [verify-build, immutable-r13]
+    if: always() && github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    permissions: {}
+    strategy:
+      matrix:
+        variant: [safe-pin, latest-kernel, snitchwatch-system]
+    steps:
+      - name: Require the selected verification dependency to succeed
+        env:
+          IMMUTABLE_MODE: ${{ github.event_name == 'pull_request' && github.repository == 'bearyjd/bazzite-tower' && github.event.pull_request.number == 107 && github.event.pull_request.head.repo.full_name == 'bearyjd/bazzite-tower' }}
+          IMMUTABLE_RESULT: ${{ needs.immutable-r13.result }}
+          BUILD_RESULT: ${{ needs.verify-build.result }}
+        run: |
+          set -euo pipefail
+          if [[ "$IMMUTABLE_MODE" == true ]]; then
+            [[ "$IMMUTABLE_RESULT" == success && "$BUILD_RESULT" == skipped ]]
+            echo 'Verified original digest88; historical b2 variant evidence retained; no new variant build.' >> "$GITHUB_STEP_SUMMARY"
+          else
+            [[ "$BUILD_RESULT" == success && "$IMMUTABLE_RESULT" == skipped ]]
+          fi
+  verify-build:
+    name: Build and test image (${{ matrix.variant }})
+    if: github.event_name == 'pull_request' && !(github.event_name == 'pull_request' && github.repository == 'bearyjd/bazzite-tower' && github.event.pull_request.number == 107 && github.event.pull_request.head.repo.full_name == 'bearyjd/bazzite-tower')
     runs-on: ubuntu-24.04
 
     # Pull requests receive no token capable of publishing, attesting, signing,

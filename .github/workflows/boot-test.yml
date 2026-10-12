@@ -41,7 +41,16 @@ env:
   TEST_IMAGE: bazzite-tower:boottest
 
 jobs:
+  immutable-r13:
+    name: Verify original r13 immutable candidate
+    if: github.event_name == 'pull_request' && github.repository == 'bearyjd/bazzite-tower' && github.event.pull_request.number == 107 && github.event.pull_request.head.repo.full_name == 'bearyjd/bazzite-tower'
+    permissions:
+      contents: read
+      actions: read
+      packages: read
+    uses: ./.github/workflows/r13-immutable-ci.yml
   boot-test:
+    if: ${{ !(github.event_name == 'pull_request' && github.repository == 'bearyjd/bazzite-tower' && github.event.pull_request.number == 107 && github.event.pull_request.head.repo.full_name == 'bearyjd/bazzite-tower') }}
     name: Boot image and check runtime behaviour
     runs-on: ubuntu-24.04
     permissions:

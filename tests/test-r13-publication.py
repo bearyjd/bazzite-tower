@@ -635,14 +635,33 @@ class WorkflowContracts(unittest.TestCase):
                 (Path(tmp) / 'lines').write_text('\n'.join(lines) + '\n')
                 cosign = 'case "$1" in verify-attestation) cat "$LINES";; esac\n'
                 (Path(tmp) / 'trust').mkdir()
-                result = self.run_step(step, tmp, {'cosign': cosign}, {'LINES': str(Path(tmp) / 'lines')})
+                result = self.run_step(step, tmp, {'cosign': cosign, 'gh': self.FAKE_GH},
+                                       {'LINES': str(Path(tmp) / 'lines'), 'GHLOG': str(Path(tmp) / 'gh.log')})
                 self.assertEqual(result.returncode == 0, success, result.stderr)
-                if success: self.assertEqual(json.loads((Path(tmp) / 'spdx.json').read_text()), spdx)
+                if success:
+                    self.assertEqual(json.loads((Path(tmp) / 'spdx.json').read_text()), spdx)
+                    self.assertEqual((Path(tmp) / 'gh.log').read_text().split(), self.PROVENANCE_ARGS)
                 self.assertNotIn(base64.b64encode(json.dumps(spdx).encode()).decode()[:40], result.stdout)
         with tempfile.TemporaryDirectory() as tmp:
             (Path(tmp) / 'trust').mkdir()
-            result = self.run_step(step, tmp, {'cosign': 'case "$1" in verify) exit 1;; esac\n'}, {})
+            result = self.run_step(step, tmp, {'cosign': 'case "$1" in verify) exit 1;; esac\n', 'gh': self.FAKE_GH},
+                                   {'GHLOG': str(Path(tmp) / 'gh.log')})
             self.assertNotEqual(result.returncode, 0)
+        # A provenance mismatch must stop the step after an otherwise valid SPDX selection.
+        with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp) / 'lines').write_text(line() + '\n'); (Path(tmp) / 'trust').mkdir()
+            cosign = 'case "$1" in verify-attestation) cat "$LINES";; esac\n'
+            result = self.run_step(step, tmp, {'cosign': cosign, 'gh': self.FAKE_GH},
+                                   {'LINES': str(Path(tmp) / 'lines'), 'GHLOG': str(Path(tmp) / 'gh.log'), 'GH_RC': '1'})
+            self.assertNotEqual(result.returncode, 0)
+
+    FAKE_GH = 'echo "$*" >> "$GHLOG"; exit "${GH_RC:-0}"\n'
+    PROVENANCE_ARGS = ['attestation', 'verify',
+                       'oci://ghcr.io/bearyjd/bazzite-tower-r13-candidate@sha256:88f8ff0052c27fcc71379f2b43e06ddd7218419b2d90c8fcf8392af5292b8454',
+                       '--repo', 'bearyjd/bazzite-tower',
+                       '--signer-workflow', 'bearyjd/bazzite-tower/.github/workflows/r13-candidate.yml',
+                       '--source-digest', 'b2f6e24131de06117a00fb727e5cb7166d4e77da',
+                       '--source-ref', 'refs/heads/ci/r13-candidate-hold-promotion', '--deny-self-hosted-runners']
 
     def test_inline_shell_syntax_and_python_compile(self):
         import yaml

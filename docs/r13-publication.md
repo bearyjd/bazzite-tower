@@ -3,7 +3,10 @@
 The system stable tag is held. `build.yml` still tests the system profile on PRs,
 but push, schedule and ordinary dispatch publish only legacy `safe-pin` and
 `latest-kernel`. A post-merge build cannot move `:snitchwatch-system`. Only
-`r13-promote.yml` can move that tag, using accepted bytes without a rebuild.
+`r13-promote.yml` can move that tag: a minimal dispatch-only promoter for one
+fixed, already-built digest (see "Fixed-digest promotion" below). Runtime
+evidence and review for that digest are recorded in the PR and release notes,
+not in workflow variables.
 
 ## Reviewed workflow and control trust
 
@@ -14,8 +17,8 @@ review evidence and exact-head CI, never from candidate-authored PASS data:
 |---|---|
 | `R13_CANDIDATE_HEAD` | Exact independently reviewed tower candidate commit |
 | `R13_CONTROL_HEAD` | Exact independently reviewed commit holding gate code, primary authority, packets and receipts |
-| `R13_PROMOTION_HEAD` | Exact reviewed, green main commit containing the promoter; leave absent until real runtime acceptance |
-| `R13_ACCEPTED_PACKET_SHA256` | Primary-recorded canonical accepted packet hash; leave absent until real runtime acceptance |
+| `R13_PROMOTION_HEAD` | Unused: only the retired packet/receipt promoter read it |
+| `R13_ACCEPTED_PACKET_SHA256` | Unused: only the retired packet/receipt promoter read it |
 
 All heads are full lowercase 40-character Git commits. The control commit can
 live on a separate control branch; no candidate main merge is required. Control
@@ -148,61 +151,59 @@ GitHub before publication. Source-repository run/artifact metadata is requested
 anonymously from the public API, preserving those accepted IDs and hashes.
 Tower's repository-scoped job token is used only for tower artifacts.
 
-Both validation and the checkout-free promoter acquire GUI bytes from the fixed
-public `bearyjd/snitchwatch` prerelease `r13-candidate`, asset
-`snitchwatch-system-r13-candidate.flatpak`, using identical inline trusted code.
-Each checks public repository/prerelease state, the tag's exact accepted source
-commit, uploaded asset name/size/digest and fixed API/download URLs. HTTPS
-redirects are bounded and restricted to GitHub and its allowlisted asset storage
-hosts; these requests carry no Authorization header or inherited proxy. The
-download is limited to 512 MiB and ten minutes, and its size and accepted SHA256
-must match before use. Release/tag/asset metadata is checked again after
-download, and the promoter rehashes the bundle before any stable write. Missing
-public assets, inaccessible metadata, changed refs or bytes remain HOLD; no
-cross-repository credential or Actions archive-download fallback is provided.
-The accepted Actions artifact archive hash remains a separate metadata binding;
-it is never compared to or replaced by the release bundle's SHA256.
+The promoter below handles the image only. It acquires no GUI bytes; the
+packet's GUI binding and the public-release acquisition it described were part
+of the retired promoter, so the matching GUI publication is verified and
+recorded by the primary in the PR and release notes.
 
 `tests/test-r13-publication.py` provides executable
 schemas/fixtures and refusals. CI installs PyYAML for its workflow static checks;
-the runtime gate/collector and inline downloader use only Python's standard
-library. Regressions execute the complete unmodified promotion entrypoint and
-both actual inline downloaders with mocked HTTP transport, including refusal
-paths. Offline success does not establish remote acquisition or runtime success.
+the runtime gate/collector uses only Python's standard library. Regressions
+execute the complete unmodified promotion entrypoint, and the promoter's
+trust-fetch and SPDX-selection steps against fake `gh`/`cosign`. Offline success
+does not establish remote acquisition or runtime success.
 
-## No-rebuild promotion
+## Fixed-digest promotion
 
-After real candidate/runtime acceptance and exact reviewed green merges, the
-primary sets the promotion variables and manually dispatches `r13-promote.yml`
-on main with only `packet_sha256`. All automated stable workflows and r13 flows
-share `bazzite-tower-stable-writers`, with cancellation disabled. The promoter
-also refuses pending old automatic build runs, which may predate that lock.
-The primary must refresh the complete old-writer inventory before promotion.
+`r13-promote.yml` is `workflow_dispatch` only, runs on `main` in this
+repository, and takes one required input, `digest`. The workflow hard-codes the
+only digest it may promote (`sha256:88f8ff00...b8454`) in `env`, and its first
+step fails unless the input equals it. It shares `bazzite-tower-stable-writers`
+with the other stable writers, cancellation disabled. One job, permissions
+`contents: read` and `packages: write`, every action pinned by SHA, no
+`actions/checkout` (the job holds `SIGNING_SECRET`). The public key and host
+signature policy are fetched from the API at the dispatched commit.
 
-The read-only gate resolves the trusted packet/receipts, exact green tower/GUI
-runs, immutable artifact IDs/hashes and actual accepted image/GUI bytes. The
-checkout-free promoter rechecks downloaded bytes, verifies the original
-candidate-repository signature/SPDX/custom predicate and exact GitHub workflow
-provenance, then copies only the accepted digest with `--all --preserve-digests`
-to `ghcr.io/bearyjd/bazzite-tower:promotion-candidate-r13-<run>`.
+Steps, in order, any failure stops before the next:
 
-The automated signing job issues destination-repository-bound signature/SPDX
-and the unchanged original candidate-build predicate for that same digest. It
-does not generate new build provenance claiming the promotion run built it.
-Original candidate GitHub provenance is retained and verified at its original
-repository; destination cosign provenance binds the same original metadata.
-Destination-bound signature, exact SPDX/build predicates and the unchanged
-stable `matchRepository` policy must PASS before `:snitchwatch-system` moves.
-The final public manifest hash must equal the accepted digest. Other stable
-tags are not r13 publication targets.
+1. Verify `ghcr.io/bearyjd/bazzite-tower-r13-candidate@<digest>` is signed by
+   `cosign.pub` and carries a key-signed SPDX attestation. The candidate package
+   also holds certificate-based GitHub provenance, so `verify-attestation` uses
+   `--new-bundle-format --key` to avoid `expected key signature, not
+   certificate`. The verified SPDX predicate for that digest is kept.
+2. `skopeo copy --all --preserve-digests` the digest to
+   `ghcr.io/bearyjd/bazzite-tower:r13-promotion-<run>`; the pushed digest must
+   equal the fixed one.
+3. `cosign sign` the digest in the stable repository and re-attest the verified
+   SPDX predicate, exactly as `build.yml` does. Re-signing is required: the host
+   policy's `matchRepository` rejects the candidate repository's signature.
+4. Verify signature and SPDX at the destination, then run `skopeo copy` with the
+   host's `policy.json` and `registries.d` (only `keyPath` rewritten to the
+   fetched key) into a local OCI directory. That is the check `bootc switch`
+   performs.
+5. `skopeo copy --all --preserve-digests` the digest to `:snitchwatch-system`.
+   No other tag is touched; `:latest` and `:latest-kernel` are out of scope.
+6. Re-resolve `:snitchwatch-system`, require the fixed digest, and repeat the
+   host-policy copy against the tag. A step summary records the result.
 
-The tower job records `IMAGE_PROMOTED_GUI_PENDING`. The matching source lane
-must publish its accepted GUI bytes without invoking the old v* rebuild path.
-Primary compares both public identities and policy receipts before declaring
-joint stable PASS. Partial publication remains partial/HOLD. Retain both CI
-artifacts (currently 30 days), public candidate GUI release assets and candidate
-attachments until promotion; expired
-artifacts require a new candidate/acceptance, never a rebuild shortcut.
+Long cosign calls are bounded to 180 s and verified payloads are discarded or
+written to files, never streamed to the log. Run it only after the PR carries
+the runtime evidence and review for that digest. Partial publication (staging
+tag and signatures written, tag not moved) is safe to re-dispatch.
+
+`ci/r13-publication.py`'s `promote` entrypoint and accepted-packet/receipt
+checks are no longer called by any workflow; they are left in place. The
+candidate flow still uses its `approval`, `source` and `candidate` gates.
 
 Official references: [Skopeo digest-preserving copy](https://github.com/podman-container-tools/skopeo/blob/main/docs/skopeo-copy.1.md),
 [public release asset acquisition](https://docs.github.com/en/rest/releases/assets#get-a-release-asset),

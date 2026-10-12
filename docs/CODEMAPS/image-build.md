@@ -135,15 +135,12 @@ verifier authenticates the refreshed pins hash. Upstream installer bytes and
 signed Koji/toolchain/daemon pins remain unchanged. This candidate pin does not
 establish independent review or runtime acceptance; authority remains held.
 
-The system profile remains PR-tested but is removed from automatic stable release builds. `r13-candidate.yml` builds/tests a reviewed source in a credential-free job, records actual installed binary/manifest/pins identities through `ci/r13-candidate-data.py`, and exports digest-preserving OCI data. The collector supplies `/usr/bin/true` when creating its never-started extraction container because bootc images may omit CMD/ENTRYPOINT; its separate RPM inventory run remains unchanged. Extraction containers are removed on success and failure. Full collector tests in `tests/test-r13-publication.py` cover commandless images, installed-binary/archive drift and cleanup, preserving the actual artifact validator. Separate checkout-free publishers and `ci/r13-publication.py` trusted control gates enforce fixed targets, accepted packet hashes and native independent/runtime receipts. Promotion copies the accepted digest and reissues destination-bound metadata without an image rebuild. Base-image/toolchain pins and smoke/boot assertions are preserved. See [r13-publication.md](../r13-publication.md) for the trust bootstrap, immutable identity schemas and GUI partial-publication status.
+The system profile remains PR-tested but is removed from automatic stable release builds. `r13-candidate.yml` builds/tests a reviewed source in a credential-free job, records actual installed binary/manifest/pins identities through `ci/r13-candidate-data.py`, and exports digest-preserving OCI data. The collector supplies `/usr/bin/true` when creating its never-started extraction container because bootc images may omit CMD/ENTRYPOINT; its separate RPM inventory run remains unchanged. Extraction containers are removed on success and failure. Full collector tests in `tests/test-r13-publication.py` cover commandless images, installed-binary/archive drift and cleanup, preserving the actual artifact validator. Separate checkout-free publishers and `ci/r13-publication.py` trusted control gates enforce fixed targets for the candidate. Promotion copies the one fixed digest, re-signs it and re-attests its SPDX predicate without an image rebuild. Base-image/toolchain pins and smoke/boot assertions are preserved. See [r13-publication.md](../r13-publication.md) for the trust bootstrap, immutable identity schemas and the promoter steps.
 
-`r13-promote.yml` contains identical guarded inline public GUI acquisition in
-validation and promotion: fixed source prerelease/tag/asset, anonymous exact
-run/artifact metadata, source/asset/hash checks, bounded HTTPS download and
-allowlisted redirects. Tower tokens remain scoped to tower artifacts. Missing
-public GUI data holds promotion. `tests/test-r13-publication.py` executes the
-unmodified promotion entrypoint and actual inline downloader refusal paths;
-remote CI/acquisition and runtime still require independent evidence.
+`r13-promote.yml` is a minimal fixed-digest promoter for the image only; it
+acquires no GUI bytes. `tests/test-r13-publication.py` executes the unmodified
+`ci/r13-publication.py` promotion entrypoint and the promoter's fake-tool
+steps; remote CI and runtime still require independent evidence.
 
 The candidate collector exports the current user's containers-storage image
 through `podman unshare skopeo copy --all --preserve-digests`. This uses the

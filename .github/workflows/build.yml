@@ -40,9 +40,9 @@ jobs:
     uses: ./.github/workflows/r13-immutable-ci.yml
   # Required contexts are dependency gates. PR107 verifies the original immutable
   # product; its historical variant checks remain b2 evidence, not new builds.
-  verify:
+  verify-required:
     name: Verify image (${{ matrix.variant }})
-    needs: [verify-build, immutable-r13]
+    needs: [verify, immutable-r13]
     if: always() && github.event_name == 'pull_request'
     runs-on: ubuntu-24.04
     permissions: {}
@@ -54,7 +54,7 @@ jobs:
         env:
           IMMUTABLE_MODE: ${{ github.event_name == 'pull_request' && github.repository == 'bearyjd/bazzite-tower' && github.event.pull_request.number == 107 && github.event.pull_request.head.repo.full_name == 'bearyjd/bazzite-tower' }}
           IMMUTABLE_RESULT: ${{ needs.immutable-r13.result }}
-          BUILD_RESULT: ${{ needs.verify-build.result }}
+          BUILD_RESULT: ${{ needs.verify.result }}
         run: |
           set -euo pipefail
           if [[ "$IMMUTABLE_MODE" == true ]]; then
@@ -63,7 +63,7 @@ jobs:
           else
             [[ "$BUILD_RESULT" == success && "$IMMUTABLE_RESULT" == skipped ]]
           fi
-  verify-build:
+  verify:
     name: Build and test image (${{ matrix.variant }})
     if: github.event_name == 'pull_request' && !(github.event_name == 'pull_request' && github.repository == 'bearyjd/bazzite-tower' && github.event.pull_request.number == 107 && github.event.pull_request.head.repo.full_name == 'bearyjd/bazzite-tower')
     runs-on: ubuntu-24.04

@@ -15,7 +15,7 @@ PATCH = ROOT + 'opensnitch-shutdown-repair.patch'
 CANDIDATE = ROOT + 'opensnitchd'
 BINARY = '/usr/bin/opensnitchd'
 VERIFIER = '/usr/libexec/snitchwatch/verify-system-daemon.py'
-EXPECTED_PINS_SHA256 = 'ed8e96da584055f3dd236d1c813cafbea47abef01db32eb32996d508e380a8fe'
+EXPECTED_PINS_SHA256 = '69f972ed5e38ad51b711084bea0da50d20adddcce14ffc893daea1253ac3ce95'
 REQUIRED = {PINS, PATCH, CANDIDATE, VERIFIER, ROOT + 'native-build-provenance.json', ROOT + 'rpm-inventory.txt', ROOT + 'go-build-info.txt',
             ROOT + 'generated/ui.pb.go', ROOT + 'generated/ui_grpc.pb.go', ROOT + 'source/go.mod', ROOT + 'source/go.sum', ROOT + 'source/ui.proto',
             '/usr/share/licenses/snitchwatch-opensnitchd/LICENSE', '/usr/share/licenses/snitchwatch-opensnitchd/THIRD-PARTY-LICENSES.md'}

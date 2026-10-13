@@ -1096,7 +1096,7 @@ index 9c06aab7..d80761c8 100644
  
  #endif
 diff --git a/daemon/rule/loader.go b/daemon/rule/loader.go
-index 3d743556..c4baa01f 100644
+index 3d743556..2dc71fd7 100644
 --- a/daemon/rule/loader.go
 +++ b/daemon/rule/loader.go
 @@ -105,6 +105,8 @@ func (l *Loader) Reload(path string) error {
@@ -1255,7 +1255,7 @@ index 3d743556..c4baa01f 100644
  	idx := 1
  	base := rule.Name
  	for l.isUniqueName(rule.Name) == false {
-@@ -377,32 +404,42 @@ func (l *Loader) sortRules() {
+@@ -377,32 +404,45 @@ func (l *Loader) sortRules() {
  	sort.Strings(l.activeRules)
  }
  
@@ -1300,10 +1300,13 @@ index 3d743556..c4baa01f 100644
 +// or displaced rule never reads its list.
 +//
 +// persist, if not nil, saves the rule to disk after the checks and before
-+// anything is committed. When it fails the rule is refused with nothing
-+// changed: the previous rule of that name stays live with its lists and any
++// anything is committed. When it fails the rule is refused and memory is
++// unchanged: the previous rule of that name stays live with its lists and any
 +// temporary timer, no timer is armed for the refused rule, and its file
-+// removal (deleteOldRuleFromDisk) is not reached. Rolling back after the swap
++// removal (deleteOldRuleFromDisk) is not reached. On disk, WriteFile
++// truncates first, so a partial write while replacing an existing Always
++// rule can leave that rule's file damaged (upstream behaviour, not
++// introduced here). Rolling back after the swap
 +// instead would have to resurrect a previous rule whose lists were already
 +// handed over or stopped. The error is returned so the caller (a UI
 +// CHANGE_RULE) reports the rule as not applied (snitchwatch#130).
@@ -1315,7 +1318,7 @@ index 3d743556..c4baa01f 100644
  
  	if rule.Enabled {
  		if err := rule.Operator.Compile(); err != nil {
-@@ -420,19 +457,50 @@ func (l *Loader) replaceUserRule(rule *Rule) (err error) {
+@@ -420,19 +460,50 @@ func (l *Loader) replaceUserRule(rule *Rule) (err error) {
  		}
  	}
  	l.Lock()
@@ -1369,7 +1372,7 @@ index 3d743556..c4baa01f 100644
  	if err != nil {
  		return err
  	}
-@@ -441,13 +509,14 @@ func (l *Loader) scheduleTemporaryRule(rule Rule) error {
+@@ -441,13 +512,14 @@ func (l *Loader) scheduleTemporaryRule(rule Rule) error {
  		l.Lock()
  		defer l.Unlock()
  
@@ -6028,7 +6031,7 @@ index 00000000..4456f295
 +}
 diff --git a/daemon/rule/ui_blocklist_test.go b/daemon/rule/ui_blocklist_test.go
 new file mode 100644
-index 00000000..f4a0a3f7
+index 00000000..f0f5f5b8
 --- /dev/null
 +++ b/daemon/rule/ui_blocklist_test.go
 @@ -0,0 +1,466 @@
@@ -6384,11 +6387,11 @@ index 00000000..f4a0a3f7
 +
 +	// A failed save over an existing rule keeps that rule, not the refused one,
 +	// with its lists and timer untouched.
-+	prev := Create("kept", "", true, false, false, Allow, Duration("200ms"), op)
++	prev := Create("kept", "", true, false, false, Allow, Duration("1h"), op)
 +	if err := l.Replace(prev, false); err != nil {
 +		t.Fatal(err)
 +	}
-+	next := Create("kept", "", true, false, false, Deny, Duration("200ms"), op)
++	next := Create("kept", "", true, false, false, Deny, Duration("1h"), op)
 +	if err := l.Replace(next, true); err == nil {
 +		t.Fatal("Replace over an existing rule hid a failed save")
 +	}

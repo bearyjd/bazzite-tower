@@ -13,7 +13,11 @@
     "--env=SNITCHWATCH_SYSTEM_BRIDGE=1",
     "--persist=.local/share/snitchwatch",
     "--filesystem=xdg-config/snitchwatch:create",
-    "--persist=.local/state/snitchwatch"
+    "--persist=.local/state/snitchwatch",
+    "--filesystem=/var/lib/flatpak/exports/share:ro",
+    "--filesystem=xdg-data/flatpak/exports/share:ro",
+    "--filesystem=xdg-data/applications:ro",
+    "--filesystem=xdg-data/icons:ro"
   ],
   "flatpakRuntimeRef": "org.kde.Platform/x86_64/6.11",
   "kojiBase": "https://kojipkgs.fedoraproject.org/packages/",
@@ -26,10 +30,10 @@
   },
   "rustVersion": "1.98.1",
   "schemaVersion": 1,
-  "sourceCommit": "1527fd4df9070704ae9b98f8c3011461919812e4",
+  "sourceCommit": "bbc57787a5834b7ac2f83405d00698a3312db1e4",
   "sourceFiles": {
     "packaging/bluebuild/files/system/etc/opensnitchd/rules/000-snitchwatch-bridge-fetch.json": "3739ab9bb74ef6309975bf0d2c3c9a766f1976e014e6f9c360b910b22daef458",
-    "packaging/flatpak/org.snitchwatch.Snitchwatch.system.yml": "a170b2ecb6ef191cca2b4571ea1f6b4a8bf09cd58bd5ad4c7ec9db57100da8ae",
+    "packaging/flatpak/org.snitchwatch.Snitchwatch.system.yml": "bd70d64823a70622dc9a3b17518732a7b0106f5cf02058dd3956f382a7b4c65b",
     "packaging/release/bridge_artifact.py": "6a82d12348772446d57ca0163d0b31fadf268db2345b6de3db485896d279d3e2",
     "packaging/release/build-bridge.sh": "b752941d3fd9c2ab7d986006eed7398c1a73110707df133fdec5ac1c241b2006",
     "packaging/release/install-deps.sh": "247a396c0f3d504023f001c33bb1211f5f0f9bfd2c6685077d4bd312ac95f8cb",
@@ -43,7 +47,7 @@
     "packaging/system/stage.sh": "18784d130d8d36210ce9ac6f91a72a0d204089109bc08d8fcc981c0f8167e08c"
   },
   "sourceRepository": "https://github.com/bearyjd/snitchwatch.git",
-  "sourceTree": "cc9fa429825b18a592fe4e721d51a0dec42b2476",
+  "sourceTree": "72160e9d595d2f9261a7f07818d0c0d558e9c78c",
   "submoduleCommit": "b404c4c6316760fa7bc415509d3f8d747f7dc9cc",
   "toolchainRpms": [
     {

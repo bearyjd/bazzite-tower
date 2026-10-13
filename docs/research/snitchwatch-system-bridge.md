@@ -539,6 +539,9 @@ Open items:
   The rule loader also refuses rule files whose name fails the same
   validation, at startup and on live reload (logged, file left in place),
   so a root-written file named `""` cannot pose as that synthetic rule.
+  An Always answer whose save fails is now refused rather than kept in
+  memory (snitchwatch#130), so with an unwritable rules directory every later
+  connection prompts again.
 - ~~The daemon factory and CI do not run the patch's Go tests.~~ Fixed
   2026-10-07: `just test-snitchwatch-daemon-patch` and the path-filtered
   `snitchwatch-daemon-patch.yml` workflow run them, `-race` included.

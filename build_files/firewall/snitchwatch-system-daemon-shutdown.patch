@@ -1096,7 +1096,7 @@ index 9c06aab7..d80761c8 100644
  
  #endif
 diff --git a/daemon/rule/loader.go b/daemon/rule/loader.go
-index 3d743556..30205a9a 100644
+index 3d743556..2dc71fd7 100644
 --- a/daemon/rule/loader.go
 +++ b/daemon/rule/loader.go
 @@ -105,6 +105,8 @@ func (l *Loader) Reload(path string) error {
@@ -1108,31 +1108,50 @@ index 3d743556..30205a9a 100644
  	for _, r := range l.rules {
  		l.cleanListsRule(r)
  	}
-@@ -157,7 +159,12 @@ func (l *Loader) Load(path string) error {
+@@ -157,27 +159,30 @@ func (l *Loader) Load(path string) error {
  
  // Add adds a rule to the list of rules, and optionally saves it to disk.
  func (l *Loader) Add(rule *Rule, saveToDisk bool) error {
 -	l.addUserRule(rule)
+-	if saveToDisk {
+-		fileName := filepath.Join(l.Path, fmt.Sprintf("%s.json", rule.Name))
+-		return l.Save(rule, fileName)
 +	if err := ValidName(rule.Name); err != nil {
 +		return err
-+	}
-+	if err := l.addUserRule(rule); err != nil {
-+		return err
-+	}
- 	if saveToDisk {
- 		fileName := filepath.Join(l.Path, fmt.Sprintf("%s.json", rule.Name))
- 		return l.Save(rule, fileName)
-@@ -167,6 +174,9 @@ func (l *Loader) Add(rule *Rule, saveToDisk bool) error {
+ 	}
+-	return nil
++	return l.addUserRule(rule, l.persistFunc(rule, saveToDisk))
+ }
  
  // Replace adds a rule to the list of rules, and optionally saves it to disk.
  func (l *Loader) Replace(rule *Rule, saveToDisk bool) error {
+-	if err := l.replaceUserRule(rule); err != nil {
 +	if err := ValidName(rule.Name); err != nil {
-+		return err
-+	}
- 	if err := l.replaceUserRule(rule); err != nil {
  		return err
  	}
-@@ -200,6 +210,9 @@ func (l *Loader) Save(rule *Rule, path string) error {
+-	if saveToDisk {
+-		l.Lock()
+-		defer l.Unlock()
++	return l.insertRule(rule, false, l.persistFunc(rule, saveToDisk))
++}
+ 
+-		fileName := filepath.Join(l.Path, fmt.Sprintf("%s.json", rule.Name))
+-		return l.Save(rule, fileName)
++// persistFunc returns the save step insertRule runs, under the loader lock,
++// before it commits rule to memory (nil when the rule is not saved to disk).
++// The file name is read when it runs, as Add may rename the rule first.
++func (l *Loader) persistFunc(rule *Rule, saveToDisk bool) func() error {
++	if !saveToDisk {
++		return nil
++	}
++	return func() error {
++		return l.Save(rule, filepath.Join(l.Path, fmt.Sprintf("%s.json", rule.Name)))
+ 	}
+-	return nil
+ }
+ 
+ // Save a rule to disk.
+@@ -200,6 +205,9 @@ func (l *Loader) Save(rule *Rule, path string) error {
  // If the duration is Always (i.e: saved on disk), it'll attempt to delete
  // it from disk.
  func (l *Loader) Delete(ruleName string) error {
@@ -1142,7 +1161,7 @@ index 3d743556..30205a9a 100644
  	l.Lock()
  	defer l.Unlock()
  
-@@ -235,10 +248,16 @@ func (l *Loader) loadRule(fileName string) error {
+@@ -235,10 +243,16 @@ func (l *Loader) loadRule(fileName string) error {
  	}
  	raw = nil
  
@@ -1161,7 +1180,7 @@ index 3d743556..30205a9a 100644
  	if !r.Enabled {
  		// XXX: we only parse and load the Data field if the rule is disabled and the Data field is not empty
  		// the rule will remain disabled.
-@@ -260,15 +279,25 @@ func (l *Loader) loadRule(fileName string) error {
+@@ -260,15 +274,25 @@ func (l *Loader) loadRule(fileName string) error {
  		}
  	}
  	if oldRule, found := l.rules[r.Name]; found {
@@ -1188,7 +1207,7 @@ index 3d743556..30205a9a 100644
  	}
  
  	return nil
-@@ -291,8 +320,12 @@ func (l *Loader) deleteRule(filePath string) {
+@@ -291,8 +315,12 @@ func (l *Loader) deleteRule(filePath string) {
  }
  
  func (l *Loader) deleteRuleFromDisk(ruleName string) error {
@@ -1203,7 +1222,7 @@ index 3d743556..30205a9a 100644
  }
  
  // deleteOldRuleFromDisk deletes a rule from disk if the Duration changes
-@@ -306,15 +339,15 @@ func (l *Loader) deleteOldRuleFromDisk(oldRule, newRule *Rule) {
+@@ -306,15 +334,15 @@ func (l *Loader) deleteOldRuleFromDisk(oldRule, newRule *Rule) {
  }
  
  // cleanListsRule erases the lists loaded of an Operator of type Lists,
@@ -1223,7 +1242,7 @@ index 3d743556..30205a9a 100644
  			}
  		}
  	}
-@@ -329,10 +362,9 @@ func (l *Loader) isUniqueName(name string) bool {
+@@ -329,10 +357,9 @@ func (l *Loader) isUniqueName(name string) bool {
  	return !found
  }
  
@@ -1236,20 +1255,26 @@ index 3d743556..30205a9a 100644
  	idx := 1
  	base := rule.Name
  	for l.isUniqueName(rule.Name) == false {
-@@ -377,32 +409,27 @@ func (l *Loader) sortRules() {
+@@ -377,32 +404,45 @@ func (l *Loader) sortRules() {
  	sort.Strings(l.activeRules)
  }
  
 -func (l *Loader) addUserRule(rule *Rule) {
-+func (l *Loader) addUserRule(rule *Rule) error {
++func (l *Loader) addUserRule(rule *Rule, persist func() error) error {
  	if rule.Duration == Once {
 -		return
-+		return nil
++		// Never kept in memory: only the save, if requested, applies.
++		if persist == nil {
++			return nil
++		}
++		l.Lock()
++		defer l.Unlock()
++		return persist()
  	}
 -
 -	l.setUniqueName(rule)
 -	l.replaceUserRule(rule)
-+	return l.insertRule(rule, true)
++	return l.insertRule(rule, true, persist)
  }
  
  func (l *Loader) replaceUserRule(rule *Rule) (err error) {
@@ -1265,7 +1290,7 @@ index 3d743556..30205a9a 100644
 -		// delete loaded lists, if this is a rule of type Lists
 -		l.cleanListsRule(oldRule)
 -	}
-+	return l.insertRule(rule, false)
++	return l.insertRule(rule, false, nil)
 +}
  
 +// insertRule compiles rule and then, in one critical section, resolves a
@@ -1273,7 +1298,19 @@ index 3d743556..30205a9a 100644
 +// over an unchanged confined list and stopping the displaced rule's
 +// monitors) and only then starts the new rule's lists monitors, so a refused
 +// or displaced rule never reads its list.
-+func (l *Loader) insertRule(rule *Rule, unique bool) (err error) {
++//
++// persist, if not nil, saves the rule to disk after the checks and before
++// anything is committed. When it fails the rule is refused and memory is
++// unchanged: the previous rule of that name stays live with its lists and any
++// temporary timer, no timer is armed for the refused rule, and its file
++// removal (deleteOldRuleFromDisk) is not reached. On disk, WriteFile
++// truncates first, so a partial write while replacing an existing Always
++// rule can leave that rule's file damaged (upstream behaviour, not
++// introduced here). Rolling back after the swap
++// instead would have to resurrect a previous rule whose lists were already
++// handed over or stopped. The error is returned so the caller (a UI
++// CHANGE_RULE) reports the rule as not applied (snitchwatch#130).
++func (l *Loader) insertRule(rule *Rule, unique bool, persist func() error) (err error) {
  	if err := l.unmarshalOperatorList(&rule.Operator); err != nil {
  		log.Error(err.Error())
  	}
@@ -1281,7 +1318,7 @@ index 3d743556..30205a9a 100644
  
  	if rule.Enabled {
  		if err := rule.Operator.Compile(); err != nil {
-@@ -420,19 +447,44 @@ func (l *Loader) replaceUserRule(rule *Rule) (err error) {
+@@ -420,19 +460,50 @@ func (l *Loader) replaceUserRule(rule *Rule) (err error) {
  		}
  	}
  	l.Lock()
@@ -1295,6 +1332,12 @@ index 3d743556..30205a9a 100644
 +	if err := l.checkBlocklistCap(rule.Name); err != nil {
 +		l.Unlock()
 +		return err
++	}
++	if persist != nil {
++		if err := persist(); err != nil {
++			l.Unlock()
++			return err
++		}
 +	}
 +	oldRule, found := l.rules[rule.Name]
 +	if found && oldRule != rule {
@@ -1329,7 +1372,7 @@ index 3d743556..30205a9a 100644
  	if err != nil {
  		return err
  	}
-@@ -441,13 +493,14 @@ func (l *Loader) scheduleTemporaryRule(rule Rule) error {
+@@ -441,13 +512,14 @@ func (l *Loader) scheduleTemporaryRule(rule Rule) error {
  		l.Lock()
  		defer l.Unlock()
  
@@ -4582,10 +4625,10 @@ index 00000000..b45b60f2
 +}
 diff --git a/daemon/rule/operator_lists_confined_lifecycle_test.go b/daemon/rule/operator_lists_confined_lifecycle_test.go
 new file mode 100644
-index 00000000..257f13a3
+index 00000000..c92cc4dd
 --- /dev/null
 +++ b/daemon/rule/operator_lists_confined_lifecycle_test.go
-@@ -0,0 +1,275 @@
+@@ -0,0 +1,290 @@
 +package rule
 +
 +import (
@@ -4782,6 +4825,21 @@ index 00000000..257f13a3
 +	}
 +}
 +
++// replaceFile swaps in path's new content atomically (temp file in the same
++// directory, then rename). The monitor polls by stat, so a truncate-and-write
++// would show it a size-0 "file gone" or a half-written size mid-rewrite, and
++// either bypasses the rate limit being tested.
++func replaceFile(t *testing.T, path, content string) {
++	t.Helper()
++	tmp := path + ".tmp"
++	if err := os.WriteFile(tmp, []byte(content), 0600); err != nil {
++		t.Fatal(err)
++	}
++	if err := os.Rename(tmp, path); err != nil {
++		t.Fatal(err)
++	}
++}
++
 +// An over-budget list rewritten with a new size on every poll is retried at
 +// most once per minConfinedReloadInterval, not on every change.
 +func TestBudgetRefusalRetriesAreRateLimited(t *testing.T) {
@@ -4810,7 +4868,7 @@ index 00000000..257f13a3
 +	}
 +	waitFor(t, "never refused", func() bool { return refusals() > 0 })
 +	for i := 1; i <= 20; i++ {
-+		writeFile(t, file, lines(1000+i))
++		replaceFile(t, file, lines(1000+i))
 +		time.Sleep(2 * confinedPollInterval)
 +	}
 +	if n := refusals(); n != 1 {
@@ -5988,10 +6046,10 @@ index 00000000..4456f295
 +}
 diff --git a/daemon/rule/ui_blocklist_test.go b/daemon/rule/ui_blocklist_test.go
 new file mode 100644
-index 00000000..6ce97785
+index 00000000..f0f5f5b8
 --- /dev/null
 +++ b/daemon/rule/ui_blocklist_test.go
-@@ -0,0 +1,382 @@
+@@ -0,0 +1,466 @@
 +package rule
 +
 +import (
@@ -6273,6 +6331,90 @@ index 00000000..6ce97785
 +	}
 +	if err := l.Add(Create(name, "", false, false, false, Deny, Restart, op), false); err == nil {
 +		t.Error("Add accepted a rename past maxNameBytes")
++	}
++}
++
++// saveFailingLoader returns a loader whose Save always fails: its rules
++// directory is a regular file, so no rule file can be created under it. (chmod
++// would not do: the tests may run as root.)
++func saveFailingLoader(t *testing.T) *Loader {
++	t.Helper()
++	l, err := NewLoader(false)
++	if err != nil {
++		t.Fatal(err)
++	}
++	if err := l.Load(t.TempDir()); err != nil {
++		t.Fatal(err)
++	}
++	notADir := filepath.Join(t.TempDir(), "file")
++	if err := os.WriteFile(notADir, nil, 0600); err != nil {
++		t.Fatal(err)
++	}
++	l.Path = notADir
++	return l
++}
++
++func activeRuleNames(l *Loader) []string {
++	l.RLock()
++	defer l.RUnlock()
++	return append([]string(nil), l.activeRules...)
++}
++
++// A rule whose save fails must not stay live in memory: the caller was told
++// it failed, and a later Delete would then fail on the missing file
++// (snitchwatch#130).
++func TestLoaderAddSaveFailureRollsBack(t *testing.T) {
++	l := saveFailingLoader(t)
++	op, _ := NewOperator(Simple, false, OpTrue, "", nil)
++	for _, d := range []Duration{Always, Duration("1h"), Once} {
++		name := "save-fails-" + string(d)
++		if err := l.Add(Create(name, "", true, false, false, Deny, d, op), true); err == nil {
++			t.Fatalf("Add(%s) hid a failed save", d)
++		}
++		if hasRule(l, name) || len(activeRuleNames(l)) != 0 {
++			t.Errorf("Add(%s) left the unsaved rule live: %v", d, activeRuleNames(l))
++		}
++		if err := l.Delete(name); err != nil {
++			t.Errorf("Delete(%s) after a failed Add: %v", d, err)
++		}
++	}
++	// The same rule without a save is still accepted.
++	if err := l.Add(Create("in-memory", "", true, false, false, Deny, Restart, op), false); err != nil {
++		t.Fatal(err)
++	}
++	if !hasRule(l, "in-memory") {
++		t.Error("in-memory rule missing")
++	}
++}
++
++func TestLoaderReplaceSaveFailureRollsBack(t *testing.T) {
++	l := saveFailingLoader(t)
++	op, _ := NewOperator(Simple, false, OpTrue, "", nil)
++	if err := l.Replace(Create("fresh", "", true, false, false, Deny, Always, op), true); err == nil {
++		t.Fatal("Replace hid a failed save")
++	}
++	if hasRule(l, "fresh") || len(activeRuleNames(l)) != 0 {
++		t.Errorf("Replace left the unsaved rule live: %v", activeRuleNames(l))
++	}
++	if err := l.Delete("fresh"); err != nil {
++		t.Errorf("Delete after a failed Replace: %v", err)
++	}
++
++	// A failed save over an existing rule keeps that rule, not the refused one,
++	// with its lists and timer untouched.
++	prev := Create("kept", "", true, false, false, Allow, Duration("1h"), op)
++	if err := l.Replace(prev, false); err != nil {
++		t.Fatal(err)
++	}
++	next := Create("kept", "", true, false, false, Deny, Duration("1h"), op)
++	if err := l.Replace(next, true); err == nil {
++		t.Fatal("Replace over an existing rule hid a failed save")
++	}
++	if got := l.GetAll()["kept"]; got != prev {
++		t.Fatalf("previous rule not kept after a failed Replace: %v", got)
++	}
++	if names := activeRuleNames(l); len(names) != 1 || names[0] != "kept" {
++		t.Errorf("active rules after a failed Replace: %v", names)
 +	}
 +}
 +

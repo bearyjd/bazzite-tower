@@ -82,16 +82,6 @@ class Publication(unittest.TestCase):
                           'workflow': pub.CANDIDATE_WORKFLOW, 'runId': 100, 'runAttempt': 1, 'identities': self.ids, 'image': self.image,
                           'files': {p.name: pub.file_sha(p) for p in self.data.iterdir()}}
         self.write_candidate()
-        self.packet = {'schemaVersion': 1, 'identities': self.ids,
-                       'candidate': {'runId': 100, 'artifactId': 101, 'artifactSha256': 'd' * 64,
-                                     'metadataSha256': pub.file_sha(self.data / 'candidate.json'), 'image': self.image,
-                                     'ref': pub.CANDIDATE_REF, 'workflow': pub.CANDIDATE_WORKFLOW},
-                       'publication': {'runId': 100, 'workflowCommit': self.ids['towerCommit'], 'workflow': pub.CANDIDATE_WORKFLOW, 'ref': pub.CANDIDATE_REF},
-                       'gui': {'repository': 'bearyjd/snitchwatch', 'sourceCommit': self.ids['sourceCommit'], 'sourceTree': self.ids['sourceTree'],
-                               'submoduleCommit': self.ids['submoduleCommit'], 'profile': 'system', 'runtimeRef': 'org.kde.Platform/x86_64/6.11',
-                               'manifestSha256': 'b' * 64, 'bundleSha256': 'e' * 64, 'runId': 200, 'workflow': '.github/workflows/candidate-gui.yml',
-                               'ref': 'refs/heads/r13-candidate', 'artifactId': 201, 'artifactSha256': 'f' * 64}}
-        self.accept_packet()
 
     def store(self, category, value):
         raw = pub.canonical(value); value_hash = pub.sha(raw)
@@ -112,15 +102,8 @@ class Publication(unittest.TestCase):
     def write_candidate(self):
         (self.data / 'candidate.json').write_bytes(pub.canonical(self.candidate))
 
-    def accept_packet(self):
-        self.packet_hash = self.store('packets', self.packet)
-        self.auth['accepted'] = {'packetSha256': self.packet_hash,
-                                 'receipts': {kind: self.make_receipt(kind, self.packet_hash) for kind in pub.RECEIPTS}}
-        self.write_auth()
-
-    def test_valid_candidate_and_primary_packet(self):
+    def test_valid_candidate(self):
         self.assertEqual(pub.validate_candidate(self.root, self.data, self.ids['towerCommit'], 100), self.candidate)
-        self.assertEqual(pub.accepted(self.root, self.packet_hash), self.packet)
 
     def collect_commandless_image(self, failure=None):
         spec = importlib.util.spec_from_file_location('collector', ROOT / 'ci/r13-candidate-data.py')
@@ -229,49 +212,13 @@ class Publication(unittest.TestCase):
         out, _ = self.collect_commandless_image('profile')
         self.assertTrue((out / 'candidate.json').exists(), 'failed candidate evidence must remain')
 
-    def test_complete_unmodified_promotion_entrypoint(self):
-        inputs = Path(self.tmp.name) / 'inputs'; inputs.mkdir()
-        shutil.copytree(self.data, inputs / 'tower'); (inputs / 'gui').mkdir()
-        bundle = inputs / 'gui/snitchwatch-system-r13-candidate.flatpak'
-        bundle.write_bytes(b'accepted GUI fixture')
-        self.packet['gui']['bundleSha256'] = pub.file_sha(bundle); self.accept_packet()
-        for prefix, repository, head, kind in [('tower', pub.REPOSITORY, self.ids['towerCommit'], 'candidate'),
-                                               ('gui', 'bearyjd/snitchwatch', self.ids['sourceCommit'], 'gui')]:
-            item = self.packet[kind]
-            run = {'id': item['runId'], 'head_sha': head, 'head_branch': item['ref'].removeprefix('refs/heads/'),
-                   'path': item['workflow'], 'repository': {'full_name': repository}, 'head_repository': {'full_name': repository},
-                   'event': 'push', 'status': 'completed', 'conclusion': 'success', 'run_attempt': 1}
-            artifact = {'id': item['artifactId'], 'name': 'r13-image-data' if prefix == 'tower' else 'r13-system-gui-candidate',
-                        'expired': False, 'digest': 'sha256:' + item['artifactSha256'], 'workflow_run': {'id': item['runId']}}
-            (inputs / (prefix + '-run.json')).write_bytes(pub.canonical(run))
-            (inputs / (prefix + '-artifact.json')).write_bytes(pub.canonical(artifact))
-        output = inputs / 'output'; output.write_text('')
-        env = dict(os.environ, GITHUB_REPOSITORY=pub.REPOSITORY, GITHUB_EVENT_NAME='workflow_dispatch', GITHUB_SHA='9' * 40,
-                   GITHUB_REF='refs/heads/main', GITHUB_WORKFLOW_REF=pub.REPOSITORY + '/' + pub.PROMOTION_WORKFLOW + '@refs/heads/main',
-                   GITHUB_RUN_ATTEMPT='1', R13_CONTROL_HEAD='a' * 40, R13_PROMOTION_HEAD='9' * 40, GITHUB_OUTPUT=str(output))
-        def invoke():
-            return subprocess.run(['python3', str(ROOT / 'ci/r13-publication.py'), 'promote', '--control', str(self.root),
-                                   '--data', str(inputs), '--packet-sha256', self.packet_hash], env=env, capture_output=True, text=True)
-        result = invoke(); self.assertEqual(result.returncode, 0, result.stderr)
-        values = dict(line.split('=', 1) for line in output.read_text().splitlines())
-        self.assertEqual(set(values), {'digest', 'hashes', 'candidate_head', 'candidate_run_id', 'artifact_id',
-                                      'gui_run_id', 'gui_artifact_id', 'gui_sha256', 'gui_identity', 'packet_sha256'})
-        self.assertEqual(values['digest'], self.image['manifestDigest'])
-        self.assertEqual(values['gui_sha256'], pub.file_sha(bundle))
-        self.assertEqual(values['packet_sha256'], self.packet_hash)
-        self.assertEqual(json.loads(values['gui_identity']), self.packet['gui'])
-        self.assertEqual(json.loads(values['hashes']), {p.name: pub.file_sha(p) for p in (inputs / 'tower').iterdir()})
-        for file, key, value in [('tower-run.json', 'head_sha', 'f' * 40), ('gui-run.json', 'head_repository', {'full_name': 'attacker/repo'}),
-                                 ('gui-run.json', 'status', 'in_progress'), ('gui-artifact.json', 'digest', 'sha256:' + '0' * 64),
-                                 ('tower-artifact.json', 'workflow_run', {'id': 999})]:
-            p = inputs / file; old = p.read_bytes(); changed = json.loads(old); changed[key] = value
-            p.write_bytes(pub.canonical(changed)); output.write_text('')
-            with self.subTest(file=file, key=key):
-                self.assertNotEqual(invoke().returncode, 0)
-                self.assertEqual(output.read_text(), '')
-            p.write_bytes(old)
-        bundle.write_bytes(b'substituted GUI'); output.write_text('')
-        self.assertNotEqual(invoke().returncode, 0); self.assertEqual(output.read_text(), '')
+    def test_retired_promote_entrypoint_and_head_variable_are_gone(self):
+        # Replaces the old promotion-entrypoint test: no workflow calls `promote`.
+        result = subprocess.run(['python3', str(ROOT / 'ci/r13-publication.py'), 'promote', '--control', str(self.root)],
+                                capture_output=True, text=True)
+        self.assertNotEqual(result.returncode, 0); self.assertIn('invalid choice', result.stderr)
+        for name in ('r13-candidate.yml', 'r13-promote.yml', 'r13-immutable-ci.yml'):
+            self.assertNotIn('R13_PROMOTION_HEAD', (ROOT / '.github/workflows' / name).read_text())
 
     def test_output_names_and_values_refuse_injection(self):
         output = Path(self.tmp.name) / 'output'; output.write_text('')
@@ -327,50 +274,6 @@ class Publication(unittest.TestCase):
                 pub.validate_candidate(self.root, self.data, self.ids['towerCommit'], 100)
             path.write_bytes(old)
 
-    def test_candidate_cannot_supply_acceptance_receipts(self):
-        self.auth['accepted'] = None; self.write_auth()
-        (self.data / 'PASS.json').write_bytes(pub.canonical({'verdict': 'PASS', 'packetSha256': self.packet_hash}))
-        with self.assertRaises(ValueError): pub.accepted(self.root, self.packet_hash)
-        with self.assertRaises(ValueError): pub.validate_candidate(self.root, self.data, self.ids['towerCommit'], 100)
-
-    def test_missing_and_stale_receipts_refuse(self):
-        for kind in pub.RECEIPTS:
-            saved = self.auth['accepted']['receipts'][kind]
-            del self.auth['accepted']['receipts'][kind]; self.write_auth()
-            with self.subTest(kind=kind), self.assertRaises(ValueError): pub.accepted(self.root, self.packet_hash)
-            self.auth['accepted']['receipts'][kind] = self.make_receipt(kind, 'f' * 64); self.write_auth()
-            with self.subTest(stale=kind), self.assertRaises(ValueError): pub.accepted(self.root, self.packet_hash)
-            self.auth['accepted']['receipts'][kind] = saved
-
-    def test_receipt_content_and_path_refusals(self):
-        for field, value in [('verdict', 'UNVERIFIED'), ('reviewer', ''), ('identities', dict(self.ids, sourceCommit='f' * 40)), ('kind', 'candidate-authored-pass')]:
-            self.auth['accepted']['receipts']['runtime-nfqueue'] = self.make_receipt('runtime-nfqueue', self.packet_hash, **{field: value})
-            self.write_auth()
-            with self.subTest(field=field), self.assertRaises(ValueError): pub.accepted(self.root, self.packet_hash)
-        self.auth['accepted']['receipts']['runtime-nfqueue'] = '../../PASS'; self.write_auth()
-        with self.assertRaises(ValueError): pub.accepted(self.root, self.packet_hash)
-
-    def test_packet_tamper_and_wrong_hash_refuse(self):
-        with self.assertRaises(ValueError): pub.accepted(self.root, 'f' * 64)
-        path = self.root / '.github/r13/packets' / (self.packet_hash + '.json')
-        path.write_bytes(path.read_bytes() + b' ')
-        with self.assertRaises(ValueError): pub.accepted(self.root, self.packet_hash)
-
-    def test_gui_source_profile_and_runtime_refusals(self):
-        for field, value in [('sourceCommit', 'f' * 40), ('sourceTree', 'f' * 40), ('submoduleCommit', 'f' * 40),
-                             ('profile', 'legacy'), ('runtimeRef', 'org.kde.Platform/x86_64/latest'), ('repository', 'attacker/repo')]:
-            saved = copy.deepcopy(self.packet); self.packet['gui'][field] = value; self.accept_packet()
-            with self.subTest(field=field), self.assertRaises(ValueError): pub.accepted(self.root, self.packet_hash)
-            self.packet = saved
-
-    def test_moved_candidate_tag_does_not_change_accepted_digest(self):
-        # Tags/target overrides are deliberately absent from the strict packet.
-        self.packet['candidate']['tag'] = 'r13-candidate'; self.accept_packet()
-        with self.assertRaises(ValueError): pub.accepted(self.root, self.packet_hash)
-        del self.packet['candidate']['tag']; self.accept_packet()
-        value = pub.accepted(self.root, self.packet_hash)
-        self.assertEqual(value['candidate']['image']['manifestDigest'], self.image['manifestDigest'])
-
     def test_oci_link_duplicate_platform_index_and_blob_tamper_refuse(self):
         for options in [dict(link=True), dict(duplicate=True), dict(arch='arm64'), dict(multi=True), dict(tamper=True)]:
             archive(self.data / 'image.oci.tar', **options)
@@ -379,31 +282,17 @@ class Publication(unittest.TestCase):
     def test_duplicate_json_refuses(self):
         with self.assertRaises(ValueError): pub.decode(b'{"verdict":"FAIL","verdict":"PASS"}')
 
-    def test_exact_ci_and_artifact_receipts(self):
-        run = {'id': 100, 'head_sha': self.ids['towerCommit'], 'head_branch': pub.CANDIDATE_REF.removeprefix('refs/heads/'),
-               'path': pub.CANDIDATE_WORKFLOW, 'repository': {'full_name': pub.REPOSITORY}, 'head_repository': {'full_name': pub.REPOSITORY},
-               'event': 'push', 'status': 'completed', 'conclusion': 'success', 'run_attempt': 1}
-        kwargs = dict(repository=pub.REPOSITORY, head=self.ids['towerCommit'], workflow=pub.CANDIDATE_WORKFLOW, ref=pub.CANDIDATE_REF, run_id=100)
-        pub.run_receipt(run, **kwargs)
-        for key, value in [('head_sha', 'f' * 40), ('path', '.github/workflows/build.yml'), ('head_branch', 'main'),
-                           ('conclusion', 'failure'), ('status', 'queued'), ('event', 'pull_request'), ('run_attempt', 2)]:
-            with self.subTest(key=key), self.assertRaises(ValueError): pub.run_receipt(dict(run, **{key: value}), **kwargs)
-        artifact = {'id': 101, 'name': 'r13-image-data', 'expired': False, 'digest': 'sha256:' + 'd' * 64, 'workflow_run': {'id': 100}}
-        pub.artifact_receipt(artifact, self.packet['candidate'], 100, 'r13-image-data')
-        for key, value in [('id', 999), ('name', 'PASS'), ('expired', True), ('digest', 'sha256:' + 'e' * 64), ('workflow_run', {'id': 999})]:
-            with self.subTest(key=key), self.assertRaises(ValueError): pub.artifact_receipt(dict(artifact, **{key: value}), self.packet['candidate'], 100, 'r13-image-data')
-
     def test_context_ref_workflow_event_head_and_rerun_refuse(self):
         env = {'GITHUB_REPOSITORY': pub.REPOSITORY, 'GITHUB_EVENT_NAME': 'push', 'GITHUB_SHA': self.ids['towerCommit'], 'GITHUB_RUN_ATTEMPT': '1'}
         ref = pub.CANDIDATE_REF; workflow = pub.REPOSITORY + '/' + pub.CANDIDATE_WORKFLOW + '@' + ref
         with patch.dict(os.environ, env, clear=True):
-            pub.context('candidate', self.ids['towerCommit'], ref, workflow, 'a' * 40)
+            pub.context(self.ids['towerCommit'], ref, workflow, 'a' * 40)
             for changed_ref, changed_workflow in [('refs/heads/main', workflow), (ref, 'attacker/workflow')]:
-                with self.assertRaises(ValueError): pub.context('candidate', self.ids['towerCommit'], changed_ref, changed_workflow, 'a' * 40)
-            with self.assertRaises(ValueError): pub.context('candidate', self.ids['towerCommit'], ref, workflow, '')
+                with self.assertRaises(ValueError): pub.context(self.ids['towerCommit'], changed_ref, changed_workflow, 'a' * 40)
+            with self.assertRaises(ValueError): pub.context(self.ids['towerCommit'], ref, workflow, '')
         for key, value in [('GITHUB_EVENT_NAME', 'pull_request'), ('GITHUB_REPOSITORY', 'attacker/repo'), ('GITHUB_SHA', 'f' * 40), ('GITHUB_RUN_ATTEMPT', '2')]:
             with patch.dict(os.environ, dict(env, **{key: value}), clear=True), self.assertRaises(ValueError):
-                pub.context('candidate', self.ids['towerCommit'], ref, workflow, 'a' * 40)
+                pub.context(self.ids['towerCommit'], ref, workflow, 'a' * 40)
 
     def test_clean_source_tree_workflow_and_pin_checks(self):
         source = Path(self.tmp.name) / 'source'; source.mkdir()
@@ -551,6 +440,12 @@ class WorkflowContracts(unittest.TestCase):
         self.assertEqual(sorted(u.split('@')[0] for u in uses), ['docker/login-action', 'sigstore/cosign-installer'])
         for use in uses: self.assertRegex(use, r'@[a-f0-9]{40}$')
         self.assertEqual(text.count('SIGNING_SECRET'), 1)
+        # Protection rules (required reviewer) attach to the environment.
+        self.assertEqual(self.promoter()[1]['environment'], 'release')
+        # Staging tag is never deleted: GHCR deletes whole versions, and that
+        # version also carries :snitchwatch-system after promotion.
+        runs = '\n'.join(s.get('run', '') for s in steps)
+        for forbidden in ('skopeo delete', '-X DELETE', 'versions/'): self.assertNotIn(forbidden, runs)
         holder = next(s for s in steps if 'SIGNING_SECRET' in str(s))
         self.assertIn('cosign sign', holder['run']); self.assertIn('cosign attest', holder['run'])
         self.assertEqual(sum('cosign sign' in s.get('run', '') or 'cosign attest' in s.get('run', '') for s in steps), 1)

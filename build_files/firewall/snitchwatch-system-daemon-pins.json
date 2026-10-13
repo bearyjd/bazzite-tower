@@ -14,7 +14,7 @@
     "daemon/go.mod": "556fe4926644b3eeb5e0e5212d5b66d88f1476480508a9337a7b71e3b034626a",
     "daemon/go.sum": "eded94c59f8e572018f7f5a845a6ec0e6ecd8671d55802ee37d619d831128d41"
   },
-  "patchSha256": "a1399555c072bff6d572420f1bd96d8f893858d3ae5c12f8d88aacd037c69f6c",
+  "patchSha256": "b0168992048bf7964a66dd1ed42e3e4f2fc55e61eecf6ddd98c259ed50e8e0df",
   "patchedFiles": {
     "daemon/drop_while_asking_test.go": "acae364ef2421fb1dcc5a15ca6228129743ebd8afb7f968c59f17a596b15655d",
     "daemon/firewall/nftables/chains.go": "bc26d889f83d4f2a14d19f8ec4ebe39d66dc2cae2d95e41627d2acb0fe0b6825",
@@ -46,7 +46,7 @@
     "daemon/rule/operator_lists.go": "59ffec900333c5feba18cab26f4ef03ef430021260b7e86784cb0ba9ec0dd934",
     "daemon/rule/operator_lists_confined.go": "907699947681e7356431226f362e288ca2f6e91b0bee29960b9106372793e841",
     "daemon/rule/operator_lists_confined_budget.go": "a991e2c74725146bfac579da84e44075fae25c4894e818c2249f2457feb57f94",
-    "daemon/rule/operator_lists_confined_lifecycle_test.go": "ba2194e56f08f11e2781eecc4ccb14fdf1d63e007f3b098fe83bddd3f7ddd229",
+    "daemon/rule/operator_lists_confined_lifecycle_test.go": "3ddc748c5426d09736f411586a645fec8f550e14f0ec3b3efa0ebd2538801aa1",
     "daemon/rule/operator_lists_confined_parse.go": "2a54dd88a8289fc79729be2b82ff0617c6ef8e942520360f973598811ffab12e",
     "daemon/rule/operator_lists_confined_test.go": "e0f92b4046c64fad6b815cbd6e4c19524d8c4c1d5f98eb0ffcbb74ce4e04c8f2",
     "daemon/rule/rule.go": "0bf02606ded908df0c940907e61e1e84e54b0a2f88bacbdf3b707478c1a29a27",

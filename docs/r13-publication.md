@@ -17,7 +17,6 @@ review evidence and exact-head CI, never from candidate-authored PASS data:
 |---|---|
 | `R13_CANDIDATE_HEAD` | Exact independently reviewed tower candidate commit |
 | `R13_CONTROL_HEAD` | Exact independently reviewed commit holding gate code, primary authority, packets and receipts |
-| `R13_PROMOTION_HEAD` | Unused: only the retired packet/receipt promoter read it |
 | `R13_ACCEPTED_PACKET_SHA256` | Unused: only the retired packet/receipt promoter read it |
 
 All heads are full lowercase 40-character Git commits. The control commit can
@@ -159,7 +158,7 @@ recorded by the primary in the PR and release notes.
 `tests/test-r13-publication.py` provides executable
 schemas/fixtures and refusals. CI installs PyYAML for its workflow static checks;
 the runtime gate/collector uses only Python's standard library. Regressions
-execute the complete unmodified promotion entrypoint, and the promoter's
+execute the candidate gates, and the promoter's
 trust-fetch and SPDX-selection steps against fake `gh`/`cosign`. Offline success
 does not establish remote acquisition or runtime success.
 
@@ -201,9 +200,24 @@ written to files, never streamed to the log. Run it only after the PR carries
 the runtime evidence and review for that digest. Partial publication (staging
 tag and signatures written, tag not moved) is safe to re-dispatch.
 
-`ci/r13-publication.py`'s `promote` entrypoint and accepted-packet/receipt
-checks are no longer called by any workflow; they are left in place. The
-candidate flow still uses its `approval`, `source` and `candidate` gates.
+`ci/r13-publication.py` keeps only the candidate flow's `approval`, `source`
+and `candidate` gates. Its retired `promote` entrypoint, accepted-packet/receipt
+checks and the `R13_PROMOTION_HEAD` variable were removed; delete that
+repository variable if it still exists.
+
+The job runs in the `release` environment so the owner can attach protection.
+Referencing a missing environment creates it **unprotected** on the next run, so
+set it up first: Settings -> Environments -> release -> required reviewers, and
+deployment branches restricted to `main`. This gates the job's start; it does not
+hide the repository-level `SIGNING_SECRET`, which `build.yml`, `build-iso.yml`
+and `r13-candidate.yml` also read (moving the secret into the environment would
+break those).
+
+The `r13-promotion-<run>` staging tag is left in place. GHCR deletes whole
+package versions, and after promotion that version also carries
+`:snitchwatch-system`, so deleting it by version id would delete the promoted
+image. The extra tag points at the same digest and is harmless; a test asserts
+the workflow contains no delete step.
 
 Official references: [Skopeo digest-preserving copy](https://github.com/podman-container-tools/skopeo/blob/main/docs/skopeo-copy.1.md),
 [public release asset acquisition](https://docs.github.com/en/rest/releases/assets#get-a-release-asset),

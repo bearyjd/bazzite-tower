@@ -14,12 +14,8 @@ CANDIDATE_REPOSITORY = 'ghcr.io/bearyjd/bazzite-tower-r13-candidate'
 STABLE_REPOSITORY = 'ghcr.io/bearyjd/bazzite-tower'
 CANDIDATE_REF = 'refs/heads/ci/r13-candidate-hold-promotion'
 CANDIDATE_WORKFLOW = '.github/workflows/r13-candidate.yml'
-PROMOTION_WORKFLOW = '.github/workflows/r13-promote.yml'
 FILES = {'image.oci.tar', 'candidate.json', 'sbom.json', 'build-provenance.json',
          'bridge-manifest.json', 'daemon-manifest.json', 'cosign.pub', 'policy.json', 'bazzite-tower.yaml'}
-RECEIPTS = {'independent-head-review', 'independent-workflow-review', 'exact-head-ci',
-            'candidate-policy', 'runtime-nfqueue', 'runtime-authorization', 'runtime-matrix',
-            'runtime-reconnect', 'runtime-migration', 'runtime-rollback', 'writer-inventory'}
 
 
 def require(condition, message):
@@ -116,16 +112,13 @@ def candidate_approval(root, head):
     return ids
 
 
-def context(mode, head, ref, workflow, control_head):
+def context(head, ref, workflow, control_head):
     hex_value(control_head, 40)
     hex_value(head, 40)
     require(os.environ.get('GITHUB_REPOSITORY') == REPOSITORY, 'wrong repository')
-    events = {'push', 'workflow_dispatch'} if mode == 'candidate' else {'workflow_dispatch'}
-    require(os.environ.get('GITHUB_EVENT_NAME') in events, 'reviewed candidate push/manual promotion required')
+    require(os.environ.get('GITHUB_EVENT_NAME') in {'push', 'workflow_dispatch'}, 'reviewed candidate push/manual dispatch required')
     require(os.environ.get('GITHUB_SHA') == head, 'unreviewed workflow head')
-    expected_ref = CANDIDATE_REF if mode == 'candidate' else 'refs/heads/main'
-    expected_workflow = CANDIDATE_WORKFLOW if mode == 'candidate' else PROMOTION_WORKFLOW
-    require(ref == expected_ref and workflow == REPOSITORY + '/' + expected_workflow + '@' + expected_ref, 'wrong workflow/ref')
+    require(ref == CANDIDATE_REF and workflow == REPOSITORY + '/' + CANDIDATE_WORKFLOW + '@' + CANDIDATE_REF, 'wrong workflow/ref')
     require(os.environ.get('GITHUB_RUN_ATTEMPT') == '1', 'rerun needs fresh review/identity')
 
 
@@ -222,55 +215,6 @@ def validate_candidate(root, data, head, run_id):
     return candidate
 
 
-def accepted(root, packet_hash):
-    hex_value(packet_hash)
-    approved = authority(root)['accepted']
-    require(isinstance(approved, dict) and set(approved) == {'packetSha256', 'receipts'}, 'stable HOLD: no accepted packet')
-    require(approved['packetSha256'] == packet_hash, 'packet hash not primary accepted')
-    packet = hashed_json(root, 'packets', packet_hash)
-    require(set(packet) == {'schemaVersion', 'identities', 'candidate', 'publication', 'gui'}, 'invalid acceptance packet')
-    require(packet['schemaVersion'] == 1, 'unsupported acceptance packet')
-    ids = packet['identities']; identity(ids)
-    require(ids == candidate_approval(root, ids['towerCommit']), 'candidate review changed')
-    require(set(approved['receipts']) == RECEIPTS, 'missing trusted independent/runtime receipts')
-    for kind, value in approved['receipts'].items():
-        receipt(root, value, kind, packet_hash, ids)
-    c = packet['candidate']
-    require(set(c) == {'runId', 'artifactId', 'artifactSha256', 'metadataSha256', 'image', 'ref', 'workflow'}, 'invalid candidate packet')
-    require(c['ref'] == CANDIDATE_REF and c['workflow'] == CANDIDATE_WORKFLOW, 'candidate ref/workflow mismatch')
-    for key in ('runId', 'artifactId'):
-        require(type(c[key]) is int and c[key] > 0, 'invalid run/artifact ID')
-    for key in ('artifactSha256', 'metadataSha256'):
-        hex_value(c[key])
-    require(set(c['image']) == {'manifestDigest', 'indexDigest', 'platformDigest', 'platform'}, 'invalid accepted image')
-    digest(c['image']['manifestDigest'])
-    require(c['image']['indexDigest'] is None and c['image']['platformDigest'] == c['image']['manifestDigest'] and c['image']['platform'] == 'linux/amd64', 'accepted platform/index substitution')
-    require(set(packet['publication']) == {'runId', 'workflowCommit', 'workflow', 'ref'}, 'invalid publication receipt')
-    require(packet['publication'] == {'runId': c['runId'], 'workflowCommit': ids['towerCommit'], 'workflow': CANDIDATE_WORKFLOW, 'ref': CANDIDATE_REF}, 'publication identity mismatch')
-    gui = packet['gui']
-    require(set(gui) == {'repository', 'sourceCommit', 'sourceTree', 'submoduleCommit', 'profile', 'runtimeRef', 'manifestSha256', 'bundleSha256', 'runId', 'workflow', 'ref', 'artifactId', 'artifactSha256'}, 'invalid GUI identity')
-    require(gui['repository'] == 'bearyjd/snitchwatch' and gui['profile'] == 'system' and gui['sourceCommit'] == ids['sourceCommit'] and gui['sourceTree'] == ids['sourceTree'] and gui['submoduleCommit'] == ids['submoduleCommit'], 'GUI/source/profile mismatch')
-    require(gui['runtimeRef'] == 'org.kde.Platform/x86_64/6.11', 'wrong GUI runtime')
-    for key in ('manifestSha256', 'bundleSha256', 'artifactSha256'):
-        hex_value(gui[key])
-    for key in ('runId', 'artifactId'):
-        require(type(gui[key]) is int and gui[key] > 0, 'invalid GUI run/artifact')
-    require(isinstance(gui['workflow'], str) and re.fullmatch(r'\.github/workflows/[a-z0-9-]+\.yml', gui['workflow']), 'invalid GUI workflow')
-    require(isinstance(gui['ref'], str) and re.fullmatch(r'refs/heads/[a-zA-Z0-9_/-]+', gui['ref']), 'invalid GUI ref')
-    return packet
-
-
-def run_receipt(run, *, repository, head, workflow, ref, run_id):
-    require(run['id'] == run_id and run['head_sha'] == head and run['head_branch'] == ref.removeprefix('refs/heads/') and run['path'] == workflow, 'stale CI identity')
-    require(run['repository']['full_name'] == run['head_repository']['full_name'] == repository and run['event'] in {'push', 'workflow_dispatch'}, 'foreign CI/ref')
-    require(run['status'] == 'completed' and run['conclusion'] == 'success' and run['run_attempt'] == 1, 'CI not exact green first attempt')
-
-
-def artifact_receipt(value, expected, run_id, name):
-    require(value['id'] == expected['artifactId'] and value['name'] == name and not value['expired'], 'missing/substituted artifact')
-    require(value['digest'] == 'sha256:' + expected['artifactSha256'] and value['workflow_run']['id'] == run_id, 'artifact/run hash substitution')
-
-
 def output(values):
     with open(os.environ['GITHUB_OUTPUT'], 'a') as stream:
         for key, value in values.items():
@@ -282,42 +226,21 @@ def output(values):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('mode', choices=['approval', 'source', 'candidate', 'promote'])
+    parser.add_argument('mode', choices=['approval', 'source', 'candidate'])
     parser.add_argument('--control', type=Path, required=True)
     parser.add_argument('--data', type=Path)
     parser.add_argument('--source', type=Path)
-    parser.add_argument('--packet-sha256')
     args = parser.parse_args()
-    mode = 'promote' if args.mode == 'promote' else 'candidate'
-    head = os.environ.get('R13_PROMOTION_HEAD' if mode == 'promote' else 'R13_CANDIDATE_HEAD', '')
-    context(mode, head, os.environ.get('GITHUB_REF', ''), os.environ.get('GITHUB_WORKFLOW_REF', ''), os.environ.get('R13_CONTROL_HEAD', ''))
+    head = os.environ.get('R13_CANDIDATE_HEAD', '')
+    context(head, os.environ.get('GITHUB_REF', ''), os.environ.get('GITHUB_WORKFLOW_REF', ''), os.environ.get('R13_CONTROL_HEAD', ''))
     if args.mode == 'approval':
         candidate_approval(args.control, head)
     elif args.mode == 'source':
         verify_source(args.source, candidate_approval(args.control, head))
-    elif args.mode == 'candidate':
+    else:
         c = validate_candidate(args.control, args.data, head, int(os.environ['GITHUB_RUN_ID']))
         output({'digest': c['image']['manifestDigest'], 'hashes': {p.name: file_sha(p) for p in args.data.iterdir()},
                 'head': head, 'run_id': os.environ['GITHUB_RUN_ID']})
-    else:
-        p = accepted(args.control, args.packet_sha256)
-        c = p['candidate']; g = p['gui']; ids = p['identities']
-        run_receipt(decode(read(args.data / 'tower-run.json')), repository=REPOSITORY, head=ids['towerCommit'], workflow=c['workflow'], ref=c['ref'], run_id=c['runId'])
-        run_receipt(decode(read(args.data / 'gui-run.json')), repository=g['repository'], head=g['sourceCommit'], workflow=g['workflow'], ref=g['ref'], run_id=g['runId'])
-        artifact_receipt(decode(read(args.data / 'tower-artifact.json')), c, c['runId'], 'r13-image-data')
-        artifact_receipt(decode(read(args.data / 'gui-artifact.json')), g, g['runId'], 'r13-system-gui-candidate')
-        data = args.data / 'tower'
-        require(file_sha(data / 'candidate.json') == c['metadataSha256'], 'accepted metadata hash changed')
-        value = validate_candidate(args.control, data, ids['towerCommit'], c['runId'])
-        require(value['image'] == c['image'], 'accepted image changed')
-        bridge = decode(read(data / 'bridge-manifest.json'))
-        require(bridge['flatpak']['manifestSha256'] == g['manifestSha256'] and bridge['flatpak']['runtimeRef'] == g['runtimeRef'], 'image/GUI manifest mismatch')
-        require(file_sha(args.data / 'gui' / 'snitchwatch-system-r13-candidate.flatpak') == g['bundleSha256'], 'accepted GUI bytes changed')
-        output({'digest': c['image']['manifestDigest'], 'hashes': {p.name: file_sha(p) for p in data.iterdir()},
-                'candidate_head': ids['towerCommit'], 'candidate_run_id': str(c['runId']), 'artifact_id': str(c['artifactId']),
-                'gui_run_id': str(g['runId']), 'gui_artifact_id': str(g['artifactId']), 'gui_sha256': g['bundleSha256'],
-                'gui_identity': g,
-                'packet_sha256': args.packet_sha256})
 
 
 if __name__ == '__main__':

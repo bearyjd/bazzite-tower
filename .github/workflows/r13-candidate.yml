@@ -22,7 +22,6 @@ jobs:
     env:
       R13_CONTROL_HEAD: ${{ vars.R13_CONTROL_HEAD }}
       R13_CANDIDATE_HEAD: ${{ vars.R13_CANDIDATE_HEAD }}
-      R13_PROMOTION_HEAD: ${{ vars.R13_PROMOTION_HEAD }}
     steps:
     - name: Require immutable externally reviewed workflow/control heads
       run: |
@@ -45,7 +44,6 @@ jobs:
     env:
       R13_CONTROL_HEAD: ${{ vars.R13_CONTROL_HEAD }}
       R13_CANDIDATE_HEAD: ${{ vars.R13_CANDIDATE_HEAD }}
-      R13_PROMOTION_HEAD: ${{ vars.R13_PROMOTION_HEAD }}
       PYTHONDONTWRITEBYTECODE: '1'
     outputs:
       artifact_id: ${{ steps.artifact.outputs.artifact-id }}
@@ -152,7 +150,6 @@ jobs:
     env:
       R13_CONTROL_HEAD: ${{ vars.R13_CONTROL_HEAD }}
       R13_CANDIDATE_HEAD: ${{ vars.R13_CANDIDATE_HEAD }}
-      R13_PROMOTION_HEAD: ${{ vars.R13_PROMOTION_HEAD }}
     outputs:
       digest: ${{ steps.validate.outputs.digest }}
       hashes: ${{ steps.validate.outputs.hashes }}

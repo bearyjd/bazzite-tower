@@ -30,6 +30,12 @@ jobs:
     if: github.repository == 'bearyjd/bazzite-tower' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     timeout-minutes: 45
+    # Lets the owner attach protection rules (required reviewer, main-only
+    # deployment branches) to the `release` environment. Referencing a missing
+    # environment creates it with no protection, so set them in Settings ->
+    # Environments -> release. Protection gates this job's start; it does not
+    # hide the repository-level signing secret from other workflows.
+    environment: release
     # No checkout: this job holds the signing key. Trust files come from the
     # API at the dispatched commit instead.
     permissions:
@@ -124,6 +130,9 @@ jobs:
       - name: Copy the digest into the stable repository under a staging tag
         env:
           STAGING_TAG: r13-promotion-${{ github.run_id }}
+        # The staging tag is deliberately never deleted: GHCR deletes whole
+        # package versions, and this version also carries :snitchwatch-system
+        # after promotion. See docs/r13-publication.md.
         run: |
           set -euo pipefail
           skopeo copy --all --preserve-digests --digestfile "${RUNNER_TEMP}/staged.digest" \

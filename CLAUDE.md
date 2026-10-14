@@ -96,6 +96,9 @@ verify.
 - `docs/downstream-change-tracking.md` — the CI failure model: what breaks
   silently vs. loudly, and which layer (smoke gate / boot test / base-watch)
   catches each failure mode.
+- `docs/release-playbook.md` — order of operations, testing method and roles
+  for getting a snitchwatch-system release from merged code to the laptop
+  (proven on r14; gate mechanics are in `docs/r13-publication.md`).
 - `docs/research/i915-bug-report/` — a worked example of a hardware bug
   investigation (`REPORT.md`, `BISECT-RUNBOOK.md`, raw log captures). Use this
   as the template for any future hardware investigation.

@@ -94,8 +94,19 @@ Its only pointers are `r13-candidate-<run>` and `r13-candidate`. No target is an
 input. Automated CI uses the existing pinned cosign installer, signing secret,
 SPDX and GitHub build provenance machinery. A signed custom predicate retains
 the original credential-free builder's exact workflow/head/run/image/manifests.
-Policy verification uses a job-local, candidate-repository-scoped copy of the
-same public key and `matchRepository` rule. It does not edit host/stable policy.
+The publisher keeps the legacy keyed `cosign sign` for the repository policy and
+adds a same-key `--new-bundle-format` signature; SPDX and the custom predicate
+are attested in bundle format too. The same digest also carries certificate-based
+GitHub build provenance, which makes legacy `verify-attestation --key` fail with
+`expected key signature, not certificate` (run 38483704342), so verification uses
+`verify-attestation --new-bundle-format --key` and requires the typed
+`sign/v1` statement for the digest plus the original SPDX and custom predicates
+bound to the fixed destination and digest, as the r13 policy recovery did
+(run 38168060273). Policy verification uses a job-local, candidate-repository-scoped
+copy of the same public key and `matchRepository` rule. It does not edit
+host/stable policy. Its local OCI export uses `--remove-signatures` only because
+OCI layout cannot store signatures; Skopeo still checks the source against that
+policy and the exported digest is compared.
 
 Candidate registry tags are public by convention, not a confidentiality barrier.
 Use only the recorded immutable manifest digest for runtime acquisition. A

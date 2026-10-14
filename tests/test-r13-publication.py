@@ -398,6 +398,75 @@ class WorkflowContracts(unittest.TestCase):
             with patch.dict(os.environ, dict(env, DIGEST='sha256:abc;touch /tmp/escape')), self.assertRaises(AssertionError):
                 exec(compile(program, 'publisher-data', 'exec'), {})
 
+    def candidate_publish_step(self, prefix):
+        import yaml
+        steps = yaml.safe_load((ROOT / '.github/workflows/r13-candidate.yml').read_text())['jobs']['publish']['steps']
+        return steps, next(s['run'] for s in steps if s.get('name', '').startswith(prefix))
+
+    def test_candidate_signs_and_verifies_attestations_in_bundle_format(self):
+        # Run 38483704342: certificate-based GitHub provenance on the same image
+        # makes legacy verify-attestation fail with "expected key signature, not
+        # certificate"; the r13 policy recovery (run 38168060273) used bundles.
+        steps, sign = self.candidate_publish_step('Sign fixed destination')
+        _, verify = self.candidate_publish_step('Verify destination-bound')
+        self.assertIn('cosign sign -y --key env://COSIGN_PRIVATE_KEY "$image"', sign)
+        self.assertIn('cosign sign -y --new-bundle-format --key env://COSIGN_PRIVATE_KEY "$image"', sign)
+        self.assertEqual(sign.count('cosign attest -y --new-bundle-format --key env://COSIGN_PRIVATE_KEY'), 2)
+        code = '\n'.join(s.get('run', '') for s in steps)
+        self.assertNotIn('cosign attest -y --key', code)
+        self.assertNotIn('verify-attestation --key', code)
+        self.assertIn('timeout 180 cosign verify --key "$DATA/cosign.pub" "$image" >/dev/null', verify)
+        for kind, out in [('https://sigstore.dev/cosign/sign/v1', 'sign-v1'), ('spdxjson', 'sbom'),
+                          ('https://github.com/bearyjd/bazzite-tower/attestations/r13-candidate-build/v1', 'provenance')]:
+            self.assertIn(f'verify-attestation --new-bundle-format --key "$DATA/cosign.pub" --type {kind} "$image" > "$RUNNER_TEMP/{out}.verified.json"', verify)
+        self.assertLess(verify.index('verify-attestation'), verify.index('gh attestation verify'))
+
+    def test_candidate_local_oci_export_removes_only_propagated_signatures(self):
+        steps, verify = self.candidate_publish_step('Verify destination-bound')
+        export = ('skopeo --policy "$RUNNER_TEMP/r13-trust/policy.json" --registries.d "$RUNNER_TEMP/r13-trust/registries.d" \\\n'
+                  '  copy --all --preserve-digests --remove-signatures --digestfile "$RUNNER_TEMP/policy.digest" '
+                  '"docker://$image" "oci:$RUNNER_TEMP/policy-verified:r13"')
+        self.assertIn(export, verify)
+        self.assertLess(verify.index("python3 - <<'PY'"), verify.index(export))
+        self.assertLess(verify.index(export), verify.index('[[ "$(cat "$RUNNER_TEMP/policy.digest")" == "$DIGEST" ]]'))
+        self.assertEqual(sum(s.get('run', '').count('--remove-signatures') for s in steps), 1)
+
+    def test_candidate_verified_bundle_payloads_bind_predicates_and_digest(self):
+        import base64
+        _, verify = self.candidate_publish_step('Verify destination-bound')
+        program = verify.split("python3 - <<'PY'\n", 1)[1].split('\nPY', 1)[0]
+        dest, digest = pub.CANDIDATE_REPOSITORY, 'sha256:' + 'a' * 64
+        kinds = {'sbom': 'https://spdx.dev/Document', 'provenance': 'https://github.com/bearyjd/bazzite-tower/attestations/r13-candidate-build/v1',
+                 'sign-v1': 'https://sigstore.dev/cosign/sign/v1'}
+        predicates = {'sbom': {'spdxVersion': 'SPDX-2.3'}, 'provenance': {'kind': 'candidate-build'}, 'sign-v1': {}}
+
+        def envelope(name, *, subject=dest, sha=digest[7:], predicate=None):
+            statement = {'_type': 'https://in-toto.io/Statement/v1', 'predicateType': kinds[name],
+                         'subject': [{'name': subject, 'digest': {'sha256': sha}}],
+                         'predicate': predicates[name] if predicate is None else predicate}
+            return {'payloadType': 'application/vnd.in-toto+json', 'payload': base64.b64encode(json.dumps(statement).encode()).decode()}
+
+        def run(overrides):
+            with tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp); data = root / 'data'; data.mkdir()
+                (data / 'sbom.json').write_text(json.dumps(predicates['sbom']))
+                (data / 'build-provenance.json').write_text(json.dumps(predicates['provenance']))
+                for name in kinds:
+                    lines = overrides.get(name, [envelope(name)])
+                    (root / (name + '.verified.json')).write_text(''.join(json.dumps(x) + '\n' for x in lines))
+                env = {'RUNNER_TEMP': tmp, 'DATA': str(data), 'DIGEST': digest, 'DESTINATION': dest}
+                with patch.dict(os.environ, env): exec(compile(program, 'candidate-verify', 'exec'), {})
+
+        run({})
+        # sign/v1 is checked by digest only, as in the recovery: its subject name is not the destination.
+        run({'sign-v1': [envelope('sign-v1', subject='ghcr.io/bearyjd/bazzite-tower-r13-candidate:r13-candidate-1')]})
+        for bad in [{'sign-v1': []}, {'sign-v1': [envelope('sign-v1', sha='b' * 64)]},
+                    {'sbom': [envelope('sbom', predicate={'spdxVersion': 'SPDX-tampered'})]},
+                    {'provenance': [envelope('provenance', subject='ghcr.io/bearyjd/bazzite-tower')]},
+                    {'sbom': [envelope('sbom', sha='b' * 64)]}]:
+            with self.assertRaises(AssertionError):
+                run(bad)
+
     PROMOTER = ROOT / '.github/workflows/r13-promote.yml'
     FIXED_DIGEST = 'sha256:88f8ff0052c27fcc71379f2b43e06ddd7218419b2d90c8fcf8392af5292b8454'
 

@@ -256,8 +256,9 @@ jobs:
         [[ -n "$COSIGN_PRIVATE_KEY" ]]
         image="ghcr.io/bearyjd/bazzite-tower-r13-candidate@$DIGEST"
         cosign sign -y --key env://COSIGN_PRIVATE_KEY "$image"
-        cosign attest -y --key env://COSIGN_PRIVATE_KEY --type spdxjson --predicate "$DATA/sbom.json" "$image"
-        cosign attest -y --key env://COSIGN_PRIVATE_KEY --type https://github.com/bearyjd/bazzite-tower/attestations/r13-candidate-build/v1 \
+        cosign sign -y --new-bundle-format --key env://COSIGN_PRIVATE_KEY "$image"
+        cosign attest -y --new-bundle-format --key env://COSIGN_PRIVATE_KEY --type spdxjson --predicate "$DATA/sbom.json" "$image"
+        cosign attest -y --new-bundle-format --key env://COSIGN_PRIVATE_KEY --type https://github.com/bearyjd/bazzite-tower/attestations/r13-candidate-build/v1 \
           --predicate "$DATA/build-provenance.json" "$image"
       env:
         DIGEST: ${{ needs.validate.outputs.digest }}
@@ -277,18 +278,20 @@ jobs:
         set -euo pipefail
         image="ghcr.io/bearyjd/bazzite-tower-r13-candidate@$DIGEST"
         timeout 180 cosign verify --key "$DATA/cosign.pub" "$image" >/dev/null
-        timeout 180 cosign verify-attestation --key "$DATA/cosign.pub" --type spdxjson "$image" > "$RUNNER_TEMP/sbom.verified.json"
-        timeout 180 cosign verify-attestation --key "$DATA/cosign.pub" --type https://github.com/bearyjd/bazzite-tower/attestations/r13-candidate-build/v1 "$image" > "$RUNNER_TEMP/provenance.verified.json"
+        timeout 180 cosign verify-attestation --new-bundle-format --key "$DATA/cosign.pub" --type https://sigstore.dev/cosign/sign/v1 "$image" > "$RUNNER_TEMP/sign-v1.verified.json"
+        timeout 180 cosign verify-attestation --new-bundle-format --key "$DATA/cosign.pub" --type spdxjson "$image" > "$RUNNER_TEMP/sbom.verified.json"
+        timeout 180 cosign verify-attestation --new-bundle-format --key "$DATA/cosign.pub" --type https://github.com/bearyjd/bazzite-tower/attestations/r13-candidate-build/v1 "$image" > "$RUNNER_TEMP/provenance.verified.json"
         python3 - <<'PY'
         import base64,json,os,pathlib
         root=pathlib.Path(os.environ['RUNNER_TEMP']); data=pathlib.Path(os.environ['DATA'])
-        for name,file,kind in [('sbom','sbom.json','https://spdx.dev/Document'),('provenance','build-provenance.json','https://github.com/bearyjd/bazzite-tower/attestations/r13-candidate-build/v1')]:
+        for name,file,kind in [('sbom','sbom.json','https://spdx.dev/Document'),('provenance','build-provenance.json','https://github.com/bearyjd/bazzite-tower/attestations/r13-candidate-build/v1'),('sign-v1',None,'https://sigstore.dev/cosign/sign/v1')]:
             verified=[json.loads(line) for line in (root/(name+'.verified.json')).read_text().splitlines() if line.strip()]
-            expected=json.loads((data/file).read_bytes())
-            assert any((lambda v:v['predicateType']==kind and v['predicate']==expected and any(s['name']==os.environ['DESTINATION'] and s['digest']=={'sha256':os.environ['DIGEST'][7:]} for s in v['subject']))(json.loads(base64.b64decode(item['payload'],validate=True))) for item in verified)
+            expected=json.loads((data/file).read_bytes()) if file else None
+            assert any((lambda v:v['predicateType']==kind and (file is None or v['predicate']==expected) and any(s['digest']=={'sha256':os.environ['DIGEST'][7:]} and (file is None or s['name']==os.environ['DESTINATION']) for s in v['subject']))(json.loads(base64.b64decode(item['payload'],validate=True))) for item in verified)
         PY
+        # Source policy still verifies signatures; local OCI cannot store them.
         skopeo --policy "$RUNNER_TEMP/r13-trust/policy.json" --registries.d "$RUNNER_TEMP/r13-trust/registries.d" \
-          copy --all --preserve-digests --digestfile "$RUNNER_TEMP/policy.digest" "docker://$image" "oci:$RUNNER_TEMP/policy-verified:r13"
+          copy --all --preserve-digests --remove-signatures --digestfile "$RUNNER_TEMP/policy.digest" "docker://$image" "oci:$RUNNER_TEMP/policy-verified:r13"
         [[ "$(cat "$RUNNER_TEMP/policy.digest")" == "$DIGEST" ]]
         gh attestation verify "oci://$image" --repo bearyjd/bazzite-tower \
           --signer-workflow bearyjd/bazzite-tower/.github/workflows/r13-candidate.yml \

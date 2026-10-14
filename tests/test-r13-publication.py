@@ -468,7 +468,7 @@ class WorkflowContracts(unittest.TestCase):
                 run(bad)
 
     PROMOTER = ROOT / '.github/workflows/r13-promote.yml'
-    FIXED_DIGEST = 'sha256:88f8ff0052c27fcc71379f2b43e06ddd7218419b2d90c8fcf8392af5292b8454'
+    FIXED_DIGEST = 'sha256:a6a7a71766fc9609c61d1c402f2632d1de6229a5cf024903130deeb3081bed5f'
 
     def promoter(self):
         import yaml
@@ -621,10 +621,10 @@ class WorkflowContracts(unittest.TestCase):
 
     FAKE_GH = 'echo "$*" >> "$GHLOG"; exit "${GH_RC:-0}"\n'
     PROVENANCE_ARGS = ['attestation', 'verify',
-                       'oci://ghcr.io/bearyjd/bazzite-tower-r13-candidate@sha256:88f8ff0052c27fcc71379f2b43e06ddd7218419b2d90c8fcf8392af5292b8454',
+                       'oci://ghcr.io/bearyjd/bazzite-tower-r13-candidate@sha256:a6a7a71766fc9609c61d1c402f2632d1de6229a5cf024903130deeb3081bed5f',
                        '--repo', 'bearyjd/bazzite-tower',
                        '--signer-workflow', 'bearyjd/bazzite-tower/.github/workflows/r13-candidate.yml',
-                       '--source-digest', 'b2f6e24131de06117a00fb727e5cb7166d4e77da',
+                       '--source-digest', 'ca367dc787618e7e0871c639d11c8f2fa3553afa',
                        '--source-ref', 'refs/heads/ci/r13-candidate-hold-promotion', '--deny-self-hosted-runners']
 
     def test_inline_shell_syntax_and_python_compile(self):

@@ -21,7 +21,7 @@ permissions: {}
 env:
   SOURCE: ghcr.io/bearyjd/bazzite-tower-r13-candidate
   DEST: ghcr.io/bearyjd/bazzite-tower
-  DIGEST: sha256:88f8ff0052c27fcc71379f2b43e06ddd7218419b2d90c8fcf8392af5292b8454
+  DIGEST: sha256:a6a7a71766fc9609c61d1c402f2632d1de6229a5cf024903130deeb3081bed5f
   TAG: snitchwatch-system
 
 jobs:
@@ -124,7 +124,7 @@ jobs:
           # workflow's GitHub build provenance (same check as r13-immutable-ci).
           run_bounded gh attestation verify "oci://${image}" --repo bearyjd/bazzite-tower \
             --signer-workflow bearyjd/bazzite-tower/.github/workflows/r13-candidate.yml \
-            --source-digest b2f6e24131de06117a00fb727e5cb7166d4e77da \
+            --source-digest ca367dc787618e7e0871c639d11c8f2fa3553afa \
             --source-ref refs/heads/ci/r13-candidate-hold-promotion --deny-self-hosted-runners >/dev/null
 
       - name: Copy the digest into the stable repository under a staging tag

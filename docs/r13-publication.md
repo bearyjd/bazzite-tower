@@ -177,7 +177,7 @@ does not establish remote acquisition or runtime success.
 
 `r13-promote.yml` is `workflow_dispatch` only, runs on `main` in this
 repository, and takes one required input, `digest`. The workflow hard-codes the
-only digest it may promote (`sha256:88f8ff00...b8454`) in `env`, and its first
+only digest it may promote (`sha256:a6a7a717...bed5f`, the r14 candidate built by `r13-candidate.yml` run 38490106535; r13 itself was `sha256:88f8ff00...b8454`) in `env`, and its first
 step fails unless the input equals it. It shares `bazzite-tower-stable-writers`
 with the other stable writers, cancellation disabled. One job, permissions
 `contents: read` and `packages: write`, every action pinned by SHA, no

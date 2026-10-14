@@ -8,12 +8,17 @@ round, so reuse them. Only the Snitchwatch GUI candidate target is per round
 (`r14-candidate` …), because its fixed-name publish refuses to replace an existing
 release.
 
+**Scope:** this applies only when the owner has explicitly authorized release
+work. Otherwise the `AGENTS.md` rule stands: no push, merge or PR without an
+explicit owner instruction.
+
 ## Roles
 
 - **Primary agent**: one orchestrator. Plans, sets repository variables, pushes
   candidate refs, merges PRs that pass the merge rule, dispatches workflows.
 - **Executor sub-agents**: write each change in its own worktree and open a PR.
-- **Independent reviewers**: separate read-only sub-agents (strongest model) that
+- **Independent reviewers**: separate read-only sub-agents (opus for release and
+  security review) that
   never authored the change. Every PR, every candidate identity and every control
   commit gets one. First line of output is `VERDICT: PASS` or `VERDICT: FAIL`.
 - **Owner**: runtime acceptance on the laptop (sudo + reboot) and the approval click
@@ -28,7 +33,8 @@ Never force-push (including `--force-with-lease`); to update a branch, merge mai
 1. Local offline gates in the worktree: `just lint`, `just check`,
    `python3 tests/test-r13-publication.py`, `tests/test-snitchwatch-system.sh`,
    `tests/test-snitchwatch-toolchain.sh`, `python3 tests/test-snitchwatch-image-build.py`,
-   `python3 tests/test-snitchwatch-image-build-daemon.py`, `tests/check-supply-chain.sh`.
+   `python3 tests/test-snitchwatch-image-build-daemon.py`, `tests/check-supply-chain.sh`,
+   `python3 tests/test-snitchwatch-system.py`, `python3 tests/test-snitchwatch-gate.py`.
    No `just build` or podman builds; CI builds the images.
 2. PR CI on the exact head: Build + Verify for all three variants (`safe-pin`,
    `latest-kernel`, `snitchwatch-system`), plus the boot test when it is not
@@ -52,7 +58,12 @@ Never force-push (including `--force-with-lease`); to update a branch, merge mai
    (`sourceCommit`, `sourceTree`; every `sourceFiles` hash re-checked) and
    `EXPECTED_PINS_SHA256` in `snitchwatch-system-verify.py`, plus doc mentions.
    Gates, review, merge.
-3. **GUI candidate** (Snitchwatch): confirm green CI on main at the source commit and
+3. **GUI candidate** (Snitchwatch). First, for a new round, a Snitchwatch PR renames
+   the hard-coded target in `.github/workflows/candidate-gui.yml`, `ci.yml` and
+   `packaging/flatpak/build-candidate.py` (branch, tag, release, packet target,
+   concurrency group, `R<NN>_CANDIDATE_REVIEWED_SHA`) to `r<NN>`; review, merge, and
+   re-pin the tower to that commit (step 2). Pushing `r15-candidate` while the
+   workflow still says `r14-candidate` triggers nothing. Then confirm green CI on main at the source commit and
    that the round's branch/tag/release do not exist. Set
    `R<NN>_CANDIDATE_REVIEWED_SHA` FIRST, then push the source commit to the
    `r<NN>-candidate` branch. Pushing an identical head emits no event, so ordering
@@ -69,7 +80,8 @@ Never force-push (including `--force-with-lease`); to update a branch, merge mai
    `git merge-base --is-ancestor` first; never delete/recreate the branch).
 7. **Record**: digest from the `r13-candidate-<run>` tag in GHCR, cross-checked
    against the run log.
-8. **Promoter PR**: change only `env.DIGEST` and `--source-digest` in
+8. **Promoter PR**: change only `env.DIGEST` (the image digest) and
+   `--source-digest` (the candidate head *commit* SHA, not an image digest) in
    `r13-promote.yml` (+ tests/docs). Review, CI, merge. Merging arms; it does not
    publish.
 9. **Owner acceptance** (below), then dispatch
@@ -83,8 +95,10 @@ workflow fix changes `workflowSha256`/pins hashes, so redo steps 4-6.
 
 ## Owner runtime acceptance (laptop)
 
-The host policy rejects unlisted registries, so the candidate is switched to by
-digest after an explicit signature check:
+The host policy (`default: reject`) does not list the candidate registry, and
+`bootc switch` without `--enforce-container-sigpolicy` does not apply it. So the
+owner verifies the signature with cosign first, and only after it passes switches
+by that exact digest (the digest binds the content to what was verified):
 
 ```
 cosign verify --key /etc/pki/containers/bazzite-tower-cosign.pub \
@@ -102,8 +116,9 @@ ghcr.io/bearyjd/bazzite-tower:snitchwatch-system` (same digest, nothing to downl
 ## Lessons from r14
 
 - Fixed-name publication refuses replacement: give the GUI candidate per-round names.
-- `actions/attest-build-provenance` puts certificate provenance on the image; key
-  verification must use `cosign … --new-bundle-format` (fixed in #113).
+- `actions/attest-build-provenance` puts certificate provenance on the image, so
+  `cosign verify-attestation --key` must use `--new-bundle-format` (fixed in #113);
+  plain `cosign verify --key` is unaffected.
 - A boot test skipped by path filters can be covered by an earlier head with the same
   image inputs; say so in the evidence.
 - Set repository variables before pushing a trigger ref, every time.

@@ -19,6 +19,8 @@ FACTORY = ROOT / 'build_files/firewall'
 FIXTURES = Path(__file__).with_name('test-snitchwatch-image-build-fixtures')
 MANIFEST = 'usr/share/snitchwatch/system-bridge-manifest.json'
 FETCH_RULE = 'etc/opensnitchd/rules/000-snitchwatch-bridge-fetch.json'
+OS_UPDATE_RULE = 'etc/opensnitchd/rules/001-tower-os-update.json'
+OS_UPDATE_SOURCE = FACTORY / 'snitchwatch-system-os-update-rule.json'
 sha = lambda data: hashlib.sha256(data).hexdigest()
 
 
@@ -50,6 +52,7 @@ class ImageBuildContracts(unittest.TestCase):
             target = {'snitchwatch.conf.sysusers': 'snitchwatch.conf', 'opensnitch-snitchwatch-system-bridge.conf': 'snitchwatch-system-bridge.conf'}.get(name, name)
             self.write(directory + target, (FIXTURES / name).read_bytes())
         self.write(FETCH_RULE, (FIXTURES / '000-snitchwatch-bridge-fetch.json').read_bytes())
+        self.write(OS_UPDATE_RULE, OS_UPDATE_SOURCE.read_bytes())
         for name in ['LICENSE', 'LICENSE.opensnitch', 'THIRD-PARTY-LICENSES.md']:
             self.write('usr/share/licenses/snitchwatch-bridge/' + name, 'License metadata fixture\n')
         self.write('usr/share/bazzite-tower/snitchwatch-bridge-profile', 'system\n')
@@ -90,8 +93,9 @@ class ImageBuildContracts(unittest.TestCase):
         before = {str(p): p.read_bytes() for p in self.root.rglob('*') if p.is_file() and not p.is_symlink()}
         result = self.check(valid=True)
         # 20 since r15: the tower's /usr/share reference copy of its own drop-in
-        # is gone; upstream's pinned drop-in is the one daemon drop-in.
-        self.assertEqual(json.loads(result.stdout)['verifiedFiles'], 20)
+        # is gone; upstream's pinned drop-in is the one daemon drop-in.  21 with
+        # the tower's always-on OS-update rule (r15, owner decision 2026-10-17).
+        self.assertEqual(json.loads(result.stdout)['verifiedFiles'], 21)
         self.assertEqual(before, {str(p): p.read_bytes() for p in self.root.rglob('*') if p.is_file() and not p.is_symlink()})
 
     def test_binary_tamper(self):
@@ -112,14 +116,72 @@ class ImageBuildContracts(unittest.TestCase):
         self.assertEqual(sha((FIXTURES / '000-snitchwatch-bridge-fetch.json').read_bytes()), pinned)
         self.assertEqual(self.manifest['files']['/' + FETCH_RULE], pinned)
 
-    def test_read_file_allows_only_the_fetch_rule_under_etc(self):
+    def test_read_file_allows_only_the_reserved_rules_under_etc(self):
+        # Was "only the fetch rule"; r15 reserves exactly one more /etc path,
+        # the tower OS-update rule.  Everything else under /etc still refuses.
         module = runpy.run_path(str(FACTORY / 'snitchwatch-system-verify.py'))
         self.write('etc/opensnitchd/rules/other.json', '{}')
         self.write('etc/shadow', 'x')
-        for name in ['/etc/shadow', '/etc/opensnitchd/rules/other.json', '/etc/opensnitchd/rules/../rules/000-snitchwatch-bridge-fetch.json', '/usr/../etc/shadow']:
+        for name in ['/etc/shadow', '/etc/opensnitchd/rules/other.json', '/etc/opensnitchd/rules/../rules/000-snitchwatch-bridge-fetch.json',
+                     '/etc/opensnitchd/rules/../rules/001-tower-os-update.json', '/usr/../etc/shadow']:
             with self.subTest(name=name), self.assertRaisesRegex(ValueError, 'invalid immutable file path'):
                 module['read_file'](self.root, name)
         self.assertEqual(module['read_file'](self.root, '/' + FETCH_RULE), (self.root / FETCH_RULE).read_bytes())
+        self.assertEqual(module['read_file'](self.root, '/' + OS_UPDATE_RULE), (self.root / OS_UPDATE_RULE).read_bytes())
+        self.assertEqual(module['RESERVED_RULES'], {'/' + FETCH_RULE, '/' + OS_UPDATE_RULE})
+
+    def test_os_update_rule_source_is_the_pinned_digest(self):
+        module = runpy.run_path(str(FACTORY / 'snitchwatch-system-verify.py'))
+        self.assertEqual(sha(OS_UPDATE_SOURCE.read_bytes()), module['OS_UPDATE_RULE_SHA256'])
+        self.assertEqual(self.manifest['files']['/' + OS_UPDATE_RULE], module['OS_UPDATE_RULE_SHA256'])
+
+    def test_os_update_rule_is_narrow_and_cannot_shadow_deny(self):
+        rule = json.loads(OS_UPDATE_SOURCE.read_text())
+        self.assertEqual(rule['name'], Path(OS_UPDATE_RULE).stem)
+        self.assertEqual((rule['action'], rule['duration'], rule['enabled']), ('allow', 'always', True))
+        # precedence false: FindFirstMatch keeps scanning, so any matching
+        # deny/reject rule (blocklists included) still wins over this allow.
+        self.assertIs(rule['precedence'], False)
+        op = rule['operator']
+        self.assertEqual((op['operand'], op['type']), ('list', 'list'))
+        terms = {term['operand']: (term['type'], term['data'], term['sensitive']) for term in op['list']}
+        self.assertEqual(len(terms), len(op['list']))
+        self.assertEqual(terms, {
+            'process.path': ('regexp', '^/usr/bin/(skopeo|rpm-ostree)$', True),
+            'user.id': ('regexp', '^(0|65534)$', False),
+            'dest.port': ('simple', '443', False),
+            'protocol': ('regexp', '^tcp6?$', False),
+        })
+
+    def test_self_consistent_os_update_rule_edit(self):
+        # Manifest updated to match: only the verifier's pinned digest catches it.
+        rule = json.loads((self.root / OS_UPDATE_RULE).read_text())
+        rule['operator']['list'] = [op for op in rule['operator']['list'] if op['operand'] != 'user.id']
+        self.write(OS_UPDATE_RULE, json.dumps(rule)); self.update_hash(OS_UPDATE_RULE)
+        result = self.check()
+        self.assertIn('tower OS-update rule differs from the reviewed digest: /' + OS_UPDATE_RULE, result.stderr)
+        self.assertIn('reserved', result.stderr)
+
+    def test_os_update_rule_edit_without_manifest_update(self):
+        self.write(OS_UPDATE_RULE, (self.root / OS_UPDATE_RULE).read_text().replace('"precedence": false', '"precedence": true'))
+        self.assertIn('immutable file hash mismatch: /' + OS_UPDATE_RULE, self.check().stderr)
+
+    def test_missing_os_update_rule(self):
+        (self.root / OS_UPDATE_RULE).unlink()
+        result = self.check()
+        self.assertIn('missing immutable file: /' + OS_UPDATE_RULE, result.stderr)
+        self.assertIn('reserved', result.stderr)
+
+    def test_manifest_without_os_update_rule(self):
+        del self.manifest['files']['/' + OS_UPDATE_RULE]
+        self.assertIn('inventory', self.check().stderr)
+
+    def test_os_update_rule_symlinked(self):
+        path = self.root / OS_UPDATE_RULE
+        copy = self.root / 'elsewhere/001-tower-os-update.json'
+        copy.parent.mkdir(); copy.write_bytes(path.read_bytes()); copy.chmod(0o644)
+        path.unlink(); path.symlink_to(copy)
+        self.assertIn('symlink in immutable file path: /' + OS_UPDATE_RULE, self.check().stderr)
 
     def test_self_consistent_fetch_rule_edit(self):
         # Manifest updated to match: only the pinned-source comparison can catch it.
@@ -159,7 +221,8 @@ class ImageBuildContracts(unittest.TestCase):
         moved = self.root / 'elsewhere-rules'
         rules.rename(moved); rules.symlink_to(moved)
         result = self.check()
-        self.assertIn('symlink in immutable file path: /' + FETCH_RULE, result.stderr)
+        # Both reserved rules live there; whichever is read first must refuse.
+        self.assertRegex(result.stderr, 'symlink in immutable file path: /(' + FETCH_RULE + '|' + OS_UPDATE_RULE + ') ')
 
     def test_self_consistent_hardening_tamper(self):
         name = 'usr/lib/systemd/system/snitchwatch-system-bridge.service'
@@ -318,6 +381,81 @@ protoc() { echo 'libprotoc 3.19.6'; }
                 env = {**os.environ, 'SNITCHWATCH_BRIDGE': bridge, 'FIREWALL_DAEMON': firewall}
                 result = subprocess.run(['bash', str(FACTORY / 'snitchwatch-system-mode.sh')], env=env, capture_output=True)
                 self.assertEqual(result.returncode, 0 if valid else 1)
+
+
+class StageOutputContracts(unittest.TestCase):
+    """Run the real stage.py against fixture inputs (no network, no build)."""
+
+    def setUp(self):
+        self.work = tempfile.TemporaryDirectory(prefix='sw-stage-contract.')
+        self.addCleanup(self.work.cleanup)
+        self.tmp = Path(self.work.name)
+
+    def write(self, path, data, mode=0o644):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(data if isinstance(data, bytes) else data.encode())
+        path.chmod(mode)
+        return path
+
+    def run_stage(self, stage_script):
+        source, artifact = self.tmp / 'source', self.tmp / 'artifact'
+        upstream_config = b'{"DefaultAction": "deny", "ProcMonitorMethod": "ebpf"}\n'
+        self.write(source / 'packaging/system/opensnitchd-default-config.json', upstream_config)
+        # Like upstream stage.sh: stages its own (ebpf) daemon config into the root.
+        self.write(source / 'packaging/system/stage.sh', 'set -eu\n' + stage_script, 0o755)
+        self.write(source / 'packaging/flatpak/org.snitchwatch.Snitchwatch.system.yml', 'app-id: org.snitchwatch.Snitchwatch\n')
+        (source / 'vendor/opensnitch').mkdir(parents=True)
+        pins = {'sourceCommit': 'a' * 40, 'sourceTree': 'b' * 40, 'submoduleCommit': 'c' * 40, 'bridgeVersion': '0.1.1',
+                'builderImage': 'fixture', 'flatpakRuntimeRef': 'fixture', 'flatpakFinishArgs': [],
+                'sourceFiles': {name: sha((source / name).read_bytes()) for name in (
+                    'packaging/system/opensnitchd-default-config.json', 'packaging/system/stage.sh',
+                    'packaging/flatpak/org.snitchwatch.Snitchwatch.system.yml')}}
+        pins_path = self.write(self.tmp / 'pins.json', json.dumps(pins))
+        # PATH shim: an exact, clean checkout at the pinned commits.
+        self.write(self.tmp / 'bin/git', f'''#!/bin/sh
+case "$*" in
+  *"rev-parse HEAD^{{tree}}") echo {pins['sourceTree']} ;;
+  *"/vendor/opensnitch rev-parse HEAD") echo {pins['submoduleCommit']} ;;
+  *"rev-parse HEAD") echo {pins['sourceCommit']} ;;
+  *"status --porcelain --ignored") ;;
+  *) exit 99 ;;
+esac
+''', 0o755)
+        bridge = artifact / 'usr/share/snitchwatch-bridge'
+        self.write(bridge / 'MANIFEST.json', json.dumps({'version': '0.1.1', 'source': {'git_commit': pins['sourceCommit'], 'dirty': False}}))
+        self.write(bridge / 'SHA256SUMS', 'fixture\n')
+        self.write(artifact / 'usr/bin/snitchwatch-bridge-cli', '#!/bin/sh\necho snitchwatch-bridge-cli 0.1.1\n', 0o755)
+        for name in ('LICENSE', 'LICENSE.opensnitch', 'THIRD-PARTY-LICENSES.md'):
+            self.write(artifact / 'usr/share/licenses/snitchwatch-bridge' / name, 'license fixture\n')
+        verifier = self.write(self.tmp / 'verifier.py', 'REQUIRED = set()\ndef verify(root):\n    pass\n')
+        logs = [self.write(self.tmp / name, name) for name in ('build.log', 'repro.log', 'rpm-inventory.txt', 'artifact.tar.gz')]
+        out = self.tmp / 'out'
+        argv = ['python3', str(FACTORY / 'snitchwatch-system-stage.py'), '--source', str(source), '--artifact', str(artifact),
+                '--out', str(out), '--pins', str(pins_path), '--verifier', str(verifier),
+                '--legacy-config', str(ROOT / 'system_files/usr/share/bazzite-tower/opensnitchd-default-config.json'),
+                '--candidate-config', str(ROOT / 'system_files/usr/share/bazzite-tower/opensnitchd-system-bridge-config.json'),
+                '--build-log', str(logs[0]), '--repro-log', str(logs[1]), '--rpm-inventory', str(logs[2]),
+                '--tarball', str(logs[3]), '--os-update-rule', str(OS_UPDATE_SOURCE)]
+        env = {**os.environ, 'PATH': str(self.tmp / 'bin') + os.pathsep + os.environ['PATH']}
+        return subprocess.run(argv, env=env, capture_output=True, text=True), out
+
+    def test_upstream_ebpf_daemon_config_is_not_in_stage_output(self):
+        # Review L-3: upstream's ebpf default-config.json must never reach the
+        # image overlay; 95-firewall.sh installs the reviewed deny+proc config.
+        result, out = self.run_stage('mkdir -p "$1/etc/opensnitchd/rules"\n'
+                                     'cp "$(dirname "$0")/opensnitchd-default-config.json" "$1/etc/opensnitchd/default-config.json"\n')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertFalse((out / 'etc/opensnitchd/default-config.json').exists())
+        self.assertFalse((out / 'etc/opensnitchd/default-config.json').is_symlink())
+        self.assertEqual([p.name for p in (out / 'etc/opensnitchd').iterdir()], ['rules'])
+        staged_rule = out / OS_UPDATE_RULE
+        self.assertEqual(staged_rule.read_bytes(), OS_UPDATE_SOURCE.read_bytes())
+        self.assertEqual(staged_rule.stat().st_mode & 0o7777, 0o644)
+
+    def test_stage_refuses_when_upstream_config_was_not_staged(self):
+        result, _ = self.run_stage('mkdir -p "$1/etc/opensnitchd"\nprintf "{}" > "$1/etc/opensnitchd/default-config.json"\n')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('did not stage the pinned upstream daemon config', result.stderr)
 
 
 if __name__ == '__main__':

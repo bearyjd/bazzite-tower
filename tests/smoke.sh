@@ -328,6 +328,9 @@ legacy)
     check "legacy OpenSnitch address is TCP" \
         jq -e '.Server.Address == "127.0.0.1:50051"' /etc/opensnitchd/default-config.json
     check "legacy image has no native system bridge" test ! -e /usr/bin/snitchwatch-bridge-cli
+    # The always-on OS-update rule is system-profile only (legacy is allow).
+    check "legacy image ships no tower OS-update rule" \
+        test ! -e /etc/opensnitchd/rules/001-tower-os-update.json
     check "legacy image has no downstream system daemon manifest" \
         test ! -e /usr/share/snitchwatch/system-daemon-manifest.json
     check "legacy image has no system bridge service" \
@@ -350,6 +353,14 @@ system)
     # shellcheck disable=SC2016 # Expanded by the inner shell.
     check "system ships the bridge fetch rule as a regular 0644 file" \
         bash -c 'f=/etc/opensnitchd/rules/000-snitchwatch-bridge-fetch.json; [[ -f "$f" && ! -L "$f" && "$(stat -c %a "$f")" == 644 ]]'
+    # Owner decision 2026-10-17 ("always update os"): OS image updates must
+    # work under DefaultAction deny with no GUI. Hash pinned by the verifier.
+    # shellcheck disable=SC2016 # Expanded by the inner shell.
+    check "system ships the tower OS-update rule as a regular 0644 file" \
+        bash -c 'f=/etc/opensnitchd/rules/001-tower-os-update.json; [[ -f "$f" && ! -L "$f" && "$(stat -c %a "$f")" == 644 ]]'
+    check "tower OS-update rule is the reviewed allow, never precedence" \
+        jq -e '.name == "001-tower-os-update" and .action == "allow" and .precedence == false' \
+            /etc/opensnitchd/rules/001-tower-os-update.json
     # shellcheck disable=SC2016 # Expanded by the inner shell.
     check "opensnitchd rules dir keeps the RPM's 0755 root:root" \
         bash -c '[[ "$(stat -c %a:%U:%G /etc/opensnitchd/rules)" == 755:root:root ]]'

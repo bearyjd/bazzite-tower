@@ -22,6 +22,13 @@ DROPIN = '/usr/lib/systemd/system/opensnitch.service.d/snitchwatch-system-bridge
 # this verifier reads.  /etc is mutable on a booted system, but this file is
 # reserved and pinned: an admin edit or delete makes verification refuse.
 FETCH_RULE = '/etc/opensnitchd/rules/000-snitchwatch-bridge-fetch.json'
+# The tower's own always-on rule (owner decision 2026-10-17, "always update
+# os"): OS image pulls keep working under DefaultAction deny with no GUI.  Not
+# an upstream file, so it is pinned here by digest rather than in build-pins.
+# Source: build_files/firewall/snitchwatch-system-os-update-rule.json.
+OS_UPDATE_RULE = '/etc/opensnitchd/rules/001-tower-os-update.json'
+OS_UPDATE_RULE_SHA256 = '549055107d191c677abb2a1affe1622897321395bf447569da075f411378aa53'
+RESERVED_RULES = {FETCH_RULE, OS_UPDATE_RULE}
 SOURCE_FILES = {
     '/usr/lib/systemd/system/snitchwatch-system-bridge.service': 'packaging/system/snitchwatch-system-bridge.service',
     '/usr/lib/systemd/system/snitchwatch-system-bridge-grpc.socket': 'packaging/system/snitchwatch-system-bridge-grpc.socket',
@@ -39,7 +46,7 @@ RECEIPTS = {
     '/usr/share/snitchwatch/schema1-artifact-SHA256SUMS',
 }
 REQUIRED = set(SOURCE_FILES) | RECEIPTS | {
-    BINARY, PROFILE, CONFIG, LEGACY_CONFIG,
+    BINARY, PROFILE, CONFIG, LEGACY_CONFIG, OS_UPDATE_RULE,
     '/usr/libexec/snitchwatch/verify-system-manifest.py',
 } | {'/usr/share/licenses/snitchwatch-bridge/' + name for name in LICENSES}
 
@@ -51,11 +58,13 @@ def digest(data):
 def describe(name):
     if name == FETCH_RULE:
         return name + ' (the shipped, image-pinned Snitchwatch opensnitchd rule; it is reserved: restore it, do not edit or delete it)'
+    if name == OS_UPDATE_RULE:
+        return name + ' (the shipped, image-pinned tower OS-update opensnitchd rule; it is reserved: restore it, do not edit or delete it)'
     return name
 
 
 def read_file(root, name, mode=0o644):
-    if not isinstance(name, str) or not (name.startswith('/usr/') or name == FETCH_RULE) or '..' in Path(name).parts:
+    if not isinstance(name, str) or not (name.startswith('/usr/') or name in RESERVED_RULES) or '..' in Path(name).parts:
         raise ValueError('invalid immutable file path')
     path = root / name.lstrip('/')
     cursor = path
@@ -110,6 +119,8 @@ def verify(root):
     for name, original in SOURCE_FILES.items():
         if files[name] != pins['sourceFiles'][original]:
             raise ValueError('system overlay differs from pinned source: ' + describe(name))
+    if files[OS_UPDATE_RULE] != OS_UPDATE_RULE_SHA256:
+        raise ValueError('tower OS-update rule differs from the reviewed digest: ' + describe(OS_UPDATE_RULE))
     if files[LEGACY_CONFIG] != pins['legacyConfigSha256']:
         raise ValueError('legacy image-intent reference differs from pinned migration baseline')
     config = json.loads(contents[CONFIG])

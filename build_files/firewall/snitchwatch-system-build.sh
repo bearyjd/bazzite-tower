@@ -57,7 +57,7 @@ python3 "$factory/snitchwatch-system-stage.py" \
     --source "$SRC_DIR" --artifact "$work/verified/$(basename "$first" .tar.gz)" --out "$1" \
     --pins "$factory/snitchwatch-system-pins.json" --verifier "$factory/snitchwatch-system-verify.py" \
     --legacy-config /candidate/legacy-config.json --candidate-config /candidate/system-config.json \
-    --build-log "$work/build.log" \
+    --build-log "$work/build.log" --os-update-rule "$factory/snitchwatch-system-os-update-rule.json" \
     --repro-log "$work/repro.log" --rpm-inventory "$work/rpm-inventory.txt" --tarball "$first"
 # Preserve source/targets/logs in the isolated build layer for audit. Only $1
 # is copied into the final image, so no compiler, user unit or checkout ships.

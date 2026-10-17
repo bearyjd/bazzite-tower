@@ -291,11 +291,39 @@ snitchwatch-system-bridge-grpc.socket snitchwatch-system-bridge.service`, then
 `sudo systemctl restart snitchwatch-system-bridge-grpc.socket opensnitch.service`.
 The bridge service has no start limit (`StartLimitIntervalSec=0`), so a crash
 loop keeps retrying every 2 s instead of staying failed. If networking is still
-blocked: `sudo bootc rollback && sudo reboot`. As a last-resort local override,
-set `DefaultAction` to `allow` in `/etc/opensnitchd/default-config.json` from the
-TTY and restart `opensnitch.service`; this is local `/etc` drift that the
-readiness helper reports, so restore the image copy
-(`/usr/share/bazzite-tower/opensnitchd-system-bridge-config.json`) afterwards.
+blocked, back out in this order:
+
+1. `ujust snitchwatch-system-migrate rollback` — if this host was moved to the
+   system bridge with the migrate helper, it restores the journaled pre-migration
+   config and unit state.
+2. `sudo bootc rollback && sudo reboot` — boots the previous deployment.
+3. Only then, as a last-resort local override, set `DefaultAction` to `allow` in
+   `/etc/opensnitchd/default-config.json` from the TTY and restart
+   `opensnitch.service`. This is local `/etc` drift that the readiness helper
+   reports, and it makes `snitchwatch-system-migrate rollback` refuse ("live
+   config changed after migration; rollback refuses to overwrite operator
+   policy"), so try steps 1–2 first and restore the image copy
+   (`/usr/share/bazzite-tower/opensnitchd-system-bridge-config.json`) afterwards.
+
+**OS updates under fail-closed.** Owner decision 2026-10-17: OS image updates
+must always work, GUI or not. The system profile therefore ships a second
+reserved rule, `/etc/opensnitchd/rules/001-tower-os-update.json` (allow,
+`always`, `precedence: false`, so any matching deny or blocklist rule still
+wins). It matches only when all four hold: process path `/usr/bin/skopeo` or
+`/usr/bin/rpm-ostree`; uid 0 or 65534; destination port 443; TCP. Why those:
+`bootc upgrade`/`switch` (also `uupd`, `bootc-fetch-apply-updates`) and
+`rpm-ostree upgrade` pull through containers-image-proxy, which spawns
+`skopeo experimental-image-proxy` — the registry connection is skopeo's, not
+bootc's. bootc 1.16.9 runs it as root; rpm-ostree 2026.2's vendored ostree-ext
+drops it to `nobody` (65534) via `setpriv` when `rpm-ostreed` runs under
+systemd. `rpm-ostreed` itself (`ExecStart=+rpm-ostree start-daemon`, root)
+fetches layered-package repo metadata in-process. No host match: ghcr.io
+redirects blobs to `pkg-containers.githubusercontent.com`. Like the fetch rule,
+its digest is pinned in `verify-system-manifest.py`, so editing or deleting it
+fails verification. It does not cover DNS: if `systemd-resolved` has no allow
+rule and no GUI answers, name resolution — and therefore the update — is still
+denied; keep a local resolved rule (this host has
+`010-allow-systemd-resolved.json`).
 
 ## Common issues
 

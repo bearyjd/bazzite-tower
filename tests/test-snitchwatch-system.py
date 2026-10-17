@@ -59,20 +59,20 @@ class Fixture(common.Context):
                 ExecStart="{ path=/usr/bin/snitchwatch-bridge-cli ; argv[]=/usr/bin/snitchwatch-bridge-cli ; ignore_errors=no ; }",
                 Environment="SNITCHWATCH_SYSTEM_BRIDGE=1 SNITCHWATCH_WS_SOCKET=/run/snitchwatch/bridge.sock SNITCHWATCH_WS_TOKEN_PATH=/run/snitchwatch-auth/token HOME=/var/lib/snitchwatch XDG_STATE_HOME=/var/lib",
                 TriggeredBy=" ".join(common.SOCKETS), RestrictAddressFamilies="AF_UNIX AF_INET AF_INET6", MainPID="0", NeedDaemonReload="no"),
-            "opensnitch.service": dict(MainPID="501", ExecStart="{ path=/usr/bin/opensnitchd ; argv[]=/usr/bin/opensnitchd ; ignore_errors=no ; }", WorkingDirectory="/run/snitchwatch", Wants=common.SOCKETS[0]+" network.target", After=common.SOCKETS[0]+" network.target", Requires="", Requisite="", BindsTo="", PartOf="", NeedDaemonReload="no",
-                FragmentPath="/usr/lib/systemd/system/opensnitch.service", DropInPaths="/usr/lib/systemd/system/opensnitch.service.d/20-system-bridge.conf")}
+            "opensnitch.service": dict(MainPID="501", ExecStart="{ path=/usr/bin/opensnitchd ; argv[]=/usr/bin/opensnitchd ; ignore_errors=no ; }", WorkingDirectory="!/run/snitchwatch", Wants=common.SOCKETS[0]+" network.target", After=common.SOCKETS[0]+" network.target", Requires="", Requisite="", BindsTo="", PartOf="", NeedDaemonReload="no",
+                FragmentPath="/usr/lib/systemd/system/opensnitch.service", DropInPaths=common.DAEMON_DROPIN)}
         for unit, path, group, mode in ((common.SOCKETS[0], "/run/snitchwatch/opensnitchd.sock", "root", "0600"), (common.SOCKETS[1], "/run/snitchwatch/bridge.sock", "snitchwatch-ui", "0660")):
             self.properties[unit] = dict(Listen=path+" (Stream)", SocketUser="root", SocketGroup=group, SocketMode=mode, Accept="no", Triggers=common.SERVICE, FragmentPath="/usr/lib/systemd/system/"+unit, DropInPaths="", NeedDaemonReload="no")
         self.write(common.PROFILE, "system\n")
         self.write(common.BINARY, "reviewed released bridge executable\n", 0o755)
-        mandatory = [common.BINARY, common.REFERENCE, "/usr/lib/sysusers.d/snitchwatch.conf", "/usr/lib/tmpfiles.d/snitchwatch.conf", "/usr/lib/systemd/system/opensnitch.service.d/20-system-bridge.conf", common.FETCH_RULE]
+        mandatory = [common.BINARY, common.REFERENCE, "/usr/lib/sysusers.d/snitchwatch.conf", "/usr/lib/tmpfiles.d/snitchwatch.conf", common.DAEMON_DROPIN, common.FETCH_RULE, common.OS_UPDATE_RULE, common.DNS_RULE]
         mandatory += ["/usr/lib/systemd/system/"+unit for unit in (common.SERVICE, *common.SOCKETS)]
         for name in mandatory:
             if name != common.BINARY:
                 self.write(name, "installed reviewed asset\n")
         legacy_text = (REPO/"system_files/usr/share/bazzite-tower/opensnitchd-default-config.json").read_text()
         self.write(common.LEGACY_REFERENCE, legacy_text)
-        system = json.loads(legacy_text);system["Server"]["Address"] = "unix:opensnitchd.sock"
+        system = json.loads(legacy_text);system["Server"]["Address"] = "unix:opensnitchd.sock";system["DefaultAction"] = "deny"
         self.write(common.REFERENCE, json.dumps(system, indent=4)+"\n")
         self.write(common.CONFIG, legacy_text)
         self.write(common.PINS, json.dumps(dict(sourceCommit="d09defc8ea3d55b335c746248a4d90743ae014e3", submoduleCommit="b404c4c6316760fa7bc415509d3f8d747f7dc9cc", bridgeVersion="0.1.1")))
@@ -200,7 +200,7 @@ org.kde.StatusNotifierWatcher=talk
             if action == "start" and self.fail_start in argv[2:]:
                 self.fail_start = None;code = 1;err = "injected activation failure"
                 if self.drift_on_start:
-                    value = json.loads(self.path(common.CONFIG).read_text());value["DefaultAction"]="deny";self.write(common.CONFIG,json.dumps(value))
+                    value = json.loads(self.path(common.CONFIG).read_text());value["DefaultAction"]="allow";self.write(common.CONFIG,json.dumps(value))
             else:
                 for unit in argv[2:]:
                     self.states[unit]["active"] = "active" if action=="start" else "inactive"
@@ -351,7 +351,10 @@ class SystemBehavior(unittest.TestCase):
                 try: self.refuse_readiness("daemon-reload")
                 finally: self.ctx.properties[unit]["NeedDaemonReload"] = "no"
 
-    def test_fetch_rule_is_the_only_manifest_entry_outside_usr(self):
+    def test_reserved_rules_are_the_only_manifest_entries_outside_usr(self):
+        # Was "fetch rule is the only entry": r15 adds exactly the tower
+        # OS-update and resolver DNS rules; any other /etc entry still refuses.
+        self.assertEqual(set(common.RESERVED_RULES), {common.FETCH_RULE, common.OS_UPDATE_RULE, common.DNS_RULE})
         common.immutable(self.ctx)
         self.ctx.write("/etc/opensnitchd/rules/other.json", "{}\n")
         self.ctx.refresh_manifest([*self.ctx.manifest["files"], "/etc/opensnitchd/rules/other.json"])
@@ -361,6 +364,28 @@ class SystemBehavior(unittest.TestCase):
     def test_manifest_without_fetch_rule_refuses(self):
         self.ctx.refresh_manifest([name for name in self.ctx.manifest["files"] if name != common.FETCH_RULE])
         with self.assertRaisesRegex(common.Refusal, "lacks required installed assets"):
+            common.immutable(self.ctx)
+
+    def test_manifest_without_os_update_rule_refuses(self):
+        self.ctx.refresh_manifest([name for name in self.ctx.manifest["files"] if name != common.OS_UPDATE_RULE])
+        with self.assertRaisesRegex(common.Refusal, "lacks required installed assets"):
+            common.immutable(self.ctx)
+
+    def test_manifest_without_dns_rule_refuses(self):
+        self.ctx.refresh_manifest([name for name in self.ctx.manifest["files"] if name != common.DNS_RULE])
+        with self.assertRaisesRegex(common.Refusal, "lacks required installed assets"):
+            common.immutable(self.ctx)
+
+    def test_dns_rule_hash_drift_refuses(self):
+        common.immutable(self.ctx)
+        self.ctx.write(common.DNS_RULE, "edited\n")
+        with self.assertRaisesRegex(common.Refusal, "installed asset hash mismatch: "+common.DNS_RULE):
+            common.immutable(self.ctx)
+
+    def test_os_update_rule_hash_drift_refuses(self):
+        common.immutable(self.ctx)
+        self.ctx.write(common.OS_UPDATE_RULE, "edited\n")
+        with self.assertRaisesRegex(common.Refusal, "installed asset hash mismatch: "+common.OS_UPDATE_RULE):
             common.immutable(self.ctx)
 
     def test_symlinked_fetch_rule_directory_refuses(self):
@@ -533,7 +558,7 @@ class SystemBehavior(unittest.TestCase):
 
     def test_config_address_and_policy_drift(self):
         self.ctx.system_config()
-        for key,value in (("DefaultAction","deny"),("ProcMonitorMethod","ebpf")):
+        for key,value in (("DefaultAction","allow"),("ProcMonitorMethod","ebpf")):
             config=json.loads(self.ctx.path(common.REFERENCE).read_text());config[key]=value;self.ctx.write(common.CONFIG,json.dumps(config))
             self.refuse_readiness("drift")
         self.ctx.write(common.CONFIG,self.ctx.path(common.LEGACY_REFERENCE).read_text())
@@ -846,8 +871,9 @@ class SystemBehavior(unittest.TestCase):
         operator=migration.Migration(self.ctx)
         applied=operator.apply()
         self.assertEqual(applied["status"],"applied")
-        self.assertEqual(json.loads(self.ctx.path(common.CONFIG).read_text())["DefaultAction"],"allow")
+        self.assertEqual(json.loads(self.ctx.path(common.CONFIG).read_text())["DefaultAction"],"deny")
         self.assertEqual(json.loads(self.ctx.path(common.CONFIG).read_text())["ProcMonitorMethod"],"proc")
+        self.assertEqual(json.loads(self.ctx.path(common.CONFIG).read_text()), json.loads(self.ctx.path(common.REFERENCE).read_text()))
         rolled=operator.rollback();self.assertEqual(rolled["status"],"rolled-back")
         self.assertEqual(self.ctx.path(common.CONFIG).read_bytes(), original)
         self.assertEqual(self.ctx.states, states)
@@ -874,7 +900,7 @@ class SystemBehavior(unittest.TestCase):
         operator=migration.Migration(self.ctx)
         with self.assertRaisesRegex(common.Refusal,"recovery-required"):
             operator.apply()
-        self.assertEqual(json.loads(self.ctx.path(common.CONFIG).read_text())["DefaultAction"],"deny")
+        self.assertEqual(json.loads(self.ctx.path(common.CONFIG).read_text())["DefaultAction"],"allow")
         with self.assertRaisesRegex(common.Refusal,"rollback refuses"):
             operator.rollback()
 
@@ -987,7 +1013,7 @@ class SystemBehavior(unittest.TestCase):
 
     def test_rollback_final_publication_boundary_preserves_operator_edit(self):
         operator = migration.Migration(self.ctx);operator.apply()
-        config = json.loads(self.ctx.path(common.CONFIG).read_text());config["DefaultAction"]="deny"
+        config = json.loads(self.ctx.path(common.CONFIG).read_text());config["DefaultAction"]="allow"
         edited = (json.dumps(config)+"\n").encode()
         count = len(self.ctx.commands)
         with self.publication_edit(lambda: self.ctx.path(common.CONFIG).write_bytes(edited)):
@@ -1030,7 +1056,7 @@ class SystemBehavior(unittest.TestCase):
 
     def test_rollback_refuses_later_policy_edit(self):
         operator=migration.Migration(self.ctx);operator.apply()
-        config=json.loads(self.ctx.path(common.CONFIG).read_text());config["DefaultAction"]="deny";self.ctx.write(common.CONFIG,json.dumps(config))
+        config=json.loads(self.ctx.path(common.CONFIG).read_text());config["DefaultAction"]="allow";self.ctx.write(common.CONFIG,json.dumps(config))
         count=len(self.ctx.commands)
         with self.assertRaisesRegex(common.Refusal,"rollback refuses"):
             operator.rollback()

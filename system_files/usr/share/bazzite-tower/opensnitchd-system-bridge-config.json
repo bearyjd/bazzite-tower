@@ -14,7 +14,7 @@
         },
         "LogFile": "/var/log/opensnitchd.log"
     },
-    "DefaultAction": "allow",
+    "DefaultAction": "deny",
     "DefaultDuration": "once",
     "InterceptUnknown": false,
     "ProcMonitorMethod": "proc",

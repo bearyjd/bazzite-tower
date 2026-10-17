@@ -103,7 +103,7 @@ The image ships a Snitchwatch-tuned `/etc/opensnitchd/default-config.json` with 
 |---|---|---|
 | `Server.Address` | `127.0.0.1:50051` | The Snitchwatch bridge's gRPC listener, instead of `opensnitch-ui`'s `unix:///tmp/osui.sock`. |
 | `ProcMonitorMethod` | `proc` | **Not `ebpf`.** The v1.8.0 RPM's bundled eBPF module fails to load on this image's 6.19/7.x kernels (`unable to load eBPF module (opensnitch.o)`, [snitchwatch#6](https://github.com/bearyjd/snitchwatch/issues/6)) and the daemon degrades badly. Revisit only when an opensnitch release ships an eBPF module built for this kernel. |
-| `DefaultAction` | `allow` | Fail open. See below. |
+| `DefaultAction` | `allow` (legacy) / `deny` (`:snitchwatch-system`) | Legacy fails open; the system-bridge image fails closed. See below. |
 
 `DefaultAction: deny` is the designed end state, but it denies **every new unruled outbound connection on any boot where no UI or bridge is answering prompts** — and the Snitchwatch bridge is a per-user systemd service (`snitchwatch-bridge.service`), installed by hand, not baked into this image. So the image ships `allow` during rollout: unruled connections fail open rather than block, and libvirt/Docker/Cockpit traffic keeps working headless.
 
@@ -113,9 +113,14 @@ the pinned native bridge version 0.1.1, system socket/service units and immutabl
 It also builds OpenSnitch 1.8.0 from the reviewed upstream pin plus the downstream
 queue-shutdown and NFT policy-ownership repair. A separate daemon manifest
 verifies the installed executable, repair patch, build inputs and licenses.
-OpenSnitch uses `unix:opensnitchd.sock` from `/run/snitchwatch`, preserving
-`DefaultAction: allow` and `ProcMonitorMethod: proc`. GUI installation and GUI
-group enrollment remain explicit operator steps.
+OpenSnitch uses `unix:opensnitchd.sock` from `/run/snitchwatch` (upstream's
+`opensnitch.service` drop-in, `WorkingDirectory=-/run/snitchwatch`) with
+`DefaultAction: deny` (fail closed; owner decision 2026-10-17, r15) and
+`ProcMonitorMethod: proc` (upstream's config says `ebpf`; the tower keeps `proc`,
+snitchwatch#6). If the socket fails the daemon still starts and denies every
+unruled connection: keep a console login handy (recovery in the
+[runbook](docs/RUNBOOK.md#opensnitch--snitchwatch-deployment-status)). GUI
+installation and GUI group enrollment remain explicit operator steps.
 
 Build locally with `just build-snitchwatch-system`. For a disposable SSH test
 image, use `just build-snitchwatch-system-vm`, then `just run-vm-ssh
@@ -136,7 +141,7 @@ KDE GUI decisions and repaired daemon shutdown/NFT behavior under enforcing
 SELinux still require fresh VM evidence. See the [candidate migration runbook](docs/RUNBOOK.md#opensnitch--snitchwatch-deployment-status)
 and [system bridge evidence](docs/research/snitchwatch-system-bridge.md).
 
-**Flipping to `deny` is order-sensitive.** The config change and the bridge install are two separate manual steps, and doing them in the wrong order costs you the network:
+**Flipping the legacy image to `deny` is order-sensitive.** The config change and the bridge install are two separate manual steps, and doing them in the wrong order costs you the network:
 
 1. Install and enable the released `snitchwatch-bridge.service`, then run `ujust opensnitch-readiness`. It is read-only and succeeds only when OpenSnitch is active, remains configured `DefaultAction: allow`, and the enabled active user service's `MainPID` resolves to the released bridge binary and owns `127.0.0.1:50051`. This rejects a stale debug bridge merely occupying the port.
    The release-install contract is intentionally fixed: install the executable at `~/.local/bin/snitchwatch-bridge-cli` and a verified one-line release manifest at `~/.local/share/snitchwatch/bridge.sha256`, formatted as `<sha256>  snitchwatch-bridge-cli`. The preflight hashes the executable and refuses a missing, malformed, or mismatched manifest. Do not substitute an arbitrary path or manifest through environment variables.

@@ -1,0 +1,47 @@
+{
+  "created": "2026-10-17T00:00:00Z",
+  "updated": "2026-10-17T00:00:00Z",
+  "name": "000-snitchwatch-tower-resolved-dns",
+  "description": "Shipped by bazzite-tower: name resolution always works under DefaultAction deny, so OS image updates can reach their registry. Only the system resolver (/usr/lib/systemd/systemd-resolved) running as a system account (uid below 1000; systemd-resolve's uid is allocated at build time) may reach DNS (port 53) or DNS-over-TLS (port 853) over UDP or TCP. Deny rules and blocklists still win.",
+  "action": "allow",
+  "duration": "always",
+  "operator": {
+    "operand": "list",
+    "data": "",
+    "type": "list",
+    "sensitive": false,
+    "list": [
+      {
+        "operand": "process.path",
+        "data": "/usr/lib/systemd/systemd-resolved",
+        "type": "simple",
+        "sensitive": true,
+        "list": []
+      },
+      {
+        "operand": "user.id",
+        "data": "^([0-9]{1,2}|[1-9][0-9]{2})$",
+        "type": "regexp",
+        "sensitive": false,
+        "list": []
+      },
+      {
+        "operand": "dest.port",
+        "data": "^(53|853)$",
+        "type": "regexp",
+        "sensitive": false,
+        "list": []
+      },
+      {
+        "operand": "protocol",
+        "data": "^(udp|udp6|tcp|tcp6)$",
+        "type": "regexp",
+        "sensitive": false,
+        "list": []
+      }
+    ]
+  },
+  "enabled": true,
+  "precedence": false,
+  "nolog": false
+}

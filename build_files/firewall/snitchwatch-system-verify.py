@@ -10,22 +10,37 @@ import sys
 
 MANIFEST = '/usr/share/snitchwatch/system-bridge-manifest.json'
 PINS = '/usr/share/snitchwatch/build-pins.json'
-EXPECTED_PINS_SHA256 = '26ec025a914ee3912d398703538a5552b8954078c2e0e4a1e69b91d697423de0'
+EXPECTED_PINS_SHA256 = 'e54846c70e8865228f476b79772a652d8161f8b236fd84da4b12607a068267f9'
 BINARY = '/usr/bin/snitchwatch-bridge-cli'
 PROFILE = '/usr/share/bazzite-tower/snitchwatch-bridge-profile'
 CONFIG = '/usr/share/bazzite-tower/opensnitchd-system-bridge-config.json'
 LEGACY_CONFIG = '/usr/share/bazzite-tower/opensnitchd-default-config.json'
-DROPIN = '/usr/lib/systemd/system/opensnitch.service.d/20-system-bridge.conf'
+# Upstream's opensnitch.service drop-in, staged by stage.sh (Wants=/After= the
+# grpc socket, WorkingDirectory=-/run/snitchwatch: fail closed if it is missing).
+DROPIN = '/usr/lib/systemd/system/opensnitch.service.d/snitchwatch-system-bridge.conf'
 # The one opensnitchd rule Snitchwatch ships, and the only path outside /usr
 # this verifier reads.  /etc is mutable on a booted system, but this file is
 # reserved and pinned: an admin edit or delete makes verification refuse.
 FETCH_RULE = '/etc/opensnitchd/rules/000-snitchwatch-bridge-fetch.json'
+# The tower's own always-on rule (owner decision 2026-10-17, "always update
+# os"): OS image pulls keep working under DefaultAction deny with no GUI.  Not
+# an upstream file, so it is pinned here by digest rather than in build-pins.
+# Source: build_files/firewall/snitchwatch-system-os-update-rule.json.
+OS_UPDATE_RULE = '/etc/opensnitchd/rules/000-snitchwatch-tower-os-update.json'
+OS_UPDATE_RULE_SHA256 = '9bd06784270af7316380b3cabe42059450b64d755fc997e64a5c0c8d317c4a42'
+# Its companion: OS updates need name resolution, so systemd-resolved may
+# always reach DNS.  Source: build_files/firewall/snitchwatch-system-resolved-dns-rule.json.
+DNS_RULE = '/etc/opensnitchd/rules/000-snitchwatch-tower-resolved-dns.json'
+DNS_RULE_SHA256 = '8f80789e093fd98f0b2b642268477b1e68d59006e4eb1d518acfecb7e95eaa29'
+TOWER_RULES = {OS_UPDATE_RULE: OS_UPDATE_RULE_SHA256, DNS_RULE: DNS_RULE_SHA256}
+RESERVED_RULES = {FETCH_RULE, *TOWER_RULES}
 SOURCE_FILES = {
     '/usr/lib/systemd/system/snitchwatch-system-bridge.service': 'packaging/system/snitchwatch-system-bridge.service',
     '/usr/lib/systemd/system/snitchwatch-system-bridge-grpc.socket': 'packaging/system/snitchwatch-system-bridge-grpc.socket',
     '/usr/lib/systemd/system/snitchwatch-system-bridge-gui.socket': 'packaging/system/snitchwatch-system-bridge-gui.socket',
     '/usr/lib/tmpfiles.d/snitchwatch.conf': 'packaging/system/snitchwatch.conf',
     '/usr/lib/sysusers.d/snitchwatch.conf': 'packaging/system/snitchwatch.conf.sysusers',
+    DROPIN: 'packaging/system/opensnitch-snitchwatch-system-bridge.conf',
     FETCH_RULE: 'packaging/bluebuild/files/system/etc/opensnitchd/rules/000-snitchwatch-bridge-fetch.json',
 }
 LICENSES = {'LICENSE', 'LICENSE.opensnitch', 'THIRD-PARTY-LICENSES.md'}
@@ -36,8 +51,7 @@ RECEIPTS = {
     '/usr/share/snitchwatch/schema1-artifact-SHA256SUMS',
 }
 REQUIRED = set(SOURCE_FILES) | RECEIPTS | {
-    BINARY, PROFILE, CONFIG, LEGACY_CONFIG, DROPIN,
-    '/usr/share/bazzite-tower/snitchwatch/opensnitch.service.d/20-system-bridge.conf',
+    BINARY, PROFILE, CONFIG, LEGACY_CONFIG, OS_UPDATE_RULE, DNS_RULE,
     '/usr/libexec/snitchwatch/verify-system-manifest.py',
 } | {'/usr/share/licenses/snitchwatch-bridge/' + name for name in LICENSES}
 
@@ -49,11 +63,15 @@ def digest(data):
 def describe(name):
     if name == FETCH_RULE:
         return name + ' (the shipped, image-pinned Snitchwatch opensnitchd rule; it is reserved: restore it, do not edit or delete it)'
+    if name == OS_UPDATE_RULE:
+        return name + ' (the shipped, image-pinned tower OS-update opensnitchd rule; it is reserved: restore it, do not edit or delete it)'
+    if name == DNS_RULE:
+        return name + ' (the shipped, image-pinned tower resolver DNS opensnitchd rule; it is reserved: restore it, do not edit or delete it)'
     return name
 
 
 def read_file(root, name, mode=0o644):
-    if not isinstance(name, str) or not (name.startswith('/usr/') or name == FETCH_RULE) or '..' in Path(name).parts:
+    if not isinstance(name, str) or not (name.startswith('/usr/') or name in RESERVED_RULES) or '..' in Path(name).parts:
         raise ValueError('invalid immutable file path')
     path = root / name.lstrip('/')
     cursor = path
@@ -108,18 +126,21 @@ def verify(root):
     for name, original in SOURCE_FILES.items():
         if files[name] != pins['sourceFiles'][original]:
             raise ValueError('system overlay differs from pinned source: ' + describe(name))
+    for name, expected in TOWER_RULES.items():
+        if files[name] != expected:
+            raise ValueError('tower rule differs from the reviewed digest: ' + describe(name))
     if files[LEGACY_CONFIG] != pins['legacyConfigSha256']:
         raise ValueError('legacy image-intent reference differs from pinned migration baseline')
     config = json.loads(contents[CONFIG])
     expected_config = json.loads(contents[LEGACY_CONFIG])
     expected_config['Server']['Address'] = 'unix:opensnitchd.sock'
+    # Owner decision 2026-10-17: the system bridge fails closed.  proc stays
+    # (eBPF fails on this laptop's kernel, snitchwatch#6).
+    expected_config['DefaultAction'] = 'deny'
     if config != expected_config:
-        raise ValueError('system candidate changes more than the daemon address')
-    if config.get('DefaultAction') != 'allow' or config.get('ProcMonitorMethod') != 'proc' or config.get('Server', {}).get('Address') != 'unix:opensnitchd.sock':
+        raise ValueError('system candidate changes more than the daemon address and default action')
+    if config.get('DefaultAction') != 'deny' or config.get('ProcMonitorMethod') != 'proc' or config.get('Server', {}).get('Address') != 'unix:opensnitchd.sock':
         raise ValueError('incorrect system candidate policy/transport')
-    expected_dropin = b'[Unit]\nWants=snitchwatch-system-bridge-grpc.socket\nAfter=snitchwatch-system-bridge-grpc.socket\n\n[Service]\nWorkingDirectory=/run/snitchwatch\n'
-    if contents[DROPIN] != expected_dropin or contents['/usr/share/bazzite-tower/snitchwatch/opensnitch.service.d/20-system-bridge.conf'] != expected_dropin:
-        raise ValueError('incorrect daemon system-socket ordering/drop-in')
     artifact = json.loads(contents['/usr/share/snitchwatch/schema1-artifact-MANIFEST.json'])
     if artifact.get('version') != pins['bridgeVersion']:
         raise ValueError('native artifact bridge version differs from required version')

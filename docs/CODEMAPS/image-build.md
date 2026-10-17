@@ -63,10 +63,18 @@ NFQUEUE is available. Rootless container checks cannot replace the VM gate.
 Legacy builds retain upstream RPM extraction and incur no native compilation.
 
 Only the system candidate changes the image-intent OpenSnitch address to
-`unix:opensnitchd.sock`, with a system drop-in requiring the gRPC socket and
-`WorkingDirectory=/run/snitchwatch`. Sysusers are materialized before tmpfiles
-and socket startup. Existing live bootc `/etc` drift is a migration decision,
-not an implicit policy overwrite. Both profiles remain fail open.
+`unix:opensnitchd.sock` and `DefaultAction` to `deny` (fail closed, r15 owner
+decision; `ProcMonitorMethod` stays `proc`). Upstream `stage.sh` installs the
+`opensnitch.service.d/snitchwatch-system-bridge.conf` drop-in (`Wants=`/`After=`
+the gRPC socket, `WorkingDirectory=-/run/snitchwatch`), pinned by hash; it also
+stages upstream's `ebpf` daemon config, which `snitchwatch-system-stage.py`
+removes from the overlay (unit-tested); `95-firewall.sh` installs the tower's `deny`/`proc`
+candidate after the RPM extraction. `snitchwatch-system-stage.py` also stages the
+tower's always-on OS-update rules (`snitchwatch-system-os-update-rule.json` ->
+`/etc/opensnitchd/rules/000-snitchwatch-tower-os-update.json`, `snitchwatch-system-resolved-dns-rule.json`
+-> `000-snitchwatch-tower-resolved-dns.json`; digests pinned in the verifier). Sysusers are materialized
+before tmpfiles and socket startup. Existing live bootc `/etc` drift is a
+migration decision, not an implicit policy overwrite. Legacy remains fail open.
 
 Daemon toolchain (golang, golang-bin, golang-src, protobuf, protobuf-compiler,
 libnetfilter_queue, libnetfilter_queue-devel) is not installed from live repos:
@@ -127,10 +135,10 @@ NFQUEUE, SELinux and deployment require separate owner-controlled evidence).
 
 ## r13 publication boundary
 
-The frozen r13 bridge candidate is `bf15bb5d87b46576b2f2d56d2c5164b6890402c7`,
-tree `ac04f33f33145ea39a3ba71fae60fe871aff3f21`, with unchanged OpenSnitch
-gitlink `b404c4c6316760fa7bc415509d3f8d747f7dc9cc`. The bridge pins record
-this identity and hashes of all 13 committed packaging inputs; the installed
+The r15 bridge candidate is `7bf3f1974395a7a55ec3a099e2e16bb5ad255ec4`,
+tree `c60578ce519174fdabd2a1b73ce01ce85f5b48b1`, with unchanged OpenSnitch
+gitlink `b404c4c6316760fa7bc415509d3f8d747f7dc9cc` (r13/r14: `bf15bb5`). The
+bridge pins record this identity and hashes of all 15 committed packaging inputs; the installed
 verifier authenticates the refreshed pins hash. Upstream installer bytes and
 signed Koji/toolchain/daemon pins remain unchanged. This candidate pin does not
 establish independent review or runtime acceptance; authority remains held.

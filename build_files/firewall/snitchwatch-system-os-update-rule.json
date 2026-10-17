@@ -1,7 +1,7 @@
 {
   "created": "2026-10-17T00:00:00Z",
   "updated": "2026-10-17T00:00:00Z",
-  "name": "001-tower-os-update",
+  "name": "000-snitchwatch-tower-os-update",
   "description": "Shipped by bazzite-tower: OS image updates always work under DefaultAction deny. Registry pulls run in skopeo (spawned by bootc as root, or by rpm-ostreed as nobody via setpriv); rpm-ostreed (/usr/bin/rpm-ostree, root) fetches layered-package metadata itself. HTTPS (TCP port 443) only. Deny rules and blocklists still win.",
   "action": "allow",
   "duration": "always",

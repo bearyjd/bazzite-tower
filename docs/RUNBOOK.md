@@ -307,7 +307,7 @@ blocked, back out in this order:
 
 **OS updates under fail-closed.** Owner decision 2026-10-17: OS image updates
 must always work, GUI or not. The system profile therefore ships a second
-reserved rule, `/etc/opensnitchd/rules/001-tower-os-update.json` (allow,
+reserved rule, `/etc/opensnitchd/rules/000-snitchwatch-tower-os-update.json` (allow,
 `always`, `precedence: false`, so any matching deny or blocklist rule still
 wins). It matches only when all four hold: process path `/usr/bin/skopeo` or
 `/usr/bin/rpm-ostree`; uid 0 or 65534; destination port 443; TCP. Why those:
@@ -323,7 +323,7 @@ its digest is pinned in `verify-system-manifest.py`, so editing or deleting it
 fails verification.
 
 Pulls also need name resolution, so a third reserved rule,
-`/etc/opensnitchd/rules/002-tower-resolved-dns.json`, lets the system resolver
+`/etc/opensnitchd/rules/000-snitchwatch-tower-resolved-dns.json`, lets the system resolver
 always reach DNS: process path `/usr/lib/systemd/systemd-resolved`, a system
 uid (0–999, regexp — `systemd-resolve` is allocated at build time: 990 on this
 image, not the 193 `sysusers.d` asks for), destination port 53 or 853 (DNS,
@@ -335,9 +335,25 @@ a local `010-allow-systemd-resolved.json` and with Snitchwatch's opt-in
 "dns-resolved" recommended rule (`snitchwatch-default-dns-resolved`): all are
 allows, and the bridge only manages names under its own prefixes
 (`snitchwatch-default-`, blocklist `z00-`/`900-`), so it neither flags nor
-deletes the tower files. A GUI user could still delete them from the Rules
-page (the `00x-tower-` names are not reserved in the bridge); the verifier
-then refuses until the image copy is restored.
+deletes the tower files.
+
+Both tower rules are named under the bridge's reserved packaged prefix
+`000-snitchwatch-`, so the bridge shows them read-only and refuses any GUI
+change, toggle or delete of them (Snitchwatch 7bf3f19: `read_only_reason`,
+`refuse_reserved_name`, `DaemonCommands::send`); it never rewrites or deletes
+them itself. If one is edited or removed anyway (as root), the verifier and
+smoke checks refuse; restore the image copy and restart the daemon:
+
+    sudo install -m0644 -o root -g root /usr/etc/opensnitchd/rules/<name>.json /etc/opensnitchd/rules/
+    sudo systemctl restart opensnitch.service
+
+with `<name>` `000-snitchwatch-tower-os-update` or
+`000-snitchwatch-tower-resolved-dns`. Accepted risk: these are
+`precedence: false` allows, so a deny rule or blocklist that a GUI member adds
+and that matches the same connection (for example a blocklist containing
+`ghcr.io` or `pkg-containers.githubusercontent.com`, or a deny for
+systemd-resolved) still wins and can block updates. That is by design: deny
+always beats these allows.
 
 ## Common issues
 

@@ -330,9 +330,9 @@ legacy)
     check "legacy image has no native system bridge" test ! -e /usr/bin/snitchwatch-bridge-cli
     # The always-on OS-update rule is system-profile only (legacy is allow).
     check "legacy image ships no tower OS-update rule" \
-        test ! -e /etc/opensnitchd/rules/001-tower-os-update.json
+        test ! -e /etc/opensnitchd/rules/000-snitchwatch-tower-os-update.json
     check "legacy image ships no tower resolver DNS rule" \
-        test ! -e /etc/opensnitchd/rules/002-tower-resolved-dns.json
+        test ! -e /etc/opensnitchd/rules/000-snitchwatch-tower-resolved-dns.json
     check "legacy image has no downstream system daemon manifest" \
         test ! -e /usr/share/snitchwatch/system-daemon-manifest.json
     check "legacy image has no system bridge service" \
@@ -359,17 +359,17 @@ system)
     # work under DefaultAction deny with no GUI. Hash pinned by the verifier.
     # shellcheck disable=SC2016 # Expanded by the inner shell.
     check "system ships the tower OS-update rule as a regular 0644 file" \
-        bash -c 'f=/etc/opensnitchd/rules/001-tower-os-update.json; [[ -f "$f" && ! -L "$f" && "$(stat -c %a "$f")" == 644 ]]'
+        bash -c 'f=/etc/opensnitchd/rules/000-snitchwatch-tower-os-update.json; [[ -f "$f" && ! -L "$f" && "$(stat -c %a "$f")" == 644 ]]'
     check "tower OS-update rule is the reviewed allow, never precedence" \
-        jq -e '.name == "001-tower-os-update" and .action == "allow" and .precedence == false' \
-            /etc/opensnitchd/rules/001-tower-os-update.json
+        jq -e '.name == "000-snitchwatch-tower-os-update" and .action == "allow" and .precedence == false' \
+            /etc/opensnitchd/rules/000-snitchwatch-tower-os-update.json
     # Updates need name resolution too: the resolver may always reach DNS.
     # shellcheck disable=SC2016 # Expanded by the inner shell.
     check "system ships the tower resolver DNS rule as a regular 0644 file" \
-        bash -c 'f=/etc/opensnitchd/rules/002-tower-resolved-dns.json; [[ -f "$f" && ! -L "$f" && "$(stat -c %a "$f")" == 644 ]]'
+        bash -c 'f=/etc/opensnitchd/rules/000-snitchwatch-tower-resolved-dns.json; [[ -f "$f" && ! -L "$f" && "$(stat -c %a "$f")" == 644 ]]'
     check "tower resolver DNS rule is the reviewed allow, never precedence" \
-        jq -e '.name == "002-tower-resolved-dns" and .action == "allow" and .precedence == false' \
-            /etc/opensnitchd/rules/002-tower-resolved-dns.json
+        jq -e '.name == "000-snitchwatch-tower-resolved-dns" and .action == "allow" and .precedence == false' \
+            /etc/opensnitchd/rules/000-snitchwatch-tower-resolved-dns.json
     check "the resolver path the DNS rule names exists" test -x /usr/lib/systemd/systemd-resolved
     # shellcheck disable=SC2016 # Expanded by the inner shell.
     check "opensnitchd rules dir keeps the RPM's 0755 root:root" \

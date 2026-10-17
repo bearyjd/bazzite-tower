@@ -1,7 +1,7 @@
 {
   "created": "2026-10-17T00:00:00Z",
   "updated": "2026-10-17T00:00:00Z",
-  "name": "002-tower-resolved-dns",
+  "name": "000-snitchwatch-tower-resolved-dns",
   "description": "Shipped by bazzite-tower: name resolution always works under DefaultAction deny, so OS image updates can reach their registry. Only the system resolver (/usr/lib/systemd/systemd-resolved) running as a system account (uid below 1000; systemd-resolve's uid is allocated at build time) may reach DNS (port 53) or DNS-over-TLS (port 853) over UDP or TCP. Deny rules and blocklists still win.",
   "action": "allow",
   "duration": "always",

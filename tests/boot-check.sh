@@ -124,10 +124,10 @@ else:
         bash -c 'f=/etc/opensnitchd/rules/000-snitchwatch-bridge-fetch.json; [[ -f "$f" && ! -L "$f" && "$(stat -c %a "$f")" == 644 ]]'
     # shellcheck disable=SC2016 # Expanded by the inner shell.
     hard "shipped tower OS-update rule is a regular 0644 file" \
-        bash -c 'f=/etc/opensnitchd/rules/001-tower-os-update.json; [[ -f "$f" && ! -L "$f" && "$(stat -c %a "$f")" == 644 ]]'
+        bash -c 'f=/etc/opensnitchd/rules/000-snitchwatch-tower-os-update.json; [[ -f "$f" && ! -L "$f" && "$(stat -c %a "$f")" == 644 ]]'
     # shellcheck disable=SC2016 # Expanded by the inner shell.
     hard "shipped tower resolver DNS rule is a regular 0644 file" \
-        bash -c 'f=/etc/opensnitchd/rules/002-tower-resolved-dns.json; [[ -f "$f" && ! -L "$f" && "$(stat -c %a "$f")" == 644 ]]'
+        bash -c 'f=/etc/opensnitchd/rules/000-snitchwatch-tower-resolved-dns.json; [[ -f "$f" && ! -L "$f" && "$(stat -c %a "$f")" == 644 ]]'
     hard "system bridge user resolves" id snitchwatch
     hard "system GUI group resolves" getent group snitchwatch-ui
     hard "sysusers and tmpfiles setup completed" \

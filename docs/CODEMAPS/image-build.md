@@ -71,8 +71,8 @@ stages upstream's `ebpf` daemon config, which `snitchwatch-system-stage.py`
 removes from the overlay (unit-tested); `95-firewall.sh` installs the tower's `deny`/`proc`
 candidate after the RPM extraction. `snitchwatch-system-stage.py` also stages the
 tower's always-on OS-update rules (`snitchwatch-system-os-update-rule.json` ->
-`/etc/opensnitchd/rules/001-tower-os-update.json`, `snitchwatch-system-resolved-dns-rule.json`
--> `002-tower-resolved-dns.json`; digests pinned in the verifier). Sysusers are materialized
+`/etc/opensnitchd/rules/000-snitchwatch-tower-os-update.json`, `snitchwatch-system-resolved-dns-rule.json`
+-> `000-snitchwatch-tower-resolved-dns.json`; digests pinned in the verifier). Sysusers are materialized
 before tmpfiles and socket startup. Existing live bootc `/etc` drift is a
 migration decision, not an implicit policy overwrite. Legacy remains fail open.
 

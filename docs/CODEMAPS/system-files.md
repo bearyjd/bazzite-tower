@@ -53,11 +53,11 @@ under `system_files/`: `/usr/bin/snitchwatch-bridge-cli`,
 (r15; replaces the tower's former `20-system-bridge.conf`) and three shipped
 opensnitchd rules: upstream's `/etc/opensnitchd/rules/000-snitchwatch-bridge-fetch.json`
 (bridge HTTPS blocklist fetch; pinned in build-pins) and the tower's always-on
-`/etc/opensnitchd/rules/001-tower-os-update.json` (r15, "always update os": allow
+`/etc/opensnitchd/rules/000-snitchwatch-tower-os-update.json` (r15, "always update os": allow
 `/usr/bin/skopeo`/`/usr/bin/rpm-ostree` as uid 0 or 65534 to TCP 443,
 `precedence: false`; source `build_files/firewall/snitchwatch-system-os-update-rule.json`,
 digest pinned in the verifier) and its companion
-`/etc/opensnitchd/rules/002-tower-resolved-dns.json` (allow
+`/etc/opensnitchd/rules/000-snitchwatch-tower-resolved-dns.json` (allow
 `/usr/lib/systemd/systemd-resolved` as a system uid 0–999 to port 53/853,
 UDP/TCP; source `snitchwatch-system-resolved-dns-rule.json`, digest pinned).
 They are the only `/etc` files the manifest

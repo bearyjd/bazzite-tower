@@ -26,12 +26,12 @@ FETCH_RULE = '/etc/opensnitchd/rules/000-snitchwatch-bridge-fetch.json'
 # os"): OS image pulls keep working under DefaultAction deny with no GUI.  Not
 # an upstream file, so it is pinned here by digest rather than in build-pins.
 # Source: build_files/firewall/snitchwatch-system-os-update-rule.json.
-OS_UPDATE_RULE = '/etc/opensnitchd/rules/001-tower-os-update.json'
-OS_UPDATE_RULE_SHA256 = '549055107d191c677abb2a1affe1622897321395bf447569da075f411378aa53'
+OS_UPDATE_RULE = '/etc/opensnitchd/rules/000-snitchwatch-tower-os-update.json'
+OS_UPDATE_RULE_SHA256 = '9bd06784270af7316380b3cabe42059450b64d755fc997e64a5c0c8d317c4a42'
 # Its companion: OS updates need name resolution, so systemd-resolved may
 # always reach DNS.  Source: build_files/firewall/snitchwatch-system-resolved-dns-rule.json.
-DNS_RULE = '/etc/opensnitchd/rules/002-tower-resolved-dns.json'
-DNS_RULE_SHA256 = '6704915648f9503b53f9111f5f26106f4fcfaaf98bbfca17fb434fcb0bc262e0'
+DNS_RULE = '/etc/opensnitchd/rules/000-snitchwatch-tower-resolved-dns.json'
+DNS_RULE_SHA256 = '8f80789e093fd98f0b2b642268477b1e68d59006e4eb1d518acfecb7e95eaa29'
 TOWER_RULES = {OS_UPDATE_RULE: OS_UPDATE_RULE_SHA256, DNS_RULE: DNS_RULE_SHA256}
 RESERVED_RULES = {FETCH_RULE, *TOWER_RULES}
 SOURCE_FILES = {

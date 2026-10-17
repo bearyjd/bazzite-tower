@@ -20,9 +20,9 @@ FACTORY = ROOT / 'build_files/firewall'
 FIXTURES = Path(__file__).with_name('test-snitchwatch-image-build-fixtures')
 MANIFEST = 'usr/share/snitchwatch/system-bridge-manifest.json'
 FETCH_RULE = 'etc/opensnitchd/rules/000-snitchwatch-bridge-fetch.json'
-OS_UPDATE_RULE = 'etc/opensnitchd/rules/001-tower-os-update.json'
+OS_UPDATE_RULE = 'etc/opensnitchd/rules/000-snitchwatch-tower-os-update.json'
 OS_UPDATE_SOURCE = FACTORY / 'snitchwatch-system-os-update-rule.json'
-DNS_RULE = 'etc/opensnitchd/rules/002-tower-resolved-dns.json'
+DNS_RULE = 'etc/opensnitchd/rules/000-snitchwatch-tower-resolved-dns.json'
 DNS_SOURCE = FACTORY / 'snitchwatch-system-resolved-dns-rule.json'
 sha = lambda data: hashlib.sha256(data).hexdigest()
 
@@ -129,8 +129,8 @@ class ImageBuildContracts(unittest.TestCase):
         self.write('etc/opensnitchd/rules/other.json', '{}')
         self.write('etc/shadow', 'x')
         for name in ['/etc/shadow', '/etc/opensnitchd/rules/other.json', '/etc/opensnitchd/rules/../rules/000-snitchwatch-bridge-fetch.json',
-                     '/etc/opensnitchd/rules/../rules/001-tower-os-update.json',
-                     '/etc/opensnitchd/rules/../rules/002-tower-resolved-dns.json', '/usr/../etc/shadow']:
+                     '/etc/opensnitchd/rules/../rules/000-snitchwatch-tower-os-update.json',
+                     '/etc/opensnitchd/rules/../rules/000-snitchwatch-tower-resolved-dns.json', '/usr/../etc/shadow']:
             with self.subTest(name=name), self.assertRaisesRegex(ValueError, 'invalid immutable file path'):
                 module['read_file'](self.root, name)
         self.assertEqual(module['read_file'](self.root, '/' + FETCH_RULE), (self.root / FETCH_RULE).read_bytes())
@@ -183,6 +183,16 @@ class ImageBuildContracts(unittest.TestCase):
     def test_manifest_without_os_update_rule(self):
         del self.manifest['files']['/' + OS_UPDATE_RULE]
         self.assertIn('inventory', self.check().stderr)
+
+    def test_tower_rules_use_the_bridges_reserved_packaged_prefix(self):
+        # Snitchwatch 7bf3f19 shows every 000-snitchwatch-* rule read-only and
+        # refuses GUI change/toggle/delete of it; only the fetch rule's exact
+        # name is its own, so the tower names must differ from that one.
+        for source, path in ((OS_UPDATE_SOURCE, OS_UPDATE_RULE), (DNS_SOURCE, DNS_RULE)):
+            name = json.loads(source.read_text())['name']
+            self.assertTrue(name.startswith('000-snitchwatch-tower-'), name)
+            self.assertNotEqual(name, '000-snitchwatch-bridge-fetch')
+            self.assertEqual(Path(path).name, name + '.json')
 
     def test_dns_rule_source_is_the_pinned_digest(self):
         module = runpy.run_path(str(FACTORY / 'snitchwatch-system-verify.py'))
@@ -247,7 +257,7 @@ class ImageBuildContracts(unittest.TestCase):
 
     def test_os_update_rule_symlinked(self):
         path = self.root / OS_UPDATE_RULE
-        copy = self.root / 'elsewhere/001-tower-os-update.json'
+        copy = self.root / 'elsewhere/000-snitchwatch-tower-os-update.json'
         copy.parent.mkdir(); copy.write_bytes(path.read_bytes()); copy.chmod(0o644)
         path.unlink(); path.symlink_to(copy)
         self.assertIn('symlink in immutable file path: /' + OS_UPDATE_RULE, self.check().stderr)

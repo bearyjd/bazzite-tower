@@ -33,8 +33,8 @@ DAEMON_DROPIN = "/usr/lib/systemd/system/opensnitch.service.d/snitchwatch-system
 FETCH_RULE = "/etc/opensnitchd/rules/000-snitchwatch-bridge-fetch.json"
 # The tower's always-on OS-update and resolver DNS rules; with FETCH_RULE, the
 # only entries outside /usr.
-OS_UPDATE_RULE = "/etc/opensnitchd/rules/001-tower-os-update.json"
-DNS_RULE = "/etc/opensnitchd/rules/002-tower-resolved-dns.json"
+OS_UPDATE_RULE = "/etc/opensnitchd/rules/000-snitchwatch-tower-os-update.json"
+DNS_RULE = "/etc/opensnitchd/rules/000-snitchwatch-tower-resolved-dns.json"
 RESERVED_RULES = {FETCH_RULE: "Snitchwatch fetch rule", OS_UPDATE_RULE: "tower OS-update rule", DNS_RULE: "tower resolver DNS rule"}
 BASE_GLOBAL_OVERRIDE = "/var/lib/flatpak/overrides/global"
 BASE_GLOBAL_OVERRIDE_SHA256 = "85e2bf73515c8da8950f1afbbfaedfeca453777eeb0be0ea869f4db6c779bd80"

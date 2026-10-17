@@ -75,8 +75,8 @@ def main():
     copy(args.rpm_inventory, out / 'usr/share/snitchwatch/native-rpm-inventory.txt')
     # Tower-owned always-on rules: OS image updates (and the DNS they need)
     # under DefaultAction deny.  Digests are pinned in the verifier, run below.
-    copy(args.os_update_rule, out / 'etc/opensnitchd/rules/001-tower-os-update.json')
-    copy(args.resolved_dns_rule, out / 'etc/opensnitchd/rules/002-tower-resolved-dns.json')
+    copy(args.os_update_rule, out / 'etc/opensnitchd/rules/000-snitchwatch-tower-os-update.json')
+    copy(args.resolved_dns_rule, out / 'etc/opensnitchd/rules/000-snitchwatch-tower-resolved-dns.json')
     for old, new in [('MANIFEST.json', 'schema1-artifact-MANIFEST.json'), ('SHA256SUMS', 'schema1-artifact-SHA256SUMS')]:
         copy(args.artifact / 'usr/share/snitchwatch-bridge' / old, out / 'usr/share/snitchwatch' / new)
     marker = out / 'usr/share/bazzite-tower/snitchwatch-bridge-profile'

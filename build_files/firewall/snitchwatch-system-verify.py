@@ -28,7 +28,12 @@ FETCH_RULE = '/etc/opensnitchd/rules/000-snitchwatch-bridge-fetch.json'
 # Source: build_files/firewall/snitchwatch-system-os-update-rule.json.
 OS_UPDATE_RULE = '/etc/opensnitchd/rules/001-tower-os-update.json'
 OS_UPDATE_RULE_SHA256 = '549055107d191c677abb2a1affe1622897321395bf447569da075f411378aa53'
-RESERVED_RULES = {FETCH_RULE, OS_UPDATE_RULE}
+# Its companion: OS updates need name resolution, so systemd-resolved may
+# always reach DNS.  Source: build_files/firewall/snitchwatch-system-resolved-dns-rule.json.
+DNS_RULE = '/etc/opensnitchd/rules/002-tower-resolved-dns.json'
+DNS_RULE_SHA256 = '6704915648f9503b53f9111f5f26106f4fcfaaf98bbfca17fb434fcb0bc262e0'
+TOWER_RULES = {OS_UPDATE_RULE: OS_UPDATE_RULE_SHA256, DNS_RULE: DNS_RULE_SHA256}
+RESERVED_RULES = {FETCH_RULE, *TOWER_RULES}
 SOURCE_FILES = {
     '/usr/lib/systemd/system/snitchwatch-system-bridge.service': 'packaging/system/snitchwatch-system-bridge.service',
     '/usr/lib/systemd/system/snitchwatch-system-bridge-grpc.socket': 'packaging/system/snitchwatch-system-bridge-grpc.socket',
@@ -46,7 +51,7 @@ RECEIPTS = {
     '/usr/share/snitchwatch/schema1-artifact-SHA256SUMS',
 }
 REQUIRED = set(SOURCE_FILES) | RECEIPTS | {
-    BINARY, PROFILE, CONFIG, LEGACY_CONFIG, OS_UPDATE_RULE,
+    BINARY, PROFILE, CONFIG, LEGACY_CONFIG, OS_UPDATE_RULE, DNS_RULE,
     '/usr/libexec/snitchwatch/verify-system-manifest.py',
 } | {'/usr/share/licenses/snitchwatch-bridge/' + name for name in LICENSES}
 
@@ -60,6 +65,8 @@ def describe(name):
         return name + ' (the shipped, image-pinned Snitchwatch opensnitchd rule; it is reserved: restore it, do not edit or delete it)'
     if name == OS_UPDATE_RULE:
         return name + ' (the shipped, image-pinned tower OS-update opensnitchd rule; it is reserved: restore it, do not edit or delete it)'
+    if name == DNS_RULE:
+        return name + ' (the shipped, image-pinned tower resolver DNS opensnitchd rule; it is reserved: restore it, do not edit or delete it)'
     return name
 
 
@@ -119,8 +126,9 @@ def verify(root):
     for name, original in SOURCE_FILES.items():
         if files[name] != pins['sourceFiles'][original]:
             raise ValueError('system overlay differs from pinned source: ' + describe(name))
-    if files[OS_UPDATE_RULE] != OS_UPDATE_RULE_SHA256:
-        raise ValueError('tower OS-update rule differs from the reviewed digest: ' + describe(OS_UPDATE_RULE))
+    for name, expected in TOWER_RULES.items():
+        if files[name] != expected:
+            raise ValueError('tower rule differs from the reviewed digest: ' + describe(name))
     if files[LEGACY_CONFIG] != pins['legacyConfigSha256']:
         raise ValueError('legacy image-intent reference differs from pinned migration baseline')
     config = json.loads(contents[CONFIG])

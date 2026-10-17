@@ -320,10 +320,24 @@ systemd. `rpm-ostreed` itself (`ExecStart=+rpm-ostree start-daemon`, root)
 fetches layered-package repo metadata in-process. No host match: ghcr.io
 redirects blobs to `pkg-containers.githubusercontent.com`. Like the fetch rule,
 its digest is pinned in `verify-system-manifest.py`, so editing or deleting it
-fails verification. It does not cover DNS: if `systemd-resolved` has no allow
-rule and no GUI answers, name resolution — and therefore the update — is still
-denied; keep a local resolved rule (this host has
-`010-allow-systemd-resolved.json`).
+fails verification.
+
+Pulls also need name resolution, so a third reserved rule,
+`/etc/opensnitchd/rules/002-tower-resolved-dns.json`, lets the system resolver
+always reach DNS: process path `/usr/lib/systemd/systemd-resolved`, a system
+uid (0–999, regexp — `systemd-resolve` is allocated at build time: 990 on this
+image, not the 193 `sysusers.d` asks for), destination port 53 or 853 (DNS,
+DNS-over-TLS), UDP or TCP. A normal user (uid ≥ 1000) running the binary
+themselves does not match, so it is not a DNS exfiltration channel for them;
+any app can still tunnel data inside ordinary lookups through the resolver,
+as with any DNS allow. Same pinning and `precedence: false`. It coexists with
+a local `010-allow-systemd-resolved.json` and with Snitchwatch's opt-in
+"dns-resolved" recommended rule (`snitchwatch-default-dns-resolved`): all are
+allows, and the bridge only manages names under its own prefixes
+(`snitchwatch-default-`, blocklist `z00-`/`900-`), so it neither flags nor
+deletes the tower files. A GUI user could still delete them from the Rules
+page (the `00x-tower-` names are not reserved in the bridge); the verifier
+then refuses until the image copy is restored.
 
 ## Common issues
 

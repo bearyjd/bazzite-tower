@@ -65,7 +65,7 @@ class Fixture(common.Context):
             self.properties[unit] = dict(Listen=path+" (Stream)", SocketUser="root", SocketGroup=group, SocketMode=mode, Accept="no", Triggers=common.SERVICE, FragmentPath="/usr/lib/systemd/system/"+unit, DropInPaths="", NeedDaemonReload="no")
         self.write(common.PROFILE, "system\n")
         self.write(common.BINARY, "reviewed released bridge executable\n", 0o755)
-        mandatory = [common.BINARY, common.REFERENCE, "/usr/lib/sysusers.d/snitchwatch.conf", "/usr/lib/tmpfiles.d/snitchwatch.conf", common.DAEMON_DROPIN, common.FETCH_RULE, common.OS_UPDATE_RULE]
+        mandatory = [common.BINARY, common.REFERENCE, "/usr/lib/sysusers.d/snitchwatch.conf", "/usr/lib/tmpfiles.d/snitchwatch.conf", common.DAEMON_DROPIN, common.FETCH_RULE, common.OS_UPDATE_RULE, common.DNS_RULE]
         mandatory += ["/usr/lib/systemd/system/"+unit for unit in (common.SERVICE, *common.SOCKETS)]
         for name in mandatory:
             if name != common.BINARY:
@@ -353,8 +353,8 @@ class SystemBehavior(unittest.TestCase):
 
     def test_reserved_rules_are_the_only_manifest_entries_outside_usr(self):
         # Was "fetch rule is the only entry": r15 adds exactly the tower
-        # OS-update rule; any other /etc entry still refuses.
-        self.assertEqual(set(common.RESERVED_RULES), {common.FETCH_RULE, common.OS_UPDATE_RULE})
+        # OS-update and resolver DNS rules; any other /etc entry still refuses.
+        self.assertEqual(set(common.RESERVED_RULES), {common.FETCH_RULE, common.OS_UPDATE_RULE, common.DNS_RULE})
         common.immutable(self.ctx)
         self.ctx.write("/etc/opensnitchd/rules/other.json", "{}\n")
         self.ctx.refresh_manifest([*self.ctx.manifest["files"], "/etc/opensnitchd/rules/other.json"])
@@ -369,6 +369,17 @@ class SystemBehavior(unittest.TestCase):
     def test_manifest_without_os_update_rule_refuses(self):
         self.ctx.refresh_manifest([name for name in self.ctx.manifest["files"] if name != common.OS_UPDATE_RULE])
         with self.assertRaisesRegex(common.Refusal, "lacks required installed assets"):
+            common.immutable(self.ctx)
+
+    def test_manifest_without_dns_rule_refuses(self):
+        self.ctx.refresh_manifest([name for name in self.ctx.manifest["files"] if name != common.DNS_RULE])
+        with self.assertRaisesRegex(common.Refusal, "lacks required installed assets"):
+            common.immutable(self.ctx)
+
+    def test_dns_rule_hash_drift_refuses(self):
+        common.immutable(self.ctx)
+        self.ctx.write(common.DNS_RULE, "edited\n")
+        with self.assertRaisesRegex(common.Refusal, "installed asset hash mismatch: "+common.DNS_RULE):
             common.immutable(self.ctx)
 
     def test_os_update_rule_hash_drift_refuses(self):

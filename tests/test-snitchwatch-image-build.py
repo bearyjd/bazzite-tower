@@ -8,6 +8,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import runpy
 import shutil
 import subprocess
@@ -21,6 +22,8 @@ MANIFEST = 'usr/share/snitchwatch/system-bridge-manifest.json'
 FETCH_RULE = 'etc/opensnitchd/rules/000-snitchwatch-bridge-fetch.json'
 OS_UPDATE_RULE = 'etc/opensnitchd/rules/001-tower-os-update.json'
 OS_UPDATE_SOURCE = FACTORY / 'snitchwatch-system-os-update-rule.json'
+DNS_RULE = 'etc/opensnitchd/rules/002-tower-resolved-dns.json'
+DNS_SOURCE = FACTORY / 'snitchwatch-system-resolved-dns-rule.json'
 sha = lambda data: hashlib.sha256(data).hexdigest()
 
 
@@ -53,6 +56,7 @@ class ImageBuildContracts(unittest.TestCase):
             self.write(directory + target, (FIXTURES / name).read_bytes())
         self.write(FETCH_RULE, (FIXTURES / '000-snitchwatch-bridge-fetch.json').read_bytes())
         self.write(OS_UPDATE_RULE, OS_UPDATE_SOURCE.read_bytes())
+        self.write(DNS_RULE, DNS_SOURCE.read_bytes())
         for name in ['LICENSE', 'LICENSE.opensnitch', 'THIRD-PARTY-LICENSES.md']:
             self.write('usr/share/licenses/snitchwatch-bridge/' + name, 'License metadata fixture\n')
         self.write('usr/share/bazzite-tower/snitchwatch-bridge-profile', 'system\n')
@@ -94,8 +98,9 @@ class ImageBuildContracts(unittest.TestCase):
         result = self.check(valid=True)
         # 20 since r15: the tower's /usr/share reference copy of its own drop-in
         # is gone; upstream's pinned drop-in is the one daemon drop-in.  21 with
-        # the tower's always-on OS-update rule (r15, owner decision 2026-10-17).
-        self.assertEqual(json.loads(result.stdout)['verifiedFiles'], 21)
+        # the tower's always-on OS-update rule (r15, owner decision 2026-10-17),
+        # 22 with its companion resolver DNS rule.
+        self.assertEqual(json.loads(result.stdout)['verifiedFiles'], 22)
         self.assertEqual(before, {str(p): p.read_bytes() for p in self.root.rglob('*') if p.is_file() and not p.is_symlink()})
 
     def test_binary_tamper(self):
@@ -117,18 +122,21 @@ class ImageBuildContracts(unittest.TestCase):
         self.assertEqual(self.manifest['files']['/' + FETCH_RULE], pinned)
 
     def test_read_file_allows_only_the_reserved_rules_under_etc(self):
-        # Was "only the fetch rule"; r15 reserves exactly one more /etc path,
-        # the tower OS-update rule.  Everything else under /etc still refuses.
+        # Was "only the fetch rule"; r15 reserves exactly two more /etc paths,
+        # the tower OS-update and resolver DNS rules.  Everything else under
+        # /etc still refuses.
         module = runpy.run_path(str(FACTORY / 'snitchwatch-system-verify.py'))
         self.write('etc/opensnitchd/rules/other.json', '{}')
         self.write('etc/shadow', 'x')
         for name in ['/etc/shadow', '/etc/opensnitchd/rules/other.json', '/etc/opensnitchd/rules/../rules/000-snitchwatch-bridge-fetch.json',
-                     '/etc/opensnitchd/rules/../rules/001-tower-os-update.json', '/usr/../etc/shadow']:
+                     '/etc/opensnitchd/rules/../rules/001-tower-os-update.json',
+                     '/etc/opensnitchd/rules/../rules/002-tower-resolved-dns.json', '/usr/../etc/shadow']:
             with self.subTest(name=name), self.assertRaisesRegex(ValueError, 'invalid immutable file path'):
                 module['read_file'](self.root, name)
         self.assertEqual(module['read_file'](self.root, '/' + FETCH_RULE), (self.root / FETCH_RULE).read_bytes())
         self.assertEqual(module['read_file'](self.root, '/' + OS_UPDATE_RULE), (self.root / OS_UPDATE_RULE).read_bytes())
-        self.assertEqual(module['RESERVED_RULES'], {'/' + FETCH_RULE, '/' + OS_UPDATE_RULE})
+        self.assertEqual(module['read_file'](self.root, '/' + DNS_RULE), (self.root / DNS_RULE).read_bytes())
+        self.assertEqual(module['RESERVED_RULES'], {'/' + FETCH_RULE, '/' + OS_UPDATE_RULE, '/' + DNS_RULE})
 
     def test_os_update_rule_source_is_the_pinned_digest(self):
         module = runpy.run_path(str(FACTORY / 'snitchwatch-system-verify.py'))
@@ -159,7 +167,7 @@ class ImageBuildContracts(unittest.TestCase):
         rule['operator']['list'] = [op for op in rule['operator']['list'] if op['operand'] != 'user.id']
         self.write(OS_UPDATE_RULE, json.dumps(rule)); self.update_hash(OS_UPDATE_RULE)
         result = self.check()
-        self.assertIn('tower OS-update rule differs from the reviewed digest: /' + OS_UPDATE_RULE, result.stderr)
+        self.assertIn('tower rule differs from the reviewed digest: /' + OS_UPDATE_RULE, result.stderr)
         self.assertIn('reserved', result.stderr)
 
     def test_os_update_rule_edit_without_manifest_update(self):
@@ -175,6 +183,67 @@ class ImageBuildContracts(unittest.TestCase):
     def test_manifest_without_os_update_rule(self):
         del self.manifest['files']['/' + OS_UPDATE_RULE]
         self.assertIn('inventory', self.check().stderr)
+
+    def test_dns_rule_source_is_the_pinned_digest(self):
+        module = runpy.run_path(str(FACTORY / 'snitchwatch-system-verify.py'))
+        self.assertEqual(sha(DNS_SOURCE.read_bytes()), module['DNS_RULE_SHA256'])
+        self.assertEqual(self.manifest['files']['/' + DNS_RULE], module['DNS_RULE_SHA256'])
+
+    def test_dns_rule_is_narrow_and_cannot_shadow_deny(self):
+        rule = json.loads(DNS_SOURCE.read_text())
+        self.assertEqual(rule['name'], Path(DNS_RULE).stem)
+        self.assertEqual((rule['action'], rule['duration'], rule['enabled']), ('allow', 'always', True))
+        self.assertIs(rule['precedence'], False)
+        op = rule['operator']
+        self.assertEqual((op['operand'], op['type']), ('list', 'list'))
+        terms = {term['operand']: (term['type'], term['data'], term['sensitive']) for term in op['list']}
+        self.assertEqual(len(terms), len(op['list']))
+        self.assertEqual(terms, {
+            'process.path': ('simple', '/usr/lib/systemd/systemd-resolved', True),
+            'user.id': ('regexp', '^([0-9]{1,2}|[1-9][0-9]{2})$', False),
+            'dest.port': ('regexp', '^(53|853)$', False),
+            'protocol': ('regexp', '^(udp|udp6|tcp|tcp6)$', False),
+        })
+
+    def test_dns_rule_matches_only_system_uids_and_dns_ports(self):
+        # OpenSnitch matches user.id against strconv.Itoa(uid) and dest.port
+        # against its decimal string (operator.go at b404c4c); Python's re
+        # agrees with Go RE2 on these anchored patterns.
+        terms = {term['operand']: re.compile(term['data']) for term in json.loads(DNS_SOURCE.read_text())['operator']['list'] if term['type'] == 'regexp'}
+        for uid in ('0', '9', '10', '99', '100', '193', '990', '999'):
+            self.assertTrue(terms['user.id'].search(uid), uid)
+        for uid in ('1000', '1001', '65534', '524288', '-1', ''):
+            self.assertFalse(terms['user.id'].search(uid), uid)
+        for port in ('53', '853'):
+            self.assertTrue(terms['dest.port'].search(port), port)
+        for port in ('5353', '5355', '443', '8853', '530', '3'):
+            self.assertFalse(terms['dest.port'].search(port), port)
+        for proto in ('udp', 'udp6', 'tcp', 'tcp6'):
+            self.assertTrue(terms['protocol'].search(proto), proto)
+        for proto in ('icmp', 'udplite', 'sctp'):
+            self.assertFalse(terms['protocol'].search(proto), proto)
+
+    def test_self_consistent_dns_rule_edit(self):
+        rule = json.loads((self.root / DNS_RULE).read_text())
+        rule['operator']['list'] = [op for op in rule['operator']['list'] if op['operand'] != 'user.id']
+        self.write(DNS_RULE, json.dumps(rule)); self.update_hash(DNS_RULE)
+        result = self.check()
+        self.assertIn('tower rule differs from the reviewed digest: /' + DNS_RULE, result.stderr)
+        self.assertIn('reserved', result.stderr)
+
+    def test_missing_dns_rule(self):
+        (self.root / DNS_RULE).unlink()
+        result = self.check()
+        self.assertIn('missing immutable file: /' + DNS_RULE, result.stderr)
+        self.assertIn('reserved', result.stderr)
+
+    def test_manifest_without_dns_rule(self):
+        del self.manifest['files']['/' + DNS_RULE]
+        self.assertIn('inventory', self.check().stderr)
+
+    def test_dns_rule_mode_0600(self):
+        (self.root / DNS_RULE).chmod(0o600)
+        self.assertIn('incorrect file type/mode: /' + DNS_RULE, self.check().stderr)
 
     def test_os_update_rule_symlinked(self):
         path = self.root / OS_UPDATE_RULE
@@ -221,8 +290,8 @@ class ImageBuildContracts(unittest.TestCase):
         moved = self.root / 'elsewhere-rules'
         rules.rename(moved); rules.symlink_to(moved)
         result = self.check()
-        # Both reserved rules live there; whichever is read first must refuse.
-        self.assertRegex(result.stderr, 'symlink in immutable file path: /(' + FETCH_RULE + '|' + OS_UPDATE_RULE + ') ')
+        # All reserved rules live there; whichever is read first must refuse.
+        self.assertRegex(result.stderr, 'symlink in immutable file path: /(' + '|'.join((FETCH_RULE, OS_UPDATE_RULE, DNS_RULE)) + ') ')
 
     def test_self_consistent_hardening_tamper(self):
         name = 'usr/lib/systemd/system/snitchwatch-system-bridge.service'
@@ -435,7 +504,7 @@ esac
                 '--legacy-config', str(ROOT / 'system_files/usr/share/bazzite-tower/opensnitchd-default-config.json'),
                 '--candidate-config', str(ROOT / 'system_files/usr/share/bazzite-tower/opensnitchd-system-bridge-config.json'),
                 '--build-log', str(logs[0]), '--repro-log', str(logs[1]), '--rpm-inventory', str(logs[2]),
-                '--tarball', str(logs[3]), '--os-update-rule', str(OS_UPDATE_SOURCE)]
+                '--tarball', str(logs[3]), '--os-update-rule', str(OS_UPDATE_SOURCE), '--resolved-dns-rule', str(DNS_SOURCE)]
         env = {**os.environ, 'PATH': str(self.tmp / 'bin') + os.pathsep + os.environ['PATH']}
         return subprocess.run(argv, env=env, capture_output=True, text=True), out
 
@@ -451,6 +520,8 @@ esac
         staged_rule = out / OS_UPDATE_RULE
         self.assertEqual(staged_rule.read_bytes(), OS_UPDATE_SOURCE.read_bytes())
         self.assertEqual(staged_rule.stat().st_mode & 0o7777, 0o644)
+        self.assertEqual((out / DNS_RULE).read_bytes(), DNS_SOURCE.read_bytes())
+        self.assertEqual((out / DNS_RULE).stat().st_mode & 0o7777, 0o644)
 
     def test_stage_refuses_when_upstream_config_was_not_staged(self):
         result, _ = self.run_stage('mkdir -p "$1/etc/opensnitchd"\nprintf "{}" > "$1/etc/opensnitchd/default-config.json"\n')

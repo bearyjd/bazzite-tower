@@ -21,7 +21,7 @@ def copy(source, dest, mode=0o644):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    for arg in ('source', 'artifact', 'out', 'pins', 'verifier', 'legacy-config', 'candidate-config', 'build-log', 'repro-log', 'rpm-inventory', 'tarball', 'os-update-rule'):
+    for arg in ('source', 'artifact', 'out', 'pins', 'verifier', 'legacy-config', 'candidate-config', 'build-log', 'repro-log', 'rpm-inventory', 'tarball', 'os-update-rule', 'resolved-dns-rule'):
         parser.add_argument('--' + arg, required=True, type=Path)
     args = parser.parse_args()
     source, out = args.source.resolve(), args.out.resolve()
@@ -73,9 +73,10 @@ def main():
     copy(args.legacy_config, out / 'usr/share/bazzite-tower/opensnitchd-default-config.json')
     copy(args.candidate_config, out / 'usr/share/bazzite-tower/opensnitchd-system-bridge-config.json')
     copy(args.rpm_inventory, out / 'usr/share/snitchwatch/native-rpm-inventory.txt')
-    # Tower-owned always-on rule: OS image updates under DefaultAction deny.
-    # Its digest is pinned in the verifier, which checks it below.
+    # Tower-owned always-on rules: OS image updates (and the DNS they need)
+    # under DefaultAction deny.  Digests are pinned in the verifier, run below.
     copy(args.os_update_rule, out / 'etc/opensnitchd/rules/001-tower-os-update.json')
+    copy(args.resolved_dns_rule, out / 'etc/opensnitchd/rules/002-tower-resolved-dns.json')
     for old, new in [('MANIFEST.json', 'schema1-artifact-MANIFEST.json'), ('SHA256SUMS', 'schema1-artifact-SHA256SUMS')]:
         copy(args.artifact / 'usr/share/snitchwatch-bridge' / old, out / 'usr/share/snitchwatch' / new)
     marker = out / 'usr/share/bazzite-tower/snitchwatch-bridge-profile'

@@ -28,7 +28,7 @@ UNITS = (*SOCKETS, SERVICE, "opensnitch.service")
 APP = "org.snitchwatch.Snitchwatch"
 VENDOR_DROPIN = "/usr/lib/systemd/system/service.d/10-timeout-abort.conf"
 DAEMON_UNIT = "/usr/lib/systemd/system/opensnitch.service"
-DAEMON_DROPIN = "/usr/lib/systemd/system/opensnitch.service.d/20-system-bridge.conf"
+DAEMON_DROPIN = "/usr/lib/systemd/system/opensnitch.service.d/snitchwatch-system-bridge.conf"
 # The one opensnitchd rule Snitchwatch ships; the only manifest entry outside /usr.
 FETCH_RULE = "/etc/opensnitchd/rules/000-snitchwatch-bridge-fetch.json"
 BASE_GLOBAL_OVERRIDE = "/var/lib/flatpak/overrides/global"
@@ -135,7 +135,7 @@ def immutable(ctx):
             and re.fullmatch(r"[0-9a-f]{40}", source.get("commit", "")) and re.fullmatch(r"[0-9a-f]{40}", source.get("submoduleCommit", "")), "unexpected source provenance")
     require(manifest.get("binary", {}).get("path") == BINARY, "unexpected manifest executable path")
     files = manifest.get("files", {})
-    mandatory = {BINARY, REFERENCE, LEGACY_REFERENCE, PINS, FETCH_RULE, "/usr/lib/sysusers.d/snitchwatch.conf", "/usr/lib/tmpfiles.d/snitchwatch.conf", "/usr/lib/systemd/system/opensnitch.service.d/20-system-bridge.conf"}
+    mandatory = {BINARY, REFERENCE, LEGACY_REFERENCE, PINS, FETCH_RULE, "/usr/lib/sysusers.d/snitchwatch.conf", "/usr/lib/tmpfiles.d/snitchwatch.conf", DAEMON_DROPIN}
     mandatory.update("/usr/lib/systemd/system/"+unit for unit in (SERVICE, *SOCKETS))
     require(isinstance(files, dict) and mandatory <= files.keys(), "system manifest lacks required installed assets")
     for name, expected in files.items():
@@ -220,7 +220,9 @@ def unit_contract(ctx):
     loaded_current("opensnitch.service", daemon)
     daemon_unit_contract(ctx, daemon)
     daemon_exec_contract(daemon["ExecStart"])
-    require(daemon["WorkingDirectory"] == "/run/snitchwatch" and SOCKETS[0] in daemon["Wants"].split() and SOCKETS[0] in daemon["After"].split(), "OpenSnitch effective Unix socket CWD/dependencies drift")
+    # The drop-in's WorkingDirectory=-/run/snitchwatch (missing is OK, so a
+    # failed socket never stops the fail-closed daemon) shows as "!/run/...".
+    require(daemon["WorkingDirectory"] == "!/run/snitchwatch" and SOCKETS[0] in daemon["Wants"].split() and SOCKETS[0] in daemon["After"].split(), "OpenSnitch effective Unix socket CWD/dependencies drift")
     # A stop of the gRPC socket must never take the firewall down with it.
     require(not any(SOCKETS[0] in daemon[key].split() for key in ("Requires", "Requisite", "BindsTo", "PartOf")), "OpenSnitch must only Want the bridge gRPC socket: a socket stop would stop the firewall")
     return actual
@@ -263,8 +265,8 @@ def daemon_exec_contract(value):
 def config_contract(ctx, address="unix:opensnitchd.sock"):
     config = json.loads(ctx.path(CONFIG).read_text())
     require(config.get("Server", {}).get("Address") == address, "live /etc Server.Address drift; use the explicit migration helper")
-    require(config.get("DefaultAction") == "allow", "DefaultAction drift: safe profile requires allow")
-    require(config.get("ProcMonitorMethod") == "proc", "ProcMonitorMethod drift: safe profile requires proc")
+    require(config.get("DefaultAction") == "deny", "DefaultAction drift: system profile requires deny (fail closed)")
+    require(config.get("ProcMonitorMethod") == "proc", "ProcMonitorMethod drift: system profile requires proc")
     return config
 
 

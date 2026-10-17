@@ -48,7 +48,9 @@ The system installer stages release-owned assets instead of duplicating them
 under `system_files/`: `/usr/bin/snitchwatch-bridge-cli`,
 `snitchwatch-system-bridge.service`, `snitchwatch-system-bridge-grpc.socket`,
 `snitchwatch-system-bridge-gui.socket`, `/usr/lib/sysusers.d/snitchwatch.conf`,
-`/usr/lib/tmpfiles.d/snitchwatch.conf` and the one shipped opensnitchd rule
+`/usr/lib/tmpfiles.d/snitchwatch.conf`, the daemon drop-in
+`/usr/lib/systemd/system/opensnitch.service.d/snitchwatch-system-bridge.conf`
+(r15; replaces the tower's former `20-system-bridge.conf`) and the one shipped opensnitchd rule
 `/etc/opensnitchd/rules/000-snitchwatch-bridge-fetch.json` (bridge HTTPS
 blocklist fetch; pinned, and the only `/etc` file the manifest verifier reads,
 so a local edit or delete fails verification). Accounts are named `snitchwatch`
@@ -120,4 +122,4 @@ Wayland/X11 sandbox authority or runtime/release acceptance.
 - `/usr/lib/bootc/install/50-signature-policy.toml` → asks bootc disk installation to enforce the image's container signature policy; it is image-owned rather than a disk-layout setting
 - `/etc/xdg/baloofilerc` → seed indexer `exclude filters` with build/cache trees (.gradle, target, language caches)
 - `/usr/libexec/bazzite-tower-stall-detect` + `/usr/lib/systemd/system/bazzite-tower-stall-detect.service` → samples CLOCK_MONOTONIC and records D-state workers on a stall. Catches freezes no kernel watchdog reports (soft lockup needs a spinning CPU; hung_task needs 120s). Built for the i915 GuC TLB invalidation timeout, drm/i915 #14469. Logs to the journal; query with `ujust freeze-report`
-- `/usr/share/bazzite-tower/opensnitchd-default-config.json` → Snitchwatch-tuned opensnitchd config. **Staged, not live**: `95-firewall.sh` `install`s it over `/etc/opensnitchd/default-config.json` *after* the OpenSnitch RPM extraction (which writes that path itself), so it can't live at the real path here. Doubles as the pristine image-intent copy to diff a 3-way-merged `/etc` against. Deltas from the RPM default: `Server.Address` `127.0.0.1:50051` in legacy or `unix:opensnitchd.sock` in the opt-in system candidate, `ProcMonitorMethod` `proc` (bundled eBPF won't load on 6.19/7.x), `DefaultAction` `allow` (fail open during rollout)
+- `/usr/share/bazzite-tower/opensnitchd-default-config.json` → Snitchwatch-tuned opensnitchd config. **Staged, not live**: `95-firewall.sh` `install`s it over `/etc/opensnitchd/default-config.json` *after* the OpenSnitch RPM extraction (which writes that path itself), so it can't live at the real path here. Doubles as the pristine image-intent copy to diff a 3-way-merged `/etc` against. Deltas from the RPM default: `Server.Address` `127.0.0.1:50051` in legacy or `unix:opensnitchd.sock` in the opt-in system candidate, `ProcMonitorMethod` `proc` (bundled eBPF won't load on 6.19/7.x), `DefaultAction` `allow` (legacy, fail open) or `deny` (system candidate `opensnitchd-system-bridge-config.json`, fail closed since r15)

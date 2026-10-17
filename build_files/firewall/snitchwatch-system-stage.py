@@ -21,7 +21,7 @@ def copy(source, dest, mode=0o644):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    for arg in ('source', 'artifact', 'out', 'pins', 'verifier', 'legacy-config', 'candidate-config', 'candidate-dropin', 'build-log', 'repro-log', 'rpm-inventory', 'tarball'):
+    for arg in ('source', 'artifact', 'out', 'pins', 'verifier', 'legacy-config', 'candidate-config', 'build-log', 'repro-log', 'rpm-inventory', 'tarball'):
         parser.add_argument('--' + arg, required=True, type=Path)
     args = parser.parse_args()
     source, out = args.source.resolve(), args.out.resolve()
@@ -46,8 +46,9 @@ def main():
     candidate = json.loads(args.candidate_config.read_text())
     expected_config = json.loads(json.dumps(legacy))
     expected_config['Server']['Address'] = 'unix:opensnitchd.sock'
-    if candidate != expected_config or candidate['DefaultAction'] != 'allow' or candidate['ProcMonitorMethod'] != 'proc':
-        raise ValueError('candidate config changes more than the daemon address')
+    expected_config['DefaultAction'] = 'deny'
+    if candidate != expected_config or candidate['DefaultAction'] != 'deny' or candidate['ProcMonitorMethod'] != 'proc':
+        raise ValueError('candidate config changes more than the daemon address and default action')
     binary = args.artifact / 'usr/bin/snitchwatch-bridge-cli'
     binary_sha = sha(binary)
     actual_version = subprocess.check_output([str(binary), '--version'], text=True, timeout=5).strip()
@@ -55,6 +56,15 @@ def main():
         raise ValueError('actual binary --version differs from required bridge version')
     # Stage from this exact source checkout, never install the schema1 user unit.
     subprocess.run(['bash', str(source / 'packaging/system/stage.sh'), str(out), str(binary), binary_sha], check=True)
+    # stage.sh also stages upstream's daemon config (deny, but ProcMonitorMethod
+    # ebpf, which fails on this laptop's kernel: snitchwatch#6).  Drop it: a file
+    # pre-placed at that path would meet the RPM's cpio extraction (mtime-
+    # dependent overwrite, see 95-firewall.sh), and 95-firewall.sh installs the
+    # reviewed tower candidate (deny + proc) there after extraction anyway.
+    staged_config = out / 'etc/opensnitchd/default-config.json'
+    if sha(staged_config) != pins['sourceFiles']['packaging/system/opensnitchd-default-config.json']:
+        raise ValueError('stage.sh did not stage the pinned upstream daemon config')
+    staged_config.unlink()
     licenses = args.artifact / 'usr/share/licenses/snitchwatch-bridge'
     for name in ('LICENSE', 'LICENSE.opensnitch', 'THIRD-PARTY-LICENSES.md'):
         copy(licenses / name, out / 'usr/share/licenses/snitchwatch-bridge' / name)
@@ -62,8 +72,6 @@ def main():
     copy(args.verifier, out / 'usr/libexec/snitchwatch/verify-system-manifest.py', 0o755)
     copy(args.legacy_config, out / 'usr/share/bazzite-tower/opensnitchd-default-config.json')
     copy(args.candidate_config, out / 'usr/share/bazzite-tower/opensnitchd-system-bridge-config.json')
-    for name in ('usr/lib/systemd/system/opensnitch.service.d/20-system-bridge.conf', 'usr/share/bazzite-tower/snitchwatch/opensnitch.service.d/20-system-bridge.conf'):
-        copy(args.candidate_dropin, out / name)
     copy(args.rpm_inventory, out / 'usr/share/snitchwatch/native-rpm-inventory.txt')
     for old, new in [('MANIFEST.json', 'schema1-artifact-MANIFEST.json'), ('SHA256SUMS', 'schema1-artifact-SHA256SUMS')]:
         copy(args.artifact / 'usr/share/snitchwatch-bridge' / old, out / 'usr/share/snitchwatch' / new)

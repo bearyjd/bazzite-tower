@@ -19,7 +19,7 @@ def main():
     common.require(os.geteuid() == 0, "all-UID inspection requires explicit root invocation: sudo /usr/libexec/bazzite-tower-snitchwatch-readiness (read-only)")
     result = common.runtime_readiness(common.Context())
     print(json.dumps(result, sort_keys=True))
-    print("Local system prerequisites pass; graphical prompt/decision behavior is not checked. DefaultAction remains allow. No state changed and no GUI user enrolled.")
+    print("Local system prerequisites pass; graphical prompt/decision behavior is not checked. DefaultAction is deny (fail closed). No state changed and no GUI user enrolled.")
 
 
 if __name__ == "__main__":

@@ -298,9 +298,9 @@ check "opensnitch staged config present" \
     test -f /usr/share/bazzite-tower/opensnitchd-default-config.json
 # The one assertion that cannot pass by coincidence. The RPM extraction writes
 # its own default-config.json to this path and build.sh installs ours over it —
-# but DefaultAction=allow below matches the RPM's shipped default, so a silently
-# skipped install would still satisfy that value check. Only a byte comparison
-# proves the overwrite actually happened.
+# but the legacy profile's DefaultAction=allow matches the RPM's shipped default,
+# so a silently skipped install would still satisfy that value check. Only a
+# byte comparison proves the overwrite actually happened.
 # Compare against the selected profile's reference inside the dispatch below.
 # Structural validity: the value checks below read individual keys, so a trailing
 # comma or unbalanced brace would leave them passing while opensnitchd fails to
@@ -309,8 +309,9 @@ check "opensnitch config is valid JSON" \
     jq -e . /etc/opensnitchd/default-config.json
 # Values parsed, not grepped — string matching couples these to the file's
 # whitespace and cannot distinguish a key from a substring elsewhere.
-check "opensnitch DefaultAction is allow (fail-open headless)" \
-    jq -e '.DefaultAction == "allow"' /etc/opensnitchd/default-config.json
+# DefaultAction is per profile (owner decision 2026-10-17): legacy stays allow
+# (fail-open headless; its per-user TCP bridge is not image-installed), system
+# is deny (fail closed behind the root-only socket). Asserted in the dispatch.
 # eBPF module fails to load on this image's kernel (snitchwatch#6) — "proc" is
 # mandatory here. Flipping this back to "ebpf" needs a newer opensnitch release.
 check "opensnitch ProcMonitorMethod is proc (eBPF broken on this kernel)" \
@@ -322,6 +323,8 @@ legacy)
     check "legacy staged config actually overwrote the RPM's" \
         cmp -s /usr/share/bazzite-tower/opensnitchd-default-config.json \
             /etc/opensnitchd/default-config.json
+    check "legacy opensnitch DefaultAction is allow (fail-open headless)" \
+        jq -e '.DefaultAction == "allow"' /etc/opensnitchd/default-config.json
     check "legacy OpenSnitch address is TCP" \
         jq -e '.Server.Address == "127.0.0.1:50051"' /etc/opensnitchd/default-config.json
     check "legacy image has no native system bridge" test ! -e /usr/bin/snitchwatch-bridge-cli
@@ -334,6 +337,8 @@ system)
     check "system staged config actually overwrote the RPM's" \
         cmp -s /usr/share/bazzite-tower/opensnitchd-system-bridge-config.json \
             /etc/opensnitchd/default-config.json
+    check "system opensnitch DefaultAction is deny (fail closed)" \
+        jq -e '.DefaultAction == "deny"' /etc/opensnitchd/default-config.json
     check "system OpenSnitch address is relative Unix" \
         jq -e '.Server.Address == "unix:opensnitchd.sock"' /etc/opensnitchd/default-config.json
     check "installed system manifest and immutable overlay verify" \

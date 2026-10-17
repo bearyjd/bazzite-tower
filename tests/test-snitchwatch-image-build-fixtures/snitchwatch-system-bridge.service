@@ -4,6 +4,10 @@ Documentation=https://github.com/bearyjd/snitchwatch
 # tmpfiles owns the runtime parents.  The bridge must never create either
 # directory: doing so would let its unprivileged account replace socket paths.
 Requires=snitchwatch-system-bridge-grpc.socket snitchwatch-system-bridge-gui.socket
+# No start limit (PR #166 L1): under DefaultAction deny, a crash loop that
+# hit the limit would leave the bridge, and its sockets, failed until an
+# administrator reset them. RestartSec=2s already paces the restarts.
+StartLimitIntervalSec=0
 After=systemd-tmpfiles-setup.service snitchwatch-system-bridge-grpc.socket snitchwatch-system-bridge-gui.socket
 
 [Service]

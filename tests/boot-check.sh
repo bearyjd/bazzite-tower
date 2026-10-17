@@ -158,7 +158,9 @@ assert set(p.get("TriggeredBy","").split())=={"snitchwatch-system-bridge-grpc.so
     hard "resolved daemon command, working directory and socket dependency" python3 -c '
 import re, subprocess
 p=dict(line.split("=",1) for line in subprocess.check_output(["systemctl","show","opensnitch.service"],text=True,timeout=5).splitlines() if "=" in line)
-assert p.get("WorkingDirectory")=="/run/snitchwatch"
+# r15: upstream drop-in sets WorkingDirectory=-/run/snitchwatch (missing-OK, so a
+# failed socket never stops the fail-closed daemon); systemctl shows it as "!/run/...".
+assert p.get("WorkingDirectory")=="!/run/snitchwatch"
 assert "snitchwatch-system-bridge-grpc.socket" in p.get("Wants","").split()
 assert not any("snitchwatch-system-bridge-grpc.socket" in p.get(k,"").split() for k in ("Requires","Requisite","BindsTo","PartOf"))
 assert "snitchwatch-system-bridge-grpc.socket" in p.get("After","").split()

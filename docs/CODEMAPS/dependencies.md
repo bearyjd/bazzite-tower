@@ -59,11 +59,12 @@ Re-pin `EXPECTED_PINS_SHA256` in the respective bridge
 `snitchwatch-system-verify.py` or daemon `snitchwatch-system-daemon-verify.py`
 whenever its pins manifest changes, and rerun relevant tests.
 
-The r13 bridge candidate source is frozen at
-`bf15bb5d87b46576b2f2d56d2c5164b6890402c7` (tree
-`ac04f33f33145ea39a3ba71fae60fe871aff3f21`, unchanged OpenSnitch gitlink
-`b404c4c6316760fa7bc415509d3f8d747f7dc9cc`). Bridge packaging input hashes and
-the pins verifier are refreshed from that committed snapshot. Source and
+The r15 bridge candidate source is pinned at
+`7bf3f1974395a7a55ec3a099e2e16bb5ad255ec4` (tree
+`c60578ce519174fdabd2a1b73ce01ce85f5b48b1`, unchanged OpenSnitch gitlink
+`b404c4c6316760fa7bc415509d3f8d747f7dc9cc`; r13/r14 used `bf15bb5`). Bridge
+packaging input hashes (15, adding upstream's `opensnitch.service` drop-in and
+daemon config) and the pins verifier are refreshed from that committed snapshot. Source and
 workflow review/runtime acceptance remain publication gates; the candidate pin
 confers no stable release authority. See [r13 publication](../r13-publication.md).
 

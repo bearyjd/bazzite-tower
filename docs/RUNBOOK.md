@@ -158,13 +158,17 @@ Known-good: `18.1.18.2644` and above.
 The default image selects the legacy TCP user bridge at `127.0.0.1:50051`.
 `SNITCHWATCH_BRIDGE=system` is an explicit image build opt-in and requires
 `FIREWALL_DAEMON=opensnitch`. Both profiles retain `ProcMonitorMethod: proc`
-and `DefaultAction: allow`. The candidate supplies native system bridge version 0.1.1,
+(eBPF fails on this laptop's kernel, snitchwatch#6). Legacy keeps
+`DefaultAction: allow`; since r15 the system profile ships `DefaultAction: deny`
+(fail closed, owner decision 2026-10-17). The candidate supplies native system bridge version 0.1.1,
 its two socket units, named system accounts and immutable artifact provenance.
 The candidate also supplies the reviewed OpenSnitch 1.8.0 shutdown/NFT repair
 with its own `/usr/share/snitchwatch/system-daemon-manifest.json`;
 `/usr/libexec/snitchwatch/verify-system-daemon.py --root /` checks the actual
 installed `/usr/bin/opensnitchd` against the source, patch and license inventory;
-OpenSnitch uses a relative Unix socket from `/run/snitchwatch`.
+OpenSnitch uses a relative Unix socket from `/run/snitchwatch`, via upstream's
+drop-in `/usr/lib/systemd/system/opensnitch.service.d/snitchwatch-system-bridge.conf`
+(`Wants=`/`After=` the gRPC socket, `WorkingDirectory=-/run/snitchwatch`).
 
 Build the local candidate with `just build-snitchwatch-system`. Use
 `just build-snitchwatch-system-vm` only for a disposable VM: it additionally
@@ -194,13 +198,16 @@ profile retains the [release-install contract](../README.md#opensnitch-applicati
 System readiness requires an explicit privileged read for cross-account
 process inspection: run `sudo ujust snitchwatch-system-readiness`.
 It verifies immutable provenance, service/socket ownership,
-permissions, token access, resolved service hardening and fail-open policy.
+permissions, token access, resolved service hardening and the fail-closed
+`deny`/`proc` policy.
 It is read-only and cannot prove a GUI answers prompts. Migration and rollback
 must preserve the recorded legacy baseline and reject unexpected live `/etc`
 policy/address drift or user-unit/Flatpak overrides. Do not activate the system
 profile while a legacy bridge process or listener remains. Use
 `ujust snitchwatch-system-migrate check` to inspect the current deployment,
-`ujust snitchwatch-system-migrate apply` for the explicit transaction, and
+`ujust snitchwatch-system-migrate apply` for the explicit transaction (it
+publishes the system reference config, so it switches a legacy host to
+`DefaultAction: deny`), and
 `ujust snitchwatch-system-migrate rollback` to restore its recorded baseline.
 The migration journal is protected at
 `/var/lib/bazzite-tower/snitchwatch-migration/current.json`; preserve it until
@@ -235,8 +242,8 @@ Operating the system candidate:
 - If a netfilter queue reader stops while its queue is still bound, the daemon
   logs `netfilter queue reader N stopped: …`, leaves through its normal
   cleanup and exits 1. systemd restarts it after `RestartSec=30`; until then
-  `QueueBypass` lets traffic through unfiltered, consistent with
-  `DefaultAction: allow`. Verified on the r4 VM (2026-10-08 UTC) by closing
+  `QueueBypass` lets traffic through unfiltered whatever the
+  `DefaultAction`. Verified on the r4 VM (2026-10-08 UTC) by closing
   the queue socket: the daemon exited 1 within 0.4 s and restarted 30 s
   later; 44 of 45 test requests during the gap succeeded.
 - Before the 22-file and later daemon patches, a daemon stop during reboot could log
@@ -249,12 +256,46 @@ Operating the system candidate:
   prompts promptly.
 - The GUI's inline Deny answers "this time" only: the daemon keeps no rule,
   so a retrying program is asked again, and while that prompt is pending
-  other new connections get the default allow. To block, open the row and
+  other new connections get the default action (`deny` on the system
+  image since r15, `allow` on legacy). To block, open the row and
   Deny with "Until quit" or "Forever" (verified on the r5 VM).
 
-Keep `DefaultAction: allow` during rollout. For a local deny experiment that
-blocks networking, restore `allow` in `/etc/opensnitchd/default-config.json` from
-a TTY and restart `opensnitch.service`, or roll back the deployment.
+### r15 system image: fail-closed upgrade and recovery
+
+**Before rebooting into an r15 `:snitchwatch-system` deployment** (ostree's `/etc`
+3-way merge keeps a locally edited config, which would leave the old policy or
+address in place):
+
+```
+sudo ostree admin config-diff | grep opensnitchd
+jq .Server.Address /etc/opensnitchd/default-config.json
+```
+
+If `config-diff` lists `M etc/opensnitchd/default-config.json`, run
+`sudo cp /usr/etc/opensnitchd/default-config.json /etc/opensnitchd/` so the merge
+takes the new image's file. After the reboot `jq .Server.Address,.DefaultAction
+/etc/opensnitchd/default-config.json` must print `"unix:opensnitchd.sock"` and
+`"deny"` (otherwise repeat the `cp` and `sudo systemctl restart
+opensnitch.service`).
+
+After boot: `sudo ss -xlp | grep /run/snitchwatch/opensnitchd.sock` shows the
+root-only (0600) gRPC listener held by systemd, `ss -tln | grep 127.0.0.1:50051`
+prints nothing, and `sudo grep 'Error compiling list rule' /var/log/opensnitchd.log`
+is empty.
+
+**Recovery with fail-closed.** Keep a console (TTY) login handy. If the bridge
+socket fails, `opensnitch.service` still starts (the drop-in only `Wants=` the
+socket and its working directory may be missing) and, with no UI to ask, denies
+every unruled outbound connection. Check `systemctl status
+snitchwatch-system-bridge-grpc.socket snitchwatch-system-bridge.service`, then
+`sudo systemctl restart snitchwatch-system-bridge-grpc.socket opensnitch.service`.
+The bridge service has no start limit (`StartLimitIntervalSec=0`), so a crash
+loop keeps retrying every 2 s instead of staying failed. If networking is still
+blocked: `sudo bootc rollback && sudo reboot`. As a last-resort local override,
+set `DefaultAction` to `allow` in `/etc/opensnitchd/default-config.json` from the
+TTY and restart `opensnitch.service`; this is local `/etc` drift that the
+readiness helper reports, so restore the image copy
+(`/usr/share/bazzite-tower/opensnitchd-system-bridge-config.json`) afterwards.
 
 ## Common issues
 

@@ -44,9 +44,10 @@ class ImageBuildContracts(unittest.TestCase):
                  'snitchwatch-system-bridge-grpc.socket': 'usr/lib/systemd/system/',
                  'snitchwatch-system-bridge-gui.socket': 'usr/lib/systemd/system/',
                  'snitchwatch.conf': 'usr/lib/tmpfiles.d/',
-                 'snitchwatch.conf.sysusers': 'usr/lib/sysusers.d/'}
+                 'snitchwatch.conf.sysusers': 'usr/lib/sysusers.d/',
+                 'opensnitch-snitchwatch-system-bridge.conf': 'usr/lib/systemd/system/opensnitch.service.d/'}
         for name, directory in units.items():
-            target = 'snitchwatch.conf' if name.endswith('.sysusers') else name
+            target = {'snitchwatch.conf.sysusers': 'snitchwatch.conf', 'opensnitch-snitchwatch-system-bridge.conf': 'snitchwatch-system-bridge.conf'}.get(name, name)
             self.write(directory + target, (FIXTURES / name).read_bytes())
         self.write(FETCH_RULE, (FIXTURES / '000-snitchwatch-bridge-fetch.json').read_bytes())
         for name in ['LICENSE', 'LICENSE.opensnitch', 'THIRD-PARTY-LICENSES.md']:
@@ -54,9 +55,6 @@ class ImageBuildContracts(unittest.TestCase):
         self.write('usr/share/bazzite-tower/snitchwatch-bridge-profile', 'system\n')
         self.write('usr/share/bazzite-tower/opensnitchd-default-config.json', (ROOT / 'system_files/usr/share/bazzite-tower/opensnitchd-default-config.json').read_bytes())
         self.write('usr/share/bazzite-tower/opensnitchd-system-bridge-config.json', (ROOT / 'system_files/usr/share/bazzite-tower/opensnitchd-system-bridge-config.json').read_bytes())
-        dropin = '[Unit]\nWants=snitchwatch-system-bridge-grpc.socket\nAfter=snitchwatch-system-bridge-grpc.socket\n\n[Service]\nWorkingDirectory=/run/snitchwatch\n'
-        for name in ['usr/lib/systemd/system/opensnitch.service.d/20-system-bridge.conf', 'usr/share/bazzite-tower/snitchwatch/opensnitch.service.d/20-system-bridge.conf']:
-            self.write(name, dropin)
         self.write('usr/libexec/snitchwatch/verify-system-manifest.py', (FACTORY / 'snitchwatch-system-verify.py').read_bytes(), 0o755)
         self.write('usr/share/snitchwatch/build-pins.json', (FACTORY / 'snitchwatch-system-pins.json').read_bytes())
         inventory = 'rust-0:1.98.1-1.fc44.x86_64\n'
@@ -91,7 +89,9 @@ class ImageBuildContracts(unittest.TestCase):
     def test_valid_complete_fixture_is_read_only(self):
         before = {str(p): p.read_bytes() for p in self.root.rglob('*') if p.is_file() and not p.is_symlink()}
         result = self.check(valid=True)
-        self.assertEqual(json.loads(result.stdout)['verifiedFiles'], 21)
+        # 20 since r15: the tower's /usr/share reference copy of its own drop-in
+        # is gone; upstream's pinned drop-in is the one daemon drop-in.
+        self.assertEqual(json.loads(result.stdout)['verifiedFiles'], 20)
         self.assertEqual(before, {str(p): p.read_bytes() for p in self.root.rglob('*') if p.is_file() and not p.is_symlink()})
 
     def test_binary_tamper(self):
@@ -266,9 +266,16 @@ protoc() { echo 'libprotoc 3.19.6'; }
                 self.assertEqual(events.read_text().splitlines(),
                                  ['upstream', 'curl', 'helper'] + ([] if failure else ['rustc']))
 
+    def test_self_consistent_dropin_requiring_its_directory(self):
+        # Without the '-' a missing /run/snitchwatch would keep the fail-closed
+        # daemon from starting; the drop-in is pinned to upstream's bytes.
+        name = 'usr/lib/systemd/system/opensnitch.service.d/snitchwatch-system-bridge.conf'
+        self.write(name, (self.root / name).read_text().replace('WorkingDirectory=-/run', 'WorkingDirectory=/run')); self.update_hash(name)
+        self.assertIn('system overlay differs from pinned source: /' + name, self.check().stderr)
+
     def test_self_consistent_policy_drift(self):
         name = 'usr/share/bazzite-tower/opensnitchd-system-bridge-config.json'
-        self.write(name, json.dumps({'DefaultAction': 'deny', 'ProcMonitorMethod': 'proc', 'Server': {'Address': 'unix:opensnitchd.sock'}})); self.update_hash(name)
+        self.write(name, json.dumps({'DefaultAction': 'allow', 'ProcMonitorMethod': 'proc', 'Server': {'Address': 'unix:opensnitchd.sock'}})); self.update_hash(name)
         self.check()
 
     def test_world_writable_token_parent_configuration(self):

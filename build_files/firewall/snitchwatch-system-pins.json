@@ -30,7 +30,7 @@
   },
   "rustVersion": "1.98.1",
   "schemaVersion": 1,
-  "sourceCommit": "bf15bb5d87b46576b2f2d56d2c5164b6890402c7",
+  "sourceCommit": "7bf3f1974395a7a55ec3a099e2e16bb5ad255ec4",
   "sourceFiles": {
     "packaging/bluebuild/files/system/etc/opensnitchd/rules/000-snitchwatch-bridge-fetch.json": "3739ab9bb74ef6309975bf0d2c3c9a766f1976e014e6f9c360b910b22daef458",
     "packaging/flatpak/org.snitchwatch.Snitchwatch.system.yml": "bd70d64823a70622dc9a3b17518732a7b0106f5cf02058dd3956f382a7b4c65b",
@@ -39,15 +39,17 @@
     "packaging/release/install-deps.sh": "247a396c0f3d504023f001c33bb1211f5f0f9bfd2c6685077d4bd312ac95f8cb",
     "packaging/release/pins.env": "e3d1ab2f0da4d7ad262934ee44ec78ae8e38ec516f0573b2ecb52a2ffe725058",
     "packaging/release/repro-check.sh": "b915ac388d28dce593bc652a07ff7d9a1fcef33e4a4434e03502d2e28cfe767e",
+    "packaging/system/opensnitch-snitchwatch-system-bridge.conf": "83715f2c8c24e1f697598f60d095ade4473cf77c921f4a5bbbf4748fafc3cbc2",
+    "packaging/system/opensnitchd-default-config.json": "821abd66341ad6b1b37ed2db28ec1fb6512f74060e2715bf05946e17bb0f2e12",
     "packaging/system/snitchwatch-system-bridge-grpc.socket": "f5615767da14b522607a36f4ebad141f2e8a85aaf3aeaafbb7b42a62cfa3877d",
     "packaging/system/snitchwatch-system-bridge-gui.socket": "c4c1fd622cb73ef25c113054249a4b9628ffcec5d961dfd98961164b24426129",
-    "packaging/system/snitchwatch-system-bridge.service": "779a9c71dd61aa6460040dc6d4ca2cafa88d6c0836b4734bf1c57a4b2f347a23",
+    "packaging/system/snitchwatch-system-bridge.service": "42ad209179ad9edad171b2bf0c574431c9eab183dec719f621cc34a2dfff40b4",
     "packaging/system/snitchwatch.conf": "a7597bd4ab25fef970d71eb290106b5689711d0d2d7ecf1a34ee73848dd88654",
     "packaging/system/snitchwatch.conf.sysusers": "3747ec8123d0428a847032530605f979f399ceaa790cfb67a93278ad26665ebd",
-    "packaging/system/stage.sh": "18784d130d8d36210ce9ac6f91a72a0d204089109bc08d8fcc981c0f8167e08c"
+    "packaging/system/stage.sh": "fe8c34aee736c7c8849383e9cc3ad22334126baa11aa7185e25bf943ac14657f"
   },
   "sourceRepository": "https://github.com/bearyjd/snitchwatch.git",
-  "sourceTree": "ac04f33f33145ea39a3ba71fae60fe871aff3f21",
+  "sourceTree": "c60578ce519174fdabd2a1b73ce01ce85f5b48b1",
   "submoduleCommit": "b404c4c6316760fa7bc415509d3f8d747f7dc9cc",
   "toolchainRpms": [
     {

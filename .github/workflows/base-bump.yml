@@ -1,0 +1,108 @@
+---
+# Follow Bazzite upstream without unpinning: weekly, move the Containerfile's
+# digest-pinned BASE_IMAGE to the current bazzite-nvidia-open:stable and open a
+# PR. build.yml's smoke gate (and base-watch's package diff) then judge it; a
+# human merges. Nothing here builds, pushes an image, or merges.
+#
+# Needs a BUMP_TOKEN secret (fine-grained PAT or app token: contents + pull
+# requests write on this repo). A PR opened with the default GITHUB_TOKEN would
+# not trigger build.yml, so the required checks would never run. Without the
+# secret this workflow does nothing; base-watch's `base-bump` issue remains the
+# heads-up.
+name: Bump upstream base
+
+on:
+  schedule:
+    - cron: '30 5 * * 6'  # 05:30 UTC Saturday — ahead of the Sunday 06:00 build
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+jobs:
+  bump:
+    name: Open base digest bump PR
+    runs-on: ubuntu-24.04
+    if: github.repository == 'bearyjd/bazzite-tower'
+    steps:
+      - name: Require BUMP_TOKEN
+        env:
+          HAVE_TOKEN: ${{ secrets.BUMP_TOKEN != '' }}
+        run: |
+          if [[ "${HAVE_TOKEN}" != "true" ]]; then
+            echo "::notice::BUMP_TOKEN is not set; skipping (PRs from GITHUB_TOKEN do not trigger CI)."
+            echo "skip=1" >> "${GITHUB_ENV}"
+          fi
+
+      - name: Checkout
+        if: env.skip != '1'
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          persist-credentials: false
+
+      - name: Ensure skopeo and jq
+        if: env.skip != '1'
+        run: |
+          if ! command -v skopeo > /dev/null || ! command -v jq > /dev/null; then
+            sudo apt-get update -q
+            sudo apt-get install -y -q skopeo jq
+          fi
+
+      - name: Resolve latest upstream digest
+        if: env.skip != '1'
+        id: bump
+        run: ci/base-bump.sh
+
+      - name: Open or reuse the bump PR
+        if: env.skip != '1' && steps.bump.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.BUMP_TOKEN }}
+          LATEST: ${{ steps.bump.outputs.latest }}
+          CURRENT: ${{ steps.bump.outputs.current }}
+          VERSION: ${{ steps.bump.outputs.version }}
+        run: |
+          set -euo pipefail
+          branch="base-bump/${LATEST#sha256:}"
+          branch="${branch:0:32}"
+          remote="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+
+          # Rerun-safe: push only if the branch is missing, open a PR only if
+          # none (open, merged or closed) exists for it.
+          if ! git ls-remote --exit-code --heads "${remote}" "${branch}" > /dev/null; then
+            git config user.name  "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git checkout -b "${branch}"
+            git commit -am "chore(base): bump bazzite-nvidia-open to ${VERSION}"
+            git push "${remote}" "${branch}"
+          fi
+          if [[ -n "$(gh pr list --head "${branch}" --state all --json number --jq '.[0].number')" ]]; then
+            echo "A PR for ${branch} already exists; nothing to do."
+            exit 0
+          fi
+
+          # Supersede older unmerged bump PRs: they edit the same Containerfile line.
+          gh pr list --state open --json number,headRefName \
+            --jq '.[] | select(.headRefName | startswith("base-bump/")) | .number' \
+            | while read -r old; do
+                gh pr close "${old}" --comment "Superseded by a newer upstream digest (${branch})."
+              done
+
+          body=$(printf '%s\n' \
+            "Automated weekly bump of the pinned upstream base." \
+            "" \
+            "- Upstream version: \`${VERSION}\`" \
+            "- Old digest: \`${CURRENT}\`" \
+            "- New digest: \`${LATEST}\`" \
+            "" \
+            "## Before merging" \
+            "- [ ] Smoke gate and build checks green on this head" \
+            "- [ ] Read the latest \`base-bump\` issue from base-watch (kernel, qemu, libvirt, NetworkManager, Docker, systemd, polkit, bootc)" \
+            "- [ ] Not mid-release: merging changes the Containerfile, so do not merge between a candidate cut and its promotion" \
+            "- [ ] Kernel unchanged or newer than the last accepted one (i915 MTL resume fix; see docs/research/i915-mtl-resume-2026-06-20.md)")
+          gh pr create --base main --head "${branch}" \
+            --title "chore(base): bump bazzite-nvidia-open to ${VERSION}" \
+            --body "${body}"

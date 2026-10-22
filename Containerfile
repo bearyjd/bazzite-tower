@@ -7,16 +7,14 @@
 #                           see the history below for what that's meant in
 #                           practice)
 #
-# Pinned by digest (not just tag) as of 2026-08-31: a tag is a mutable label at
-# the registry, a digest is a hash of the actual content, so this is a stronger
-# reproducibility guarantee than the dated tag alone — see "Strategic option:
-# pin the base by digest" in docs/downstream-change-tracking.md. This digest is
-# `bazzite-nvidia-open:44.20260825` (kernel 7.2.0-ogc6.1, driver 610.57.04),
-# confirmed via `skopeo inspect docker://ghcr.io/ublue-os/bazzite-nvidia-open:44.20260825`.
-# Bumping the base now means re-running that command against a newer tag and
-# replacing the digest below in its own PR — no Renovate automation wired up
-# yet (docs/downstream-change-tracking.md's Section 4 also proposed that; not
-# done here, just the pin).
+# Pinned by digest (not just tag): a tag is a mutable label at the registry, a
+# digest is a hash of the actual content -- see "Strategic option: pin the base
+# by digest" in docs/downstream-change-tracking.md. The pin is advanced weekly by
+# .github/workflows/base-bump.yml (ci/base-bump.sh), which opens a PR against
+# upstream `bazzite-nvidia-open:stable`; the smoke gate judges it and a human
+# merges. The upstream version and kernel are recorded in each bump PR. To move
+# it by hand: `skopeo inspect docker://ghcr.io/ublue-os/bazzite-nvidia-open:stable`
+# and replace the digest below in its own PR.
 ARG BASE_IMAGE=ghcr.io/ublue-os/bazzite-nvidia-open@sha256:010616ed07152c36c6fbe2a4116d20c038ca5eb2a83a3fa3997d545ed75de51d
 ARG FIREWALL_DAEMON=opensnitch
 ARG SNITCHWATCH_BRIDGE=legacy

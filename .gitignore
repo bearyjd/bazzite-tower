@@ -12,3 +12,6 @@ _build-*/**
 # transient analysis reports (codemap diffs, etc.)
 .reports/
 __pycache__/
+
+# graft's local graph cache — regenerable, not committed (run `graft build`).
+/graft/

@@ -6,7 +6,7 @@
     "ui.pb.go": "54d5d0068bbd0e2be7179b2829f0c770d4e21381fe955b6ffa35650578085a3f",
     "ui_grpc.pb.go": "55ae171accdac281e34f22fcc9939ec74751e2b625b8a0de0b10b2f264a1842e"
   },
-  "goVersion": "go version go1.26.8-X:nodwarf5 linux/amd64",
+  "goVersion": "go version go1.26.10-X:nodwarf5 linux/amd64",
   "kojiBase": "https://kojipkgs.fedoraproject.org/packages/",
   "libnetfilterQueueVersion": "1.0.5",
   "licenseSha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
@@ -81,28 +81,28 @@
   "sourceTree": "21593ba74c55b6f7ad7f220692c33477b65a3686",
   "toolchainRpms": [
     {
-      "file": "golang-1.26.8-2.fc44.x86_64.rpm",
-      "kojiPath": "golang/1.26.8/2.fc44/data/signed/6d9f90a6/x86_64/golang-1.26.8-2.fc44.x86_64.rpm",
+      "file": "golang-1.26.10-1.fc44.x86_64.rpm",
+      "kojiPath": "golang/1.26.10/1.fc44/data/signed/6d9f90a6/x86_64/golang-1.26.10-1.fc44.x86_64.rpm",
       "name": "golang",
-      "nevra": "golang-0:1.26.8-2.fc44.x86_64",
-      "sha256": "1e040d55833b11412529d730416520fa1e6c7848315bff3bff04aeb3d5189c0c",
-      "size": 1499186
+      "nevra": "golang-0:1.26.10-1.fc44.x86_64",
+      "sha256": "f7b347122d8cb2e93eafbb8405acf2b643c68180d40ce393c739eec98c22527f",
+      "size": 1499222
     },
     {
-      "file": "golang-bin-1.26.8-2.fc44.x86_64.rpm",
-      "kojiPath": "golang/1.26.8/2.fc44/data/signed/6d9f90a6/x86_64/golang-bin-1.26.8-2.fc44.x86_64.rpm",
+      "file": "golang-bin-1.26.10-1.fc44.x86_64.rpm",
+      "kojiPath": "golang/1.26.10/1.fc44/data/signed/6d9f90a6/x86_64/golang-bin-1.26.10-1.fc44.x86_64.rpm",
       "name": "golang-bin",
-      "nevra": "golang-bin-0:1.26.8-2.fc44.x86_64",
-      "sha256": "2966d1cdec3b400ac7e2c138cb7f24ac6d74bd97df90a7bb01efddd007f478cc",
-      "size": 22080032
+      "nevra": "golang-bin-0:1.26.10-1.fc44.x86_64",
+      "sha256": "da6d778ba0745e15ce555e13ea7378e72f68741f9acd7d371d37c34f1097205b",
+      "size": 22058844
     },
     {
-      "file": "golang-src-1.26.8-2.fc44.noarch.rpm",
-      "kojiPath": "golang/1.26.8/2.fc44/data/signed/6d9f90a6/noarch/golang-src-1.26.8-2.fc44.noarch.rpm",
+      "file": "golang-src-1.26.10-1.fc44.noarch.rpm",
+      "kojiPath": "golang/1.26.10/1.fc44/data/signed/6d9f90a6/noarch/golang-src-1.26.10-1.fc44.noarch.rpm",
       "name": "golang-src",
-      "nevra": "golang-src-0:1.26.8-2.fc44.noarch",
-      "sha256": "11966507e87786a04df48b7259a505489ca9e0d9d814b9bbb7a888a1110fefa6",
-      "size": 15289793
+      "nevra": "golang-src-0:1.26.10-1.fc44.noarch",
+      "sha256": "afa2c78dce37f8e0928f18580f86f34ba5b5824c4f2e1aa44e06cbbe306abe72",
+      "size": 15297629
     },
     {
       "file": "protobuf-3.19.6-20.fc44.x86_64.rpm",

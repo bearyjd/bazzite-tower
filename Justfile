@@ -590,6 +590,7 @@ test-ci:
     #!/usr/bin/env bash
     set -euo pipefail
     bash tests/test-base-diff.sh
+    bash tests/test-base-bump.sh
 
 # Offline fixture checks with hashed inputs and retained evidence; no runtime claim.
 [group('Test')]

@@ -32,7 +32,7 @@ pieces fit together read [docs/CODEMAPS/](./CODEMAPS/architecture.md).
 | `just lint-containerfile` | `hadolint` the `Containerfile` in seconds, no image build — not a CI gate |
 | `just format` | `shfmt --write` every `*.sh` — **not** a required gate, see "Code style" |
 | `just check` / `just fix` | Check / auto-format Just syntax |
-| `just test-ci` | Fixture-based tests for `ci/base-diff.py` (offline, no live upstream manifests needed) |
+| `just test-ci` | Fixture-based offline tests for `ci/base-diff.py` and `ci/base-bump.sh` (no live upstream or registry needed) |
 | `just token-report [--since YYYY-MM-DD] [--project substring] [--json]` | Read-only Claude/Codex local usage aggregates; last seven days by default, text <=40 lines, JSON contains all groups, no message content |
 | `just test-snitchwatch-daemon-patch` | Apply the pinned OpenSnitch patch to upstream and run its Go tests (with `-race`) and C harness tests in throwaway containers — no image build |
 | `just clean` | Remove build artifacts (`output/`, manifests, `*_build*`) |

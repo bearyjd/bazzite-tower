@@ -186,6 +186,8 @@ Wi-Fi and virtqemud silent-runtime gap that Layer 2 can only approximate.
 > manifest back (`docs/**` is in `build.yml`'s `paths-ignore`, so that commit
 > doesn't trigger an image rebuild). First run just records the baseline.
 
+**Automated bump PRs (2026-10-21).** `.github/workflows/base-bump.yml` opens a weekly PR moving the `Containerfile` digest pin to upstream `:stable` (`ci/base-bump.sh`, tested offline by `tests/test-base-bump.sh`). It requires a `BUMP_TOKEN` secret so the PR triggers `build.yml`; without it the workflow is a no-op. Merging stays manual.
+
 On each scheduled run, before/after pulling the base:
 
 1. `podman run --rm ghcr.io/ublue-os/bazzite-nvidia-open:stable rpm -qa | sort` →

@@ -2,7 +2,7 @@
 # image under the stable repository and moves only :snitchwatch-system to it.
 # Runtime evidence and review are recorded in the PR and release notes, not in
 # workflow variables. See docs/r13-publication.md.
-name: r13 fixed-digest promotion
+name: Promote candidate digest to stable
 on:
   workflow_dispatch:
     inputs:
@@ -26,7 +26,7 @@ env:
 
 jobs:
   promote:
-    name: Promote fixed r13 digest
+    name: Promote the fixed candidate digest
     if: github.repository == 'bearyjd/bazzite-tower' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     timeout-minutes: 45

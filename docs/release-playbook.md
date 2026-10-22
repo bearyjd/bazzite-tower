@@ -85,7 +85,7 @@ Never force-push (including `--force-with-lease`); to update a branch, merge mai
    `r13-promote.yml` (+ tests/docs). Review, CI, merge. Merging arms; it does not
    publish.
 9. **Owner acceptance** (below), then dispatch
-   `gh workflow run r13-promote.yml --ref main -f digest=<digest>`; the owner
+   `gh workflow run r13-promote.yml -R bearyjd/bazzite-tower --ref main -f digest=<digest>`; the owner
    approves the `release` deployment. Then publish the stable GUI release as a byte
    copy of the candidate prerelease assets, with release notes.
 
@@ -107,11 +107,38 @@ sudo bootc switch ghcr.io/bearyjd/bazzite-tower-r13-candidate@<digest>
 sudo reboot
 ```
 
+The switch may already be staged (pending deployment) by the time a session
+starts; check `bootc status` before asking the owner to repeat it. Then only the
+reboot is left.
+
 Checks after boot: `bootc status --booted` shows the digest; `systemctl status
-opensnitchd snitchwatch-system-bridge.service` active; the GUI features in the
-release work; web, DNS and Tailscale work. Failure: `sudo bootc rollback && sudo
-reboot`. After promotion: `sudo bootc switch --enforce-container-sigpolicy
+opensnitch.service snitchwatch-system-bridge.service` active (the unit is
+`opensnitch`, not `opensnitchd`); the GUI features in the release work (tree, rule
+button, `app:`/`country:` filters, side panel, map); web, DNS and Tailscale work.
+Failure: `sudo bootc rollback && sudo reboot`, then report what broke. After promotion: `sudo bootc switch --enforce-container-sigpolicy
 ghcr.io/bearyjd/bazzite-tower:snitchwatch-system` (same digest, nothing to download).
+
+## Round r15 and later: fail-closed firewall
+
+From r15 the system profile ships `DefaultAction deny` with `ProcMonitorMethod proc`
+and a root-only `unix:opensnitchd.sock`. Extra owner acceptance steps:
+
+- Before the reboot: `sudo ostree admin config-diff | grep opensnitchd` (copy the
+  `/usr/etc` version over if it shows `M`), and keep a console open, because a bad
+  config fails closed and cuts the network.
+- `sudo usermod -aG snitchwatch-ui <user>` so the GUI can reach the socket.
+- After boot: `ss -xl` shows the socket root-owned `0600`, nothing listens on
+  `127.0.0.1:50051`, the daemon log is clean, and OS updates still work (the always-on
+  `000-snitchwatch-tower-os-update` and `-resolved-dns` rules).
+- Enable the recommended rules in the GUI (e.g. chrony NTP). Tower-shipped rules use
+  the reserved `000-snitchwatch-` prefix, so the bridge treats them as read-only;
+  RUNBOOK has the restore command.
+
+Cut rule: a round is Snitchwatch `main` as merged when the previous round is promoted.
+At the cut, re-pin to that head (also `git grep 000-snitchwatch-tower <sha>` for a
+name collision), set the new `R<NN>_CANDIDATE_REVIEWED_SHA`, review, merge, then run
+the pipeline above. Packaging, daemon-config, unit or socket changes after the cut
+go to the next round.
 
 ## Lessons from r14
 
@@ -122,3 +149,8 @@ ghcr.io/bearyjd/bazzite-tower:snitchwatch-system` (same digest, nothing to downl
 - A boot test skipped by path filters can be covered by an earlier head with the same
   image inputs; say so in the evidence.
 - Set repository variables before pushing a trigger ref, every time.
+- Host service UIDs differ from upstream assumptions (`systemd-resolved` 990, chrony
+  994, avahi 70). A rule that pins a numeric UID can silently never match and fail
+  closed; resolve the UID from the account name at run time. Treat a known
+  non-matching DNS opt-in as a recorded issue, not a regression, unless the round
+  was meant to fix it.

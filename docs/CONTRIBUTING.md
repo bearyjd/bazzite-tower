@@ -21,6 +21,8 @@ pieces fit together read [docs/CODEMAPS/](./CODEMAPS/architecture.md).
 | Command | Purpose |
 |---|---|
 | `just build` | Build the container image locally (adds `SHA_HEAD_SHORT` when the tree is clean) |
+| `just build-snitchwatch-system` | Build the opt-in system-bridge candidate image locally; no registry publication or GUI install |
+| `just build-snitchwatch-system-vm` | Same candidate plus the disposable SSH gate (`VM_GATE_SSH`); never the ordinary candidate |
 | `just build-portmaster-spike` | Build the disabled Portmaster VM-spike image; never a default/host image |
 | `just smoke` | Offline-assert the built image — **the exact CI gate** (`tests/smoke.sh`) |
 | `just build-qcow2` | Turn the image into a bootable qcow2 via bootc-image-builder |
@@ -35,6 +37,8 @@ pieces fit together read [docs/CODEMAPS/](./CODEMAPS/architecture.md).
 | `just test-ci` | Fixture-based offline tests for `ci/base-diff.py` and `ci/base-bump.sh` (no live upstream or registry needed) |
 | `just token-report [--since YYYY-MM-DD] [--project substring] [--json]` | Read-only Claude/Codex local usage aggregates; last seven days by default, text <=40 lines, JSON contains all groups, no message content |
 | `just test-snitchwatch-daemon-patch` | Apply the pinned OpenSnitch patch to upstream and run its Go tests (with `-race`) and C harness tests in throwaway containers — no image build |
+| `just snitchwatch-gate [args]` | Offline fixture checks with hashed inputs and retained evidence; makes no runtime claim |
+| `just test-docker-libvirt-forwarding` | Privileged, opt-in host check of the `DOCKER-USER` rules for libvirt NAT bridges; not a required CI test |
 | `just clean` | Remove build artifacts (`output/`, manifests, `*_build*`) |
 <!-- END AUTO-GENERATED:commands -->
 

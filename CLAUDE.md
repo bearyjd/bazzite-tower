@@ -34,6 +34,9 @@ any of it.
 | `just lint-containerfile` | `hadolint` the `Containerfile` via a digest-pinned container — seconds, no image build. Run it after any `Containerfile` edit; it is **not** a CI gate |
 | `just format` | `shfmt --write` every `*.sh` — **not** a required gate; do not run it over existing files (see "Code style") |
 | `just test-snitchwatch-daemon-patch` | Apply the pinned OpenSnitch patch to upstream and run its Go tests (with `-race`) and C harness tests in throwaway containers (network to fetch, `--network=none` to test). No image build; minutes. Run it after touching `build_files/firewall/snitchwatch-system-daemon-*`. CI runs it as `snitchwatch-daemon-patch.yml` (path-filtered, not required) |
+| `just build-snitchwatch-system[-vm]` | Build the opt-in system-bridge candidate image locally (`-vm` adds the disposable SSH gate); same caveats as `just build` |
+| `just snitchwatch-gate [args]` | Offline fixture checks with hashed inputs and retained evidence; no runtime claim |
+| `just test-docker-libvirt-forwarding` | Privileged, opt-in host check of `DOCKER-USER` rules for libvirt NAT bridges; not a CI test |
 | `just check` / `just fix` | Check / auto-format `Justfile`/`*.just` syntax |
 | `just token-report [--since YYYY-MM-DD] [--project substring] [--json]` | Read-only Claude/Codex usage aggregates from local session logs; defaults to the last seven days, text stays under 40 lines, JSON includes all groups. No message content is emitted |
 | `just clean` | Remove build artifacts (`output/`, manifests, `*_build*`) |

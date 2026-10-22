@@ -135,8 +135,8 @@ NFQUEUE, SELinux and deployment require separate owner-controlled evidence).
 
 ## r13 publication boundary
 
-The r15 bridge candidate is `7bf3f1974395a7a55ec3a099e2e16bb5ad255ec4`,
-tree `c60578ce519174fdabd2a1b73ce01ce85f5b48b1`, with unchanged OpenSnitch
+The r15 bridge candidate is `da5d7f1296eeec098919f9dc50920e3312225d3b`,
+tree `28482f508236cea1d60e295327c2c557ffff4382`, with unchanged OpenSnitch
 gitlink `b404c4c6316760fa7bc415509d3f8d747f7dc9cc` (r13/r14: `bf15bb5`). The
 bridge pins record this identity and hashes of all 15 committed packaging inputs; the installed
 verifier authenticates the refreshed pins hash. Upstream installer bytes and

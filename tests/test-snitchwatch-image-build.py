@@ -64,7 +64,7 @@ class ImageBuildContracts(unittest.TestCase):
         self.write('usr/share/bazzite-tower/opensnitchd-system-bridge-config.json', (ROOT / 'system_files/usr/share/bazzite-tower/opensnitchd-system-bridge-config.json').read_bytes())
         self.write('usr/libexec/snitchwatch/verify-system-manifest.py', (FACTORY / 'snitchwatch-system-verify.py').read_bytes(), 0o755)
         self.write('usr/share/snitchwatch/build-pins.json', (FACTORY / 'snitchwatch-system-pins.json').read_bytes())
-        inventory = 'rust-0:1.98.1-1.fc44.x86_64\n'
+        inventory = 'rust-0:1.99.0-1.fc44.x86_64\n'
         self.write('usr/share/snitchwatch/native-rpm-inventory.txt', inventory)
         artifact = {'schema_version': 1, 'version': self.pins['bridgeVersion'], 'source': {'git_commit': self.pins['sourceCommit'], 'dirty': False},
                     'upstream': {'opensnitch_commit': self.pins['submoduleCommit']},
@@ -331,7 +331,7 @@ class ImageBuildContracts(unittest.TestCase):
     def test_rust_pin_authentication(self):
         name = 'usr/share/snitchwatch/build-pins.json'
         for field, value in [('sha256', '0' * 64), ('size', 1),
-                             ('nevra', 'rust-0:1.99.0-1.fc44.x86_64'),
+                             ('nevra', 'rust-0:1.98.1-1.fc44.x86_64'),
                              ('kojiPath', 'unsigned/rust.rpm')]:
             with self.subTest(field=field):
                 pins = json.loads((FACTORY / 'snitchwatch-system-pins.json').read_text())
@@ -344,20 +344,20 @@ class ImageBuildContracts(unittest.TestCase):
         for key in ('rpmSigningKey', 'kojiBase'):
             self.assertEqual(self.pins[key], daemon[key])
         expected = {
-            'rust': ('4f4a346f18eddff7ee512850a65e9a0a6b0f1ccfe96b1e665a99b6d02dacfa76', 31568956),
-            'cargo': ('b32e8b630c55c5ae0df6a3efdf58173974d4dc462a2e2be7a10cd18ea365d30f', 8292119),
-            'rust-std-static': ('612185594cb772f5320d5c9a97dd226390fb32972389a47a99b3cb07786c39c4', 42066597),
+            'rust': ('cbbedd9794b017a3b654382170c55a4ba75dcfdbb7a828d3dd63d0c4b93e01be', 32479878),
+            'cargo': ('133d5003f7b30708a9143bd63ba4f2848dae5b1d9768dca7c4d2f65497af7206', 8270638),
+            'rust-std-static': ('5b1753c706960ec4a6b2158cb5525e677111cff681c6b54c88f95f0f0fbe4202', 42781168),
         }
         rpms = self.pins['toolchainRpms']
         self.assertEqual(len(rpms), 3)
         self.assertEqual({r['name'] for r in rpms}, set(expected))
         for rpm in rpms:
             name = rpm['name']
-            filename = f'{name}-1.98.1-1.fc44.x86_64.rpm'
+            filename = f'{name}-1.99.0-1.fc44.x86_64.rpm'
             self.assertEqual((rpm['sha256'], rpm['size']), expected[name])
             self.assertEqual(rpm['file'], filename)
-            self.assertEqual(rpm['nevra'], f'{name}-0:1.98.1-1.fc44.x86_64')
-            self.assertEqual(rpm['kojiPath'], 'rust/1.98.1/1.fc44/data/signed/6d9f90a6/x86_64/' + filename)
+            self.assertEqual(rpm['nevra'], f'{name}-0:1.99.0-1.fc44.x86_64')
+            self.assertEqual(rpm['kojiPath'], 'rust/1.99.0/1.fc44/data/signed/6d9f90a6/x86_64/' + filename)
         installer = (FACTORY / 'snitchwatch-system-install-deps.sh').read_bytes()
         self.assertEqual(sha(installer), '247a396c0f3d504023f001c33bb1211f5f0f9bfd2c6685077d4bd312ac95f8cb')
 
@@ -393,7 +393,7 @@ dnf() {
 rustc() {
     echo rustc >> "$events"
     [[ -f "$installed" ]] || return 1
-    echo 'rustc 1.98.1 (fixture)'
+    echo 'rustc 1.99.0 (fixture)'
 }
 protoc() { echo 'libprotoc 3.19.6'; }
 '''

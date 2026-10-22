@@ -86,7 +86,7 @@ NEVRA, then installs them in one dnf transaction. The version-string gate in
 (fails closed). A `fetch` mode does the same verification without installing; `tests/test-snitchwatch-daemon-patch.sh` uses it in its network phase so the offline test phase installs the same pinned RPMs. Test: `tests/test-snitchwatch-toolchain.sh`.
 
 Phase 2 adds three signed Koji RPMs (rust, cargo, rust-std-static
-1.98.1-1.fc44) to `snitchwatch-system-pins.json` for the bridge. The same helper
+1.99.0-1.fc44) to `snitchwatch-system-pins.json` for the bridge. The same helper
 runs after the byte-identical upstream installer and before the Rust version
 gate in `snitchwatch-system-build.sh`; the daemon retains its seven pins.
 Remaining live toolchain and transitive dependencies, including LLVM, are not
@@ -135,8 +135,8 @@ NFQUEUE, SELinux and deployment require separate owner-controlled evidence).
 
 ## r13 publication boundary
 
-The r15 bridge candidate is `da5d7f1296eeec098919f9dc50920e3312225d3b`,
-tree `28482f508236cea1d60e295327c2c557ffff4382`, with unchanged OpenSnitch
+The r15 bridge candidate is `bfc76e6607574b354e1d3b1494798e7ea78d1685`,
+tree `be719d27d61f9a1a02567b8673d02dcd53548085`, with unchanged OpenSnitch
 gitlink `b404c4c6316760fa7bc415509d3f8d747f7dc9cc` (r13/r14: `bf15bb5`). The
 bridge pins record this identity and hashes of all 15 committed packaging inputs; the installed
 verifier authenticates the refreshed pins hash. Upstream installer bytes and

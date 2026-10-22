@@ -129,8 +129,8 @@ pins hashes and candidate workflow hash. Its independent-workflow-review
 receipt binds the SHA256 of that canonical identity object. The control commit
 records this after the candidate commit exists, avoiding a self-referential Git
 commit/hash. The current (r15) bridge candidate pin is
-`da5d7f1296eeec098919f9dc50920e3312225d3b` (tree
-`28482f508236cea1d60e295327c2c557ffff4382`, unchanged OpenSnitch gitlink
+`bfc76e6607574b354e1d3b1494798e7ea78d1685` (tree
+`be719d27d61f9a1a02567b8673d02dcd53548085`, unchanged OpenSnitch gitlink
 `b404c4c6316760fa7bc415509d3f8d747f7dc9cc`; r13/r14 used `bf15bb5`). This is a candidate identity,
 not source review approval. Any review-driven source change requires another
 pin/input/verifier refresh and relevant offline checks before publication.

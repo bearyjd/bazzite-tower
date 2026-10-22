@@ -28,16 +28,16 @@
     "path": "/etc/pki/rpm-gpg/RPM-GPG-KEY-fedora-44-primary",
     "sha256": "93642aec521a1e5e96dd715f7ae0ec0850ebc9de09a94ce03cae5263f26cc18a"
   },
-  "rustVersion": "1.98.1",
+  "rustVersion": "1.99.0",
   "schemaVersion": 1,
-  "sourceCommit": "da5d7f1296eeec098919f9dc50920e3312225d3b",
+  "sourceCommit": "bfc76e6607574b354e1d3b1494798e7ea78d1685",
   "sourceFiles": {
     "packaging/bluebuild/files/system/etc/opensnitchd/rules/000-snitchwatch-bridge-fetch.json": "3739ab9bb74ef6309975bf0d2c3c9a766f1976e014e6f9c360b910b22daef458",
     "packaging/flatpak/org.snitchwatch.Snitchwatch.system.yml": "bd70d64823a70622dc9a3b17518732a7b0106f5cf02058dd3956f382a7b4c65b",
     "packaging/release/bridge_artifact.py": "6a82d12348772446d57ca0163d0b31fadf268db2345b6de3db485896d279d3e2",
     "packaging/release/build-bridge.sh": "b752941d3fd9c2ab7d986006eed7398c1a73110707df133fdec5ac1c241b2006",
     "packaging/release/install-deps.sh": "247a396c0f3d504023f001c33bb1211f5f0f9bfd2c6685077d4bd312ac95f8cb",
-    "packaging/release/pins.env": "e3d1ab2f0da4d7ad262934ee44ec78ae8e38ec516f0573b2ecb52a2ffe725058",
+    "packaging/release/pins.env": "cf5903315781c0b3edbb5afa53354a8c8a4c332942e3041de2bf8a32e6c5766e",
     "packaging/release/repro-check.sh": "b915ac388d28dce593bc652a07ff7d9a1fcef33e4a4434e03502d2e28cfe767e",
     "packaging/system/opensnitch-snitchwatch-system-bridge.conf": "83715f2c8c24e1f697598f60d095ade4473cf77c921f4a5bbbf4748fafc3cbc2",
     "packaging/system/opensnitchd-default-config.json": "821abd66341ad6b1b37ed2db28ec1fb6512f74060e2715bf05946e17bb0f2e12",
@@ -49,32 +49,32 @@
     "packaging/system/stage.sh": "fe8c34aee736c7c8849383e9cc3ad22334126baa11aa7185e25bf943ac14657f"
   },
   "sourceRepository": "https://github.com/bearyjd/snitchwatch.git",
-  "sourceTree": "28482f508236cea1d60e295327c2c557ffff4382",
+  "sourceTree": "be719d27d61f9a1a02567b8673d02dcd53548085",
   "submoduleCommit": "b404c4c6316760fa7bc415509d3f8d747f7dc9cc",
   "toolchainRpms": [
     {
-      "file": "rust-1.98.1-1.fc44.x86_64.rpm",
-      "kojiPath": "rust/1.98.1/1.fc44/data/signed/6d9f90a6/x86_64/rust-1.98.1-1.fc44.x86_64.rpm",
+      "file": "rust-1.99.0-1.fc44.x86_64.rpm",
+      "kojiPath": "rust/1.99.0/1.fc44/data/signed/6d9f90a6/x86_64/rust-1.99.0-1.fc44.x86_64.rpm",
       "name": "rust",
-      "nevra": "rust-0:1.98.1-1.fc44.x86_64",
-      "sha256": "4f4a346f18eddff7ee512850a65e9a0a6b0f1ccfe96b1e665a99b6d02dacfa76",
-      "size": 31568956
+      "nevra": "rust-0:1.99.0-1.fc44.x86_64",
+      "sha256": "cbbedd9794b017a3b654382170c55a4ba75dcfdbb7a828d3dd63d0c4b93e01be",
+      "size": 32479878
     },
     {
-      "file": "cargo-1.98.1-1.fc44.x86_64.rpm",
-      "kojiPath": "rust/1.98.1/1.fc44/data/signed/6d9f90a6/x86_64/cargo-1.98.1-1.fc44.x86_64.rpm",
+      "file": "cargo-1.99.0-1.fc44.x86_64.rpm",
+      "kojiPath": "rust/1.99.0/1.fc44/data/signed/6d9f90a6/x86_64/cargo-1.99.0-1.fc44.x86_64.rpm",
       "name": "cargo",
-      "nevra": "cargo-0:1.98.1-1.fc44.x86_64",
-      "sha256": "b32e8b630c55c5ae0df6a3efdf58173974d4dc462a2e2be7a10cd18ea365d30f",
-      "size": 8292119
+      "nevra": "cargo-0:1.99.0-1.fc44.x86_64",
+      "sha256": "133d5003f7b30708a9143bd63ba4f2848dae5b1d9768dca7c4d2f65497af7206",
+      "size": 8270638
     },
     {
-      "file": "rust-std-static-1.98.1-1.fc44.x86_64.rpm",
-      "kojiPath": "rust/1.98.1/1.fc44/data/signed/6d9f90a6/x86_64/rust-std-static-1.98.1-1.fc44.x86_64.rpm",
+      "file": "rust-std-static-1.99.0-1.fc44.x86_64.rpm",
+      "kojiPath": "rust/1.99.0/1.fc44/data/signed/6d9f90a6/x86_64/rust-std-static-1.99.0-1.fc44.x86_64.rpm",
       "name": "rust-std-static",
-      "nevra": "rust-std-static-0:1.98.1-1.fc44.x86_64",
-      "sha256": "612185594cb772f5320d5c9a97dd226390fb32972389a47a99b3cb07786c39c4",
-      "size": 42066597
+      "nevra": "rust-std-static-0:1.99.0-1.fc44.x86_64",
+      "sha256": "5b1753c706960ec4a6b2158cb5525e677111cff681c6b54c88f95f0f0fbe4202",
+      "size": 42781168
     }
   ]
 }

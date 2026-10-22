@@ -128,10 +128,10 @@ bind tower commit/tree, Snitchwatch source commit/tree/submodule, bridge/daemon
 pins hashes and candidate workflow hash. Its independent-workflow-review
 receipt binds the SHA256 of that canonical identity object. The control commit
 records this after the candidate commit exists, avoiding a self-referential Git
-commit/hash. The frozen bridge candidate pin is
-`bf15bb5d87b46576b2f2d56d2c5164b6890402c7` (tree
-`ac04f33f33145ea39a3ba71fae60fe871aff3f21`, unchanged OpenSnitch gitlink
-`b404c4c6316760fa7bc415509d3f8d747f7dc9cc`). This is a candidate identity,
+commit/hash. The current (r15) bridge candidate pin is
+`bfc76e6607574b354e1d3b1494798e7ea78d1685` (tree
+`be719d27d61f9a1a02567b8673d02dcd53548085`, unchanged OpenSnitch gitlink
+`b404c4c6316760fa7bc415509d3f8d747f7dc9cc`; r13/r14 used `bf15bb5`). This is a candidate identity,
 not source review approval. Any review-driven source change requires another
 pin/input/verifier refresh and relevant offline checks before publication.
 

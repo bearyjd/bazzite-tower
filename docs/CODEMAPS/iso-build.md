@@ -1,4 +1,4 @@
-<!-- Generated: 2026-06-10 | Files scanned: 5 | Token estimate: ~620 -->
+<!-- Generated: 2026-10-21 | Files scanned: 5 | Token estimate: ~700 -->
 # Live / Installer ISO
 
 A **separate** build from the installed OS image. Produces a bootable live KDE
@@ -44,6 +44,13 @@ bootable ISO  → checksum + cosign sign-blob → artifact / S3   (Secure Boot O
 `build-iso.yml` (dispatch, Sun 08:00 UTC) builds the payload then runs the
 `ublue-os/titanoboa` action (pinned to `main`; mid-revamp, no tagged release).
 On failure it opens the `iso-failure` issue. See [ci-cd.md](ci-cd.md).
+
+Before any rootful podman use the job pins `/etc/containers/storage.conf` to
+**native kernel overlayfs**, wipes the runner's store (`system reset` → `umount -R`
+→ `rm -rf`), and fails if `mount_program` (fuse-overlayfs) survives. Why: the
+runner's podman bundle switched rootful storage to fuse-overlayfs, which rejects
+the nested `podman pull`'s literal `.wh.*` whiteouts with EINVAL (issues #47,
+#52). Keep this step first; both the payload build and titanoboa share the store.
 
 ## Status
 

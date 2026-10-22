@@ -37,7 +37,7 @@ class DaemonBuildContracts(unittest.TestCase):
         self.write(self.module['CANDIDATE'], b'\x7fELF\x02\x01' + bytes(58), 0o755)
         self.write(self.module['BINARY'], self.path(self.module['CANDIDATE']).read_bytes(), 0o755)
         self.write(self.module['VERIFIER'], 'readonly metadata fixture\n', 0o755)
-        self.write(base + 'rpm-inventory.txt', 'golang-0:1.26.8-2.fc44.x86_64\n')
+        self.write(base + 'rpm-inventory.txt', 'golang-0:1.26.10-1.fc44.x86_64\n')
         self.write(base + 'source/ui.proto', 'synthetic proto\n')
         self.write(base + 'source/go.mod', 'locked synthetic module\n')
         self.write(base + 'source/go.sum', 'locked synthetic sums\n')
@@ -45,7 +45,7 @@ class DaemonBuildContracts(unittest.TestCase):
             self.write(base + 'generated/' + name, 'generated ' + name)
         self.write('/usr/share/licenses/snitchwatch-opensnitchd/LICENSE', 'synthetic GPL license\n')
         self.write('/usr/share/licenses/snitchwatch-opensnitchd/THIRD-PARTY-LICENSES.md', '# Linked Go module licenses\n\nModule checksum: `h1:fixture`\n')
-        self.write(base + 'go-build-info.txt', 'fixture: go1.26.8-X:nodwarf5\n\tbuild\t-trimpath=true\n\tbuild\tvcs.revision=' + self.pins['sourceCommit'] + '\n\tbuild\tvcs.modified=true\n')
+        self.write(base + 'go-build-info.txt', 'fixture: go1.26.10-X:nodwarf5\n\tbuild\t-trimpath=true\n\tbuild\tvcs.revision=' + self.pins['sourceCommit'] + '\n\tbuild\tvcs.modified=true\n')
         binary_sha = sha(self.path(self.module['CANDIDATE']).read_bytes())
         self.provenance = {'sourceCommit': self.pins['sourceCommit'], 'sourceTree': self.pins['sourceTree'], 'patchSha256': self.pins['patchSha256'],
                            'patchedFiles': self.pins['patchedFiles'], 'builderImage': self.pins['builderImage'], 'goVersion': self.pins['goVersion'],
@@ -132,7 +132,7 @@ class DaemonBuildContracts(unittest.TestCase):
         self.change(self.module['PINS'], json.dumps(self.pins)); self.manifest['source']['commit'] = '0' * 40; self.reject()
 
     def test_build_info_wrong_upstream(self):
-        self.change(self.module['ROOT'] + 'go-build-info.txt', 'fixture: go1.26.8-X:nodwarf5\n\tbuild\t-trimpath=true\n\tbuild\tvcs.revision=' + '0' * 40 + '\n\tbuild\tvcs.modified=true\n'); self.reject()
+        self.change(self.module['ROOT'] + 'go-build-info.txt', 'fixture: go1.26.10-X:nodwarf5\n\tbuild\t-trimpath=true\n\tbuild\tvcs.revision=' + '0' * 40 + '\n\tbuild\tvcs.modified=true\n'); self.reject()
 
     def test_build_info_hides_downstream_patch(self):
         name = self.module['ROOT'] + 'go-build-info.txt'

@@ -51,7 +51,7 @@ Snitchwatch daemon build toolchain: 7 Fedora 44 RPMs pinned by sha256 in
 `build_files/firewall/snitchwatch-system-daemon-pins.json` and fetched from Koji
 (signed copies, key sha256 pinned); see [image-build](image-build.md).
 Phase 2 separately pins three signed Koji bridge RPMs (rust, cargo,
-rust-std-static 1.98.1-1.fc44) in `build_files/firewall/snitchwatch-system-pins.json`.
+rust-std-static 1.99.0-1.fc44) in `build_files/firewall/snitchwatch-system-pins.json`.
 The shared toolchain helper runs after the byte-identical upstream installer
 and before the Rust gate; the daemon retains its seven pins. Remaining live
 toolchain and transitive dependencies, including LLVM, are not fully hermetic.
@@ -59,11 +59,12 @@ Re-pin `EXPECTED_PINS_SHA256` in the respective bridge
 `snitchwatch-system-verify.py` or daemon `snitchwatch-system-daemon-verify.py`
 whenever its pins manifest changes, and rerun relevant tests.
 
-The r13 bridge candidate source is frozen at
-`bf15bb5d87b46576b2f2d56d2c5164b6890402c7` (tree
-`ac04f33f33145ea39a3ba71fae60fe871aff3f21`, unchanged OpenSnitch gitlink
-`b404c4c6316760fa7bc415509d3f8d747f7dc9cc`). Bridge packaging input hashes and
-the pins verifier are refreshed from that committed snapshot. Source and
+The r15 bridge candidate source is pinned at
+`bfc76e6607574b354e1d3b1494798e7ea78d1685` (tree
+`be719d27d61f9a1a02567b8673d02dcd53548085`, unchanged OpenSnitch gitlink
+`b404c4c6316760fa7bc415509d3f8d747f7dc9cc`; r13/r14 used `bf15bb5`). Bridge
+packaging input hashes (15, adding upstream's `opensnitch.service` drop-in and
+daemon config) and the pins verifier are refreshed from that committed snapshot. Source and
 workflow review/runtime acceptance remain publication gates; the candidate pin
 confers no stable release authority. See [r13 publication](../r13-publication.md).
 

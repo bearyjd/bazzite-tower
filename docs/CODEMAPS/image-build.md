@@ -63,10 +63,18 @@ NFQUEUE is available. Rootless container checks cannot replace the VM gate.
 Legacy builds retain upstream RPM extraction and incur no native compilation.
 
 Only the system candidate changes the image-intent OpenSnitch address to
-`unix:opensnitchd.sock`, with a system drop-in requiring the gRPC socket and
-`WorkingDirectory=/run/snitchwatch`. Sysusers are materialized before tmpfiles
-and socket startup. Existing live bootc `/etc` drift is a migration decision,
-not an implicit policy overwrite. Both profiles remain fail open.
+`unix:opensnitchd.sock` and `DefaultAction` to `deny` (fail closed, r15 owner
+decision; `ProcMonitorMethod` stays `proc`). Upstream `stage.sh` installs the
+`opensnitch.service.d/snitchwatch-system-bridge.conf` drop-in (`Wants=`/`After=`
+the gRPC socket, `WorkingDirectory=-/run/snitchwatch`), pinned by hash; it also
+stages upstream's `ebpf` daemon config, which `snitchwatch-system-stage.py`
+removes from the overlay (unit-tested); `95-firewall.sh` installs the tower's `deny`/`proc`
+candidate after the RPM extraction. `snitchwatch-system-stage.py` also stages the
+tower's always-on OS-update rules (`snitchwatch-system-os-update-rule.json` ->
+`/etc/opensnitchd/rules/000-snitchwatch-tower-os-update.json`, `snitchwatch-system-resolved-dns-rule.json`
+-> `000-snitchwatch-tower-resolved-dns.json`; digests pinned in the verifier). Sysusers are materialized
+before tmpfiles and socket startup. Existing live bootc `/etc` drift is a
+migration decision, not an implicit policy overwrite. Legacy remains fail open.
 
 Daemon toolchain (golang, golang-bin, golang-src, protobuf, protobuf-compiler,
 libnetfilter_queue, libnetfilter_queue-devel) is not installed from live repos:
@@ -78,7 +86,7 @@ NEVRA, then installs them in one dnf transaction. The version-string gate in
 (fails closed). A `fetch` mode does the same verification without installing; `tests/test-snitchwatch-daemon-patch.sh` uses it in its network phase so the offline test phase installs the same pinned RPMs. Test: `tests/test-snitchwatch-toolchain.sh`.
 
 Phase 2 adds three signed Koji RPMs (rust, cargo, rust-std-static
-1.98.1-1.fc44) to `snitchwatch-system-pins.json` for the bridge. The same helper
+1.99.0-1.fc44) to `snitchwatch-system-pins.json` for the bridge. The same helper
 runs after the byte-identical upstream installer and before the Rust version
 gate in `snitchwatch-system-build.sh`; the daemon retains its seven pins.
 Remaining live toolchain and transitive dependencies, including LLVM, are not
@@ -127,10 +135,10 @@ NFQUEUE, SELinux and deployment require separate owner-controlled evidence).
 
 ## r13 publication boundary
 
-The frozen r13 bridge candidate is `bf15bb5d87b46576b2f2d56d2c5164b6890402c7`,
-tree `ac04f33f33145ea39a3ba71fae60fe871aff3f21`, with unchanged OpenSnitch
-gitlink `b404c4c6316760fa7bc415509d3f8d747f7dc9cc`. The bridge pins record
-this identity and hashes of all 13 committed packaging inputs; the installed
+The r15 bridge candidate is `bfc76e6607574b354e1d3b1494798e7ea78d1685`,
+tree `be719d27d61f9a1a02567b8673d02dcd53548085`, with unchanged OpenSnitch
+gitlink `b404c4c6316760fa7bc415509d3f8d747f7dc9cc` (r13/r14: `bf15bb5`). The
+bridge pins record this identity and hashes of all 15 committed packaging inputs; the installed
 verifier authenticates the refreshed pins hash. Upstream installer bytes and
 signed Koji/toolchain/daemon pins remain unchanged. This candidate pin does not
 establish independent review or runtime acceptance; authority remains held.

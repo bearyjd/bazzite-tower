@@ -41,7 +41,6 @@ ARG FIREWALL_DAEMON
 COPY --from=ctx /firewall/snitchwatch-system* /factory/
 COPY system_files/usr/share/bazzite-tower/opensnitchd-default-config.json /candidate/legacy-config.json
 COPY system_files/usr/share/bazzite-tower/opensnitchd-system-bridge-config.json /candidate/system-config.json
-COPY system_files/usr/share/bazzite-tower/snitchwatch/opensnitch.service.d/20-system-bridge.conf /candidate/20-system-bridge.conf
 RUN SNITCHWATCH_BRIDGE=system FIREWALL_DAEMON="${FIREWALL_DAEMON}" bash /factory/snitchwatch-system-build.sh /out && \
     SNITCHWATCH_BRIDGE=system FIREWALL_DAEMON="${FIREWALL_DAEMON}" bash /factory/snitchwatch-system-daemon-build.sh /out
 

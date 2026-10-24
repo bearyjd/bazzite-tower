@@ -113,6 +113,37 @@ Known limits:
   (`NoNewPrivileges` may break SELinux transitions).
 - The service shows `failed` when offline (the helper exits 1 with no default route).
 
+**Optional diagnostic packages (r16.1 source changes; not yet built or installed).**
+All four requested Fedora packages are added to the image recipe: `bpftool`,
+`sysstat`, `igt-gpu-tools`, and `trace-cmd`. Package availability is confirmed in
+Fedora 44 metadata; installation, dependency resolution on this image and actual
+GPU/BPF/tracing operation remain unverified until the new image is built and
+accepted. These tools are not invoked by `tower-health` or CI GPU tests. Automatic
+activation defaults are described below.
+
+After installation, owner-invoked examples are `sudo bpftool prog show` (inspect
+loaded BPF programs), `iostat -xz 1 10` or `pidstat -u -r 1 10` (finite samples),
+`sudo timeout 10s intel_gpu_top` (Intel GPU activity), and `trace-cmd list -e`
+(list trace events). Tool availability does not establish kernel support or grant
+permission. GPU test runners/register writes and trace recordings require a
+separately chosen owner procedure; none runs automatically.
+
+Fresh images disable `sysstat.service`, `sysstat-collect.timer`,
+`sysstat-summary.timer`, `sysstat-rotate.timer`, and `trace-cmd.service`, with an
+early vendor disable preset and explicit build-time disable. Existing owner
+`/etc` enablement can survive a bootc update; inspect with `systemctl is-enabled`
+and `systemctl is-active` before assuming collection is off on an existing host.
+The trace-cmd udev rule only reloads its already-active service and is retained.
+
+Fedora's `sysstat.sleep` otherwise writes a data record unconditionally on suspend
+and resume, regardless of the disabled services. The build retains its contents
+but deliberately sets mode `0644`, so systemd-sleep skips it. This expected RPM
+mode override also leaves sleep annotations disabled if the owner later opts in
+to sysstat timers; manual `sar`, `iostat`, and `pidstat` still work. To explicitly
+opt in to periodic collection after accepting the image, the owner can enable
+`sysstat.service` plus its collect/summary/rotate timers. To turn it off again,
+disable and stop all four units. The image does neither on a running host.
+
 **One-shot sweep:** [`scripts/tower-diagnostic.sh`](../scripts/tower-diagnostic.sh)
 runs all of the above (SOF/ABI, MCE/RAS, i915 resume, thermals, SMART, rpm-ostree)
 in one pass. Run with `sudo` for the root-only checks:

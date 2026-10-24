@@ -1,0 +1,6 @@
+# Early first-match image defaults; owner /etc enablement remains opt-in.
+disable sysstat.service
+disable sysstat-collect.timer
+disable sysstat-summary.timer
+disable sysstat-rotate.timer
+disable trace-cmd.service

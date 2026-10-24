@@ -139,3 +139,12 @@ Wayland/X11 sandbox authority or runtime/release acceptance.
 - `/etc/xdg/baloofilerc` → seed indexer `exclude filters` with build/cache trees (.gradle, target, language caches)
 - `/usr/libexec/bazzite-tower-stall-detect` + `/usr/lib/systemd/system/bazzite-tower-stall-detect.service` → samples CLOCK_MONOTONIC and records D-state workers on a stall. Catches freezes no kernel watchdog reports (soft lockup needs a spinning CPU; hung_task needs 120s). Built for the i915 GuC TLB invalidation timeout, drm/i915 #14469. Logs to the journal; query with `ujust freeze-report`
 - `/usr/share/bazzite-tower/opensnitchd-default-config.json` → Snitchwatch-tuned opensnitchd config. **Staged, not live**: `95-firewall.sh` `install`s it over `/etc/opensnitchd/default-config.json` *after* the OpenSnitch RPM extraction (which writes that path itself), so it can't live at the real path here. Doubles as the pristine image-intent copy to diff a 3-way-merged `/etc` against. Deltas from the RPM default: `Server.Address` `127.0.0.1:50051` in legacy or `unix:opensnitchd.sock` in the opt-in system candidate, `ProcMonitorMethod` `proc` (tested baseline; packaged eBPF objects need owner runtime validation), `DefaultAction` `allow` (permanent default in both profiles; deny enforcement requires explicit operator opt-in). System candidate `opensnitchd-system-bridge-config.json` retains allow/proc; migration retains allow and readiness rejects local deny drift
+
+## Diagnostic collection preset
+
+`/usr/lib/systemd/system-preset/00-bazzite-tower-diagnostics.preset` disables
+sysstat.service, sysstat-collect/summary/rotate.timer and trace-cmd.service for
+fresh-image preset processing (first matching preset wins; `/etc` owner policy
+can override). Build stage70 also explicitly disables these units and sets the
+packaged sysstat.sleep hook0644; vendor bytes remain intact but suspend annotations
+stay off even after a timer opt-in. No tracing or GPU tests are automatically run.

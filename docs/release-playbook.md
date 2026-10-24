@@ -2,9 +2,11 @@
 
 How a release gets from merged code to the laptop. Proven end to end on r14
 (2026-10-13). The mechanics of each gate live in `docs/r13-publication.md`; this
-file is the order of operations and the testing method. The workflow, variable,
-branch and GHCR package names still say `r13`: they name the pipeline, not the
-round, so reuse them. Only the Snitchwatch GUI candidate target is per round
+file is the order of operations and the testing method. The release promoter is
+`release.yml` (**Release Snitchwatch System**). Candidate workflow, control
+variable, branch and GHCR package names retain their historical `r13` identities:
+they name the pipeline, so reuse them across rounds. Only the Snitchwatch GUI
+candidate target is per round
 (`r14-candidate` …), because its fixed-name publish refuses to replace an existing
 release.
 
@@ -82,10 +84,10 @@ Never force-push (including `--force-with-lease`); to update a branch, merge mai
    against the run log.
 8. **Promoter PR**: change only `env.DIGEST` (the image digest) and
    `--source-digest` (the candidate head *commit* SHA, not an image digest) in
-   `r13-promote.yml` (+ tests/docs). Review, CI, merge. Merging arms; it does not
+   `release.yml` (+ tests/docs). Review, CI, merge. Merging arms; it does not
    publish.
 9. **Owner acceptance** (below), then dispatch
-   `gh workflow run r13-promote.yml -R bearyjd/bazzite-tower --ref main -f digest=<digest>`; the owner
+   `gh workflow run release.yml -R bearyjd/bazzite-tower --ref main -f digest=<digest>`; the owner
    approves the `release` deployment. Then publish the stable GUI release as a byte
    copy of the candidate prerelease assets, with release notes.
 

@@ -184,7 +184,7 @@ does not establish remote acquisition or runtime success.
 
 `release.yml` is `workflow_dispatch` only, runs on `main` in this
 repository, and takes one required input, `digest`. The workflow hard-codes the
-only digest it may promote (`sha256:df4ec1239abae0cbe1d4d4e27bce85d54f17e2b5155e431c2727c724aa879bf7`, the r15.1 candidate built by `r13-candidate.yml` run `40050864799`) in `env`, and its first
+only digest it may promote (`sha256:3f9a0d238e69917a33a23710a53963e70b64526cc8e44f9d24787944dcca1f27`, the r16.1 candidate built by `r13-candidate.yml` run `40118265705`, source `1c01f086f58bd33a5d7651254671e57723d45561`) in `env`, and its first
 step fails unless the input equals it. It shares `bazzite-tower-stable-writers`
 with the other stable writers, cancellation disabled. One job, permissions
 `contents: read` and `packages: write`, every action pinned by SHA, no
@@ -217,6 +217,22 @@ Long cosign calls are bounded to 180 s and verified payloads are discarded or
 written to files, never streamed to the log. Run it only after the PR carries
 the runtime evidence and review for that digest. Partial publication (staging
 tag and signatures written, tag not moved) is safe to re-dispatch.
+
+The r16.1 promoter update arms this exact digest; merging does not publish it.
+Owner requested release based on the verified candidate and CI; laptop runtime
+remains unverified and no physical acceptance is claimed. Protected `release`
+approval remains owner-only.
+
+Automatic refresh still builds both profiles from the accepted r15.1 source
+above. After r16.1 promotion its system publisher holds: the new digest is not
+the policy's bootstrap digest, and fixed-digest promotion writes no
+`base-refresh/v1` provenance required by the signed-baseline check. It cannot
+replace r16.1 with the older product. Legacy refresh remains independent.
+Resuming system refresh requires a separately reviewed accepted-source and exact
+system-baseline policy transition. The current source fields apply to both
+profiles; review the legacy and system profile contracts before advancing them.
+Do not change only the bootstrap digest:
+that would authorize refresh builds of the old system product over r16.1.
 
 `ci/r13-publication.py` keeps only the candidate flow's `approval`, `source`
 and `candidate` gates. Its retired `promote` entrypoint, accepted-packet/receipt

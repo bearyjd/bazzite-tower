@@ -75,7 +75,7 @@ again on a future kernel bump.
 | Indexer excludes applied | `balooctl6 config show excludeFilters` (expect `.gradle`, build/cache dirs) |
 | CPU power baseline | `cat /sys/devices/system/cpu/cpu0/cpufreq/energy_performance_preference` (expect `balance_performance`); `cat /sys/firmware/acpi/platform_profile` (expect `balanced`); `systemctl is-active thermald` |
 | Virt stack up | `systemctl is-active virtqemud.socket` · `virsh -c qemu:///system list --all` |
-| Read-only image/host summary | `ujust tower-health` — optional-service states, SMART/RAS/timers, firmware and security-tool availability |
+| Read-only image/host summary | `ujust tower-health` — booted/staged identity, running versions, failed services, RAS evidence and SELinux labels; `ujust tower-health --diagnostics` adds bounded current-boot/resume excerpts |
 | OpenSnitch legacy bridge readiness | `ujust opensnitch-readiness` — read-only check of the active daemon, fail-open config and verified user bridge at `127.0.0.1:50051`; see the OpenSnitch section below |
 | Cockpit web management (opt-in) | `ujust enable-cockpit`; it binds only to loopback. Review Tailnet ACLs, then separately run `tailscale serve --https=443 http://127.0.0.1:9090`; do not expose :9090 directly without explicit firewall policy. |
 | Docker/libvirt NAT forwarding (opt-in Docker) | `just test-docker-libvirt-forwarding` (from a repository checkout) — restarts Docker, checks its `DOCKER-USER` NAT-bridge/uplink pair rules, then probes Docker bridge networking. Rules are only for active libvirt XML `forward mode='nat'` bridges; no broad source-RFC1918 or bridge-wildcard policy is added. A post-start reconciliation failure is non-fatal to Docker and later libvirt/NetworkManager events retry it. |
@@ -564,7 +564,7 @@ always beats these allows.
 | Display flicker / ~30s sluggish wake | i915 PSR/DC or `deep` suspend on Meteor Lake | baked kargs disable PSR/DC and pin `s2idle`; verify `cat /sys/power/mem_sleep` |
 | `cat /proc/cmdline` shows `mem_sleep_default=deep` despite `20-suspend.toml` declaring `s2idle` | [`bootc` docs](https://bootc.dev/bootc/building/kernel-arguments.html) mark it **undefined behavior** when a kargs.d value changes across versions of the same fragment (this one shipped `deep` before PR #16 corrected it to `s2idle`) — once a value like this is baked into a deployment's persisted kernelopts, later `bootc upgrade`s can keep carrying the old value forward instead of reconciling to the fragment's current content. Confirmed on this machine 2026-09-19: `rpm-ostree kargs` showed `deep` on a deployment built long after the `s2idle` fix landed. **Harmless in practice on this hardware**: `cat /sys/power/mem_sleep` reports only `s2idle` — the firmware exposes no `deep` state at all, so the stale karg has nothing to select and resume is not currently degraded by it. Worth fixing for hygiene (declared intent should match reality) and because a future firmware/BIOS update could theoretically add a `deep` state this karg would then actually select, not because anything is broken today | one-time local correction, which then persists correctly across future upgrades the same way the wrong value did. Run `rpm-ostree kargs` bare first to confirm the deployment actually carries `deep` — `--delete` fails if it doesn't: `sudo rpm-ostree kargs --delete=mem_sleep_default=deep --append=mem_sleep_default=s2idle`, then reboot. Re-check any OTHER kargs.d fragment you edit after its first deploy — this isn't specific to suspend, it's a general bootc kargs.d gotcha |
 | No audio; journal floods with `FW reported error: 9` / `failed to create module pipeline` | SOF topology ABI (3.29) newer than the kernel's SOF driver ABI (3.23); no ABI-≤3.23 firmware in repos to downgrade to | `25-audio-sof-bypass.toml` forces the legacy HDA driver (`snd_intel_dspcfg.dsp_driver=1`), sidestepping SOF; verify `journalctl -k \| grep -i dsp_driver` |
-| Frequent corrected MCEs in the journal | corrected CPU **cache** errors on Meteor Lake (EDAC `igen6` ECC counters 0/0 → not DRAM) | `rasdaemon` records/decodes them; `mcelog` is masked (its trigger tried to offline a CPU). Decode with `sudo ras-mc-ctl --errors` |
+| Frequent corrected MCEs in the journal | machine-check events need per-event bank/status decode; zero EDAC `igen6` counters alone do not exclude DRAM faults | `rasdaemon` records/decodes them; `mcelog` is masked (its trigger tried to offline a CPU). Decode with `sudo ras-mc-ctl --errors` |
 | `smartd` warns of media errors / available-spare drop | NVMe wear or developing fault | `journalctl -u smartd`; confirm with `sudo smartctl -a /dev/nvmeN`; a falling available-spare or rising media-error count is an escalation/back-up signal |
 | Secure Boot refuses the image | — | the image kernel is signed with the shared ublue MOK (already enrolled on ublue/Bazzite hosts); no MOK work needed when switching ublue↔bazzite-tower |
 | Black screen at login, no prompt, after a deployment update | KDE Plasma package-family skew — `kwin` landed a point release ahead of `kscreenlocker` in that day's dnf transaction (`kwin_wayland: undefined symbol: ...inhibitSuspend()`, exit 127, no compositor); recurred twice, see `docs/research/kwin-screenlocker-abi-2026-07-26/` and `-2026-08-08/` | roll back to the previous deployment via the GRUB menu or `rpm-ostree rollback`; `build.d/05-pin-kde-packages.sh` now excludes the KDE Plasma/KWin family from this build's own dnf transactions, and `tests/smoke.sh` fails the build if `kwin`/`kscreenlocker` don't share a major.minor version |
@@ -603,29 +603,78 @@ so the firmware **cannot be downgraded** to match the kernel.
   or Koji to keep full SOF + the mic array — more complex, depends on an external
   source, and needs per-update version matching. Revisit if the DMIC array is needed.
 
-## CPU MCEs (corrected cache errors)
+## CPU MCEs and memory evidence
 
-This Meteor Lake CPU logs corrected machine-check events (~115/boot observed) that
-are **CPU cache**, not DRAM — EDAC `igen6` ECC counters stay at 0/0. `rasdaemon`
-collects and decodes them; `mcelog` is masked.
+This Meteor Lake CPU has logged corrected machine-check events (~115/boot in an
+earlier observation). Attribution to CPU cache requires the decoded bank/status
+and event type. Zero EDAC `igen6` ECC counters do **not** exclude DRAM faults or
+establish that the events are harmless. `rasdaemon` collects and decodes supported
+events; `mcelog` is masked.
 
 ```bash
-sudo ras-mc-ctl --summary    # counts by type since boot
+sudo ras-mc-ctl --summary    # recorded database counts; may span boots
 sudo ras-mc-ctl --errors     # decoded per-event detail (bank, address, type)
 ```
 
 Reading the result:
 
-- **Corrected** errors spread across cores/cache ways are common and generally
-  benign — the CPU corrected them and continued.
+- **Corrected** means hardware reported recovery for that event. It does not
+  establish the cause or that continuing events are harmless. Compare rates,
+  decoded banks/status, firmware and microcode revisions across boots; correlate
+  with hangs, application crashes and memory failures.
 - Corrected errors **localized to a single core / cache line** that recur are a
   possible RMA signal; capture `ras-mc-ctl --errors` over several boots.
-- **Any _uncorrected_ MCE is an escalation** — treat as failing hardware: save the
-  decode, and roll back / power down rather than continue.
+- **Any _uncorrected_ MCE is an escalation**: preserve the decode and relevant
+  journal, stop workload experiments and seek hardware diagnosis. Follow owner
+  recovery procedures; an OS rollback alone does not establish hardware safety.
+- `/proc/meminfo` `HardwareCorrupted` is memory currently accounted as poisoned
+  by the kernel, in kB. A nonzero value warrants investigation; zero does not
+  exclude errors that were corrected, unreported or outside this accounting.
+- Missing RAS tools, inaccessible journals or unavailable counters mean
+  **unknown**, not zero errors. RAS database counts and journal excerpts have
+  different lifetimes; the health helper labels its bounded current-boot window.
 
 Microcode: `microcode_ctl` is layered at the latest Fedora revision in `build.sh`.
 Early-load takes effect once the initramfs is regenerated (on a base bump); confirm
 the running revision with `grep -m1 microcode /proc/cpuinfo`.
+
+## SELinux labels: boot.log and kvmfr
+
+`ujust tower-health` shows the current and installed-policy expected labels for
+`/var/log/boot.log` and `/dev/kvmfr0`, failed services, and whether an exact
+`/dev/kvmfr0` mapping exists in the targeted policy's `file_contexts.local`. It
+prints no file contents or other local mappings. Broader matching local patterns
+are not enumerated; `matchpathcon` is the effective policy expectation. Missing
+tools/permissions are **unknown**. The report does not change either label.
+
+On this machine the owner observed `boot.log` as `var_t` while the installed
+policy expected `plymouthd_var_log_t`, causing normal logrotate to fail. The
+image-owned `logrotate.service` drop-in runs a fixed-path helper before its
+existing rotation command. It calls `restorecon` only for an existing regular,
+root-owned, single-link `/var/log/boot.log`; it refuses symlinks and never creates
+or recursively relabels files. The current policy determines the expected type,
+so another base is not forced to use `plymouthd_var_log_t`. A refused/failed repair
+leaves the service failed for investigation. Vendor timer, AC-power condition,
+logrotate arguments and rotation policy remain in effect; no forced rotation.
+
+For an existing image without the helper, the owner can inspect and correct the
+single file, then retry the normal service on AC power:
+
+```bash
+ls -lZ /var/log/boot.log
+sudo restorecon -nv -- /var/log/boot.log  # inspect proposed label, no change
+# Proceed only if it is the expected regular file, not a symlink/hard-link alias.
+sudo restorecon -v -- /var/log/boot.log
+sudo systemctl start logrotate.service
+systemctl status logrotate.service --no-pager
+```
+
+`/dev/kvmfr0` is a separate owner-maintained SELinux override issue. A local exact
+mapping to `svirt_tmpfs_t` was observed in `file_contexts.local`; do not infer that
+the image udev ownership rule caused the denial. Inspect with
+`sudo semanage fcontext -l -C` and `matchpathcon /dev/kvmfr0`, then review any
+mapping change with the owner. The image does not remove local mappings, relabel
+kvmfr, relax enforcement or install an allow-all policy.
 
 ## Wi-Fi: BE200 firmware asserts (desktop freezes)
 

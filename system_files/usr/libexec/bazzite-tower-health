@@ -1,59 +1,190 @@
 #!/usr/bin/env bash
-# bazzite-tower-health — reporting-only host health summary.
-#
-# This intentionally does not use sudo and never enables, starts, stops, or
-# modifies a service. Individual probes may be unavailable on a particular base
-# image; that is reported rather than treated as a health-command failure.
+# Reporting only: no elevation, host writes, network requests or service changes.
+# Every external probe is finite; unavailable/denied probes are explicitly unknown.
 set +e
+set -o pipefail
+export LC_ALL=C
 
-unit_status() {
-    local unit="$1"
-    local enabled active
-    enabled=$(systemctl is-enabled "${unit}" 2>/dev/null || true)
-    active=$(systemctl is-active "${unit}" 2>/dev/null || true)
-    printf '  %-36s enabled=%-10s active=%s\n' "${unit}" "${enabled:-unknown}" "${active:-unknown}"
+case "${1:-}" in
+    "") diagnostics=false ;;
+    --diagnostics) diagnostics=true ;;
+    *) echo "Usage: bazzite-tower-health [--diagnostics]" >&2; exit 2 ;;
+esac
+if (( $# > 1 )); then
+    echo "Usage: bazzite-tower-health [--diagnostics]" >&2
+    exit 2
+fi
+
+available() { command -v "$1" >/dev/null 2>&1; }
+
+# Bound both command duration and bytes before formatting. Failed/partial probes
+# are never presented as a clean bill of health. No temporary files are written.
+probe() {
+    local label="$1" output rc truncated=false
+    shift
+    printf '  %s:\n' "$label"
+    if ! available "$1" || ! available timeout; then
+        echo "    UNKNOWN (tool unavailable)"
+        return
+    fi
+    # Preserve trailing newlines with a sentinel, retaining the pipeline status.
+    # The extra byte detects truncation even if a buffered writer exits zero.
+    output=$(timeout 8s "$@" 2>&1 | head -c 12289; rc=$?; printf '.'; exit "$rc")
+    rc=$?
+    output=${output%.}
+    if (( ${#output} > 12288 )); then
+        truncated=true
+        output=${output:0:12288}
+    fi
+    if "$truncated" || (( rc != 0 )) || [[ "$output" =~ [Pp]ermission\ denied|[Aa]ccess\ denied|[Oo]peration\ not\ permitted|not\ seeing\ messages|No\ journal\ files ]]; then
+        printf '    UNKNOWN (probe failed, denied, timed out or truncated; status=%s)\n' "$rc"
+    elif [[ -z "$output" ]]; then
+        echo "    no entries returned (successful query)"
+    fi
+    printf '%s\n' "$output" | tr -d '\000-\010\013-\037\177' | awk 'NR <= 20 {print "    " substr($0, 1, 240); if (length($0) > 240) clipped=1} NR == 21 {clipped=1} END {if (clipped) print "    [display truncated]"}'
+    if "$truncated"; then echo "    [display truncated] (byte limit)"; fi
 }
 
-available() {
-    command -v "$1" >/dev/null 2>&1
+unit_status() {
+    local unit="$1" enabled active
+    enabled=$(timeout 8s systemctl is-enabled "$unit" 2>/dev/null)
+    active=$(timeout 8s systemctl is-active "$unit" 2>/dev/null)
+    # systemctl uses nonzero status for legitimate disabled/inactive units.
+    case "$enabled" in enabled|disabled|static|masked|indirect|generated|alias|enabled-runtime|linked|linked-runtime) ;; *) enabled=UNKNOWN ;; esac
+    case "$active" in active|inactive|failed|activating|deactivating|reloading) ;; *) active=UNKNOWN ;; esac
+    printf '  %-36s enabled=%-10s active=%s\n' "$unit" "$enabled" "$active"
+}
+
+# rpm-ostree works without root on bootc hosts where bootc status is privileged.
+# Select identity fields only: never print package manifests or local config.
+image_identity() {
+    local data
+    if ! available rpm-ostree || ! available python3 || ! available timeout; then
+        echo "  Booted/staged image: UNKNOWN (rpm-ostree/python3/timeout unavailable)"
+        return
+    fi
+    if ! data=$(timeout 8s rpm-ostree status --json 2>/dev/null | head -c 2097153); then
+        echo "  Booted/staged image: UNKNOWN (rpm-ostree status failed or denied)"
+        return
+    fi
+    printf '%s' "$data" | python3 -c '
+import json, sys
+try:
+    data = sys.stdin.read(2097153)
+    if len(data) > 2097152:
+        raise ValueError("identity input exceeds 2 MiB")
+    deployments = json.loads(data)["deployments"]
+    if not isinstance(deployments, list) or not deployments:
+        raise ValueError("missing deployments")
+    for name in ("booted", "staged"):
+        matches = [d for d in deployments if d.get(name) is True]
+        if not matches:
+            print("  " + name + (": none reported" if name == "staged" else ": UNKNOWN (not reported)"))
+            continue
+        if len(matches) != 1:
+            raise ValueError("ambiguous deployment")
+        deployment = matches[0]
+        print("  " + name + ":")
+        for key in ("container-image-reference", "version", "checksum"):
+            value = deployment.get(key)
+            if isinstance(value, str):
+                value = "".join(c for c in value if c.isprintable())[:400]
+            else:
+                value = "UNKNOWN"
+            label = "ostree-checksum (not container digest)" if key == "checksum" else key
+            print("    " + label + "=" + value)
+except (ValueError, KeyError, TypeError, AttributeError):
+    print("  Booted/staged image: UNKNOWN (unrecognized rpm-ostree status)")
+'
+}
+
+label_status() {
+    local path="$1"
+    probe "$path current label (no contents)" ls -Zd -- "$path"
+    probe "$path expected label under installed policy" matchpathcon -n "$path"
 }
 
 echo "== bazzite-tower health (reporting only) =="
+echo "UNKNOWN means unavailable evidence, never healthy. No network or state changes."
 echo
-echo "== Optional host services =="
-unit_status docker.socket
-unit_status docker.service
-unit_status cockpit.socket
-unit_status waydroid-container.service
-unit_status tailscaled.service
-echo "  Docker, Cockpit, and Waydroid are opt-in; tailscaled has no node identity until 'tailscale up'."
+echo "== Deployment and running versions =="
+image_identity
+probe "Running kernel" uname -r
+probe "Loaded NVIDIA module version" cat /sys/module/nvidia/version
+probe "Installed kernel/NVIDIA/firmware packages (may differ from loaded versions)" rpm -q kernel-core nvidia-driver kmod-nvidia linux-firmware microcode_ctl
+probe "Running CPU microcode revision" awk '/^microcode[[:space:]]*:/ {print; exit}' /proc/cpuinfo
+probe "BIOS version/date (no serial numbers)" cat /sys/class/dmi/id/bios_version /sys/class/dmi/id/bios_date
+probe "Suspend mode" cat /sys/power/mem_sleep
 
 echo
-echo "== Included monitoring and timers =="
-unit_status smartd.service
-unit_status rasdaemon.service
-unit_status bazzite-tower-power-tuning.service
+echo "== Optional host services =="
+for unit in docker.socket docker.service cockpit.socket waydroid-container.service tailscaled.service; do
+    unit_status "$unit"
+done
+echo "  Docker, Cockpit, and Waydroid are opt-in; tailscaled needs owner enrollment."
+echo
+echo "== Monitoring and failed services =="
+for unit in smartd.service rasdaemon.service bazzite-tower-power-tuning.service logrotate.service; do
+    unit_status "$unit"
+done
+probe "Failed system services (up to 20 displayed)" systemctl --failed --type=service --no-legend --plain --no-pager
+
+echo
+echo "== MCE / memory evidence =="
+probe "Kernel HardwareCorrupted (kB; not a full hardware verdict)" awk '/^HardwareCorrupted:/ {found=1; print} END {if (!found) exit 1}' /proc/meminfo
+probe "RAS recorded summary (database lifetime, not necessarily this boot)" ras-mc-ctl --summary
+probe "Recent matching kernel evidence, current boot (last 12 matches)" journalctl -k -b 0 --no-pager -o cat -n 12 --grep='mce:|Machine check|Hardware Error|EDAC|Memory failure|RAS:|[Ss]oft.offlin'
+probe "Decoded rasdaemon journal evidence, current boot (last 12 records)" journalctl -u rasdaemon.service -b 0 --no-pager -o cat -n 12
+echo "  Zero EDAC/HardwareCorrupted counts do not exclude DRAM faults. Corrected does not mean harmless."
+
+echo
+echo "== SELinux and local override evidence =="
+probe "SELinux mode" getenforce
+label_status /var/log/boot.log
+label_status /dev/kvmfr0
+# Report only presence of the exact kvmfr local SELinux mapping; never dump
+# file_contexts.local, which can contain unrelated owner configuration.
+local_contexts=/etc/selinux/targeted/contexts/files/file_contexts.local
+if [[ -r "$local_contexts" ]]; then
+    timeout 8s grep -qE '^/dev/kvmfr0[[:space:]]' "$local_contexts"
+    case $? in
+        0) echo "  Local SELinux override for exact /dev/kvmfr0: present (contents not printed)" ;;
+        1) echo "  Local SELinux override for exact /dev/kvmfr0: absent (broader patterns not evaluated)" ;;
+        *) echo "  Local SELinux override for /dev/kvmfr0: UNKNOWN (query failed)" ;;
+    esac
+elif [[ -r "${local_contexts%/*}" && -x "${local_contexts%/*}" && ! -e "$local_contexts" ]]; then
+    echo "  Local SELinux override file: absent"
+else
+    echo "  Local SELinux override for /dev/kvmfr0: UNKNOWN (missing permission or policy path)"
+fi
+for path in /etc/udev/rules.d/70-kvmfr.rules /etc/modprobe.d/kvmfr.conf /etc/systemd/system/logrotate.service.d; do
+    if [[ -e "$path" || -L "$path" ]]; then
+        printf '  Local configuration path present: %s (contents not read)\n' "$path"
+    elif [[ -r "${path%/*}" && -x "${path%/*}" ]]; then
+        printf '  Local configuration path absent: %s\n' "$path"
+    else
+        printf '  Local configuration path UNKNOWN (parent inaccessible/missing): %s\n' "$path"
+    fi
+done
 
 echo
 echo "== Firmware and security availability =="
-if available bootc; then
-    echo "  bootc: $(bootc --version 2>/dev/null | head -n 1 || echo unavailable)"
-fi
-if available rpm-ostree; then
-    echo "  rpm-ostree: $(rpm-ostree --version 2>/dev/null | head -n 1 || echo unavailable)"
-fi
-if available mokutil; then
-    echo "  Secure Boot: $(mokutil --sb-state 2>/dev/null || echo unavailable)"
-fi
-if available fwupdmgr; then
-    echo "  fwupdmgr security:"
-    fwupdmgr security 2>/dev/null | sed 's/^/    /' || echo "    unavailable (firmware service may not be running)"
-fi
-if available rpm; then
-    echo "  firmware packages:"
-    rpm -q linux-firmware microcode_ctl 2>/dev/null | sed 's/^/    /' || echo "    package query unavailable"
+probe "bootc version" bootc --version
+probe "rpm-ostree version" rpm-ostree --version
+probe "Secure Boot" mokutil --sb-state
+# The security command can auto-upload HSI reports under local remote policy.
+# Version-only availability avoids that implicit network/write path.
+probe "Firmware tool availability (version only)" fwupdmgr --version
+
+if "$diagnostics"; then
+    echo
+    echo "== Bounded fresh-boot / resume excerpts (current boot only) =="
+    echo "  Last matching records only; absence is not proof of a successful resume."
+    probe "Kernel resume/GPU/audio/firmware evidence (last 20 matches)" journalctl -k -b 0 --no-pager -o short-monotonic -n 20 --grep='PM: suspend|PM: resume|suspend entry|suspend exit|i915.*(error|fail|reset|timeout)|NVRM:|nvidia.*(error|fail)|iwlwifi.*(firmware|error)|sof.*(error|fail)|microcode:'
+    probe "Suspend unit outcome" systemctl show systemd-suspend.service -p ActiveState -p Result -p ExecMainStatus
+    probe "Decoded recorded RAS errors (bounded display)" ras-mc-ctl --errors
 fi
 
 echo
-echo "This command did not change host state. For privileged diagnostics, see docs/RUNBOOK.md."
+echo "No host state changed. Privileged follow-up and interpretation: docs/RUNBOOK.md."
 exit 0

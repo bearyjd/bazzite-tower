@@ -9,7 +9,7 @@ bash -n "${script}"
 grep -qx 'set +e' "${script}"
 grep -q 'systemctl is-enabled' "${script}"
 grep -q 'systemctl is-active' "${script}"
-grep -q 'fwupdmgr security' "${script}"
+grep -q 'fwupdmgr --version' "${script}"
 grep -q 'mokutil --sb-state' "${script}"
 if grep -Ev '^[[:space:]]*#' "${script}" | grep -Eq '(^|[[:space:]])sudo([[:space:]]|$)'; then
     echo "tower-health must not require sudo" >&2
@@ -19,4 +19,5 @@ if grep -Ev '^[[:space:]]*#' "${script}" | grep -Eq 'systemctl[[:space:]]+(enabl
     echo "tower-health must not change service state" >&2
     exit 1
 fi
-echo "tower-health is reporting-only: pass"
+python3 "${repo_root}/tests/test-tower-health.py"
+echo "tower-health reporting and targeted repair fixtures: pass"

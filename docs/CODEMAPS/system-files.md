@@ -20,6 +20,11 @@ Docker, Cockpit, and Waydroid are explicitly disabled in the image; Tailscale
 is enabled without a node identity. Other listed services are enabled in
 build.sh except the disabled `portmaster.service` VM spike.
 
+The image-owned `/usr/lib/systemd/system/logrotate.service.d/20-boot-log-label.conf`
+adds only `ExecStartPre=bazzite-tower-boot-log-label`; it preserves the vendor
+logrotate command, timer and AC-power condition and enables no extra service.
+There is no kvmfr relabel or local SELinux mapping removal.
+
 ## systemd-sleep hooks (`/usr/lib/systemd/system-sleep/`)
 
 - `bazzite-tower-bluetooth-resume-guard` — `systemctl restart bluetooth.service` on `post` resume only. No unit/enable step: any executable in this directory is auto-invoked by `systemd-suspend(-then-hibernate)/-hibernate/-hybrid-sleep.service`. Mitigates a previously-paired Bluetooth device (reported: a mouse) not reconnecting after suspend — bluetoothd stays "active" across the cycle with nothing logged, and there's no BE200-style firmware NMI/reset signature for hci0 the way there is for Wi-Fi (below), so it's the adapter's HCI state, not firmware, that doesn't recover cleanly. Same s2idle-resume-quality class of bug as i915 display and the BE200 Wi-Fi radio on this hardware. Health-checks via `busctl get-property ... Powered` (not `bluetoothctl show`, which can SIGABRT — coredump — if queried before D-Bus is fully up) for up to 30s (a documented self-recovery took 23s; escalating sooner would unbind a perfectly healthy adapter). If still not healthy, unbind/rebinds the BE200 Bluetooth USB function (`8087:0036`, resolving the driver symlink's real target *before* unbinding — the kernel removes that symlink on unbind, so reading it again afterwards to rebind silently fails) to force a closer equivalent of a full reboot's reinitialization, then restarts the daemon again. `etc/systemd/system/bluetooth.service.d/10-fast-timeout.conf` bounds each restart to 10s start/10s stop, since this script can restart the service twice and systemd-sleep blocks the whole system's resume until it exits
@@ -29,7 +34,8 @@ build.sh except the disabled `portmaster.service` VM spike.
 - `bazzite-tower-firstboot` — first regular user → `usermod -aG` only existing groups
 - `bazzite-tower-wifi-backend-guard` — NM iwd-backend guard, idempotent
 - `bazzite-tower-wifi-debug` — read-only Wi-Fi diagnostics (offline)
-- `bazzite-tower-health` — reporting-only optional-service, monitoring, firmware, and security-tool summary (no sudo or state changes)
+- `bazzite-tower-health` — bounded reporting-only booted/staged image identity (selected rpm-ostree fields, OSTree checksum distinguished from container digest), loaded/installed versions, failed services, MCE/HardwareCorrupted evidence, effective SELinux labels and exact kvmfr local-mapping presence. `--diagnostics` adds limited current-boot/resume/RAS excerpts; missing or denied probes are UNKNOWN. No sudo, network, config dumps or state changes. Runtime fixtures: `tests/test-tower-health.py`, invoked by `tests/test-tower-health.sh`
+- `bazzite-tower-boot-log-label` — fixed `/var/log/boot.log` restorecon preflight for logrotate only; existing regular root-owned single-link target, no symlinks/recursion/creation; current installed policy supplies the context
 - `bazzite-tower-opensnitch-readiness` — read-only selected-profile dispatcher; legacy retains the fixed release hash/user-service/TCP listener check. System dispatch requires an explicit root invocation of `bazzite-tower-snitchwatch-readiness` for provenance, service hardening, socket/token DAC and the shipped allow/proc policy; local deny overrides fail readiness. Neither proves GUI decisions
 - `bazzite-tower-opensnitch-ebpf-check` — read-only regular-file/ELF64 relocatable BPF header check for all three pinned RPM objects; build and smoke packaging gate, no kernel-load claim
 - `bazzite-tower-snitchwatch-resources` — finite reporting-only Python sampler; default daemon/bridge MainPIDs plus optional GUI PIDs, interval CPU core percentages, RSS/threads, PID/starttime changes and missing/permission statuses; no traffic, command-line or environment reads. Offline fixtures: `tests/test-snitchwatch-resources.py`; owner A/B procedure in RUNBOOK

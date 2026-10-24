@@ -400,6 +400,50 @@ class RefreshTests(unittest.TestCase):
         self.assertIn('expected_digest=' + env['VALIDATED_DIGEST'], text); self.assertIn('Rerun', text)
         self.assertNotIn('REFRESH_PASS', text)
 
+    def test_all_refresh_consumers_require_completed_strict_artifact_download(self):
+        workflow = yaml.safe_load((ROOT / '.github/workflows/base-refresh.yml').read_text())
+        expected = {'validate-legacy', 'validate-system', 'publish-legacy', 'publish-system'}
+        consumers = {name for name, job in workflow['jobs'].items()
+                     if any(step.get('uses', '').startswith('actions/download-artifact@') for step in job['steps'])}
+        self.assertEqual(consumers, expected)
+        for name in sorted(expected):
+            with self.subTest(job=name):
+                steps = workflow['jobs'][name]['steps']
+                downloads = [step for step in steps if step.get('uses', '').startswith('actions/download-artifact@')]
+                self.assertEqual(len(downloads), 1)
+                download = downloads[0]
+                self.assertEqual(download['uses'], 'actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333')
+                self.assertEqual(download['id'], 'download')
+                self.assertEqual(download['with'], {'name': 'refresh-image-' + name.rsplit('-', 1)[1],
+                                 'path': '${{ runner.temp }}/data', 'digest-mismatch': 'error', 'skip-decompress': False})
+                self.assertNotIn('continue-on-error', download)
+                guard = steps[steps.index(download) + 1]
+                self.assertEqual(guard['name'], 'Require completed artifact download')
+                self.assertEqual(guard['env'], {'DOWNLOADED_DATA': '${{ steps.download.outputs.download-path }}'})
+                self.assertNotIn('${{', guard['run'])
+                self.assertNotIn('continue-on-error', guard)
+                self.assertNotIn('if', guard)
+                gates = [i for i, step in enumerate(steps) if any(
+                    token in step.get('run', '') for token in ['base-refresh.py validate ', 'base-refresh.py revalidate ',
+                                                             'base-refresh.py trust ', 'cosign sign ', 'skopeo copy '])]
+                self.assertTrue(gates)
+                self.assertTrue(all(i > steps.index(guard) for i in gates))
+
+    def test_refresh_download_guards_reject_missing_wrong_and_injected_output(self):
+        workflow = yaml.safe_load((ROOT / '.github/workflows/base-refresh.yml').read_text())
+        for name in ['validate-legacy', 'validate-system', 'publish-legacy', 'publish-system']:
+            guard = next(step for step in workflow['jobs'][name]['steps'] if step.get('name') == 'Require completed artifact download')
+            marker = Path(self.tmp.name) / 'must-not-execute'
+            for value in [self.tmp.name + '/data', None, '', '/wrong', '$(touch ' + str(marker) + ')',
+                          '"; touch ' + str(marker) + '; #']:
+                with self.subTest(job=name, value=value):
+                    env = {**os.environ, 'RUNNER_TEMP': self.tmp.name}
+                    env.pop('DOWNLOADED_DATA', None)
+                    if value is not None: env['DOWNLOADED_DATA'] = value
+                    result = subprocess.run(['bash', '-c', guard['run']], env=env, capture_output=True)
+                    self.assertEqual(result.returncode, 0 if value == self.tmp.name + '/data' else 1)
+                    self.assertFalse(marker.exists())
+
     def test_workflow_permission_split_and_exact_alias_gate(self):
         workflow = yaml.safe_load((ROOT / '.github/workflows/base-refresh.yml').read_text()); jobs = workflow['jobs']
         self.assertEqual(workflow['concurrency'], {'group': 'bazzite-tower-stable-writers', 'cancel-in-progress': False})

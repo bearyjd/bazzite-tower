@@ -66,6 +66,13 @@ succeeds, independent destination signature/SPDX checks pass, and exact-head CI
 and independent policy review pass. Host runtime acceptance remains unverified;
 the owner authorized the CI-based release path.
 
+All four refresh artifact consumers (legacy/system validators and publishers)
+use SHA-pinned download-artifact v8.0.2, strict digest mismatch errors and explicit
+extraction. Each requires the completed download-path output through a quoted
+environment variable before validation/revalidation, trust setup or publication.
+This carries over the candidate pipeline's proven large-artifact transport fix;
+it adds no trust exception and changes no profile or job permission.
+
 Refresh trust collection checks exact staged policy/key/registry bytes and active
 key/registry copies. The active policy is an intentional merge with upstream
 rules: require reject default, exact tower signing rule and no more-specific

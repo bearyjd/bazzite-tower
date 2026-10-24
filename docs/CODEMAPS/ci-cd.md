@@ -80,11 +80,11 @@ The r16.1 promoter binds candidate run `40118265705` to image digest
 provenance source `1c01f086f58bd33a5d7651254671e57723d45561`. Merging only arms
 this digest; owner runtime acceptance remains unverified. This fixed-digest feature-acceptance path retains the owner `release` environment
 and all signature, attestation and policy gates; automatic base refresh uses its
-separate policy-pinned path above. After promotion, system refresh fails closed
-because r16.1 is neither its bootstrap digest nor a signed base-refresh baseline.
-A separate reviewed accepted-source and exact system-baseline policy transition
-is required; the current single source pin applies to both profiles, whose
-legacy and system contracts must be reviewed for that transition.
+separate policy-pinned path above. Before the r16.1 policy transition merges,
+system refresh holds after promotion because the prior policy cannot accept that
+digest. The transition advances source and exact baseline together, after the
+promotion and independent destination checks pass; fixed-digest promotion does
+not fabricate signed base-refresh provenance. Both profile contracts stay exact.
 
 All stable OCI workflows share `bazzite-tower-stable-writers` with cancellation disabled. The promoter's runtime evidence and review are recorded in the PR and release notes, not workflow variables; its steps are in [r13-publication.md](../r13-publication.md), which also covers the candidate trust bootstrap and artifact identities. `ci/r13-publication.py` is the read-only gate and `ci/r13-candidate-data.py` captures installed/OCI/RPM identity only in the credential-free builder. The primary-reviewed control store starts with null authority. Final tower heads first receive independent review and actual-head green PR CI on a separate review branch; only then may the primary record variables and fast-forward the existing fixed candidate branch to that exact tested head. Same-head pushes and detached dispatch do not supply fresh verify/artifact CI; no force/delete/main-registration shortcut. The full sequence is in the publication document.
 

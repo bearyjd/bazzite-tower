@@ -2,12 +2,13 @@
 
 Automatic base refresh and feature acceptance are separate paths.
 `base-refresh.yml` refreshes accepted product source pinned by
-`.github/base-refresh-policy.json` (`91908f11eba496cde806298f2d0cbe332213192d`)
+`.github/base-refresh-policy.json` (`1c01f086f58bd33a5d7651254671e57723d45561`)
 against a newly resolved immutable Bazzite base. Daily and manual runs on `main`
-publish legacy `:stable` plus compatibility `:latest`, and the accepted r15.1
+publish legacy `:stable` plus compatibility `:latest`, and the reviewed r16.1
 system product as `:snitchwatch-system`, after all publication gates. They need
 no per-base owner click; the Bazzite/kernel floor and stale-policy checks prevent
-downrev or superseded policy publication. Product code remains frozen during r16.
+downrev or superseded policy publication. The r16.1 policy transition must merge
+only after successful protected promotion and independent destination checks.
 
 `build.yml` retains all three PR verification contexts but automatically publishes
 only `:latest-kernel`. A new feature product still requires runtime evidence and
@@ -223,16 +224,22 @@ Owner requested release based on the verified candidate and CI; laptop runtime
 remains unverified and no physical acceptance is claimed. Protected `release`
 approval remains owner-only.
 
-Automatic refresh still builds both profiles from the accepted r15.1 source
-above. After r16.1 promotion its system publisher holds: the new digest is not
-the policy's bootstrap digest, and fixed-digest promotion writes no
-`base-refresh/v1` provenance required by the signed-baseline check. It cannot
-replace r16.1 with the older product. Legacy refresh remains independent.
-Resuming system refresh requires a separately reviewed accepted-source and exact
-system-baseline policy transition. The current source fields apply to both
-profiles; review the legacy and system profile contracts before advancing them.
-Do not change only the bootstrap digest:
-that would authorize refresh builds of the old system product over r16.1.
+Before the r16.1 refresh-policy transition merges, system refresh holds after
+promotion: the prior policy cannot accept the new digest, and fixed-digest
+promotion writes no `base-refresh/v1` provenance. The reviewed transition advances
+both the global source identity above and the exact system release baseline to
+`sha256:3f9a0d238e69917a33a23710a53963e70b64526cc8e44f9d24787944dcca1f27`.
+Both legacy and system profile contracts remain exact, as do native pins and
+Bazzite/kernel floors. Never change only the bootstrap digest: that would permit
+the older system product to replace r16.1.
+
+Merge the transition only after protected promotion succeeds, independent
+destination signature/SPDX/host-policy verification passes, and its exact PR head
+has green CI and independent review. It then permits that exact repository-key
+signed release digest as the system baseline without fabricated refresh
+provenance; missing system tags and old/arbitrary release digests fail closed.
+Subsequent normal refreshes require destination-bound signed refresh provenance
+and monotonic Bazzite/kernel versions. Host runtime remains unverified.
 
 `ci/r13-publication.py` keeps only the candidate flow's `approval`, `source`
 and `candidate` gates. Its retired `promote` entrypoint, accepted-packet/receipt

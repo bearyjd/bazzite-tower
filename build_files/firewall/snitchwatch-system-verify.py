@@ -10,7 +10,7 @@ import sys
 
 MANIFEST = '/usr/share/snitchwatch/system-bridge-manifest.json'
 PINS = '/usr/share/snitchwatch/build-pins.json'
-EXPECTED_PINS_SHA256 = '5c2643480a36d70981e3a35342d0e3a21b4bf8417edc7b16991a2d4cee57a6e4'
+EXPECTED_PINS_SHA256 = '1d39ade2f618bba0b8dd3412f7833eee0d2fe9a5290665b2abe409794d4b2f41'
 BINARY = '/usr/bin/snitchwatch-bridge-cli'
 PROFILE = '/usr/share/bazzite-tower/snitchwatch-bridge-profile'
 CONFIG = '/usr/share/bazzite-tower/opensnitchd-system-bridge-config.json'
@@ -134,12 +134,12 @@ def verify(root):
     config = json.loads(contents[CONFIG])
     expected_config = json.loads(contents[LEGACY_CONFIG])
     expected_config['Server']['Address'] = 'unix:opensnitchd.sock'
-    # Owner decision 2026-10-17: the system bridge fails closed.  proc stays
-    # (eBPF fails on this laptop's kernel, snitchwatch#6).
-    expected_config['DefaultAction'] = 'deny'
+    # Both profiles default to allow; deny enforcement requires explicit opt-in.
+    # proc stays (eBPF fails on this laptop's kernel, snitchwatch#6).
+    expected_config['DefaultAction'] = 'allow'
     if config != expected_config:
-        raise ValueError('system candidate changes more than the daemon address and default action')
-    if config.get('DefaultAction') != 'deny' or config.get('ProcMonitorMethod') != 'proc' or config.get('Server', {}).get('Address') != 'unix:opensnitchd.sock':
+        raise ValueError('system candidate must retain the allow/proc defaults and change only the daemon address')
+    if config.get('DefaultAction') != 'allow' or config.get('ProcMonitorMethod') != 'proc' or config.get('Server', {}).get('Address') != 'unix:opensnitchd.sock':
         raise ValueError('incorrect system candidate policy/transport')
     artifact = json.loads(contents['/usr/share/snitchwatch/schema1-artifact-MANIFEST.json'])
     if artifact.get('version') != pins['bridgeVersion']:

@@ -161,9 +161,9 @@ class Migration:
         legacy = json.loads(self.ctx.path(common.LEGACY_REFERENCE).read_text())
         system = json.loads(self.ctx.path(common.REFERENCE).read_text())
         common.require(config in (legacy, system), "unexpected live config/policy/address drift; operator review required, nothing overwritten")
-        # Legacy (TCP) keeps allow; the system reference fails closed (owner
-        # decision 2026-10-17). proc either way: eBPF fails here (snitchwatch#6).
-        expected_action = "deny" if config == system else "allow"
+        # Both profiles permanently retain allow; deny requires explicit opt-in.
+        # proc either way: eBPF fails here (snitchwatch#6).
+        expected_action = "allow"
         common.require(config["DefaultAction"] == expected_action and config["ProcMonitorMethod"] == "proc", expected_action+"/proc policy required")
         state = common.service_state(self.ctx)
         common.require(all(state[unit]["enabled"] == "enabled" for unit in common.SOCKETS), "candidate image system sockets must already be enabled; helper does not change enablement")
@@ -214,7 +214,7 @@ class Migration:
         # Replacement and rollback baseline come from the same verified snapshot.
         target = json.loads(original)
         target["Server"]["Address"] = "unix:opensnitchd.sock"
-        target["DefaultAction"] = "deny"
+        target["DefaultAction"] = "allow"
         replacement = (json.dumps(target, indent=4)+"\n").encode()
         self.journal(create=True)
         if self.current.exists():

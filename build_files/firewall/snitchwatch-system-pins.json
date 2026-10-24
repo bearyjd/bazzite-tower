@@ -30,7 +30,7 @@
   },
   "rustVersion": "1.99.0",
   "schemaVersion": 1,
-  "sourceCommit": "bfc76e6607574b354e1d3b1494798e7ea78d1685",
+  "sourceCommit": "5c969a2e21dc7f5c976e7048aa9f95e5663c7de2",
   "sourceFiles": {
     "packaging/bluebuild/files/system/etc/opensnitchd/rules/000-snitchwatch-bridge-fetch.json": "3739ab9bb74ef6309975bf0d2c3c9a766f1976e014e6f9c360b910b22daef458",
     "packaging/flatpak/org.snitchwatch.Snitchwatch.system.yml": "bd70d64823a70622dc9a3b17518732a7b0106f5cf02058dd3956f382a7b4c65b",
@@ -49,7 +49,7 @@
     "packaging/system/stage.sh": "fe8c34aee736c7c8849383e9cc3ad22334126baa11aa7185e25bf943ac14657f"
   },
   "sourceRepository": "https://github.com/bearyjd/snitchwatch.git",
-  "sourceTree": "be719d27d61f9a1a02567b8673d02dcd53548085",
+  "sourceTree": "a6f415313f30e81b6bca9bb839aadd0f2f908af3",
   "submoduleCommit": "b404c4c6316760fa7bc415509d3f8d747f7dc9cc",
   "toolchainRpms": [
     {

@@ -75,11 +75,16 @@ failed run `40062419690` at `d8407c60f74ceafbcbc2e333198c9fd23ce4e260`;
 GitHub API metadata and complete attempt-1 jobs must prove both publishers were
 skipped. Run3+, reruns, API failure and identity mismatches HOLD.
 
-The r15.1 promoter binds candidate run `40050864799` to image digest
-`sha256:df4ec1239abae0cbe1d4d4e27bce85d54f17e2b5155e431c2727c724aa879bf7` and
-provenance source `91908f11eba496cde806298f2d0cbe332213192d`. This fixed-digest feature-acceptance path retains the owner `release` environment
+The r16.1 promoter binds candidate run `40118265705` to image digest
+`sha256:3f9a0d238e69917a33a23710a53963e70b64526cc8e44f9d24787944dcca1f27` and
+provenance source `1c01f086f58bd33a5d7651254671e57723d45561`. Merging only arms
+this digest; owner runtime acceptance remains unverified. This fixed-digest feature-acceptance path retains the owner `release` environment
 and all signature, attestation and policy gates; automatic base refresh uses its
-separate policy-pinned path above.
+separate policy-pinned path above. After promotion, system refresh fails closed
+because r16.1 is neither its bootstrap digest nor a signed base-refresh baseline.
+A separate reviewed accepted-source and exact system-baseline policy transition
+is required; the current single source pin applies to both profiles, whose
+legacy and system contracts must be reviewed for that transition.
 
 All stable OCI workflows share `bazzite-tower-stable-writers` with cancellation disabled. The promoter's runtime evidence and review are recorded in the PR and release notes, not workflow variables; its steps are in [r13-publication.md](../r13-publication.md), which also covers the candidate trust bootstrap and artifact identities. `ci/r13-publication.py` is the read-only gate and `ci/r13-candidate-data.py` captures installed/OCI/RPM identity only in the credential-free builder. The primary-reviewed control store starts with null authority. Final tower heads first receive independent review and actual-head green PR CI on a separate review branch; only then may the primary record variables and fast-forward the existing fixed candidate branch to that exact tested head. Same-head pushes and detached dispatch do not supply fresh verify/artifact CI; no force/delete/main-registration shortcut. The full sequence is in the publication document.
 

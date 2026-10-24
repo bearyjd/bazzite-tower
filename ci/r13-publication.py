@@ -182,7 +182,10 @@ def image_identity(archive):
 
 def validate_candidate(root, data, head, run_id):
     ids = candidate_approval(root, head)
-    require(set(p.name for p in data.iterdir()) == FILES, 'unexpected artifact inventory')
+    actual = {p.name for p in data.iterdir()}
+    missing, extra = sorted(FILES - actual), sorted(actual - FILES)
+    details = {'missing': missing, 'extra': [name[:120] for name in extra[:20]], 'extraCount': len(extra)}
+    require(actual == FILES, 'unexpected artifact inventory: ' + json.dumps(details, ensure_ascii=True))
     for path in data.iterdir():
         limit = 40 * 1024 ** 3 if path.name == 'image.oci.tar' else 16 * 1024 ** 2
         require(not path.is_symlink() and path.is_file() and path.stat().st_size <= limit, 'invalid/oversized artifact')

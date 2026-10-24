@@ -317,6 +317,92 @@ class Publication(unittest.TestCase):
             with self.assertRaises(ValueError): pub.verify_source(source, ids)
 
 
+    def test_missing_and_extra_inventory_still_refuse_with_details(self):
+        path = self.data / 'candidate.json'
+        original = path.read_bytes()
+        path.unlink()
+        with self.assertRaisesRegex(ValueError, 'unexpected artifact inventory:') as caught:
+            pub.validate_candidate(self.root, self.data, self.ids['towerCommit'], 100)
+        details = json.loads(str(caught.exception).split(': ', 1)[1])
+        self.assertEqual(details, {'missing': ['candidate.json'], 'extra': [], 'extraCount': 0})
+        path.write_bytes(original)
+        (self.data / 'unreviewed').write_text('DO-NOT-PRINT-CONTENTS')
+        with self.assertRaisesRegex(ValueError, 'unexpected artifact inventory:') as caught:
+            pub.validate_candidate(self.root, self.data, self.ids['towerCommit'], 100)
+        details = json.loads(str(caught.exception).split(': ', 1)[1])
+        self.assertEqual(details, {'missing': [], 'extra': ['unreviewed'], 'extraCount': 1})
+        self.assertNotIn('DO-NOT-PRINT-CONTENTS', str(caught.exception))
+
+    def test_inventory_error_is_bounded_and_escapes_control_characters(self):
+        for index in range(24):
+            (self.data / ('extra-' + str(index).zfill(2))).write_bytes(b'')
+        (self.data / ('\x1b\n' + 'z' * 180)).write_bytes(b'')
+        with self.assertRaises(ValueError) as caught:
+            pub.validate_candidate(self.root, self.data, self.ids['towerCommit'], 100)
+        message = str(caught.exception)
+        details = json.loads(message.split(': ', 1)[1])
+        self.assertEqual(details['extraCount'], 25)
+        self.assertEqual(len(details['extra']), 20)
+        self.assertTrue(all(len(name) <= 120 for name in details['extra']))
+        self.assertNotIn('\n', message)
+        self.assertNotIn('\x1b', message)
+
+    def test_candidate_download_completion_is_mandatory_and_env_quoted(self):
+        import yaml
+        workflow = yaml.safe_load((ROOT / pub.CANDIDATE_WORKFLOW).read_text())
+        for job_name in ('validate', 'publish'):
+            steps = workflow['jobs'][job_name]['steps']
+            download = next(step for step in steps if step.get('id') == 'download')
+            self.assertEqual(download['uses'].split()[0], 'actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333')
+            self.assertEqual(download['with']['digest-mismatch'], 'error')
+            self.assertIs(download['with']['skip-decompress'], False)
+            self.assertEqual(download['with']['artifact-ids'], '${{ needs.build.outputs.artifact_id }}')
+            guard = steps[steps.index(download) + 1]
+            self.assertEqual(guard['env']['DOWNLOADED_DATA'], '${{ steps.download.outputs.download-path }}')
+            self.assertNotIn('${{', guard['run'])
+            self.assertNotIn('continue-on-error', guard)
+            marker = Path(self.tmp.name) / 'must-not-execute'
+            for value, expected in ((self.tmp.name + '/data', 0), ('', 1), ('/wrong', 1),
+                                    ('$(touch ' + str(marker) + ')', 1)):
+                env = dict(os.environ, RUNNER_TEMP=self.tmp.name, DOWNLOADED_DATA=value)
+                result = subprocess.run(['bash', '-c', guard['run']], env=env, capture_output=True)
+                self.assertEqual(result.returncode, expected)
+                self.assertFalse(marker.exists())
+
+    def test_failed_download_diagnostics_are_bounded_and_do_not_follow_links(self):
+        import yaml
+        workflow = yaml.safe_load((ROOT / pub.CANDIDATE_WORKFLOW).read_text())
+        for job_name in ('validate', 'publish'):
+            step = next(step for step in workflow['jobs'][job_name]['steps']
+                        if step.get('name') == 'Diagnose failed artifact consumption')
+            self.assertEqual(step['if'], 'failure()')
+            with tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp); data = root / 'data'; data.mkdir()
+                outside = root / 'outside'; outside.write_text('PRIVATE-CONTENTS-MARKER')
+                (data / 'alias').symlink_to(outside)
+                link_result = subprocess.run(['bash', '-c', step['run']], env=dict(os.environ, RUNNER_TEMP=tmp),
+                                             capture_output=True, text=True)
+                link_entries = json.loads(next(line.split('=', 1)[1] for line in link_result.stdout.splitlines()
+                                               if line.startswith('data_entries=')))
+                self.assertEqual(link_entries[0]['mode'], 0o120000)
+                self.assertNotIn('PRIVATE-CONTENTS-MARKER', link_result.stdout)
+                for index in range(25): (data / str(index)).write_text('PRIVATE-CONTENTS-MARKER')
+                result = subprocess.run(['bash', '-c', step['run']], env=dict(os.environ, RUNNER_TEMP=tmp),
+                                        capture_output=True, text=True)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertNotIn('PRIVATE-CONTENTS-MARKER', result.stdout)
+                entries = json.loads(next(line.split('=', 1)[1] for line in result.stdout.splitlines()
+                                          if line.startswith('data_entries=')))
+                self.assertEqual(len(entries), 20)
+                self.assertIn('data_entries_truncated=true', result.stdout)
+                data.rename(root / 'original-data'); data.symlink_to(root / 'original-data')
+                result = subprocess.run(['bash', '-c', step['run']], env=dict(os.environ, RUNNER_TEMP=tmp),
+                                        capture_output=True, text=True)
+                self.assertEqual(result.returncode, 0)
+                self.assertIn('data_directory=not-a-directory', result.stdout)
+                self.assertNotIn('data_entries=', result.stdout)
+
+
 class WorkflowContracts(unittest.TestCase):
     def test_pr_head_proof_refuses_synthetic_merge_and_missing_head(self):
         import yaml

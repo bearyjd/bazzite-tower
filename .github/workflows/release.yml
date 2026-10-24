@@ -2,7 +2,7 @@
 # image under the stable repository and moves only :snitchwatch-system to it.
 # Runtime evidence and review are recorded in the PR and release notes, not in
 # workflow variables. See docs/r13-publication.md.
-name: Promote candidate digest to stable
+name: Release Snitchwatch System
 on:
   workflow_dispatch:
     inputs:

@@ -11,7 +11,7 @@ downrev or superseded policy publication. Product code remains frozen during r16
 
 `build.yml` retains all three PR verification contexts but automatically publishes
 only `:latest-kernel`. A new feature product still requires runtime evidence and
-review recorded in the PR/release notes, plus the protected `r13-promote.yml`
+review recorded in the PR/release notes, plus the protected `release.yml`
 fixed-digest acceptance flow below. A subsequent reviewed refresh-policy update
 is required before automatic refreshes use the newly accepted product.
 
@@ -182,7 +182,7 @@ does not establish remote acquisition or runtime success.
 
 ## Fixed-digest promotion
 
-`r13-promote.yml` is `workflow_dispatch` only, runs on `main` in this
+`release.yml` is `workflow_dispatch` only, runs on `main` in this
 repository, and takes one required input, `digest`. The workflow hard-codes the
 only digest it may promote (`sha256:df4ec1239abae0cbe1d4d4e27bce85d54f17e2b5155e431c2727c724aa879bf7`, the r15.1 candidate built by `r13-candidate.yml` run `40050864799`) in `env`, and its first
 step fails unless the input equals it. It shares `bazzite-tower-stable-writers`

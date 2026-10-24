@@ -217,7 +217,7 @@ class Publication(unittest.TestCase):
         result = subprocess.run(['python3', str(ROOT / 'ci/r13-publication.py'), 'promote', '--control', str(self.root)],
                                 capture_output=True, text=True)
         self.assertNotEqual(result.returncode, 0); self.assertIn('invalid choice', result.stderr)
-        for name in ('r13-candidate.yml', 'r13-promote.yml', 'r13-immutable-ci.yml'):
+        for name in ('r13-candidate.yml', 'release.yml', 'r13-immutable-ci.yml'):
             self.assertNotIn('R13_PROMOTION_HEAD', (ROOT / '.github/workflows' / name).read_text())
 
     def test_output_names_and_values_refuse_injection(self):
@@ -355,14 +355,14 @@ class WorkflowContracts(unittest.TestCase):
     def test_yaml_and_privilege_boundaries(self):
         # PyYAML is a local static-check convenience, not a runtime dependency.
         import yaml
-        workflows = {name: yaml.safe_load((ROOT / '.github/workflows' / name).read_text()) for name in ('build.yml', 'r13-candidate.yml', 'r13-promote.yml')}
+        workflows = {name: yaml.safe_load((ROOT / '.github/workflows' / name).read_text()) for name in ('build.yml', 'r13-candidate.yml', 'release.yml')}
         self.assertEqual([m['variant'] for m in workflows['build.yml']['jobs']['release']['strategy']['matrix']['include']], ['latest-kernel'])
         for name, workflow in workflows.items():
             self.assertFalse(workflow['concurrency']['cancel-in-progress'])
             self.assertIn('bazzite-tower-stable-writers', workflow['concurrency']['group'])
         candidate = workflows['r13-candidate.yml']
         self.assertEqual(candidate['jobs']['build']['permissions'], {'contents': 'read'})
-        for name, job in [('r13-candidate.yml', 'publish'), ('r13-promote.yml', 'promote')]:
+        for name, job in [('r13-candidate.yml', 'publish'), ('release.yml', 'promote')]:
             steps = workflows[name]['jobs'][job]['steps']
             code = '\n'.join(s.get('run', '') for s in steps)
             self.assertNotIn('podman run', code); self.assertNotIn('podman exec', code)
@@ -375,7 +375,7 @@ class WorkflowContracts(unittest.TestCase):
             self.assertIn('--preserve-digests', code)
         candidate_code = '\n'.join(s.get('run', '') for s in candidate['jobs']['publish']['steps'])
         self.assertNotIn('docker://ghcr.io/bearyjd/bazzite-tower:', candidate_code)
-        promotion = workflows['r13-promote.yml']
+        promotion = workflows['release.yml']
         self.assertNotIn('push', promotion.get('on', promotion.get(True, {})))
 
     def test_publisher_data_guard_executes_and_rejects_hash_target_path_tamper(self):
@@ -467,7 +467,7 @@ class WorkflowContracts(unittest.TestCase):
             with self.assertRaises(AssertionError):
                 run(bad)
 
-    PROMOTER = ROOT / '.github/workflows/r13-promote.yml'
+    PROMOTER = ROOT / '.github/workflows/release.yml'
     FIXED_DIGEST = 'sha256:df4ec1239abae0cbe1d4d4e27bce85d54f17e2b5155e431c2727c724aa879bf7'
 
     def promoter(self):
@@ -480,6 +480,7 @@ class WorkflowContracts(unittest.TestCase):
 
     def test_promoter_is_dispatch_only_with_one_digest_input_and_main_guard(self):
         workflow, job, _ = self.promoter()
+        self.assertEqual(workflow['name'], 'Release Snitchwatch System')
         self.assertEqual(workflow.get('on', workflow.get(True)), {'workflow_dispatch': {'inputs': {'digest': {
             'description': 'Must equal the fixed r13 candidate digest in this workflow', 'required': True, 'type': 'string'}}}})
         self.assertEqual(list(workflow['jobs']), ['promote'])
@@ -629,7 +630,7 @@ class WorkflowContracts(unittest.TestCase):
 
     def test_inline_shell_syntax_and_python_compile(self):
         import yaml
-        for name in ('r13-candidate.yml', 'r13-promote.yml'):
+        for name in ('r13-candidate.yml', 'release.yml'):
             workflow = yaml.safe_load((ROOT / '.github/workflows' / name).read_text())
             for job in workflow['jobs'].values():
                 for step in job['steps']:

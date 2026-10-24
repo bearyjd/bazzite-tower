@@ -255,8 +255,8 @@ extra child processes are outside the sampled PID's accounting. No automatic
 resource thresholds or performance claims follow from the report.
 
 Before editing, stop other policy writers. Run the complete block below from
-an owner terminal. A root shell holds the migration-lock descriptor while waiting for the
-owner subprocess to finish recovery. Its signal handlers preserve that lock
+an owner terminal. A root shell holds the migration-lock descriptor while
+waiting for the owner subprocess to finish recovery. Its signal handlers preserve that lock
 through terminal interrupts. The editor and experiment shell run as
 the owner; `sudoedit` retains the selected owner editor. Every failure before
 editing aborts. After the verified private backup exists, EXIT/HUP/INT/TERM
@@ -335,7 +335,7 @@ check_interval() {
     grep -Fq '[eBPF] module loaded: /usr/lib/opensnitchd/ebpf/opensnitch.o' "$ebpf_log" || return 1
     grep -Fq '[eBPF] module loaded: /usr/lib/opensnitchd/ebpf/opensnitch-procs.o' "$ebpf_log" || return 1
     grep -Fq 'Process monitor method ebpf' "$ebpf_log" || return 1
-    if grep -Ei 'unable to load eBPF module|opensnitch-procs.o not available|error starting ebpf monitor method|module collection.*error|opening kprobe|opening kretprobe|tracepoint.*(fail|error|missing|not found)|(fail|error|missing).*tracepoint|Process monitor method (proc|audit|ftrace)' "$ebpf_log"; then
+    if grep -Ei 'unable to load eBPF module|opensnitch-procs.o not available|error starting ebpf monitor method|module collection.*error|opening kprobe|opening kretprobe|tracepoint.*(fail|error|missing|not found)|(fail|error|missing).*tracepoint|Process monitor method (/?proc|audit|ftrace)' "$ebpf_log"; then
         return 1
     fi
 }
@@ -374,7 +374,7 @@ power loss and a reboot cannot be trapped: use the printed protected backup
 path to restore with `sudo cp --preserve=all -- BACKUP/proc.json
 /etc/opensnitchd/default-config.json`, compare bytes/metadata, validate proc/allow,
 restart OpenSnitch and run readiness **before** resuming normal operations.
-After the block completes, run the same full `tests/boot-check.sh` gate used
+After successful proc recovery and block completion, run the same full `tests/boot-check.sh` gate used
 before the experiment. Preserve its result alongside the resource/log reports.
 
 Retain the protected backup and reports. `cp --preserve=all` restores original

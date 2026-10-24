@@ -119,7 +119,10 @@ The source-contract gates in `build.yml` (legacy and system candidate) and
 `r13-candidate.yml` run `python3 tests/test-snitchwatch-resources.py` alongside
 the daemon/image fixtures. It checks interval CPU accounting using monotonic
 elapsed time, RSS/thread series, identity changes, missing/permission/timeouts,
-and rejects absent/nonregular/wrong-format BPF object fixtures. The installed
+and rejects absent/nonregular/wrong-format BPF object fixtures. It also executes
+the RUNBOOK backup/trap/editor sequence with recording command doubles,
+covering backup failures, editor failure, restoration retry and HUP/INT/TERM
+without privileged host actions. The installed
 reporting-only sampler is `bazzite-tower-snitchwatch-resources`; owner A/B tests
 are documented in RUNBOOK and remain separate from CI. The built-image smoke
 gate requires all three ELF BPF objects while retaining the allow/proc baseline;

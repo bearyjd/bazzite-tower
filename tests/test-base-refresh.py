@@ -134,7 +134,7 @@ class RefreshTests(unittest.TestCase):
     def test_valid_artifact_and_stable_alias_identity(self):
         proof, hashes = self.valid()
         self.assertEqual(proof['channels'], ['stable', 'latest'])
-        self.assertEqual(proof['sourceCommit'], '91908f11eba496cde806298f2d0cbe332213192d')
+        self.assertEqual(proof['sourceCommit'], '1c01f086f58bd33a5d7651254671e57723d45561')
         self.assertEqual(set(hashes), r.FILES)
 
     def test_policy_schema_dest_ref_profile_fail_closed(self):
@@ -189,7 +189,7 @@ class RefreshTests(unittest.TestCase):
         path.unlink(); path.write_bytes(saved)
 
     def test_sbom_inventory_and_provenance_substitution_refused(self):
-        for key, value in [('sourceCommit', 'c' * 40), ('profile', 'system'), ('baseImage', self.base.replace('b' * 64, 'c' * 64)), ('kernel', '7.3.0-ogc1.1.fc44')]:
+        for key, value in [('sourceCommit', 'c' * 40), ('sourceTree', 'd' * 40), ('profile', 'system'), ('baseImage', self.base.replace('b' * 64, 'c' * 64)), ('kernel', '7.3.0-ogc1.1.fc44')]:
             proof = copy.deepcopy(self.proof); proof[key] = value; write(self.data / 'build-provenance.json', proof)
             with self.subTest(key=key), self.assertRaises(ValueError): self.valid()
         write(self.data / 'build-provenance.json', self.proof)
@@ -220,7 +220,8 @@ class RefreshTests(unittest.TestCase):
     def test_source_tree_and_dirty_source_refused(self):
         outputs = [self.policy['sourceCommit'], self.policy['sourceTree'], '', self.policy['sourceCreated']]
         with patch.object(r, 'command', side_effect=outputs): r.source(self.root, self.root)
-        for outputs in [['c' * 40], [self.policy['sourceCommit'], 'd' * 40], [self.policy['sourceCommit'], self.policy['sourceTree'], '?? injected']]:
+        for outputs in [['c' * 40], [self.policy['sourceCommit'], 'd' * 40], [self.policy['sourceCommit'], self.policy['sourceTree'], '?? injected'],
+                        [self.policy['sourceCommit'], self.policy['sourceTree'], '', '2026-10-24T01:20:24Z']]:
             with patch.object(r, 'command', side_effect=outputs), self.assertRaises(ValueError): r.source(self.root, self.root)
 
     def test_installed_trust_substitution_refused(self):
@@ -239,6 +240,64 @@ class RefreshTests(unittest.TestCase):
                 r.baseline(self.root, self.data, 'legacy', self.root)
         with patch.object(r.subprocess, 'run', return_value=result(b'manifest unknown')), self.assertRaises(ValueError):
             r.baseline(self.root, self.data, 'system', self.root)
+
+    def test_reviewed_system_release_requires_exact_digest_and_signature(self):
+        digest = 'sha256:3f9a0d238e69917a33a23710a53963e70b64526cc8e44f9d24787944dcca1f27'
+        self.assertEqual(self.policy['bootstrap']['system'], {'allowMissing': False, 'digest': digest})
+        manifest = subprocess.CompletedProcess([], 0, b'reviewed release manifest', b'')
+        signature = subprocess.CompletedProcess([], 0)
+        with patch.object(r.pub, 'sha', return_value=digest[7:]), patch.object(r.subprocess, 'run', side_effect=[manifest, signature]) as run, patch.object(r.subprocess, 'check_output') as attestation:
+            r.baseline(self.root, self.data, 'system', self.root)
+            self.assertEqual(run.call_args_list[0].args[0], ['skopeo', 'inspect', '--raw', 'docker://' + r.DEST + ':snitchwatch-system'])
+            self.assertEqual(run.call_args_list[1].args[0], ['timeout', '180', 'cosign', 'verify', '--key', str(self.root / 'cosign.pub'), r.DEST + '@' + digest])
+            self.assertTrue(run.call_args_list[1].kwargs['check'])
+            attestation.assert_not_called()
+        failure = subprocess.CalledProcessError(1, ['cosign', 'verify'])
+        with patch.object(r.pub, 'sha', return_value=digest[7:]), patch.object(r.subprocess, 'run', side_effect=[manifest, failure]), patch.object(r.subprocess, 'check_output') as attestation, self.assertRaises(subprocess.CalledProcessError):
+            r.baseline(self.root, self.data, 'system', self.root)
+        attestation.assert_not_called()
+
+    def test_old_arbitrary_and_wrong_profile_digests_have_no_release_exception(self):
+        new = self.policy['bootstrap']['system']['digest']
+        old = 'sha256:df4ec1239abae0cbe1d4d4e27bce85d54f17e2b5155e431c2727c724aa879bf7'
+        for profile, digest in [('system', old), ('system', 'sha256:' + 'f' * 64), ('legacy', new)]:
+            with self.subTest(profile=profile, digest=digest), patch.object(r.pub, 'sha', return_value=digest[7:]), patch.object(r.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, b'manifest', b'')), patch.object(r.subprocess, 'check_output', return_value=b'[]') as attestation, self.assertRaisesRegex(ValueError, 'no destination-bound signed refresh baseline'):
+                r.baseline(self.root, self.data, profile, self.root)
+            self.assertIn('verify-attestation', attestation.call_args.args[0])
+
+    def test_system_release_exception_policy_cannot_be_widened(self):
+        for mutate in [lambda p: p['bootstrap']['system'].update(allowMissing=True),
+                       lambda p: p['bootstrap']['system'].update(digest='sha256:df4ec1239abae0cbe1d4d4e27bce85d54f17e2b5155e431c2727c724aa879bf7'),
+                       lambda p: p['bootstrap']['system'].update(digest='sha256:' + 'f' * 64),
+                       lambda p: p['bootstrap']['legacy'].update(digest=p['bootstrap']['system']['digest'])]:
+            p = copy.deepcopy(self.policy); mutate(p); write(self.path, p)
+            with self.assertRaises(ValueError): r.policy(self.root)
+
+    def test_signed_refresh_baseline_remains_destination_bound_and_monotonic(self):
+        manifest = b'normal refresh manifest'
+        digest = 'sha256:' + r.pub.sha(manifest)
+        for profile in ['legacy', 'system']:
+            proof = r.evidence(self.policy, profile, self.base, self.version, self.proof['image'], self.proof['sbomSha256'], self.proof['kernel'])
+            write(self.data / 'build-provenance.json', proof)
+            statement = {'predicateType': r.PREDICATE, 'predicate': proof,
+                         'subject': [{'name': r.DEST, 'digest': {'sha256': digest[7:]}}]}
+            def baseline(value):
+                envelope = {'payload': base64.b64encode(r.pub.canonical(value)).decode()}
+                with patch.object(r.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, manifest, b'')), patch.object(r.subprocess, 'check_output', return_value=r.pub.canonical(envelope)):
+                    r.baseline(self.root, self.data, profile, self.root)
+            baseline(statement)
+            mutations = [lambda v: v.update(predicateType='https://example.com/other'),
+                         lambda v: v['subject'][0].update(name=r.DEST + ':snitchwatch-system'),
+                         lambda v: v['subject'][0]['digest'].update(sha256='f' * 64),
+                         lambda v: v['predicate'].update(profile='system' if profile == 'legacy' else 'legacy'),
+                         lambda v: v['predicate'].update(repository='attacker/fork'),
+                         lambda v: v['predicate'].update(workflow='.github/workflows/other.yml'),
+                         lambda v: v['predicate'].update(ref='refs/heads/feature'),
+                         lambda v: v['predicate'].update(baseVersion='44.20261024'),
+                         lambda v: v['predicate'].update(kernel='7.2.10-ogc1.1.fc44')]
+            for mutate in mutations:
+                value = copy.deepcopy(statement); mutate(value)
+                with self.subTest(profile=profile, value=value), self.assertRaises(ValueError): baseline(value)
 
     def test_missing_stable_refused_outside_reviewed_recovery_run_attempt(self):
         from subprocess import CompletedProcess
@@ -340,6 +399,50 @@ class RefreshTests(unittest.TestCase):
         self.assertIn('REFRESH_POINTER_FAILURE', text); self.assertIn('attempted=stable latest confirmed=stable', text)
         self.assertIn('expected_digest=' + env['VALIDATED_DIGEST'], text); self.assertIn('Rerun', text)
         self.assertNotIn('REFRESH_PASS', text)
+
+    def test_all_refresh_consumers_require_completed_strict_artifact_download(self):
+        workflow = yaml.safe_load((ROOT / '.github/workflows/base-refresh.yml').read_text())
+        expected = {'validate-legacy', 'validate-system', 'publish-legacy', 'publish-system'}
+        consumers = {name for name, job in workflow['jobs'].items()
+                     if any(step.get('uses', '').startswith('actions/download-artifact@') for step in job['steps'])}
+        self.assertEqual(consumers, expected)
+        for name in sorted(expected):
+            with self.subTest(job=name):
+                steps = workflow['jobs'][name]['steps']
+                downloads = [step for step in steps if step.get('uses', '').startswith('actions/download-artifact@')]
+                self.assertEqual(len(downloads), 1)
+                download = downloads[0]
+                self.assertEqual(download['uses'], 'actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333')
+                self.assertEqual(download['id'], 'download')
+                self.assertEqual(download['with'], {'name': 'refresh-image-' + name.rsplit('-', 1)[1],
+                                 'path': '${{ runner.temp }}/data', 'digest-mismatch': 'error', 'skip-decompress': False})
+                self.assertNotIn('continue-on-error', download)
+                guard = steps[steps.index(download) + 1]
+                self.assertEqual(guard['name'], 'Require completed artifact download')
+                self.assertEqual(guard['env'], {'DOWNLOADED_DATA': '${{ steps.download.outputs.download-path }}'})
+                self.assertNotIn('${{', guard['run'])
+                self.assertNotIn('continue-on-error', guard)
+                self.assertNotIn('if', guard)
+                gates = [i for i, step in enumerate(steps) if any(
+                    token in step.get('run', '') for token in ['base-refresh.py validate ', 'base-refresh.py revalidate ',
+                                                             'base-refresh.py trust ', 'cosign sign ', 'skopeo copy '])]
+                self.assertTrue(gates)
+                self.assertTrue(all(i > steps.index(guard) for i in gates))
+
+    def test_refresh_download_guards_reject_missing_wrong_and_injected_output(self):
+        workflow = yaml.safe_load((ROOT / '.github/workflows/base-refresh.yml').read_text())
+        for name in ['validate-legacy', 'validate-system', 'publish-legacy', 'publish-system']:
+            guard = next(step for step in workflow['jobs'][name]['steps'] if step.get('name') == 'Require completed artifact download')
+            marker = Path(self.tmp.name) / 'must-not-execute'
+            for value in [self.tmp.name + '/data', None, '', '/wrong', '$(touch ' + str(marker) + ')',
+                          '"; touch ' + str(marker) + '; #']:
+                with self.subTest(job=name, value=value):
+                    env = {**os.environ, 'RUNNER_TEMP': self.tmp.name}
+                    env.pop('DOWNLOADED_DATA', None)
+                    if value is not None: env['DOWNLOADED_DATA'] = value
+                    result = subprocess.run(['bash', '-c', guard['run']], env=env, capture_output=True)
+                    self.assertEqual(result.returncode, 0 if value == self.tmp.name + '/data' else 1)
+                    self.assertFalse(marker.exists())
 
     def test_workflow_permission_split_and_exact_alias_gate(self):
         workflow = yaml.safe_load((ROOT / '.github/workflows/base-refresh.yml').read_text()); jobs = workflow['jobs']

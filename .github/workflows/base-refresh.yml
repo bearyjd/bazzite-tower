@@ -184,10 +184,19 @@ jobs:
       run: |-
         sudo apt-get update -qq
         sudo apt-get install -y skopeo python3-yaml
-    - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0
+    - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2, Node24
+      id: download
       with:
         name: refresh-image-legacy
         path: ${{ runner.temp }}/data
+        digest-mismatch: error
+        skip-decompress: false
+    - name: Require completed artifact download
+      env:
+        DOWNLOADED_DATA: ${{ steps.download.outputs.download-path }}
+      run: |
+        set -euo pipefail
+        [[ "${DOWNLOADED_DATA:-}" == "$RUNNER_TEMP/data" ]]
     - name: Independently validate OCI, actual RPM inventory, SPDX, profile and provenance
       run: python3 control/ci/base-refresh.py validate --control control --data "$RUNNER_TEMP/data" --profile "$PROFILE" --base
         "$BASE" --version "$VERSION"
@@ -218,10 +227,19 @@ jobs:
       run: |-
         sudo apt-get update -qq
         sudo apt-get install -y skopeo python3-yaml
-    - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0
+    - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2, Node24
+      id: download
       with:
         name: refresh-image-system
         path: ${{ runner.temp }}/data
+        digest-mismatch: error
+        skip-decompress: false
+    - name: Require completed artifact download
+      env:
+        DOWNLOADED_DATA: ${{ steps.download.outputs.download-path }}
+      run: |
+        set -euo pipefail
+        [[ "${DOWNLOADED_DATA:-}" == "$RUNNER_TEMP/data" ]]
     - name: Independently validate OCI, actual RPM inventory, SPDX, profile and provenance
       run: python3 control/ci/base-refresh.py validate --control control --data "$RUNNER_TEMP/data" --profile "$PROFILE" --base
         "$BASE" --version "$VERSION"
@@ -266,10 +284,19 @@ jobs:
           mkdir -p "control/$(dirname "$path")"
           gh api "repos/$GITHUB_REPOSITORY/contents/$path?ref=$GITHUB_SHA" -H 'Accept: application/vnd.github.raw+json' > "control/$path"
         done
-    - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0
+    - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2, Node24
+      id: download
       with:
         name: refresh-image-legacy
         path: ${{ runner.temp }}/data
+        digest-mismatch: error
+        skip-decompress: false
+    - name: Require completed artifact download
+      env:
+        DOWNLOADED_DATA: ${{ steps.download.outputs.download-path }}
+      run: |
+        set -euo pipefail
+        [[ "${DOWNLOADED_DATA:-}" == "$RUNNER_TEMP/data" ]]
     - name: Rehash bounded data and revalidate without executing candidate
       run: python3 control/ci/base-refresh.py revalidate --control control --data "$DATA" --profile "$PROFILE" --base "$BASE"
         --version "$VERSION"
@@ -345,7 +372,7 @@ jobs:
           [[ "$resolved" == "$VALIDATED_DIGEST" ]]
           confirmed+=("$tag")
         done
-        echo "REFRESH_PASS profile=$PROFILE digest=$VALIDATED_DIGEST base=$BASE accepted_source=91908f11eba496cde806298f2d0cbe332213192d" >> "$GITHUB_STEP_SUMMARY"
+        echo "REFRESH_PASS profile=$PROFILE digest=$VALIDATED_DIGEST base=$BASE accepted_source=1c01f086f58bd33a5d7651254671e57723d45561" >> "$GITHUB_STEP_SUMMARY"
     - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
       with:
         name: refresh-receipt-legacy
@@ -395,10 +422,19 @@ jobs:
           mkdir -p "control/$(dirname "$path")"
           gh api "repos/$GITHUB_REPOSITORY/contents/$path?ref=$GITHUB_SHA" -H 'Accept: application/vnd.github.raw+json' > "control/$path"
         done
-    - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0
+    - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2, Node24
+      id: download
       with:
         name: refresh-image-system
         path: ${{ runner.temp }}/data
+        digest-mismatch: error
+        skip-decompress: false
+    - name: Require completed artifact download
+      env:
+        DOWNLOADED_DATA: ${{ steps.download.outputs.download-path }}
+      run: |
+        set -euo pipefail
+        [[ "${DOWNLOADED_DATA:-}" == "$RUNNER_TEMP/data" ]]
     - name: Rehash bounded data and revalidate without executing candidate
       run: python3 control/ci/base-refresh.py revalidate --control control --data "$DATA" --profile "$PROFILE" --base "$BASE"
         --version "$VERSION"
@@ -474,7 +510,7 @@ jobs:
           [[ "$resolved" == "$VALIDATED_DIGEST" ]]
           confirmed+=("$tag")
         done
-        echo "REFRESH_PASS profile=$PROFILE digest=$VALIDATED_DIGEST base=$BASE accepted_source=91908f11eba496cde806298f2d0cbe332213192d" >> "$GITHUB_STEP_SUMMARY"
+        echo "REFRESH_PASS profile=$PROFILE digest=$VALIDATED_DIGEST base=$BASE accepted_source=1c01f086f58bd33a5d7651254671e57723d45561" >> "$GITHUB_STEP_SUMMARY"
     - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
       with:
         name: refresh-receipt-system

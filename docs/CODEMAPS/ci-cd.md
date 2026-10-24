@@ -10,7 +10,7 @@ Workflows, highlighted test scripts and the base-change diff filter. Full failur
 | Workflow | Triggers | Flow | Issue label |
 |---|---|---|---|
 | `build.yml` | push main (ignores README/docs/**), PR, Sun 06:00 UTC, dispatch | PR-only **verify** retains all three contexts (`safe-pin`, `latest-kernel`, `snitchwatch-system`), credential-free actual-head checkout/tree proof and local smoke/runtime checks. Default-branch **release** publishes only opt-in `:latest-kernel` after build/test/signing/SPDX/provenance gates. A separate **notify** job reads each release leg's actual conclusion from the Actions API | `ci-failure-<variant>` |
-| `base-refresh.yml` | daily, dispatch; `main` only | policy-pinned accepted product source + fresh immutable upstream base → read-only resolve/build/validate jobs → checkout-free publisher → verified signature, SPDX, build provenance, GitHub attestation and host signature policy → recheck current main policy hash immediately before public pointers. Legacy moves `:stable` and compatibility `:latest`; accepted r15.1 system moves only `:snitchwatch-system`. No per-base owner approval | — |
+| `base-refresh.yml` | daily, dispatch; `main` only | policy-pinned accepted product source + fresh immutable upstream base → read-only resolve/build/validate jobs → checkout-free publisher → verified signature, SPDX, build provenance, GitHub attestation and host signature policy → recheck current main policy hash immediately before public pointers. Legacy moves `:stable` and compatibility `:latest`; reviewed r16.1 system moves only `:snitchwatch-system`. No per-base owner approval | — |
 | `r13-candidate.yml` | reviewed exact-head candidate branch push; optional dispatch after main registration | read-only approval/build/test/OCI validation jobs → checkout-free fixed candidate-package publisher → existing automated signing/SPDX/provenance and scoped destination policy verification; no stable tag input | — |
 | `release.yml` (**Release Snitchwatch System**) | main dispatch, one `digest` input that must equal the digest hard-coded in the workflow | one checkout-free job in the `release` environment (owner attaches reviewer/main-only protection): verify candidate key signature + SPDX → `skopeo copy --all --preserve-digests` to a staging tag → `cosign sign` + re-attest SPDX → verify + host `policy.json` skopeo check → move only `:snitchwatch-system` → re-resolve and re-check. Staging tag is never deleted (GHCR deletes whole versions). No rebuild | — |
 | `boot-test.yml` | PR (build paths), Sun 07:00 UTC, dispatch | actual PR-head SHA checkout + head/tree proof in read-only boot job → build → `podman run --systemd=always /sbin/init` → wait running/degraded → exec `tests/boot-check.sh` | `boot-test-failure` (separate non-PR notifier only; no candidate code or checkout) |
@@ -44,8 +44,8 @@ auto-closes — each leg's labelled tracking issue, independently of whether
 `base-refresh.yml` permits missing-stable initialization only through the
 reviewed, API-verified run2/attempt1 recovery described below; other missing
 baselines hold for independently reviewed recovery. It reads `.github/base-refresh-policy.json`: both product
-profiles pin accepted source `91908f11eba496cde806298f2d0cbe332213192d` while
-r16 is prepared. Legacy retains `IMAGE_TAG=latest`; system retains
+profiles pin reviewed source `1c01f086f58bd33a5d7651254671e57723d45561` for
+the r16.1 transition. Legacy retains `IMAGE_TAG=latest`; system retains
 `IMAGE_TAG=snitchwatch-system`. Source SHA/tree/cleanliness and profile contracts
 are checked before the build; independent validation checks image/RPM/SPDX
 identity and actual Bazzite/kernel floors (`44.20261023` /
@@ -53,6 +53,25 @@ identity and actual Bazzite/kernel floors (`44.20261023` /
 the dispatched main SHA, with no source checkout. Policy staleness blocks tag
 movement. Features still need owner runtime acceptance, protected fixed-digest
 promotion and a subsequent reviewed policy update.
+
+The r16.1 transition changes only the global source identity and exact system
+release-baseline digest, retaining the profile schema and all native pins. The
+only direct system baseline is
+`sha256:3f9a0d238e69917a33a23710a53963e70b64526cc8e44f9d24787944dcca1f27`,
+and only after successful repository-key signature verification. Old/arbitrary
+digests require destination-bound signed refresh provenance and monotonic version
+checks; missing system tags fail closed. Regression tests cover these boundaries
+and source tree/timestamp substitution. Merge only after protected promotion
+succeeds, independent destination signature/SPDX checks pass, and exact-head CI
+and independent policy review pass. Host runtime acceptance remains unverified;
+the owner authorized the CI-based release path.
+
+All four refresh artifact consumers (legacy/system validators and publishers)
+use SHA-pinned download-artifact v8.0.2, strict digest mismatch errors and explicit
+extraction. Each requires the completed download-path output through a quoted
+environment variable before validation/revalidation, trust setup or publication.
+This carries over the candidate pipeline's proven large-artifact transport fix;
+it adds no trust exception and changes no profile or job permission.
 
 Refresh trust collection checks exact staged policy/key/registry bytes and active
 key/registry copies. The active policy is an intentional merge with upstream
@@ -68,11 +87,11 @@ The r16.1 promoter binds candidate run `40118265705` to image digest
 provenance source `1c01f086f58bd33a5d7651254671e57723d45561`. Merging only arms
 this digest; owner runtime acceptance remains unverified. This fixed-digest feature-acceptance path retains the owner `release` environment
 and all signature, attestation and policy gates; automatic base refresh uses its
-separate policy-pinned path above. After promotion, system refresh fails closed
-because r16.1 is neither its bootstrap digest nor a signed base-refresh baseline.
-A separate reviewed accepted-source and exact system-baseline policy transition
-is required; the current single source pin applies to both profiles, whose
-legacy and system contracts must be reviewed for that transition.
+separate policy-pinned path above. Before the r16.1 policy transition merges,
+system refresh holds after promotion because the prior policy cannot accept that
+digest. The transition advances source and exact baseline together, after the
+promotion and independent destination checks pass; fixed-digest promotion does
+not fabricate signed base-refresh provenance. Both profile contracts stay exact.
 
 All stable OCI workflows share `bazzite-tower-stable-writers` with cancellation disabled. The promoter's runtime evidence and review are recorded in the PR and release notes, not workflow variables; its steps are in [r13-publication.md](../r13-publication.md), which also covers the candidate trust bootstrap and artifact identities. `ci/r13-publication.py` is the read-only gate and `ci/r13-candidate-data.py` captures installed/OCI/RPM identity only in the credential-free builder. The primary-reviewed control store starts with null authority. Final tower heads first receive independent review and actual-head green PR CI on a separate review branch; only then may the primary record variables and fast-forward the existing fixed candidate branch to that exact tested head. Same-head pushes and detached dispatch do not supply fresh verify/artifact CI; no force/delete/main-registration shortcut. The full sequence is in the publication document.
 

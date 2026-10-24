@@ -70,8 +70,9 @@ this digest; owner runtime acceptance remains unverified. This fixed-digest feat
 and all signature, attestation and policy gates; automatic base refresh uses its
 separate policy-pinned path above. After promotion, system refresh fails closed
 because r16.1 is neither its bootstrap digest nor a signed base-refresh baseline.
-A separate reviewed source/baseline policy advance must preserve the accepted
-legacy source; the current single source pin applies to both profiles.
+A separate reviewed accepted-source and exact system-baseline policy transition
+is required; the current single source pin applies to both profiles, whose
+legacy and system contracts must be reviewed for that transition.
 
 All stable OCI workflows share `bazzite-tower-stable-writers` with cancellation disabled. The promoter's runtime evidence and review are recorded in the PR and release notes, not workflow variables; its steps are in [r13-publication.md](../r13-publication.md), which also covers the candidate trust bootstrap and artifact identities. `ci/r13-publication.py` is the read-only gate and `ci/r13-candidate-data.py` captures installed/OCI/RPM identity only in the credential-free builder. The primary-reviewed control store starts with null authority. Final tower heads first receive independent review and actual-head green PR CI on a separate review branch; only then may the primary record variables and fast-forward the existing fixed candidate branch to that exact tested head. Same-head pushes and detached dispatch do not supply fresh verify/artifact CI; no force/delete/main-registration shortcut. The full sequence is in the publication document.
 

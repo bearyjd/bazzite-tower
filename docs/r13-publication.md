@@ -227,10 +227,10 @@ above. After r16.1 promotion its system publisher holds: the new digest is not
 the policy's bootstrap digest, and fixed-digest promotion writes no
 `base-refresh/v1` provenance required by the signed-baseline check. It cannot
 replace r16.1 with the older product. Legacy refresh remains independent.
-Resuming system refresh requires a separately reviewed source/baseline policy
-advance. The current source fields apply to both profiles, so advancing them
-also advances legacy product code; preserve the separately accepted legacy
-source when designing that change. Do not change only the bootstrap digest:
+Resuming system refresh requires a separately reviewed accepted-source and exact
+system-baseline policy transition. The current source fields apply to both
+profiles; review the legacy and system profile contracts before advancing them.
+Do not change only the bootstrap digest:
 that would authorize refresh builds of the old system product over r16.1.
 
 `ci/r13-publication.py` keeps only the candidate flow's `approval`, `source`

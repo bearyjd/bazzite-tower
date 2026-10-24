@@ -219,8 +219,9 @@ the runtime evidence and review for that digest. Partial publication (staging
 tag and signatures written, tag not moved) is safe to re-dispatch.
 
 The r16.1 promoter update arms this exact digest; merging does not publish it.
-Owner laptop runtime acceptance remains unverified and must precede dispatch
-and the owner's protected `release` approval.
+Owner requested release based on the verified candidate and CI; laptop runtime
+remains unverified and no physical acceptance is claimed. Protected `release`
+approval remains owner-only.
 
 Automatic refresh still builds both profiles from the accepted r15.1 source
 above. After r16.1 promotion its system publisher holds: the new digest is not

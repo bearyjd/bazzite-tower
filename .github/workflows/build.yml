@@ -133,6 +133,7 @@ jobs:
           tests/test-snitchwatch-system.sh
           tests/test-snitchwatch-toolchain.sh
           python3 tests/test-r13-publication.py
+          python3 tests/test-base-refresh.py
           python3 tests/test-snitchwatch-gate.py
           python3 tests/test-snitchwatch-image-build.py
           python3 tests/test-snitchwatch-image-build-daemon.py
@@ -214,26 +215,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # Default/primary — what `bootc upgrade` pulls with no explicit tag.
-          # Pinned base comes exclusively from the Containerfile's BASE_IMAGE
-          # default. Do not add a build arg here: that would create a second,
-          # mutable source of truth. tag_prefix empty => tag strings below are byte-identical
-          # to this workflow's pre-matrix behavior (no disruption to existing
-          # installs or anyone pinned to a `:<date>`/`:<sha>` tag).
-          # As of 2026-08-28 this is bazzite-nvidia-open (NVIDIA open kernel
-          # modules) — moved off proprietary bazzite-nvidia because that
-          # flavor forked onto a kernel track (`ogc-lts`, 6.18.x) that will
-          # not receive the i915 cx0 s2idle-resume fix; see the Containerfile
-          # comment and docs/research/i915-bug-report/UPSTREAM-FIX-STATUS-2026-08-28.md.
-          - variant: safe-pin
-            build_args: "IMAGE_TAG=latest"
-            tag_base: latest
-            tag_prefix: ""
-          # Opt-in — tracks upstream bazzite-nvidia-open:stable's current
-          # kernel/driver, for early warning of the next upstream surprise
-          # before it reaches the pinned safe-pin leg. Never the default tag;
-          # every tag this leg produces is namespaced under tag_prefix so it
-          # can never collide with the safe-pin leg's pushed tags.
+          # Automatic accepted-product channels are owned by base-refresh.yml.
+          # This separate opt-in lane continues tracking the current source.
           - variant: latest-kernel
             build_args: |
               BASE_IMAGE=ghcr.io/ublue-os/bazzite-nvidia-open:stable
@@ -274,6 +257,7 @@ jobs:
           tests/test-snitchwatch-system.sh
           tests/test-snitchwatch-toolchain.sh
           python3 tests/test-r13-publication.py
+          python3 tests/test-base-refresh.py
           python3 tests/test-snitchwatch-gate.py
           python3 tests/test-snitchwatch-image-build.py
           python3 tests/test-snitchwatch-image-build-daemon.py
@@ -669,7 +653,7 @@ jobs:
             // tag_base mirrors the `release` job's matrix, purely for the
             // human-readable message below — not a build input, so drifting
             // is cosmetic, not a correctness risk.
-            const TAG_BASE = { 'safe-pin': 'latest', 'latest-kernel': 'latest-kernel' };
+            const TAG_BASE = { 'latest-kernel': 'latest-kernel' };
             const jobs = await github.paginate(github.rest.actions.listJobsForWorkflowRun, {
               owner, repo, run_id: runId, per_page: 100,
             });

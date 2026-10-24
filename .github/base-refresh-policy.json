@@ -1,0 +1,48 @@
+{
+  "schemaVersion": 1,
+  "repository": "bearyjd/bazzite-tower",
+  "ref": "refs/heads/main",
+  "destination": "ghcr.io/bearyjd/bazzite-tower",
+  "upstream": "ghcr.io/ublue-os/bazzite-nvidia-open",
+  "upstreamTag": "stable",
+  "minimumBaseVersion": "44.20261023",
+  "minimumKernel": "7.2.9-ogc3.1.fc44",
+  "sourceCommit": "91908f11eba496cde806298f2d0cbe332213192d",
+  "sourceTree": "2734d40ebf61895b87e892198c593e72fee92fb6",
+  "sourceCreated": "2026-10-24T01:20:24Z",
+  "profiles": {
+    "legacy": {
+      "imageTag": "latest",
+      "channels": [
+        "stable",
+        "latest"
+      ]
+    },
+    "system": {
+      "imageTag": "snitchwatch-system",
+      "channels": [
+        "snitchwatch-system"
+      ]
+    }
+  },
+  "bootstrap": {
+    "legacy": {
+      "allowMissing": true,
+      "digest": null
+    },
+    "system": {
+      "allowMissing": false,
+      "digest": "sha256:df4ec1239abae0cbe1d4d4e27bce85d54f17e2b5155e431c2727c724aa879bf7"
+    }
+  },
+  "nativeSource": {
+    "commit": "5c969a2e21dc7f5c976e7048aa9f95e5663c7de2",
+    "tree": "a6f415313f30e81b6bca9bb839aadd0f2f908af3",
+    "submoduleCommit": "b404c4c6316760fa7bc415509d3f8d747f7dc9cc"
+  },
+  "daemonSource": {
+    "commit": "b404c4c6316760fa7bc415509d3f8d747f7dc9cc",
+    "tree": "21593ba74c55b6f7ad7f220692c33477b65a3686"
+  },
+  "daemonPatchSha256": "b0168992048bf7964a66dd1ed42e3e4f2fc55e61eecf6ddd98c259ed50e8e0df"
+}

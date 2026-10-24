@@ -4,20 +4,32 @@
 
 `Containerfile` → `build_files/build.sh` (runs inside the build, `set -euo pipefail`).
 
-## r15.1 upstream base
+## Accepted products and upstream base refresh
 
-The corrective release updates the pinned default base to Bazzite
-`44.20261023`, digest
+`.github/base-refresh-policy.json` pins both accepted product profiles to
+`91908f11eba496cde806298f2d0cbe332213192d`. Legacy publishes `:stable` and
+compatibility `:latest` with `IMAGE_TAG=latest`; accepted r15.1 system publishes
+only `:snitchwatch-system`. Product code stays frozen during r16 preparation.
+
+`base-refresh.yml` resolves upstream `bazzite-nvidia-open:stable` once to an
+immutable digest and supplies `BASE_IMAGE` to that accepted checkout. Independent
+validation checks the actual image's Bazzite version and RPM kernel against
+floors `44.20261023` / `7.2.9-ogc3.1.fc44`, as well as source/profile/SPDX
+identity. Build, smoke/runtime-systemd, signature, SPDX, build provenance, GitHub
+attestation and host signature policy gates precede publication; a current-main
+policy hash recheck rejects stale policy before public pointers move. Daily and
+main-only dispatch refreshes need no per-base owner click. New features still
+need protected fixed-digest acceptance and a subsequent reviewed policy update.
+
+The candidate `Containerfile` default pin is Bazzite `44.20261023`, digest
 `sha256:d0e5e105ebf43c7ddbe3c4a5dfecac1628b0e0dcf152bbd2aee0eda3e4b4cdd4`.
-Registry inspection on 2026-10-24 reports kernel
-`7.2.9-ogc3.1.fc44.x86_64`. The existing weekly `base-bump.yml` workflow
-continues to propose digest updates through reviewed PRs. System-image
-publication still follows the release playbook; a base bump alone does not
-promote the protected `:snitchwatch-system` tag.
+Weekly `base-bump.yml` PRs maintain this default; automatic refresh independently
+resolves its base. Neither path changes hardware tuning or proves host eBPF
+compatibility. Both profiles retain allow/proc defaults.
 
 ## Containerfile stages
 
-1. `ARG BASE_IMAGE=ghcr.io/ublue-os/bazzite-nvidia-open@sha256:…` (the single pinned default source for `:latest`; CI leaves it unset for safe-pin and overrides it only for `:latest-kernel`)
+1. `ARG BASE_IMAGE=ghcr.io/ublue-os/bazzite-nvidia-open@sha256:…` (candidate default; PR safe-pin verification leaves it unset, `latest-kernel` and accepted-product base refresh override it)
 2. `FROM scratch AS ctx` + `COPY build_files /` — scripts reachable via bind mount, not baked in
 3. `FROM ${BASE_IMAGE}` + OCI labels
 4. `COPY system_files/ /` — static content, copied **before** build.sh so it can enable those units
@@ -165,7 +177,7 @@ digests, Flatpak finish arguments, native bridge and wire source remain unchange
 from r15; this repin selects the GUI learning/naming work. This candidate pin does not
 establish independent review or runtime acceptance; authority remains held.
 
-The system profile remains PR-tested but is removed from automatic stable release builds. `r13-candidate.yml` builds/tests a reviewed source in a credential-free job, records actual installed binary/manifest/pins identities through `ci/r13-candidate-data.py`, and exports digest-preserving OCI data. The collector supplies `/usr/bin/true` when creating its never-started extraction container because bootc images may omit CMD/ENTRYPOINT; its separate RPM inventory run remains unchanged. Extraction containers are removed on success and failure. Full collector tests in `tests/test-r13-publication.py` cover commandless images, installed-binary/archive drift and cleanup, preserving the actual artifact validator. Separate checkout-free publishers and `ci/r13-publication.py` trusted control gates enforce fixed targets for the candidate. The publisher keeps legacy keyed signing for repository policy, adds a same-key Cosign bundle and attests/verifies SPDX and the original build predicate with `--new-bundle-format` (legacy `verify-attestation` trips on the certificate-based GitHub provenance on the same digest); its policy-gated local OCI export uses `--remove-signatures` only because OCI cannot store signatures. Promotion copies the one fixed digest, re-signs it and re-attests its SPDX predicate without an image rebuild. Base-image/toolchain pins and smoke/boot assertions are preserved. See [r13-publication.md](../r13-publication.md) for the trust bootstrap, immutable identity schemas and the promoter steps.
+The system profile remains PR-tested; `build.yml` does not automatically publish it. Accepted-product base refresh uses the separate policy-pinned path described above. `r13-candidate.yml` builds/tests a reviewed source in a credential-free job, records actual installed binary/manifest/pins identities through `ci/r13-candidate-data.py`, and exports digest-preserving OCI data. The collector supplies `/usr/bin/true` when creating its never-started extraction container because bootc images may omit CMD/ENTRYPOINT; its separate RPM inventory run remains unchanged. Extraction containers are removed on success and failure. Full collector tests in `tests/test-r13-publication.py` cover commandless images, installed-binary/archive drift and cleanup, preserving the actual artifact validator. Separate checkout-free publishers and `ci/r13-publication.py` trusted control gates enforce fixed targets for the candidate. The publisher keeps legacy keyed signing for repository policy, adds a same-key Cosign bundle and attests/verifies SPDX and the original build predicate with `--new-bundle-format` (legacy `verify-attestation` trips on the certificate-based GitHub provenance on the same digest); its policy-gated local OCI export uses `--remove-signatures` only because OCI cannot store signatures. Promotion copies the one fixed digest, re-signs it and re-attests its SPDX predicate without an image rebuild. Base-image/toolchain pins and smoke/boot assertions are preserved. See [r13-publication.md](../r13-publication.md) for the trust bootstrap, immutable identity schemas and the promoter steps.
 
 `release.yml` is a minimal fixed-digest promoter for the image only; it
 acquires no GUI bytes. `tests/test-r13-publication.py` executes the

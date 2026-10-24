@@ -356,7 +356,7 @@ class WorkflowContracts(unittest.TestCase):
         # PyYAML is a local static-check convenience, not a runtime dependency.
         import yaml
         workflows = {name: yaml.safe_load((ROOT / '.github/workflows' / name).read_text()) for name in ('build.yml', 'r13-candidate.yml', 'release.yml')}
-        self.assertEqual([m['variant'] for m in workflows['build.yml']['jobs']['release']['strategy']['matrix']['include']], ['safe-pin', 'latest-kernel'])
+        self.assertEqual([m['variant'] for m in workflows['build.yml']['jobs']['release']['strategy']['matrix']['include']], ['latest-kernel'])
         for name, workflow in workflows.items():
             self.assertFalse(workflow['concurrency']['cancel-in-progress'])
             self.assertIn('bazzite-tower-stable-writers', workflow['concurrency']['group'])

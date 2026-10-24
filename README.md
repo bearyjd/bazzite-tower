@@ -296,11 +296,11 @@ This image rides upstream Bazzite's base and the laptop rebases onto `:latest`, 
 
 | Layer | Where | What it does |
 |---|---|---|
-| **Smoke gate** | `build.yml` → [`tests/smoke.sh`](./tests/smoke.sh) | Offline assertions against the freshly built image, run **before** push: qemu user resolves, the six `virt*.socket`s are enabled, `libvirtd` is masked, the Wi-Fi guard / first-boot units are enabled, Docker/Cockpit/Waydroid remain disabled, and the IOMMU / i915 / suspend kargs are present. A failure blocks the push, so `:latest` stays on the last-good image. |
-| **Runtime promotion gate** | `build.yml` → [`tests/boot-check.sh`](./tests/boot-check.sh) | Boots each freshly built matrix candidate under `podman --systemd=always` before any registry login or tag promotion. It proves the stack *works*: socket-activates `virtqemud`, connects to `qemu:///system`, and confirms the Wi-Fi backend guard ran clean. `boot-test.yml` remains an independent scheduled diagnostic. |
+| **Smoke gate** | `base-refresh.yml` / `build.yml` → [`tests/smoke.sh`](./tests/smoke.sh) | Offline assertions against the freshly built image, run **before** push: qemu user resolves, the six `virt*.socket`s are enabled, `libvirtd` is masked, the Wi-Fi guard / first-boot units are enabled, Docker/Cockpit/Waydroid remain disabled, and the IOMMU / i915 / suspend kargs are present. A failure blocks the push, so `:latest` stays on the last-good image. |
+| **Runtime promotion gate** | `base-refresh.yml` / `build.yml` → [`tests/boot-check.sh`](./tests/boot-check.sh) | Boots each freshly built matrix candidate under `podman --systemd=always` before any registry login or tag promotion. It proves the stack *works*: socket-activates `virtqemud`, connects to `qemu:///system`, and confirms the Wi-Fi backend guard ran clean. `boot-test.yml` remains an independent scheduled diagnostic. |
 | **Upstream early warning** | `base-watch.yml` → [`ci/base-diff.py`](./ci/base-diff.py) | Daily, diffs the base image's package manifest (committed to `docs/manifests/` after the first run) against the last-seen one, filtered to the blast-radius packages (qemu/libvirt/NetworkManager/Docker/kernel/systemd/polkit/bootc). A change opens a heads-up issue **before** the next build. |
 
-Each failing layer opens — and later auto-closes — a labelled tracking issue (`ci-failure`, `boot-test-failure`, `base-bump`). Reproduce the smoke gate locally with `just smoke`.
+The build, boot-test and base-watch workflows maintain labelled tracking issues (`ci-failure`, `boot-test-failure`, `base-bump`). Automatic refresh failures appear in the Actions run summary. Reproduce the smoke gate locally with `just smoke`.
 
 ## Installing
 
@@ -326,33 +326,34 @@ upgrades retain the policy in `/etc`.
 
 ## Tags
 
-Three variants are built from the same `Containerfile` (selected via build-args:
-`BASE_IMAGE` for the kernel channel, `SNITCHWATCH_BRIDGE` for the bridge profile — see the comment above `FROM` in `Containerfile`):
+Three channels use the same `Containerfile`, with separate accepted product
+profiles. `.github/base-refresh-policy.json` freezes the product source at
+`91908f11eba496cde806298f2d0cbe332213192d` while r16 is prepared.
 
-**`latest` — default/primary, pinned base (what `bootc upgrade` pulls with no explicit tag)**
-- `latest` — current build of `main`
-- `latest.YYYYMMDD` — same image, date-stamped
-- `YYYYMMDD` — date-only tag
-- `<short-sha>` — the 7-character git SHA of the build commit
+**`stable` — automatic Bazzite refresh of the accepted legacy product**
 
-**`latest-kernel` — opt-in, tracks upstream `bazzite-nvidia-open:stable`'s current kernel/driver**
+- `stable` and compatibility alias `latest` select the same legacy product
+  (`SNITCHWATCH_BRIDGE=legacy`, `IMAGE_TAG=latest`). Existing `:latest` hosts
+  continue receiving this channel.
+- `base-refresh.yml` runs daily and by dispatch on `main`. It resolves upstream
+  `bazzite-nvidia-open:stable` to an immutable digest and overrides `BASE_IMAGE`
+  in the accepted source checkout. It rejects bases below Bazzite `44.20261023`
+  / kernel `7.2.9-ogc3.1.fc44` and stale policy before publication.
+
+**`latest-kernel` — opt-in development channel**
+
 - `latest-kernel` / `latest-kernel.YYYYMMDD` / `latest-kernel-YYYYMMDD` / `latest-kernel-<short-sha>`
-- Exists as an early-warning channel: since `latest` is a reproducible pinned
-  tag rather than a moving `:stable` reference (see
-  [Intel display & suspend stability](#intel-display--suspend-stability) for
-  why this repo pins base images at all), this leg surfaces whatever upstream
-  ships next before it's ever considered for the pinned default. Check
-  `docs/research/i915-bug-report/` before booting it on the ThinkPad P1 this
-  repo targets. Never the default — `bootc switch` to it explicitly if you
-  want to track it.
+- `build.yml` publishes this channel from current `main`, using upstream
+  `bazzite-nvidia-open:stable`. It does not move the accepted product channels.
+  Check `docs/research/i915-bug-report/` before booting it on the ThinkPad P1.
 
-**`snitchwatch-system` — opt-in, pinned base plus the native Snitchwatch system bridge**
-- `snitchwatch-system` / `snitchwatch-system.YYYYMMDD` / `snitchwatch-system-YYYYMMDD` / `snitchwatch-system-<short-sha>`
-- Same pinned base as `latest`, built with `SNITCHWATCH_BRIDGE=system` and
-  `FIREWALL_DAEMON=opensnitch`: the reviewed OpenSnitch daemon patch, the native
-  system bridge and its socket units. Never the default. It is gated by the same
-  smoke and boot checks as the other legs, but the daemon has so far only passed
-  disposable-VM gates (see the OpenSnitch / Snitchwatch status in the RUNBOOK).
+**`snitchwatch-system` — automatic Bazzite refresh of the accepted r15.1 system product**
+
+- Remains a separate opt-in channel; it is not an alias for `stable`.
+- Uses the accepted r15.1 system profile with `SNITCHWATCH_BRIDGE=system` and
+  `FIREWALL_DAEMON=opensnitch`, refreshed by `base-refresh.yml` against the same
+  immutable upstream base. Both profiles retain `DefaultAction: allow` and
+  `ProcMonitorMethod: proc`; these gates do not establish host eBPF compatibility.
 - **Switching is not just `bootc switch`.** `/etc` survives `bootc rollback`, so the
   profile change has its own transaction (RUNBOOK, "OpenSnitch / Snitchwatch
   deployment status"). Order: `sudo bootc switch --enforce-container-sigpolicy
@@ -362,9 +363,14 @@ Three variants are built from the same `Containerfile` (selected via build-args:
   rollback`; otherwise the legacy image boots with the system socket address in
   `/etc/opensnitchd/default-config.json` and the firewall silently fails open.
 
-CI rebuilds weekly (Sunday 06:00 UTC) and on every push to `main`, building
-and smoke-testing all three variants independently (a break in one never blocks
-or affects the others' publish).
+Each base refresh must pass image build, smoke/runtime checks, signing, SPDX,
+provenance and host signature policy checks before its tags advance. No owner
+click is required for each base refresh. Accepting new Snitchwatch features still
+requires owner runtime acceptance and the protected release promoter, followed
+by a reviewed policy update. The weekly base-bump PR maintains the historical
+`Containerfile` default pin. Automatic accepted-product refresh always overrides
+that pin with the separately resolved immutable upstream base; the reviewed
+refresh policy determines the product source.
 
 ## Hardware target
 

@@ -14,6 +14,33 @@ release.
 work. Otherwise the `AGENTS.md` rule stands: no push, merge or PR without an
 explicit owner instruction.
 
+## Base refresh versus feature acceptance
+
+`base-refresh.yml` runs daily and by dispatch on `main`, without a per-base owner
+approval. `.github/base-refresh-policy.json` pins accepted product source
+`91908f11eba496cde806298f2d0cbe332213192d`: legacy publishes `:stable` and its
+compatibility alias `:latest` (`IMAGE_TAG=latest`); accepted r15.1 system publishes
+only `:snitchwatch-system`. Product code stays frozen while r16 is prepared.
+The workflow resolves a fresh immutable Bazzite base, enforces the
+`44.20261023` / `7.2.9-ogc3.1.fc44` floor and rejects stale policy, then requires
+build/test/signing/SPDX/provenance/host-policy gates before publication.
+
+The missing-`:stable` bootstrap is allowed only on this workflow's first
+server-assigned run (`GITHUB_RUN_NUMBER=1`) and first attempt
+(`GITHUB_RUN_ATTEMPT=1`), on the exact `main` workflow identity. A later run or
+rerun with no canonical `:stable` tag fails closed instead of resetting the
+signed version baseline. If the first run fails before establishing `:stable`,
+recovery requires an independently reviewed recovery change; rerunning alone
+cannot bypass the bootstrap gate. Do not delete the canonical tag to recover.
+
+The release sequence below remains the feature-acceptance path. A newly accepted
+feature digest still needs owner runtime acceptance and the protected `release`
+environment promoter. Only a subsequent independently reviewed policy update may
+make that product the source of automatic refreshes. A weekly base-bump PR
+updates the candidate `Containerfile` pin; merging it does not accept features.
+
+Automatic refresh updates registry tags sequentially. `stable` and `latest` are verified to resolve to the same digest on success, but the registry has no transaction spanning both tags. A partial transport failure reports attempted tags, confirmed tags and the expected digest in the run summary; an attempted write may have completed despite a lost response. Rerun the refresh workflow with the same reviewed policy to verify the signed baseline and repair the aliases.
+
 ## Roles
 
 - **Primary agent**: one orchestrator. Plans, sets repository variables, pushes
@@ -120,14 +147,16 @@ button, `app:`/`country:` filters, side panel, map); web, DNS and Tailscale work
 Failure: `sudo bootc rollback && sudo reboot`, then report what broke. After promotion: `sudo bootc switch --enforce-container-sigpolicy
 ghcr.io/bearyjd/bazzite-tower:snitchwatch-system` (same digest, nothing to download).
 
-## Round r15 and later: fail-closed firewall
+## Firewall defaults and owner checks
 
-From r15 the system profile ships `DefaultAction deny` with `ProcMonitorMethod proc`
-and a root-only `unix:opensnitchd.sock`. Extra owner acceptance steps:
+The original r15 system release used `DefaultAction deny`; r15.1 and subsequent
+products retain `DefaultAction allow` in both profiles with `ProcMonitorMethod proc`. Deny
+enforcement requires explicit operator opt-in. The system profile uses a root-only
+`unix:opensnitchd.sock`. Extra owner acceptance steps:
 
 - Before the reboot: `sudo ostree admin config-diff | grep opensnitchd` (copy the
-  `/usr/etc` version over if it shows `M`), and keep a console open, because a bad
-  config fails closed and cuts the network.
+  `/usr/etc` version over only after reviewing local changes), and retain a console
+  during any explicit deny-policy experiment.
 - `sudo usermod -aG snitchwatch-ui <user>` so the GUI can reach the socket.
 - After boot: `ss -xl` shows the socket root-owned `0600`, nothing listens on
   `127.0.0.1:50051`, the daemon log is clean, and OS updates still work (the always-on

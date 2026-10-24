@@ -76,6 +76,7 @@ jobs:
         tests/check-supply-chain.sh
         tests/test-rpm-inventory-spdx.sh
         python3 tests/test-r13-publication.py
+        python3 tests/test-base-refresh.py
         tests/test-snitchwatch-system.sh
         tests/test-snitchwatch-toolchain.sh
         python3 tests/test-snitchwatch-image-build.py

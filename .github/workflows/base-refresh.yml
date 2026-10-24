@@ -1,0 +1,486 @@
+# Only main-reviewed policy may select accepted product sources.
+name: Refresh accepted products from Bazzite
+'on':
+  schedule:
+  - cron: 17 7 * * *
+  workflow_dispatch: {}
+permissions: {}
+concurrency:
+  group: bazzite-tower-stable-writers
+  cancel-in-progress: false
+defaults:
+  run:
+    shell: bash
+env:
+  PYTHONDONTWRITEBYTECODE: '1'
+jobs:
+  resolve:
+    if: github.repository == 'bearyjd/bazzite-tower' && github.ref == 'refs/heads/main' && (github.event_name == 'schedule'
+      || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    outputs:
+      base: ${{ steps.resolve.outputs.base }}
+      version: ${{ steps.resolve.outputs.version }}
+      source: ${{ steps.resolve.outputs.source }}
+      policy: ${{ steps.resolve.outputs.policy }}
+    steps:
+    - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      with:
+        ref: ${{ github.sha }}
+        path: control
+        persist-credentials: false
+    - name: Install data transport
+      run: |-
+        sudo apt-get update -qq
+        sudo apt-get install -y skopeo python3-yaml
+    - name: Test trusted refresh validation and permission boundaries
+      run: python3 tests/test-base-refresh.py
+      working-directory: control
+    - name: Resolve upstream stable once to immutable digest
+      run: python3 control/ci/base-refresh.py resolve --control control
+      id: resolve
+  build:
+    needs: resolve
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        profile:
+        - legacy
+        - system
+    env:
+      PROFILE: ${{ matrix.profile }}
+      BASE: ${{ needs.resolve.outputs.base }}
+      VERSION: ${{ needs.resolve.outputs.version }}
+    steps:
+    - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      with:
+        ref: ${{ github.sha }}
+        path: control
+        persist-credentials: false
+    - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      with:
+        ref: ${{ needs.resolve.outputs.source }}
+        path: source
+        persist-credentials: false
+    - name: Require exact clean accepted source
+      run: python3 control/ci/base-refresh.py source --control control --source source
+    - uses: ublue-os/remove-unwanted-software@695eb75bc387dbcd9685a8e72d23439d8686cba6
+    - name: Install data transport
+      run: |-
+        sudo apt-get update -qq
+        sudo apt-get install -y skopeo python3-yaml
+    - name: Validate accepted source safety contracts
+      run: |-
+        set -euo pipefail
+        tests/check-supply-chain.sh
+        tests/test-rpm-inventory-spdx.sh
+        tests/test-firstboot-no-docker.sh
+        tests/test-tower-health.sh
+        tests/test-opensnitch-readiness.sh
+        tests/test-snitchwatch-system.sh
+        tests/test-snitchwatch-toolchain.sh
+        python3 tests/test-r13-publication.py
+        python3 tests/test-snitchwatch-gate.py
+        python3 tests/test-snitchwatch-image-build.py
+        python3 tests/test-snitchwatch-image-build-daemon.py
+        tests/test-container-templates.sh
+        tests/test-docker-libvirt-forwarding.sh
+        tests/test-docker-libvirt-forwarding-hooks.sh
+      working-directory: source
+    - name: Recheck accepted source after offline contracts
+      run: python3 control/ci/base-refresh.py source --control control --source source
+    - name: Select reviewed profile
+      run: |-
+        set -euo pipefail
+        case "$PROFILE" in legacy) tag=latest ;; system) tag=snitchwatch-system ;; *) exit 1 ;; esac
+        echo "IMAGE_TAG=$tag" >> "$GITHUB_ENV"
+    - name: Build credential-free accepted source with immutable base
+      uses: redhat-actions/buildah-build@3a51aade9afa17e5c78256bcbe2e1ee08c7b995b
+      with:
+        context: source
+        containerfiles: source/Containerfile
+        image: bazzite-tower
+        tags: refresh-${{ matrix.profile }}
+        build-args: |-
+          BASE_IMAGE=${{ needs.resolve.outputs.base }}
+          FIREWALL_DAEMON=opensnitch
+          SNITCHWATCH_BRIDGE=${{ matrix.profile }}
+          IMAGE_TAG=${{ env.IMAGE_TAG }}
+        oci: true
+        squash: false
+    - name: Smoke exact built image
+      run: podman run --rm -i "localhost/bazzite-tower:refresh-$PROFILE" bash -s < source/tests/smoke.sh
+    - name: Read-only systemd and boot gate
+      run: |
+        set -uo pipefail
+        container="bzverify-refresh-${PROFILE}"
+        # EXIT trap invokes cleanup.
+        # shellcheck disable=SC2329
+        cleanup() { podman rm -f "${container}" >/dev/null 2>&1 || true; }
+        trap cleanup EXIT
+        podman run -d --name "${container}" --privileged --systemd=always \
+          "localhost/bazzite-tower:refresh-${PROFILE}" /sbin/init
+        booted=
+        for i in $(seq 1 90); do
+          state="$(podman exec "${container}" systemctl is-system-running 2>/dev/null || true)"
+          echo "[${i}] is-system-running: ${state:-<none>}"
+          case "${state}" in running|degraded) booted=1; break ;; esac
+          sleep 2
+        done
+        if [[ -z "${booted}" ]]; then
+          echo "::error::image systemd never reached running/degraded"
+          podman exec "${container}" journalctl --no-pager -n 120 2>/dev/null || podman logs "${container}" || true
+          exit 1
+        fi
+        podman cp tests/boot-check.sh "${container}":/usr/local/bin/boot-check.sh
+        podman exec "${container}" chmod +x /usr/local/bin/boot-check.sh
+        set +e
+        podman exec "${container}" /usr/local/bin/boot-check.sh
+        rc=$?
+        set -e
+        podman exec "${container}" journalctl --no-pager -n 80 \
+          -u virtqemud.service -u virtqemud.socket \
+          -u bazzite-tower-wifi-backend-guard.service 2>/dev/null || true
+        exit "${rc}"
+      working-directory: source
+    - name: Collect installed RPM SPDX and immutable OCI evidence
+      run: python3 control/ci/base-refresh.py collect --control control --data "$RUNNER_TEMP/data" --profile "$PROFILE" --base
+        "$BASE" --version "$VERSION"
+    - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      with:
+        name: refresh-image-${{ matrix.profile }}
+        path: ${{ runner.temp }}/data/
+        if-no-files-found: error
+        retention-days: 14
+        compression-level: 0
+  validate-legacy:
+    needs:
+    - resolve
+    - build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      actions: read
+    env:
+      PROFILE: legacy
+      BASE: ${{ needs.resolve.outputs.base }}
+      VERSION: ${{ needs.resolve.outputs.version }}
+    outputs:
+      digest: ${{ steps.validate.outputs.digest }}
+      hashes: ${{ steps.validate.outputs.hashes }}
+    steps:
+    - uses: ublue-os/remove-unwanted-software@695eb75bc387dbcd9685a8e72d23439d8686cba6
+    - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      with:
+        ref: ${{ github.sha }}
+        path: control
+        persist-credentials: false
+    - name: Install data transport
+      run: |-
+        sudo apt-get update -qq
+        sudo apt-get install -y skopeo python3-yaml
+    - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0
+      with:
+        name: refresh-image-legacy
+        path: ${{ runner.temp }}/data
+    - name: Independently validate OCI, actual RPM inventory, SPDX, profile and provenance
+      run: python3 control/ci/base-refresh.py validate --control control --data "$RUNNER_TEMP/data" --profile "$PROFILE" --base
+        "$BASE" --version "$VERSION"
+      id: validate
+  validate-system:
+    needs:
+    - resolve
+    - build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      actions: read
+    env:
+      PROFILE: system
+      BASE: ${{ needs.resolve.outputs.base }}
+      VERSION: ${{ needs.resolve.outputs.version }}
+    outputs:
+      digest: ${{ steps.validate.outputs.digest }}
+      hashes: ${{ steps.validate.outputs.hashes }}
+    steps:
+    - uses: ublue-os/remove-unwanted-software@695eb75bc387dbcd9685a8e72d23439d8686cba6
+    - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      with:
+        ref: ${{ github.sha }}
+        path: control
+        persist-credentials: false
+    - name: Install data transport
+      run: |-
+        sudo apt-get update -qq
+        sudo apt-get install -y skopeo python3-yaml
+    - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0
+      with:
+        name: refresh-image-system
+        path: ${{ runner.temp }}/data
+    - name: Independently validate OCI, actual RPM inventory, SPDX, profile and provenance
+      run: python3 control/ci/base-refresh.py validate --control control --data "$RUNNER_TEMP/data" --profile "$PROFILE" --base
+        "$BASE" --version "$VERSION"
+      id: validate
+  publish-legacy:
+    needs:
+    - resolve
+    - validate-legacy
+    if: github.repository == 'bearyjd/bazzite-tower' && github.ref == 'refs/heads/main' && (github.event_name == 'schedule'
+      || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      actions: read
+      packages: write
+      attestations: write
+      artifact-metadata: write
+      id-token: write
+    env:
+      PROFILE: legacy
+      BASE: ${{ needs.resolve.outputs.base }}
+      VERSION: ${{ needs.resolve.outputs.version }}
+      VALIDATED_DIGEST: ${{ needs.validate-legacy.outputs.digest }}
+      VALIDATED_HASHES: ${{ needs.validate-legacy.outputs.hashes }}
+      DEST: ghcr.io/bearyjd/bazzite-tower
+      GH_TOKEN: ${{ github.token }}
+    steps:
+    - uses: ublue-os/remove-unwanted-software@695eb75bc387dbcd9685a8e72d23439d8686cba6
+    - name: Set isolated data and trust directories
+      run: |-
+        echo "DATA=$RUNNER_TEMP/data" >> "$GITHUB_ENV"
+        echo "TRUST=$RUNNER_TEMP/refresh-trust" >> "$GITHUB_ENV"
+    - name: Install data transport
+      run: |-
+        sudo apt-get update -qq
+        sudo apt-get install -y skopeo python3-yaml
+    - name: Fetch trusted control code and host policy at dispatched main SHA without checkout
+      run: |-
+        set -euo pipefail
+        [[ "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]]
+        for path in ci/base-refresh.py ci/r13-publication.py ci/rpm-inventory-spdx.py .github/base-refresh-policy.json cosign.pub system_files/usr/share/bazzite-tower/containers/policy.json system_files/usr/share/bazzite-tower/containers/registries.d/bazzite-tower.yaml; do
+          mkdir -p "control/$(dirname "$path")"
+          gh api "repos/$GITHUB_REPOSITORY/contents/$path?ref=$GITHUB_SHA" -H 'Accept: application/vnd.github.raw+json' > "control/$path"
+        done
+    - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0
+      with:
+        name: refresh-image-legacy
+        path: ${{ runner.temp }}/data
+    - name: Rehash bounded data and revalidate without executing candidate
+      run: python3 control/ci/base-refresh.py revalidate --control control --data "$DATA" --profile "$PROFILE" --base "$BASE"
+        --version "$VERSION"
+    - name: Prepare exact trusted host repository signature policy
+      run: python3 control/ci/base-refresh.py trust --control control --data "$TRUST"
+    - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6
+      with:
+        cosign-release: v2.6.3
+    - uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee
+      with:
+        registry: ghcr.io
+        username: ${{ github.actor }}
+        password: ${{ github.token }}
+    - name: Stage exact digest at unique run and attempt tag
+      run: |-
+        set -euo pipefail
+        skopeo copy --all --preserve-digests --digestfile "$RUNNER_TEMP/staged.digest"   "oci-archive:$DATA/image.oci.tar:refresh" "docker://$DEST:refresh-$PROFILE-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+        [[ "$(cat "$RUNNER_TEMP/staged.digest")" == "$VALIDATED_DIGEST" ]]
+    - name: Sign exact digest and attest RPM SPDX and base source profile
+      run: |-
+        set -euo pipefail
+        [[ -n "$COSIGN_PRIVATE_KEY" ]]
+        image="$DEST@$VALIDATED_DIGEST"
+        cosign sign -y --key env://COSIGN_PRIVATE_KEY "$image"
+        cosign attest -y --new-bundle-format --key env://COSIGN_PRIVATE_KEY --type spdxjson --predicate "$DATA/sbom.json" "$image"
+        cosign attest -y --new-bundle-format --key env://COSIGN_PRIVATE_KEY --type https://github.com/bearyjd/bazzite-tower/attestations/base-refresh/v1 --predicate "$DATA/build-provenance.json" "$image"
+      env:
+        COSIGN_PRIVATE_KEY: ${{ secrets.SIGNING_SECRET }}
+        COSIGN_PASSWORD: ''
+    - name: Publish GitHub build provenance for exact image digest
+      uses: actions/attest-build-provenance@9d57eef8c06cd9d6b433effeeb7a6a77b3ff94ad
+      with:
+        subject-name: ghcr.io/bearyjd/bazzite-tower
+        subject-digest: ${{ needs.validate-legacy.outputs.digest }}
+        push-to-registry: true
+    - name: Verify exact signed predicates, GitHub provenance and host signed identity
+      run: |-
+        set -euo pipefail
+        image="$DEST@$VALIDATED_DIGEST"
+        mkdir "$RUNNER_TEMP/verified"
+        timeout 180 cosign verify --key "$TRUST/cosign.pub" "$image" >/dev/null
+        timeout 180 cosign verify-attestation --new-bundle-format --key "$TRUST/cosign.pub" --type spdxjson "$image" > "$RUNNER_TEMP/verified/sbom.json"
+        timeout 180 cosign verify-attestation --new-bundle-format --key "$TRUST/cosign.pub" --type https://github.com/bearyjd/bazzite-tower/attestations/base-refresh/v1 "$image" > "$RUNNER_TEMP/verified/provenance.json"
+        python3 control/ci/base-refresh.py attestations --control control --data "$DATA" --current "$RUNNER_TEMP/verified"
+        gh attestation verify "oci://$image" --repo bearyjd/bazzite-tower --signer-workflow bearyjd/bazzite-tower/.github/workflows/base-refresh.yml --source-digest "$GITHUB_SHA" --source-ref refs/heads/main --deny-self-hosted-runners
+        skopeo --policy "$TRUST/policy.json" --registries.d "$TRUST/registries.d" copy --all --preserve-digests --remove-signatures --digestfile "$RUNNER_TEMP/policy.digest" "docker://$image" "oci:$RUNNER_TEMP/policy-verified:refresh"
+        [[ "$(cat "$RUNNER_TEMP/policy.digest")" == "$VALIDATED_DIGEST" ]]
+      timeout-minutes: 20
+    - name: Reject signed baseline downgrades and stale main policy before moving channels
+      run: |-
+        set -euo pipefail
+        python3 control/ci/base-refresh.py baseline --control control --data "$DATA" --profile "$PROFILE" --current "$TRUST"
+        gh api "repos/$GITHUB_REPOSITORY/contents/.github/base-refresh-policy.json?ref=main" -H 'Accept: application/vnd.github.raw+json' > "$RUNNER_TEMP/current-policy.json"
+        python3 control/ci/base-refresh.py fresh --control control --current "$RUNNER_TEMP/current-policy.json"
+        case "$PROFILE" in legacy) channels=(stable latest) ;; system) channels=(snitchwatch-system) ;; *) exit 1 ;; esac
+        attempted=(); confirmed=()
+        # The EXIT trap reports writes whose transport response may have been lost.
+        # shellcheck disable=SC2329
+        pointer_failure_summary() {
+          local rc=$?
+          if [[ "$rc" -ne 0 ]]; then
+            echo "REFRESH_POINTER_FAILURE profile=$PROFILE expected_digest=$VALIDATED_DIGEST attempted=${attempted[*]:-none} confirmed=${confirmed[*]:-none}" >> "$GITHUB_STEP_SUMMARY"
+            echo 'Tag updates are not transactional. An attempted tag may have moved even if transport failed. Rerun this workflow with the same reviewed policy to verify and repair aliases.' >> "$GITHUB_STEP_SUMMARY"
+          fi
+          return "$rc"
+        }
+        trap pointer_failure_summary EXIT
+        for tag in "${channels[@]}"; do
+          attempted+=("$tag")
+          skopeo copy --all --preserve-digests --digestfile "$RUNNER_TEMP/$tag.digest" "docker://$DEST@$VALIDATED_DIGEST" "docker://$DEST:$tag"
+          [[ "$(cat "$RUNNER_TEMP/$tag.digest")" == "$VALIDATED_DIGEST" ]]
+          resolved="sha256:$(skopeo inspect --raw "docker://$DEST:$tag" | sha256sum | cut -d' ' -f1)"
+          [[ "$resolved" == "$VALIDATED_DIGEST" ]]
+          confirmed+=("$tag")
+        done
+        echo "REFRESH_PASS profile=$PROFILE digest=$VALIDATED_DIGEST base=$BASE accepted_source=91908f11eba496cde806298f2d0cbe332213192d" >> "$GITHUB_STEP_SUMMARY"
+    - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      with:
+        name: refresh-receipt-legacy
+        path: |-
+          ${{ runner.temp }}/verified/
+          ${{ runner.temp }}/*.digest
+          ${{ runner.temp }}/data/build-provenance.json
+        if-no-files-found: error
+        retention-days: 30
+  publish-system:
+    needs:
+    - resolve
+    - validate-system
+    if: github.repository == 'bearyjd/bazzite-tower' && github.ref == 'refs/heads/main' && (github.event_name == 'schedule'
+      || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      actions: read
+      packages: write
+      attestations: write
+      artifact-metadata: write
+      id-token: write
+    env:
+      PROFILE: system
+      BASE: ${{ needs.resolve.outputs.base }}
+      VERSION: ${{ needs.resolve.outputs.version }}
+      VALIDATED_DIGEST: ${{ needs.validate-system.outputs.digest }}
+      VALIDATED_HASHES: ${{ needs.validate-system.outputs.hashes }}
+      DEST: ghcr.io/bearyjd/bazzite-tower
+      GH_TOKEN: ${{ github.token }}
+    steps:
+    - uses: ublue-os/remove-unwanted-software@695eb75bc387dbcd9685a8e72d23439d8686cba6
+    - name: Set isolated data and trust directories
+      run: |-
+        echo "DATA=$RUNNER_TEMP/data" >> "$GITHUB_ENV"
+        echo "TRUST=$RUNNER_TEMP/refresh-trust" >> "$GITHUB_ENV"
+    - name: Install data transport
+      run: |-
+        sudo apt-get update -qq
+        sudo apt-get install -y skopeo python3-yaml
+    - name: Fetch trusted control code and host policy at dispatched main SHA without checkout
+      run: |-
+        set -euo pipefail
+        [[ "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]]
+        for path in ci/base-refresh.py ci/r13-publication.py ci/rpm-inventory-spdx.py .github/base-refresh-policy.json cosign.pub system_files/usr/share/bazzite-tower/containers/policy.json system_files/usr/share/bazzite-tower/containers/registries.d/bazzite-tower.yaml; do
+          mkdir -p "control/$(dirname "$path")"
+          gh api "repos/$GITHUB_REPOSITORY/contents/$path?ref=$GITHUB_SHA" -H 'Accept: application/vnd.github.raw+json' > "control/$path"
+        done
+    - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0
+      with:
+        name: refresh-image-system
+        path: ${{ runner.temp }}/data
+    - name: Rehash bounded data and revalidate without executing candidate
+      run: python3 control/ci/base-refresh.py revalidate --control control --data "$DATA" --profile "$PROFILE" --base "$BASE"
+        --version "$VERSION"
+    - name: Prepare exact trusted host repository signature policy
+      run: python3 control/ci/base-refresh.py trust --control control --data "$TRUST"
+    - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6
+      with:
+        cosign-release: v2.6.3
+    - uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee
+      with:
+        registry: ghcr.io
+        username: ${{ github.actor }}
+        password: ${{ github.token }}
+    - name: Stage exact digest at unique run and attempt tag
+      run: |-
+        set -euo pipefail
+        skopeo copy --all --preserve-digests --digestfile "$RUNNER_TEMP/staged.digest"   "oci-archive:$DATA/image.oci.tar:refresh" "docker://$DEST:refresh-$PROFILE-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+        [[ "$(cat "$RUNNER_TEMP/staged.digest")" == "$VALIDATED_DIGEST" ]]
+    - name: Sign exact digest and attest RPM SPDX and base source profile
+      run: |-
+        set -euo pipefail
+        [[ -n "$COSIGN_PRIVATE_KEY" ]]
+        image="$DEST@$VALIDATED_DIGEST"
+        cosign sign -y --key env://COSIGN_PRIVATE_KEY "$image"
+        cosign attest -y --new-bundle-format --key env://COSIGN_PRIVATE_KEY --type spdxjson --predicate "$DATA/sbom.json" "$image"
+        cosign attest -y --new-bundle-format --key env://COSIGN_PRIVATE_KEY --type https://github.com/bearyjd/bazzite-tower/attestations/base-refresh/v1 --predicate "$DATA/build-provenance.json" "$image"
+      env:
+        COSIGN_PRIVATE_KEY: ${{ secrets.SIGNING_SECRET }}
+        COSIGN_PASSWORD: ''
+    - name: Publish GitHub build provenance for exact image digest
+      uses: actions/attest-build-provenance@9d57eef8c06cd9d6b433effeeb7a6a77b3ff94ad
+      with:
+        subject-name: ghcr.io/bearyjd/bazzite-tower
+        subject-digest: ${{ needs.validate-system.outputs.digest }}
+        push-to-registry: true
+    - name: Verify exact signed predicates, GitHub provenance and host signed identity
+      run: |-
+        set -euo pipefail
+        image="$DEST@$VALIDATED_DIGEST"
+        mkdir "$RUNNER_TEMP/verified"
+        timeout 180 cosign verify --key "$TRUST/cosign.pub" "$image" >/dev/null
+        timeout 180 cosign verify-attestation --new-bundle-format --key "$TRUST/cosign.pub" --type spdxjson "$image" > "$RUNNER_TEMP/verified/sbom.json"
+        timeout 180 cosign verify-attestation --new-bundle-format --key "$TRUST/cosign.pub" --type https://github.com/bearyjd/bazzite-tower/attestations/base-refresh/v1 "$image" > "$RUNNER_TEMP/verified/provenance.json"
+        python3 control/ci/base-refresh.py attestations --control control --data "$DATA" --current "$RUNNER_TEMP/verified"
+        gh attestation verify "oci://$image" --repo bearyjd/bazzite-tower --signer-workflow bearyjd/bazzite-tower/.github/workflows/base-refresh.yml --source-digest "$GITHUB_SHA" --source-ref refs/heads/main --deny-self-hosted-runners
+        skopeo --policy "$TRUST/policy.json" --registries.d "$TRUST/registries.d" copy --all --preserve-digests --remove-signatures --digestfile "$RUNNER_TEMP/policy.digest" "docker://$image" "oci:$RUNNER_TEMP/policy-verified:refresh"
+        [[ "$(cat "$RUNNER_TEMP/policy.digest")" == "$VALIDATED_DIGEST" ]]
+      timeout-minutes: 20
+    - name: Reject signed baseline downgrades and stale main policy before moving channels
+      run: |-
+        set -euo pipefail
+        python3 control/ci/base-refresh.py baseline --control control --data "$DATA" --profile "$PROFILE" --current "$TRUST"
+        gh api "repos/$GITHUB_REPOSITORY/contents/.github/base-refresh-policy.json?ref=main" -H 'Accept: application/vnd.github.raw+json' > "$RUNNER_TEMP/current-policy.json"
+        python3 control/ci/base-refresh.py fresh --control control --current "$RUNNER_TEMP/current-policy.json"
+        case "$PROFILE" in legacy) channels=(stable latest) ;; system) channels=(snitchwatch-system) ;; *) exit 1 ;; esac
+        attempted=(); confirmed=()
+        # The EXIT trap reports writes whose transport response may have been lost.
+        # shellcheck disable=SC2329
+        pointer_failure_summary() {
+          local rc=$?
+          if [[ "$rc" -ne 0 ]]; then
+            echo "REFRESH_POINTER_FAILURE profile=$PROFILE expected_digest=$VALIDATED_DIGEST attempted=${attempted[*]:-none} confirmed=${confirmed[*]:-none}" >> "$GITHUB_STEP_SUMMARY"
+            echo 'Tag updates are not transactional. An attempted tag may have moved even if transport failed. Rerun this workflow with the same reviewed policy to verify and repair aliases.' >> "$GITHUB_STEP_SUMMARY"
+          fi
+          return "$rc"
+        }
+        trap pointer_failure_summary EXIT
+        for tag in "${channels[@]}"; do
+          attempted+=("$tag")
+          skopeo copy --all --preserve-digests --digestfile "$RUNNER_TEMP/$tag.digest" "docker://$DEST@$VALIDATED_DIGEST" "docker://$DEST:$tag"
+          [[ "$(cat "$RUNNER_TEMP/$tag.digest")" == "$VALIDATED_DIGEST" ]]
+          resolved="sha256:$(skopeo inspect --raw "docker://$DEST:$tag" | sha256sum | cut -d' ' -f1)"
+          [[ "$resolved" == "$VALIDATED_DIGEST" ]]
+          confirmed+=("$tag")
+        done
+        echo "REFRESH_PASS profile=$PROFILE digest=$VALIDATED_DIGEST base=$BASE accepted_source=91908f11eba496cde806298f2d0cbe332213192d" >> "$GITHUB_STEP_SUMMARY"
+    - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      with:
+        name: refresh-receipt-system
+        path: |-
+          ${{ runner.temp }}/verified/
+          ${{ runner.temp }}/*.digest
+          ${{ runner.temp }}/data/build-provenance.json
+        if-no-files-found: error
+        retention-days: 30

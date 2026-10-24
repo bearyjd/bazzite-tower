@@ -2,19 +2,20 @@
 <!-- Targeted update: 2026-10-07 | OpenSnitch patch-test workflow; not a full regeneration -->
 # CI / CD
 
-8 workflows + highlighted test scripts + 1 diff filter. Full failure model:
+Workflows, highlighted test scripts and the base-change diff filter. Full failure model:
 [`../downstream-change-tracking.md`](../downstream-change-tracking.md).
 
 ## Workflows (`.github/workflows/`)
 
 | Workflow | Triggers | Flow | Issue label |
 |---|---|---|---|
-| `build.yml` | push main (ignores README/docs/**), PR, Sun 06:00 UTC, dispatch | Two mutually exclusive jobs: PR-only **verify** has `contents: read`, credential-free actual PR-head SHA checkout with checked-out head/tree proof, then builds/smokes/runtime-tests its own local legacy safe-pin/latest-kernel candidates and opt-in `verify-snitchwatch-system`; default-branch **release** publishes two legacy variants (`safe-pin`→`:latest`, opt-in `latest-kernel`); `snitchwatch-system` is held on push/schedule/dispatch and only accepted-digest promotion may move it and independently rebuilds/retests, queries the exact local candidate's RPM database into a deterministic SPDX installed-RPM inventory, pushes a unique candidate digest, requires cosign+signed SPDX+GitHub provenance verification, then promotes that unchanged digest to public tags. `fail-fast: false` — one leg failing never cancels the others. A separate **notify** job (`needs: release`, `if: always()`) reads each leg's actual conclusion from the Actions API and syncs its tracking issue — kept out of `release`'s own steps so a leg getting killed mid-step (not just failing cleanly) can't silently skip the notification | `ci-failure-<variant>` (release only; per-leg label, so one leg's success never auto-closes the other's issue) |
+| `build.yml` | push main (ignores README/docs/**), PR, Sun 06:00 UTC, dispatch | PR-only **verify** retains all three contexts (`safe-pin`, `latest-kernel`, `snitchwatch-system`), credential-free actual-head checkout/tree proof and local smoke/runtime checks. Default-branch **release** publishes only opt-in `:latest-kernel` after build/test/signing/SPDX/provenance gates. A separate **notify** job reads each release leg's actual conclusion from the Actions API | `ci-failure-<variant>` |
+| `base-refresh.yml` | daily, dispatch; `main` only | policy-pinned accepted product source + fresh immutable upstream base → read-only resolve/build/validate jobs → checkout-free publisher → verified signature, SPDX, build provenance, GitHub attestation and host signature policy → recheck current main policy hash immediately before public pointers. Legacy moves `:stable` and compatibility `:latest`; accepted r15.1 system moves only `:snitchwatch-system`. No per-base owner approval | — |
 | `r13-candidate.yml` | reviewed exact-head candidate branch push; optional dispatch after main registration | read-only approval/build/test/OCI validation jobs → checkout-free fixed candidate-package publisher → existing automated signing/SPDX/provenance and scoped destination policy verification; no stable tag input | — |
 | `r13-promote.yml` | main dispatch, one `digest` input that must equal the digest hard-coded in the workflow | one checkout-free job in the `release` environment (owner attaches reviewer/main-only protection): verify candidate key signature + SPDX → `skopeo copy --all --preserve-digests` to a staging tag → `cosign sign` + re-attest SPDX → verify + host `policy.json` skopeo check → move only `:snitchwatch-system` → re-resolve and re-check. Staging tag is never deleted (GHCR deletes whole versions). No rebuild | — |
 | `boot-test.yml` | PR (build paths), Sun 07:00 UTC, dispatch | actual PR-head SHA checkout + head/tree proof in read-only boot job → build → `podman run --systemd=always /sbin/init` → wait running/degraded → exec `tests/boot-check.sh` | `boot-test-failure` (separate non-PR notifier only; no candidate code or checkout) |
 | `base-watch.yml` | daily 05:00 UTC, dispatch | pull `bazzite-nvidia-open:stable` → `rpm -qa` manifest → `ci/base-diff.py` vs last-seen baseline in `docs/manifests/` (written on first run) → commit refreshed manifest (and fail if every push retry fails) | `base-bump` |
-| `base-bump.yml` | Sat 05:30 UTC, dispatch | needs `BUMP_TOKEN` secret (else no-op: GITHUB_TOKEN PRs don't trigger CI) → `ci/base-bump.sh` resolves `bazzite-nvidia-open:stable` digest, rewrites the `Containerfile` pin → branch `base-bump/<digest>` + PR; never builds or merges | — |
+| `base-bump.yml` | Sat 05:30 UTC, dispatch | needs `BUMP_TOKEN` secret (else no-op: GITHUB_TOKEN PRs don't trigger CI) → `ci/base-bump.sh` resolves `bazzite-nvidia-open:stable` digest, rewrites the candidate `Containerfile` pin (automatic refresh resolves its base separately) → branch `base-bump/<digest>` + PR; never builds or merges | — |
 | `build-disk.yml` | dispatch (platform amd64/arm64), PR (disk.toml path) | resolve `:latest` once to an immutable digest → verify it with `cosign.pub` → pass that digest to bootc-image-builder → qcow2 disk image (rootfs=btrfs) → artifact or S3. anaconda-iso disabled: upstream BIB#1188 + bazzite#3418 | — |
 | `snitchwatch-daemon-patch.yml` | PR + push main (paths: `build_files/firewall/snitchwatch-system-daemon-*`, its script, itself), dispatch | `tests/test-snitchwatch-daemon-patch.sh`: pinned Fedora builder fetches the pinned, signature-verified Koji toolchain RPMs (helper `fetch` mode) plus live dependency RPMs, applies the pinned OpenSnitch patch to upstream `b404c4c` via the factory's check-source gates, then a `--network=none` container runs gofmt (patched files), `go vet` (netfilter/nftables in full; root/ui without the three analyzers upstream code trips), `go test -race` on root/netfilter/nftables/ui (three upstream ui race failures skipped by name; upstream's privileged nftables tests skip) and a plain `go test` pass. Not required (path-filtered). No image build | — |
 | `build-iso.yml` | dispatch, Sun 08:00 UTC | `podman build installer/` payload (live session + Anaconda, Fedora-signed kernel for Secure Boot) → titanoboa → bootable ISO → checksum + cosign sign-blob → artifact or S3 | `iso-failure` |
@@ -40,12 +41,22 @@ last-good independently). The separate `notify` job opens — and later
 auto-closes — each leg's labelled tracking issue, independently of whether
 `release` finished cleanly or was cancelled/killed partway through.
 
+`base-refresh.yml` reads `.github/base-refresh-policy.json`: both product
+profiles pin accepted source `91908f11eba496cde806298f2d0cbe332213192d` while
+r16 is prepared. Legacy retains `IMAGE_TAG=latest`; system retains
+`IMAGE_TAG=snitchwatch-system`. Source SHA/tree/cleanliness and profile contracts
+are checked before the build; independent validation checks image/RPM/SPDX
+identity and actual Bazzite/kernel floors (`44.20261023` /
+`7.2.9-ogc3.1.fc44`). The publisher fetches trusted code from the GitHub API at
+the dispatched main SHA, with no source checkout. Policy staleness blocks tag
+movement. Features still need owner runtime acceptance, protected fixed-digest
+promotion and a subsequent reviewed policy update.
+
 The r15.1 promoter binds candidate run `40050864799` to image digest
 `sha256:df4ec1239abae0cbe1d4d4e27bce85d54f17e2b5155e431c2727c724aa879bf7` and
-provenance source `91908f11eba496cde806298f2d0cbe332213192d`. Owner runtime
-acceptance remains **UNVERIFIED**; preparing this binding does not authorize
-stable publication. The owner release environment and all signature, attestation
-and policy gates remain mandatory.
+provenance source `91908f11eba496cde806298f2d0cbe332213192d`. This fixed-digest feature-acceptance path retains the owner `release` environment
+and all signature, attestation and policy gates; automatic base refresh uses its
+separate policy-pinned path above.
 
 All stable OCI workflows share `bazzite-tower-stable-writers` with cancellation disabled. The promoter's runtime evidence and review are recorded in the PR and release notes, not workflow variables; its steps are in [r13-publication.md](../r13-publication.md), which also covers the candidate trust bootstrap and artifact identities. `ci/r13-publication.py` is the read-only gate and `ci/r13-candidate-data.py` captures installed/OCI/RPM identity only in the credential-free builder. The primary-reviewed control store starts with null authority. Final tower heads first receive independent review and actual-head green PR CI on a separate review branch; only then may the primary record variables and fast-forward the existing fixed candidate branch to that exact tested head. Same-head pushes and detached dispatch do not supply fresh verify/artifact CI; no force/delete/main-registration shortcut. The full sequence is in the publication document.
 
@@ -88,7 +99,9 @@ rootless boot containers cannot start NFQUEUE; an active daemon additionally
 requires the reviewed process hash, arguments and root UID. Fresh
 enforcing-SELinux image VM evidence remains a separate gate. Default release
 variants retain legacy TCP `127.0.0.1:50051`/`allow`; the opt-in
-r13 candidate flow selects the system bridge and patched daemon; the system stable tag stays held until accepted-digest promotion.
+r13 candidate flow selects new system bridge/daemon features for protected
+acceptance. Automatic base refresh uses the separately pinned accepted system
+product; it does not accept candidate features.
 
 ## Diff filter (`ci/base-diff.py`)
 

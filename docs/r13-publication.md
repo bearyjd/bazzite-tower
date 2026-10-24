@@ -1,12 +1,19 @@
 # r13 candidate and accepted-digest publication
 
-The system stable tag is held. `build.yml` still tests the system profile on PRs,
-but push, schedule and ordinary dispatch publish only legacy `safe-pin` and
-`latest-kernel`. A post-merge build cannot move `:snitchwatch-system`. Only
-`r13-promote.yml` can move that tag: a minimal dispatch-only promoter for one
-fixed, already-built digest (see "Fixed-digest promotion" below). Runtime
-evidence and review for that digest are recorded in the PR and release notes,
-not in workflow variables.
+Automatic base refresh and feature acceptance are separate paths.
+`base-refresh.yml` refreshes accepted product source pinned by
+`.github/base-refresh-policy.json` (`91908f11eba496cde806298f2d0cbe332213192d`)
+against a newly resolved immutable Bazzite base. Daily and manual runs on `main`
+publish legacy `:stable` plus compatibility `:latest`, and the accepted r15.1
+system product as `:snitchwatch-system`, after all publication gates. They need
+no per-base owner click; the Bazzite/kernel floor and stale-policy checks prevent
+downrev or superseded policy publication. Product code remains frozen during r16.
+
+`build.yml` retains all three PR verification contexts but automatically publishes
+only `:latest-kernel`. A new feature product still requires runtime evidence and
+review recorded in the PR/release notes, plus the protected `r13-promote.yml`
+fixed-digest acceptance flow below. A subsequent reviewed refresh-policy update
+is required before automatic refreshes use the newly accepted product.
 
 ## Reviewed workflow and control trust
 
@@ -177,7 +184,7 @@ does not establish remote acquisition or runtime success.
 
 `r13-promote.yml` is `workflow_dispatch` only, runs on `main` in this
 repository, and takes one required input, `digest`. The workflow hard-codes the
-only digest it may promote (`sha256:a6a7a717...bed5f`, the r14 candidate built by `r13-candidate.yml` run 38490106535; r13 itself was `sha256:88f8ff00...b8454`) in `env`, and its first
+only digest it may promote (`sha256:df4ec1239abae0cbe1d4d4e27bce85d54f17e2b5155e431c2727c724aa879bf7`, the r15.1 candidate built by `r13-candidate.yml` run `40050864799`) in `env`, and its first
 step fails unless the input equals it. It shares `bazzite-tower-stable-writers`
 with the other stable writers, cancellation disabled. One job, permissions
 `contents: read` and `packages: write`, every action pinned by SHA, no

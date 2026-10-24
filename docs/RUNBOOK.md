@@ -158,9 +158,11 @@ Known-good: `18.1.18.2644` and above.
 The default image selects the legacy TCP user bridge at `127.0.0.1:50051`.
 `SNITCHWATCH_BRIDGE=system` is an explicit image build opt-in and requires
 `FIREWALL_DAEMON=opensnitch`. Both profiles retain `ProcMonitorMethod: proc`
-(eBPF fails on this laptop's kernel, snitchwatch#6). Legacy keeps
-`DefaultAction: allow`; since r15 the system profile ships `DefaultAction: deny`
-(fail closed, owner decision 2026-10-17). The candidate supplies native system bridge version 0.1.1,
+(eBPF fails on this laptop's kernel, snitchwatch#6). Both profiles permanently
+ship `DefaultAction: allow`; deny enforcement always requires explicit operator
+opt-in. Unanswered unruled connections use allow, while explicit rules still
+apply. `DropWhileAsking` remains absent (default false); opting into it can drop
+traffic while a prompt is pending even with allow. The candidate supplies native system bridge version 0.1.1,
 its two socket units, named system accounts and immutable artifact provenance.
 The candidate also supplies the reviewed OpenSnitch 1.8.0 shutdown/NFT repair
 with its own `/usr/share/snitchwatch/system-daemon-manifest.json`;
@@ -198,16 +200,17 @@ profile retains the [release-install contract](../README.md#opensnitch-applicati
 System readiness requires an explicit privileged read for cross-account
 process inspection: run `sudo ujust snitchwatch-system-readiness`.
 It verifies immutable provenance, service/socket ownership,
-permissions, token access, resolved service hardening and the fail-closed
-`deny`/`proc` policy.
+permissions, token access, resolved service hardening and the shipped
+`allow`/`proc` policy. An explicit local deny override fails this readiness
+contract as policy drift; readiness does not enable enforcement.
 It is read-only and cannot prove a GUI answers prompts. Migration and rollback
 must preserve the recorded legacy baseline and reject unexpected live `/etc`
 policy/address drift or user-unit/Flatpak overrides. Do not activate the system
 profile while a legacy bridge process or listener remains. Use
 `ujust snitchwatch-system-migrate check` to inspect the current deployment,
 `ujust snitchwatch-system-migrate apply` for the explicit transaction (it
-publishes the system reference config, so it switches a legacy host to
-`DefaultAction: deny`), and
+publishes the system reference config, retaining
+`DefaultAction: allow` while switching the transport), and
 `ujust snitchwatch-system-migrate rollback` to restore its recorded baseline.
 The migration journal is protected at
 `/var/lib/bazzite-tower/snitchwatch-migration/current.json`; preserve it until
@@ -256,11 +259,35 @@ Operating the system candidate:
   prompts promptly.
 - The GUI's inline Deny answers "this time" only: the daemon keeps no rule,
   so a retrying program is asked again, and while that prompt is pending
-  other new connections get the default action (`deny` on the system
-  image since r15, `allow` on legacy). To block, open the row and
+  other new connections get the default action (`allow` in both current
+  profiles; deny requires explicit operator opt-in). To block, open the row and
   Deny with "Until quit" or "Forever" (verified on the r5 VM).
 
-### r15 system image: fail-closed upgrade and recovery
+### r15.1 transition from an existing deny deployment
+
+r15.1 restores the permanent allow default for both profiles. An existing locally
+edited `/etc/opensnitchd/default-config.json` can retain `DefaultAction: deny`
+through ostree's three-way `/etc` merge. An image upgrade alone therefore does
+not guarantee this host uses allow. Inspect the live config after upgrading:
+
+```bash
+jq .Server.Address,.DefaultAction /etc/opensnitchd/default-config.json
+```
+
+To adopt the shipped policy, explicitly set `DefaultAction` to `allow` in that
+file and restart `opensnitch.service`. Preserve any other intended local edits.
+Then run `sudo ujust snitchwatch-system-readiness`; the system transport must
+remain `unix:opensnitchd.sock`. Keeping deny is an explicit local enforcement
+opt-in and fails the shipped allow readiness/migration contract as policy drift.
+If a migration journal exists, changing the live policy also makes rollback
+refuse to overwrite it; inspect the recorded baseline before recovery.
+
+### Historical r15 system image: fail-closed upgrade and recovery
+
+This section records the r15 deny default. Current images permanently ship
+allow in both profiles; deny is an explicit local opt-in. On current images,
+use the current migration/readiness contract above. The r15 instructions below
+apply only to an existing r15 deployment.
 
 **Before rebooting into an r15 `:snitchwatch-system` deployment** (ostree's `/etc`
 3-way merge keeps a locally edited config, which would leave the old policy or

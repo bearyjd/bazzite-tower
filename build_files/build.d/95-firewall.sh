@@ -94,14 +94,12 @@ if [[ "${FIREWALL_DAEMON:-opensnitch}" == "opensnitch" ]]; then
     #     eBPF module (opensnitch.o)", snitchwatch#6) and the daemon degrades badly.
     #     Revisit only when an opensnitch release ships an eBPF module built for
     #     this kernel.
-    #   DefaultAction "allow"          — fail open, for the legacy profile only: its
-    #     per-user TCP bridge is installed by hand, so "deny" would block every new
-    #     outbound connection on a boot where nothing answers prompts. See README
-    #     "OpenSnitch". The system profile below replaces this file with
-    #     opensnitchd-system-bridge-config.json: the same config with the root-only
-    #     Unix socket and DefaultAction "deny" (fail closed; owner decision
-    #     2026-10-17), still ProcMonitorMethod "proc". Both are asserted per
-    #     profile in tests/smoke.sh.
+    #   DefaultAction "allow"          — permanent default for both profiles;
+    #     deny enforcement always requires explicit operator opt-in. Without a
+    #     decision client, deny can block every new unruled outbound connection.
+    #     The system profile below replaces only the address with the root-only
+    #     Unix socket, retaining allow/proc. Both profiles are asserted in
+    #     tests/smoke.sh.
     install -D -m 0644 /usr/share/bazzite-tower/opensnitchd-default-config.json \
         /etc/opensnitchd/default-config.json
 

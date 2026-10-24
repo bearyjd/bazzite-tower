@@ -226,7 +226,7 @@ def unit_contract(ctx):
     daemon_unit_contract(ctx, daemon)
     daemon_exec_contract(daemon["ExecStart"])
     # The drop-in's WorkingDirectory=-/run/snitchwatch (missing is OK, so a
-    # failed socket never stops the fail-closed daemon) shows as "!/run/...".
+    # failed socket never stops the daemon) shows as "!/run/...".
     require(daemon["WorkingDirectory"] == "!/run/snitchwatch" and SOCKETS[0] in daemon["Wants"].split() and SOCKETS[0] in daemon["After"].split(), "OpenSnitch effective Unix socket CWD/dependencies drift")
     # A stop of the gRPC socket must never take the firewall down with it.
     require(not any(SOCKETS[0] in daemon[key].split() for key in ("Requires", "Requisite", "BindsTo", "PartOf")), "OpenSnitch must only Want the bridge gRPC socket: a socket stop would stop the firewall")
@@ -270,7 +270,7 @@ def daemon_exec_contract(value):
 def config_contract(ctx, address="unix:opensnitchd.sock"):
     config = json.loads(ctx.path(CONFIG).read_text())
     require(config.get("Server", {}).get("Address") == address, "live /etc Server.Address drift; use the explicit migration helper")
-    require(config.get("DefaultAction") == "deny", "DefaultAction drift: system profile requires deny (fail closed)")
+    require(config.get("DefaultAction") == "allow", "DefaultAction drift: system readiness requires allow; deny is an explicit local opt-in")
     require(config.get("ProcMonitorMethod") == "proc", "ProcMonitorMethod drift: system profile requires proc")
     return config
 

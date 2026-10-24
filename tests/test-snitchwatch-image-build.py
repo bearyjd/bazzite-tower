@@ -409,7 +409,7 @@ protoc() { echo 'libprotoc 3.19.6'; }
                                  ['upstream', 'curl', 'helper'] + ([] if failure else ['rustc']))
 
     def test_self_consistent_dropin_requiring_its_directory(self):
-        # Without the '-' a missing /run/snitchwatch would keep the fail-closed
+        # Without the '-' a missing /run/snitchwatch would keep the
         # daemon from starting; the drop-in is pinned to upstream's bytes.
         name = 'usr/lib/systemd/system/opensnitch.service.d/snitchwatch-system-bridge.conf'
         self.write(name, (self.root / name).read_text().replace('WorkingDirectory=-/run', 'WorkingDirectory=/run')); self.update_hash(name)
@@ -417,8 +417,10 @@ protoc() { echo 'libprotoc 3.19.6'; }
 
     def test_self_consistent_policy_drift(self):
         name = 'usr/share/bazzite-tower/opensnitchd-system-bridge-config.json'
-        self.write(name, json.dumps({'DefaultAction': 'allow', 'ProcMonitorMethod': 'proc', 'Server': {'Address': 'unix:opensnitchd.sock'}})); self.update_hash(name)
-        self.check()
+        config = json.loads((self.root / name).read_text())
+        config['DefaultAction'] = 'deny'
+        self.write(name, json.dumps(config)); self.update_hash(name)
+        self.assertIn('system candidate must retain the allow/proc defaults', self.check().stderr)
 
     def test_world_writable_token_parent_configuration(self):
         name = 'usr/lib/tmpfiles.d/snitchwatch.conf'

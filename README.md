@@ -103,23 +103,27 @@ The image ships a Snitchwatch-tuned `/etc/opensnitchd/default-config.json` with 
 |---|---|---|
 | `Server.Address` | `127.0.0.1:50051` | The Snitchwatch bridge's gRPC listener, instead of `opensnitch-ui`'s `unix:///tmp/osui.sock`. |
 | `ProcMonitorMethod` | `proc` | **Not `ebpf`.** The v1.8.0 RPM's bundled eBPF module fails to load on this image's 6.19/7.x kernels (`unable to load eBPF module (opensnitch.o)`, [snitchwatch#6](https://github.com/bearyjd/snitchwatch/issues/6)) and the daemon degrades badly. Revisit only when an opensnitch release ships an eBPF module built for this kernel. |
-| `DefaultAction` | `allow` (legacy) / `deny` (`:snitchwatch-system`) | Legacy fails open; the system-bridge image fails closed. See below. |
+| `DefaultAction` | `allow` (both profiles) | Permanent default; deny enforcement always requires explicit operator opt-in. |
 
-`DefaultAction: deny` is the designed end state, but it denies **every new unruled outbound connection on any boot where no UI or bridge is answering prompts** — and the Snitchwatch bridge is a per-user systemd service (`snitchwatch-bridge.service`), installed by hand, not baked into this image. So the image ships `allow` during rollout: unruled connections fail open rather than block, and libvirt/Docker/Cockpit traffic keeps working headless.
+Both profiles permanently ship `DefaultAction: allow`: unanswered unruled connections use allow, so headless networking remains available. Deny enforcement is always an explicit operator opt-in, never a rollout end state. A local `DefaultAction: deny` can block every new unruled outbound connection when no decision client answers prompts. `DropWhileAsking` is not enabled by the image; explicitly opting into it can drop traffic while prompts are pending even with the allow default. Explicit firewall rules still apply.
 
 The opt-in image candidate selects `SNITCHWATCH_BRIDGE=system` with
 `FIREWALL_DAEMON=opensnitch`; the default remains `legacy`. The candidate installs
 the pinned native bridge version 0.1.1, system socket/service units and immutable provenance.
+The r15.1 bridge/GUI source pin is `5c969a2e21dc7f5c976e7048aa9f95e5663c7de2`;
+its native bridge, wire protocol, packaging inputs and Flatpak permissions retain
+the r15 bytes.
 It also builds OpenSnitch 1.8.0 from the reviewed upstream pin plus the downstream
 queue-shutdown and NFT policy-ownership repair. A separate daemon manifest
 verifies the installed executable, repair patch, build inputs and licenses.
 OpenSnitch uses `unix:opensnitchd.sock` from `/run/snitchwatch` (upstream's
 `opensnitch.service` drop-in, `WorkingDirectory=-/run/snitchwatch`) with
-`DefaultAction: deny` (fail closed; owner decision 2026-10-17, r15) and
+`DefaultAction: allow` (deny requires explicit operator opt-in) and
 `ProcMonitorMethod: proc` (upstream's config says `ebpf`; the tower keeps `proc`,
-snitchwatch#6). If the socket fails the daemon still starts and denies every
-unruled connection: keep a console login handy (recovery in the
-[runbook](docs/RUNBOOK.md#opensnitch--snitchwatch-deployment-status)). GUI
+snitchwatch#6). If the socket fails the daemon still starts and unanswered
+unruled connections use the allow default. System readiness and migration
+require the shipped allow policy; an explicit local deny override is reported
+as policy drift. See the [runbook](docs/RUNBOOK.md#opensnitch--snitchwatch-deployment-status). GUI
 installation and GUI group enrollment remain explicit operator steps.
 
 Build locally with `just build-snitchwatch-system`. For a disposable SSH test
@@ -149,6 +153,10 @@ and [system bridge evidence](docs/research/snitchwatch-system-bridge.md).
 3. Only after both checks succeed should an operator consider a local deny-policy experiment. This image does not provide an enable-enforcement recipe and continues to ship `DefaultAction: allow`.
 
 If a local deny experiment leaves a host unable to connect, recover from a TTY by setting `DefaultAction` back to `allow` in `/etc/opensnitchd/default-config.json` and running `systemctl restart opensnitch.service`, or use `rpm-ostree rollback`.
+
+Existing r15 hosts with a locally edited deny config may retain it across the
+r15.1 upgrade through ostree's `/etc` merge. Explicitly adopt allow and restart
+OpenSnitch to use the shipped policy; see the [r15.1 transition](docs/RUNBOOK.md#r151-transition-from-an-existing-deny-deployment).
 
 The pristine image-intent copy lives at `/usr/share/bazzite-tower/opensnitchd-default-config.json`. Because `/etc` is 3-way merged across bootc upgrades, a locally edited `/etc/opensnitchd/default-config.json` stops tracking the image — `diff` the two to see exactly what drifted.
 

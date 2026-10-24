@@ -4,6 +4,17 @@
 
 `Containerfile` → `build_files/build.sh` (runs inside the build, `set -euo pipefail`).
 
+## r15.1 upstream base
+
+The corrective release updates the pinned default base to Bazzite
+`44.20261023`, digest
+`sha256:d0e5e105ebf43c7ddbe3c4a5dfecac1628b0e0dcf152bbd2aee0eda3e4b4cdd4`.
+Registry inspection on 2026-10-24 reports kernel
+`7.2.9-ogc3.1.fc44.x86_64`. The existing weekly `base-bump.yml` workflow
+continues to propose digest updates through reviewed PRs. System-image
+publication still follows the release playbook; a base bump alone does not
+promote the protected `:snitchwatch-system` tag.
+
 ## Containerfile stages
 
 1. `ARG BASE_IMAGE=ghcr.io/ublue-os/bazzite-nvidia-open@sha256:…` (the single pinned default source for `:latest`; CI leaves it unset for safe-pin and overrides it only for `:latest-kernel`)
@@ -63,18 +74,19 @@ NFQUEUE is available. Rootless container checks cannot replace the VM gate.
 Legacy builds retain upstream RPM extraction and incur no native compilation.
 
 Only the system candidate changes the image-intent OpenSnitch address to
-`unix:opensnitchd.sock` and `DefaultAction` to `deny` (fail closed, r15 owner
-decision; `ProcMonitorMethod` stays `proc`). Upstream `stage.sh` installs the
+`unix:opensnitchd.sock`; both profiles permanently retain `DefaultAction: allow`
+and `ProcMonitorMethod: proc`. Deny enforcement requires explicit operator opt-in. Upstream `stage.sh` installs the
 `opensnitch.service.d/snitchwatch-system-bridge.conf` drop-in (`Wants=`/`After=`
 the gRPC socket, `WorkingDirectory=-/run/snitchwatch`), pinned by hash; it also
 stages upstream's `ebpf` daemon config, which `snitchwatch-system-stage.py`
-removes from the overlay (unit-tested); `95-firewall.sh` installs the tower's `deny`/`proc`
+removes from the overlay (unit-tested); `95-firewall.sh` installs the tower's `allow`/`proc`
 candidate after the RPM extraction. `snitchwatch-system-stage.py` also stages the
 tower's always-on OS-update rules (`snitchwatch-system-os-update-rule.json` ->
 `/etc/opensnitchd/rules/000-snitchwatch-tower-os-update.json`, `snitchwatch-system-resolved-dns-rule.json`
 -> `000-snitchwatch-tower-resolved-dns.json`; digests pinned in the verifier). Sysusers are materialized
 before tmpfiles and socket startup. Existing live bootc `/etc` drift is a
-migration decision, not an implicit policy overwrite. Legacy remains fail open.
+migration decision, not an implicit policy overwrite. Migration retains allow;
+system readiness rejects an explicit local deny override as policy drift.
 
 Daemon toolchain (golang, golang-bin, golang-src, protobuf, protobuf-compiler,
 libnetfilter_queue, libnetfilter_queue-devel) is not installed from live repos:
@@ -135,12 +147,14 @@ NFQUEUE, SELinux and deployment require separate owner-controlled evidence).
 
 ## r13 publication boundary
 
-The r15 bridge candidate is `bfc76e6607574b354e1d3b1494798e7ea78d1685`,
-tree `be719d27d61f9a1a02567b8673d02dcd53548085`, with unchanged OpenSnitch
+The r15.1 bridge/GUI candidate is `5c969a2e21dc7f5c976e7048aa9f95e5663c7de2`,
+tree `a6f415313f30e81b6bca9bb839aadd0f2f908af3`, with unchanged OpenSnitch
 gitlink `b404c4c6316760fa7bc415509d3f8d747f7dc9cc` (r13/r14: `bf15bb5`). The
 bridge pins record this identity and hashes of all 15 committed packaging inputs; the installed
 verifier authenticates the refreshed pins hash. Upstream installer bytes and
-signed Koji/toolchain/daemon pins remain unchanged. This candidate pin does not
+signed Koji/toolchain/daemon pins remain unchanged. All 15 packaging-input
+digests, Flatpak finish arguments, native bridge and wire source remain unchanged
+from r15; this repin selects the GUI learning/naming work. This candidate pin does not
 establish independent review or runtime acceptance; authority remains held.
 
 The system profile remains PR-tested but is removed from automatic stable release builds. `r13-candidate.yml` builds/tests a reviewed source in a credential-free job, records actual installed binary/manifest/pins identities through `ci/r13-candidate-data.py`, and exports digest-preserving OCI data. The collector supplies `/usr/bin/true` when creating its never-started extraction container because bootc images may omit CMD/ENTRYPOINT; its separate RPM inventory run remains unchanged. Extraction containers are removed on success and failure. Full collector tests in `tests/test-r13-publication.py` cover commandless images, installed-binary/archive drift and cleanup, preserving the actual artifact validator. Separate checkout-free publishers and `ci/r13-publication.py` trusted control gates enforce fixed targets for the candidate. The publisher keeps legacy keyed signing for repository policy, adds a same-key Cosign bundle and attests/verifies SPDX and the original build predicate with `--new-bundle-format` (legacy `verify-attestation` trips on the certificate-based GitHub provenance on the same digest); its policy-gated local OCI export uses `--remove-signatures` only because OCI cannot store signatures. Promotion copies the one fixed digest, re-signs it and re-attests its SPDX predicate without an image rebuild. Base-image/toolchain pins and smoke/boot assertions are preserved. See [r13-publication.md](../r13-publication.md) for the trust bootstrap, immutable identity schemas and the promoter steps.

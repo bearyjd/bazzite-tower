@@ -46,9 +46,9 @@ def main():
     candidate = json.loads(args.candidate_config.read_text())
     expected_config = json.loads(json.dumps(legacy))
     expected_config['Server']['Address'] = 'unix:opensnitchd.sock'
-    expected_config['DefaultAction'] = 'deny'
-    if candidate != expected_config or candidate['DefaultAction'] != 'deny' or candidate['ProcMonitorMethod'] != 'proc':
-        raise ValueError('candidate config changes more than the daemon address and default action')
+    expected_config['DefaultAction'] = 'allow'
+    if candidate != expected_config or candidate['DefaultAction'] != 'allow' or candidate['ProcMonitorMethod'] != 'proc':
+        raise ValueError('candidate config must retain the allow/proc defaults and change only the daemon address')
     binary = args.artifact / 'usr/bin/snitchwatch-bridge-cli'
     binary_sha = sha(binary)
     actual_version = subprocess.check_output([str(binary), '--version'], text=True, timeout=5).strip()
@@ -60,7 +60,7 @@ def main():
     # ebpf, which fails on this laptop's kernel: snitchwatch#6).  Drop it: a file
     # pre-placed at that path would meet the RPM's cpio extraction (mtime-
     # dependent overwrite, see 95-firewall.sh), and 95-firewall.sh installs the
-    # reviewed tower candidate (deny + proc) there after extraction anyway.
+    # reviewed tower candidate (allow + proc) there after extraction anyway.
     staged_config = out / 'etc/opensnitchd/default-config.json'
     if sha(staged_config) != pins['sourceFiles']['packaging/system/opensnitchd-default-config.json']:
         raise ValueError('stage.sh did not stage the pinned upstream daemon config')

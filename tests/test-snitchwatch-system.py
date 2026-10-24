@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Behavioral fixtures for fixed-path runtime checks and operator transactions."""
 import copy
+import contextlib
+import io
 import importlib.util
 import importlib.machinery
 import json
@@ -29,6 +31,8 @@ def load(name, path):
 common = load("common_test", LIBEXEC/"bazzite-tower-snitchwatch-common.py")
 migration = load("migration_test", LIBEXEC/"bazzite-tower-snitchwatch-migrate")
 migration.common = common
+readiness = load("readiness_test", LIBEXEC/"bazzite-tower-snitchwatch-readiness")
+readiness.common = common
 BASE_GLOBAL_CONTENT = '[Context]\nfilesystems=xdg-config/gtk-3.0:ro;xdg-config/gtk-4.0:ro;xdg-config/MangoHud:create;xdg-config/vkBasalt:create;\n'
 REAL_READLINK = os.readlink
 VENDOR_CONTENT = '# This file is part of the systemd package.\n# See https://fedoraproject.org/wiki/Changes/Shorter_Shutdown_Timer.\n#\n# To facilitate debugging when a service fails to stop cleanly,\n# TimeoutStopFailureMode=abort is set to "crash" services that fail to stop in\n# the time allotted. This will cause the service to be terminated with SIGABRT\n# and a coredump to be generated.\n#\n# To undo this configuration change, create a mask file:\n#   sudo mkdir -p /etc/systemd/system/service.d\n#   sudo ln -sv /dev/null /etc/systemd/system/service.d/10-timeout-abort.conf\n\n[Service]\nTimeoutStopFailureMode=abort\n'
@@ -72,7 +76,7 @@ class Fixture(common.Context):
                 self.write(name, "installed reviewed asset\n")
         legacy_text = (REPO/"system_files/usr/share/bazzite-tower/opensnitchd-default-config.json").read_text()
         self.write(common.LEGACY_REFERENCE, legacy_text)
-        system = json.loads(legacy_text);system["Server"]["Address"] = "unix:opensnitchd.sock";system["DefaultAction"] = "deny"
+        system = json.loads(legacy_text);system["Server"]["Address"] = "unix:opensnitchd.sock";system["DefaultAction"] = "allow"
         self.write(common.REFERENCE, json.dumps(system, indent=4)+"\n")
         self.write(common.CONFIG, legacy_text)
         self.write(common.PINS, json.dumps(dict(sourceCommit="d09defc8ea3d55b335c746248a4d90743ae014e3", submoduleCommit="b404c4c6316760fa7bc415509d3f8d747f7dc9cc", bridgeVersion="0.1.1")))
@@ -200,7 +204,7 @@ org.kde.StatusNotifierWatcher=talk
             if action == "start" and self.fail_start in argv[2:]:
                 self.fail_start = None;code = 1;err = "injected activation failure"
                 if self.drift_on_start:
-                    value = json.loads(self.path(common.CONFIG).read_text());value["DefaultAction"]="allow";self.write(common.CONFIG,json.dumps(value))
+                    value = json.loads(self.path(common.CONFIG).read_text());value["DefaultAction"]="deny";self.write(common.CONFIG,json.dumps(value))
             else:
                 for unit in argv[2:]:
                     self.states[unit]["active"] = "active" if action=="start" else "inactive"
@@ -504,6 +508,20 @@ class SystemBehavior(unittest.TestCase):
         self.assertEqual(report["defaultAction"], "allow")
         self.assertFalse(any(cmd[:2] in (["systemctl","start"], ["systemctl","stop"]) for cmd in self.ctx.commands))
 
+    def test_readiness_cli_reports_the_validated_allow_policy(self):
+        self.ctx.system_config();self.ctx.flatpak()
+        output = io.StringIO()
+        with mock.patch.object(readiness.sys, "argv", ["bazzite-tower-snitchwatch-readiness"]), \
+             mock.patch.object(readiness.os, "geteuid", return_value=0), \
+             mock.patch.object(common, "Context", return_value=self.ctx), \
+             contextlib.redirect_stdout(output):
+            readiness.main()
+        lines = output.getvalue().splitlines()
+        self.assertEqual(json.loads(lines[0])["defaultAction"], "allow")
+        self.assertIn("DefaultAction is allow; deny enforcement requires explicit operator opt-in.", lines[1])
+        self.assertIn("No state changed", lines[1])
+        self.assertFalse(any(cmd[:2] in (["systemctl","start"], ["systemctl","stop"]) for cmd in self.ctx.commands))
+
     def test_different_named_ids_not_hardcoded(self):
         self.ctx.system_config();self.ctx.uid,self.ctx.gid,self.ctx.ui_gid=901,902,777
         self.ctx.bridge(True)
@@ -558,7 +576,7 @@ class SystemBehavior(unittest.TestCase):
 
     def test_config_address_and_policy_drift(self):
         self.ctx.system_config()
-        for key,value in (("DefaultAction","allow"),("ProcMonitorMethod","ebpf")):
+        for key,value in (("DefaultAction","deny"),("ProcMonitorMethod","ebpf")):
             config=json.loads(self.ctx.path(common.REFERENCE).read_text());config[key]=value;self.ctx.write(common.CONFIG,json.dumps(config))
             self.refuse_readiness("drift")
         self.ctx.write(common.CONFIG,self.ctx.path(common.LEGACY_REFERENCE).read_text())
@@ -871,7 +889,7 @@ class SystemBehavior(unittest.TestCase):
         operator=migration.Migration(self.ctx)
         applied=operator.apply()
         self.assertEqual(applied["status"],"applied")
-        self.assertEqual(json.loads(self.ctx.path(common.CONFIG).read_text())["DefaultAction"],"deny")
+        self.assertEqual(json.loads(self.ctx.path(common.CONFIG).read_text())["DefaultAction"],"allow")
         self.assertEqual(json.loads(self.ctx.path(common.CONFIG).read_text())["ProcMonitorMethod"],"proc")
         self.assertEqual(json.loads(self.ctx.path(common.CONFIG).read_text()), json.loads(self.ctx.path(common.REFERENCE).read_text()))
         rolled=operator.rollback();self.assertEqual(rolled["status"],"rolled-back")
@@ -900,7 +918,7 @@ class SystemBehavior(unittest.TestCase):
         operator=migration.Migration(self.ctx)
         with self.assertRaisesRegex(common.Refusal,"recovery-required"):
             operator.apply()
-        self.assertEqual(json.loads(self.ctx.path(common.CONFIG).read_text())["DefaultAction"],"allow")
+        self.assertEqual(json.loads(self.ctx.path(common.CONFIG).read_text())["DefaultAction"],"deny")
         with self.assertRaisesRegex(common.Refusal,"rollback refuses"):
             operator.rollback()
 
@@ -1013,7 +1031,7 @@ class SystemBehavior(unittest.TestCase):
 
     def test_rollback_final_publication_boundary_preserves_operator_edit(self):
         operator = migration.Migration(self.ctx);operator.apply()
-        config = json.loads(self.ctx.path(common.CONFIG).read_text());config["DefaultAction"]="allow"
+        config = json.loads(self.ctx.path(common.CONFIG).read_text());config["DefaultAction"]="deny"
         edited = (json.dumps(config)+"\n").encode()
         count = len(self.ctx.commands)
         with self.publication_edit(lambda: self.ctx.path(common.CONFIG).write_bytes(edited)):
@@ -1056,7 +1074,7 @@ class SystemBehavior(unittest.TestCase):
 
     def test_rollback_refuses_later_policy_edit(self):
         operator=migration.Migration(self.ctx);operator.apply()
-        config=json.loads(self.ctx.path(common.CONFIG).read_text());config["DefaultAction"]="allow";self.ctx.write(common.CONFIG,json.dumps(config))
+        config=json.loads(self.ctx.path(common.CONFIG).read_text());config["DefaultAction"]="deny";self.ctx.write(common.CONFIG,json.dumps(config))
         count=len(self.ctx.commands)
         with self.assertRaisesRegex(common.Refusal,"rollback refuses"):
             operator.rollback()

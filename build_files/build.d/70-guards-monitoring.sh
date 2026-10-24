@@ -17,6 +17,19 @@ systemctl enable bazzite-tower-wifi-backend-guard.service
 dnf install -y smartmontools
 systemctl enable smartd.service
 
+# ── Owner-invoked diagnostics (no automatic collection/tracing) ───────────────
+# Fedora packages; no feature probing, GPU tests or trace sessions at build/boot.
+# The image preset is already present when RPM install scriptlets apply presets.
+dnf install -y bpftool sysstat igt-gpu-tools trace-cmd
+# No --now: this is an offline image build. Fail if expected unit names drift.
+systemctl disable sysstat.service sysstat-collect.timer sysstat-summary.timer sysstat-rotate.timer trace-cmd.service
+# Fedora's sleep hook unconditionally calls sa1 --sleep even with units disabled.
+# systemd-sleep executes only executable hooks. Retain vendor bytes but override
+# RPM mode deliberately, after this stage's install on every image build.
+# Timer opt-in does not re-enable suspend annotations; manual sysstat tools work.
+[[ -f /usr/lib/systemd/system-sleep/sysstat.sleep && ! -L /usr/lib/systemd/system-sleep/sysstat.sleep ]]
+chmod 0644 /usr/lib/systemd/system-sleep/sysstat.sleep
+
 # ── Cockpit: web-based system + VM management (opt-in) ─────────────────────────
 # Homelab management surface on :9090 — VMs (cockpit-machines drives the same
 # libvirt stack baked above), services, storage, logs, and podman. The base

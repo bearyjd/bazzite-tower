@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+# Fixed-scope pre-logrotate repair. Never follows a supplied path or recurses.
+set -euo pipefail
+export LC_ALL=C
+if (( $# != 0 )); then
+    echo "boot-log-label: no arguments accepted" >&2
+    exit 1
+fi
+# /var/log is root-managed. Refuse links (including broken links), non-regular
+# targets and hard links so this cannot label another file through an alias.
+for path in /var /var/log /var/log/boot.log; do
+    if [[ -L "$path" ]]; then
+        echo "boot-log-label: refusing symlink" >&2
+        exit 1
+    fi
+done
+if [[ ! -e /var/log/boot.log ]]; then
+    echo "boot-log-label: boot.log absent; nothing to label"
+    exit 0
+fi
+if [[ ! -f /var/log/boot.log ]] || [[ $(stat -c '%u:%h' -- /var/log/boot.log) != 0:1 ]]; then
+    echo "boot-log-label: refusing non-regular, non-root-owned or multiply linked file" >&2
+    exit 1
+fi
+if ! command -v selinuxenabled >/dev/null || ! command -v restorecon >/dev/null; then
+    echo "boot-log-label: SELinux tools unavailable" >&2
+    exit 1
+fi
+if selinuxenabled; then
+    :
+else
+    rc=$?
+    if (( rc == 1 )); then
+        echo "boot-log-label: SELinux disabled; nothing to label"
+        exit 0
+    fi
+    echo "boot-log-label: SELinux status unknown" >&2
+    exit 1
+fi
+# Current installed policy supplies the context; do not hardcode a base type.
+# No -R, -F, policy edits, kvmfr relabel or enforcement changes.
+exec restorecon -- /var/log/boot.log

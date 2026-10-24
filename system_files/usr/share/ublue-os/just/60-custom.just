@@ -138,8 +138,8 @@ enable-waydroid:
 
 # Report image and host health without changing daemon state or requiring sudo.
 [group('Diagnostics')]
-tower-health:
-    @/usr/libexec/bazzite-tower-health
+tower-health mode="":
+    @/usr/libexec/bazzite-tower-health {{ quote(mode) }}
 
 # Check that OpenSnitch is active, remains fail-open, and can reach the local
 # Snitchwatch bridge endpoint. This is read-only and deliberately never changes

@@ -53,7 +53,7 @@ carry, because line ranges drift and filenames do not.
 | `40-sysusers-fixup.sh` | **generic** orphan strip (keep only shadow/gshadow lines with a matching passwd/group) -> `systemd-sysusers` -> guarded `groupadd -r qemu` + `useradd qemu` + **`groupadd -r docker`**. Fixes virtqemud + docker.socket "Unknown group" boot failures. The most fragile piece; kept isolated on purpose |
 | `50-docker-networking.sh` | intentional no-op: `ujust enable-docker` creates the Docker-only `iptable_nat` modules-load file locally |
 | `60-libvirt-services.sh` | mask `libvirtd.service`; enable `virtqemud/virtnetworkd/virtnodedevd/virtnwfilterd/virtstoraged/virtproxyd.socket`; explicitly disable Docker service/socket; default NAT net autostart symlink (virsh can't run at build time); polkit `wheel` -> `qemu:///system`; enable `bazzite-tower-firstboot.service` (kvm/libvirt only); enable `docker-libvirt-forwarding.path` / `.timer` |
-| `70-guards-monitoring.sh` | enable `bazzite-tower-wifi-backend-guard.service`; dnf smartmontools + enable `smartd.service`; dnf cockpit/cockpit-machines but explicitly disable Cockpit socket (loopback-only if an operator later enables it) |
+| `70-guards-monitoring.sh` | Wi-Fi guard + SMART, opt-in Cockpit; install bpftool/sysstat/igt-gpu-tools/trace-cmd, explicitly disable sysstat.service + collect/summary/rotate timers and trace-cmd.service, retain sysstat.sleep bytes but force0644 to prevent unconditional suspend collection (intentional RPM mode override) |
 | `80-ras-microcode.sh` | dnf rasdaemon (enable); **mask `mcelog.service`**; dnf microcode_ctl (latest) |
 | `90-power-thermal.sh` | dnf thermald (enable); enable `bazzite-tower-power-tuning.service` (balanced EPP + platform-profile). SOF audio: **no install** — bypassed via the `dsp_driver=1` karg |
 | `95-firewall.sh` | Firewall selector. Default `opensnitch`: pinned v1.8.0 RPM extraction, Snitchwatch config + enablement. `SNITCHWATCH_BRIDGE=system` opts into the pinned native bridge/system overlay; legacy remains default. `FIREWALL_DAEMON=portmaster` is a disabled VM spike, sourcing `../firewall/portmaster.sh`: source-build of the exact Portmaster v2.2.1 commit, direct core (no updater/bootstrapper), config pinned from `/usr` via `BindReadOnlyPaths=`, Go toolchain removed after build, OpenSnitch masked. Build with `just build-portmaster-spike`; never a default image |
@@ -190,3 +190,15 @@ existing Podman user namespace and image store, without sudo or runner security
 changes. The full collector regression models direct Skopeo unshare refusal and
 checks namespace-export failure cleanup. Actual runner success requires fresh CI.
 See [Podman unshare](https://docs.podman.io/en/latest/markdown/podman-unshare.1.html).
+
+## Diagnostic package defaults (r16.1 source preparation)
+
+The four diagnostic packages use Fedora repositories. Source availability is
+verified; actual new-image installation/operation is not yet built or accepted.
+The early `00-bazzite-tower-diagnostics.preset` supplies disabled fresh-image
+defaults before RPM scriptlets; explicit disables after install enforce the
+image state. No masks, running-host changes or tool invocations are added.
+`sysstat.sleep` must exist as a regular non-symlink file before its executable
+mode is removed; timers remain independently opt-in. `tests/smoke.sh` adds package
+and executable presence, all five disabled units and nonexecutable retained sleep
+hook assertions. These are built-image gates, unrun until an image build.

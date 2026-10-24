@@ -2,8 +2,9 @@
 set -euo pipefail
 
 # ── RAS / MCE handling ────────────────────────────────────────────────────────
-# This box logs ~115 corrected CPU cache-error MCEs per boot on Meteor Lake. EDAC
-# igen6 ECC counters read 0/0, so these are CPU cache, not DRAM. Two changes:
+# This box has logged corrected MCEs on Meteor Lake. Decode event bank/status
+# before attributing them: zero EDAC counters alone do not exclude DRAM faults.
+# Corrected errors still need tracking and correlation. Two changes:
 #   1. rasdaemon — the modern RAS collector. It records and decodes MCEs into a
 #      local store queryable with `ras-mc-ctl --summary`/`--errors`.
 #   2. mask mcelog — redundant with rasdaemon, and on this box its

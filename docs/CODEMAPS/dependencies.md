@@ -23,6 +23,8 @@ virt stack (qemu-kvm, libvirt*, virt-*, edk2-ovmf, guestfs-tools, spice-gtk3),
 Docker CE, dev tooling (android-tools, ccache, flatpak-builder, podman-machine/tui,
 rclone, restic, zsh), the hardware/health additions (**smartmontools**,
 **cockpit + cockpit-machines**, **rasdaemon**, **microcode_ctl**, **thermald**),
+plus owner-invoked **bpftool**, **sysstat**, **igt-gpu-tools** and **trace-cmd**
+(r16.1 recipe additions, not yet built/installed; automatic collection/tracing off),
 and the firewall selector (default **OpenSnitch** v1.8.0, pinned RPM extraction +
 Snitchwatch config; disabled **Portmaster** VM spike behind
 `FIREWALL_DAEMON=portmaster`, see `docs/research/portmaster-bootc-spike.md`).

@@ -103,6 +103,22 @@ check "smartctl present"      command -v smartctl
 check_enabled "smartd.service"
 check "smartd.conf present"   test -f /etc/smartmontools/smartd.conf
 
+echo "== Owner-invoked diagnostic tools (collection opt-in) =="
+for package in bpftool sysstat igt-gpu-tools trace-cmd; do
+    check "diagnostic package: ${package}" rpm -q "${package}"
+done
+for tool in bpftool iostat pidstat mpstat sar intel_gpu_top trace-cmd; do
+    check "diagnostic executable: ${tool}" command -v "${tool}"
+done
+# Fresh-image on-disk defaults, not a claim about an existing host's /etc state.
+for unit in sysstat.service sysstat-collect.timer sysstat-summary.timer sysstat-rotate.timer trace-cmd.service; do
+    check_disabled "${unit}"
+done
+
+# The vendor hook otherwise writes records on every suspend despite disabled units.
+check "sysstat sleep hook retained" test -f /usr/lib/systemd/system-sleep/sysstat.sleep
+check "sysstat sleep hook is not executable" test ! -x /usr/lib/systemd/system-sleep/sysstat.sleep
+
 echo "== CPU power tuning =="
 check "thermald present"                command -v thermald
 check_enabled "thermald.service"

@@ -84,11 +84,11 @@ opensnitch)
 # check below this needs nothing a container lacks, and is HARD.
 hard "opensnitchd execs at runtime" \
     bash -c '/usr/bin/opensnitchd -version >/dev/null 2>&1'
-# ProcMonitorMethod is pinned to "proc" because the v1.8.0 RPM's bundled eBPF
-# module does not load on this image's kernel (snitchwatch#6). If a future config
-# or release flips back to ebpf on an unsupported kernel, the daemon degrades and
-# logs this. HARD: passes vacuously if the daemon never started in the container,
-# but catches the regression on a real boot journal (same bargain as SOF above).
+# proc is the shipped baseline. Historical load errors alone do not identify
+# their cause or prove kernel incompatibility. Keep this whole-boot regression
+# assertion; owner eBPF experiments additionally inspect the daemon file log
+# for the new restart interval (see RUNBOOK). A failed experiment can leave
+# boot-journal evidence here even after restoring proc; report that interval.
 hard "no eBPF module load failure" \
     bash -c '! journalctl -b 0 --no-pager 2>/dev/null | grep -q "unable to load eBPF module"'
 # Interception needs NFQUEUE + NET_ADMIN, which a container does not have — the

@@ -68,6 +68,9 @@ if [[ "${FIREWALL_DAEMON:-opensnitch}" == "opensnitch" ]]; then
     #      find it — smoke.sh checks for the binary instead.
     ( cd / && rpm2cpio "/tmp/${opensnitch_rpm}" | cpio -idm )
     rm -f "/tmp/${opensnitch_rpm}"
+    # The native Go build does not embed BPF objects; retain the RPM payload.
+    # Packaging proof only: successful loading still needs an owner runtime test.
+    python3 /usr/libexec/bazzite-tower-opensnitch-ebpf-check
 
     # Overwrite the RPM's default-config.json with the Snitchwatch-tuned one. This
     # runs *after* the extraction on purpose: `COPY system_files/` happens earlier in
@@ -89,11 +92,10 @@ if [[ "${FIREWALL_DAEMON:-opensnitch}" == "opensnitch" ]]; then
     #   Server.Address 127.0.0.1:50051 — the Snitchwatch bridge's gRPC listener
     #     (a per-user service that is NOT part of this image) rather than upstream
     #     opensnitch-ui's unix:///tmp/osui.sock.
-    #   ProcMonitorMethod "proc"       — NOT "ebpf". The v1.8.0 RPM's bundled eBPF
-    #     module fails to load on this image's 6.19/7.x kernels ("unable to load
-    #     eBPF module (opensnitch.o)", snitchwatch#6) and the daemon degrades badly.
-    #     Revisit only when an opensnitch release ships an eBPF module built for
-    #     this kernel.
+    #   ProcMonitorMethod "proc"       — tested baseline. A past module-load
+    #     failure is not proof of a kernel incompatibility. The pinned RPM
+    #     supplies all three BPF objects; owner-only eBPF A/B testing is in
+    #     docs/RUNBOOK.md, without changing the image/readiness baseline.
     #   DefaultAction "allow"          — permanent default for both profiles;
     #     deny enforcement always requires explicit operator opt-in. Without a
     #     decision client, deny can block every new unruled outbound connection.

@@ -158,7 +158,8 @@ Known-good: `18.1.18.2644` and above.
 The default image selects the legacy TCP user bridge at `127.0.0.1:50051`.
 `SNITCHWATCH_BRIDGE=system` is an explicit image build opt-in and requires
 `FIREWALL_DAEMON=opensnitch`. Both profiles retain `ProcMonitorMethod: proc`
-(eBPF fails on this laptop's kernel, snitchwatch#6). Both profiles permanently
+(the tested baseline; historical eBPF load errors do not establish kernel
+incompatibility). Both profiles permanently
 ship `DefaultAction: allow`; deny enforcement always requires explicit operator
 opt-in. Unanswered unruled connections use allow, while explicit rules still
 apply. `DropWhileAsking` remains absent (default false); opting into it can drop
@@ -215,6 +216,133 @@ publishes the system reference config, retaining
 The migration journal is protected at
 `/var/lib/bazzite-tower/snitchwatch-migration/current.json`; preserve it until
 rollback is no longer needed. These migration recipes request sudo explicitly.
+
+### OpenSnitch resource baseline and owner eBPF experiment
+
+This is an optional **owner-operated** test on the candidate, after its initial
+`allow`/`proc` boot passes `sudo ujust snitchwatch-system-readiness` and the full
+`tests/boot-check.sh` gate. Agents do not edit host configuration, invoke sudo,
+restart services or reboot. No kernel, security or probe workarounds belong in
+this experiment. A past `unable to load eBPF module` message does not identify
+its cause. The RPM supplies `/usr/lib/opensnitchd/ebpf/opensnitch.o`,
+`opensnitch-procs.o` and `opensnitch-dns.o`; build/smoke verifies their ELF BPF
+headers, while the native daemon executable itself does not embed them.
+
+Use the same workload, GUI, power state and observation lengths in each mode.
+Allow two minutes of warmup, sample ten minutes idle, then ten minutes of a
+repeatable normal workload. The reporting-only sampler needs only Python's
+standard library and reads MainPID and `/proc/PID/stat`; it collects no network
+payloads, connection details, command lines, environment or tokens. Optional
+`--pid gui=PID` includes a GUI process selected by the owner (reacquire after a
+GUI restart). Run each window with the GUI/bridge mode held constant:
+
+```bash
+# Run as the owner. sudo permits reading cross-account proc entries only.
+sudo /usr/libexec/bazzite-tower-snitchwatch-resources --duration 600 --interval 5 > proc-idle.json
+sudo /usr/libexec/bazzite-tower-snitchwatch-resources --duration 600 --interval 5 > proc-workload.json
+```
+
+Repeat as `ebpf-idle.json` and `ebpf-workload.json` only after the eBPF startup
+checks below succeed. JSON includes each PID/start tick, monotonic sample time,
+interval CPU percentage (100% = one fully busy core; can exceed 100%), RSS and
+threads, plus CPU median/p95, RSS initial/final/peak and observed restart count.
+CPU is the change in utime+stime divided by actual elapsed monotonic time and
+clock ticks, never lifetime CPU. Compare matching windows and retain raw series;
+unavailable/permission-denied samples and PID reuse/restarts invalidate an
+unbroken comparison. Samples spanning a missing process or identity change
+have no CPU percentage. Short-lived restarts between observations may be missed;
+extra child processes are outside the sampled PID's accounting. No automatic
+resource thresholds or performance claims follow from the report.
+
+Before editing, stop other policy writers and migration operations for the
+whole experiment. Use the migration lock for the editing session by opening a
+locked owner subshell (exit it after restoration):
+
+```bash
+sudo flock -n /run/lock/bazzite-tower-snitchwatch-migration.lock sudo -u "$USER" -- bash --noprofile --norc
+```
+
+In that subshell, preserve the exact current **proc** config in a newly created
+root-owned private directory; do not reuse a predictable backup filename in a
+shared directory. Keep the printed backup path until the experiment is over:
+
+```bash
+config=/etc/opensnitchd/default-config.json
+sudo jq -e '.ProcMonitorMethod == "proc" and .DefaultAction == "allow" and .Server.Address == "unix:opensnitchd.sock"' "$config"
+backup_dir="$(sudo mktemp -d /var/lib/bazzite-tower/snitchwatch-ebpf.XXXXXX)"
+printf 'Restore directory: %s\n' "$backup_dir"
+sudo cp --preserve=all -- "$config" "$backup_dir/proc.json"
+sudo cmp -- "$config" "$backup_dir/proc.json"
+sudo stat -c '%U:%G %a %n' "$backup_dir" "$backup_dir/proc.json"
+# Directory must be root:root 700; copy retains original mode, owner and label.
+sudoedit "$config"
+# Change only ProcMonitorMethod from "proc" to "ebpf". Preserve allow/address.
+sudo jq -e '.ProcMonitorMethod == "ebpf" and .DefaultAction == "allow" and .Server.Address == "unix:opensnitchd.sock"' "$config"
+```
+
+Record the log inode and byte length of `/var/log/opensnitchd.log` immediately
+before `sudo systemctl restart opensnitch.service`. Inspect **only the new log
+interval**, not older successes. The principal upstream log is this file;
+journald alone is insufficient. For example, in the same subshell:
+
+```bash
+log=/var/log/opensnitchd.log
+log_inode="$(sudo stat -c %i "$log")"
+log_bytes="$(sudo stat -c %s "$log")"
+sudo systemctl restart opensnitch.service
+sudo systemctl is-active opensnitch.service
+# Inspect after startup; the interval file is owner-private.
+umask 077
+ebpf_log="$(mktemp ./ebpf-startup.XXXXXX.log)"
+printf 'New restart log: %s\n' "$ebpf_log"
+if [ "$(sudo stat -c %i "$log")" = "$log_inode" ] && [ "$(sudo stat -c %s "$log")" -ge "$log_bytes" ]; then
+    sudo tail -c "+$((log_bytes + 1))" "$log" > "$ebpf_log"
+else
+    echo 'Log rotated/truncated: stop; identify exact new restart log interval manually.'
+fi
+```
+
+Stop and restore proc if the log does not exist, rotates/truncates before an
+unambiguous interval is captured, or lacks **any** of these exact successes:
+
+```text
+[eBPF] module loaded: /usr/lib/opensnitchd/ebpf/opensnitch.o
+[eBPF] module loaded: /usr/lib/opensnitchd/ebpf/opensnitch-procs.o
+Process monitor method ebpf
+```
+
+Reject `unable to load eBPF module`, `opensnitch-procs.o not available`,
+`error starting ebpf monitor method`, module-collection errors, fallback to
+another monitor, relevant `opening kprobe`/`opening kretprobe` warnings, or
+missing syscall/scheduler tracepoints. Continue checking the new interval
+through the workload for late failures. An active service and the single
+`opensnitch.o` success do not prove the process monitor started. DNS object
+presence is asserted for packaging; it is not a substitute for either required
+module success. Full system readiness **must refuse** this local eBPF override
+because its contract is the shipped allow/proc policy; do not loosen readiness
+or interpret that expected refusal as an eBPF performance result.
+
+Restore using the recorded private backup even if loading succeeds. In the
+same subshell (or set `backup_dir` to the previously recorded exact path):
+
+```bash
+sudo cp --preserve=all -- "$backup_dir/proc.json" "$config"
+sudo cmp -- "$backup_dir/proc.json" "$config"
+sudo stat -c '%U:%G %a %n' "$config"
+sudo jq -e '.ProcMonitorMethod == "proc" and .DefaultAction == "allow"' "$config"
+sudo systemctl restart opensnitch.service
+sudo ujust snitchwatch-system-readiness
+# Run the same complete tests/boot-check.sh gate used before the experiment.
+exit  # Release the migration lock only after proc restoration/checks.
+```
+
+Retain the protected backup and reports. `cp --preserve=all` restores original
+ownership, permissions and security context; do not relax DAC to make backup
+files readable. The full boot gate's existing whole-boot eBPF error assertion
+remains strict. If an experiment failed and left a boot-journal error, report
+that exact experiment interval separately alongside restored-proc checks;
+do not call the full gate clean or erase the evidence. A subsequent clean
+proc boot is an owner action, never an agent action.
 
 Policy writers must serialize edits with the migration helper using
 `/run/lock/bazzite-tower-snitchwatch-migration.lock`. Linux filesystem exchange

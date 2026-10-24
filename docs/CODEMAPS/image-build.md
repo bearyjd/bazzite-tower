@@ -72,6 +72,14 @@ and actual `/usr/bin/opensnitchd` hash. Both manifests are checked by smoke
 and boot tests; the boot check verifies the running daemon executable when
 NFQUEUE is available. Rootless container checks cannot replace the VM gate.
 Legacy builds retain upstream RPM extraction and incur no native compilation.
+Both profiles retain the RPM-supplied `/usr/lib/opensnitchd/ebpf/opensnitch.o`,
+`opensnitch-procs.o` and `opensnitch-dns.o`: the native Go executable does not
+embed them. `95-firewall.sh` fails closed through
+`bazzite-tower-opensnitch-ebpf-check` when any object is missing, nonregular or
+has an invalid ELF64 relocatable BPF header; smoke repeats the packaging check.
+This is not proof that probes load on the running kernel; the proc baseline
+and readiness contract remain unchanged. `tests/test-snitchwatch-resources.py`
+exercises invalid/missing object fixtures and interval resource accounting.
 
 Only the system candidate changes the image-intent OpenSnitch address to
 `unix:opensnitchd.sock`; both profiles permanently retain `DefaultAction: allow`

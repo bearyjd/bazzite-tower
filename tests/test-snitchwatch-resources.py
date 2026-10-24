@@ -149,5 +149,77 @@ class BpfPackagingTests(unittest.TestCase):
                 path.write_bytes(header)
 
 
+class OwnerRecoveryRecipeTests(unittest.TestCase):
+    def test_guarded_recipe_sequence_without_host_commands(self):
+        # Execute the RUNBOOK's actual preparation/trap/editor sequence with
+        # every privileged command replaced by a recording shell function.
+        runbook = (ROOT / 'docs/RUNBOOK.md').read_text()
+        recipe = runbook.split("<<'EBPF_EXPERIMENT'\n", 1)[1]
+        recipe = recipe.split("sudo python3 -", 1)[0]
+        # CI has no controlling terminal; the fake editor does not read input.
+        recipe = recipe.replace('</dev/tty', '</dev/null')
+        stubs = r'''
+sudo() {
+    local command="$1"; shift
+    printf '%s\n' "$command" >> "$events"
+    case "$command" in
+        mktemp) printf '/fixture\n' ;;
+        stat)
+            if [ "$*" = '-c %u:%g:%a /fixture' ]; then
+                printf '0:0:700\n'
+            else
+                printf '0:0:644:fixture_context\n'
+            fi ;;
+        cp)
+            local count=0
+            [ ! -f "$copies" ] || read -r count < "$copies"
+            count=$((count + 1)); printf '%s\n' "$count" > "$copies"
+            if [ "$scenario" = backup-failure ] && [ "$count" = 1 ]; then return 41; fi
+            if [ "$scenario" = restore-failure ] && [ "$count" = 2 ]; then return 43; fi ;;
+        cmp)
+            local count=0
+            read -r count < "$copies"
+            if [ "$scenario" = backup-validation-failure ] && [ "$count" = 1 ]; then return 44; fi
+            if [ "$scenario" = restore-validation-failure ] && [ "$count" = 2 ]; then return 45; fi ;;
+        jq|systemctl|ujust) ;;
+        *) return 99 ;;
+    esac
+}
+sudoedit() {
+    printf 'edit\n' >> "$events"
+    [ "$scenario" != editor-failure ] || return 42
+    case "$scenario" in
+        signal-HUP) kill -HUP "$$" ;;
+        signal-INT) kill -INT "$$" ;;
+        signal-TERM) kill -TERM "$$" ;;
+    esac
+}
+sleep() { printf 'recovery-wait\n' >> "$events"; }
+'''
+        cases = {'normal': 0, 'backup-failure': 41, 'backup-validation-failure': 44,
+                 'editor-failure': 42, 'restore-failure': 0, 'restore-validation-failure': 0,
+                 'signal-HUP': 129, 'signal-INT': 130, 'signal-TERM': 143}
+        for scenario, expected_status in cases.items():
+            with self.subTest(scenario=scenario), tempfile.TemporaryDirectory() as directory:
+                events = Path(directory) / 'events'
+                result = subprocess.run(['bash', '-c', stubs + recipe], text=True,
+                                        capture_output=True, timeout=5,
+                                        env={**os.environ, 'events': str(events),
+                                             'copies': str(Path(directory) / 'copies'),
+                                             'scenario': scenario})
+                sequence = events.read_text().splitlines()
+                self.assertEqual(result.returncode, expected_status, result.stderr)
+                if scenario.startswith('backup-'):
+                    self.assertNotIn('edit', sequence)
+                    self.assertNotIn('systemctl', sequence)
+                    continue
+                self.assertEqual(sequence.count('edit'), 1)
+                self.assertEqual(sequence[-6:], ['cp', 'cmp', 'stat', 'jq', 'systemctl', 'ujust'])
+                if scenario.startswith('restore-'):
+                    self.assertIn('RECOVERY FAILED; migration lock retained', result.stderr)
+                    self.assertEqual(sequence.count('systemctl'), 1)
+                    self.assertEqual(sequence.count('cp'), 3)
+
+
 if __name__ == '__main__':
     unittest.main()

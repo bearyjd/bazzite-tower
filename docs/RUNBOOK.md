@@ -254,87 +254,128 @@ have no CPU percentage. Short-lived restarts between observations may be missed;
 extra child processes are outside the sampled PID's accounting. No automatic
 resource thresholds or performance claims follow from the report.
 
-Before editing, stop other policy writers and migration operations for the
-whole experiment. Use the migration lock for the editing session by opening a
-locked owner subshell (exit it after restoration):
+Before editing, stop other policy writers. Run the complete block below from
+an owner terminal. A root shell holds the migration-lock descriptor while waiting for the
+owner subprocess to finish recovery. Its signal handlers preserve that lock
+through terminal interrupts. The editor and experiment shell run as
+the owner; `sudoedit` retains the selected owner editor. Every failure before
+editing aborts. After the verified private backup exists, EXIT/HUP/INT/TERM
+restore proc automatically, including editor failure and Ctrl-C. The trap is
+registered **before** the first edit. Do not run individual lines separately.
 
 ```bash
-sudo flock -n /run/lock/bazzite-tower-snitchwatch-migration.lock sudo -u "$USER" -- bash --noprofile --norc
-```
-
-In that subshell, preserve the exact current **proc** config in a newly created
-root-owned private directory; do not reuse a predictable backup filename in a
-shared directory. Keep the printed backup path until the experiment is over:
-
-```bash
+sudo bash -c '
+set -euo pipefail
+exec 9>/run/lock/bazzite-tower-snitchwatch-migration.lock
+flock -n 9
+trap ":" HUP INT TERM
+sudo -H -u "$1" -- env SUDO_EDITOR="$2" bash -s
+' -- "$USER" "${SUDO_EDITOR:-${VISUAL:-${EDITOR:-vi}}}" <<'EBPF_EXPERIMENT'
+set -Eeuo pipefail
+umask 077
 config=/etc/opensnitchd/default-config.json
-sudo jq -e '.ProcMonitorMethod == "proc" and .DefaultAction == "allow" and .Server.Address == "unix:opensnitchd.sock"' "$config"
+log=/var/log/opensnitchd.log
+sudo jq -e '.ProcMonitorMethod == "proc" and .DefaultAction == "allow" and .Server.Address == "unix:opensnitchd.sock"' "$config" >/dev/null
 backup_dir="$(sudo mktemp -d /var/lib/bazzite-tower/snitchwatch-ebpf.XXXXXX)"
-printf 'Restore directory: %s\n' "$backup_dir"
+[ "$(sudo stat -c '%u:%g:%a' "$backup_dir")" = 0:0:700 ]
 sudo cp --preserve=all -- "$config" "$backup_dir/proc.json"
 sudo cmp -- "$config" "$backup_dir/proc.json"
-sudo stat -c '%U:%G %a %n' "$backup_dir" "$backup_dir/proc.json"
-# Directory must be root:root 700; copy retains original mode, owner and label.
-sudoedit "$config"
-# Change only ProcMonitorMethod from "proc" to "ebpf". Preserve allow/address.
-sudo jq -e '.ProcMonitorMethod == "ebpf" and .DefaultAction == "allow" and .Server.Address == "unix:opensnitchd.sock"' "$config"
-```
+original_metadata="$(sudo stat -c '%u:%g:%a:%C' "$config")"
+[ "$(sudo stat -c '%u:%g:%a:%C' "$backup_dir/proc.json")" = "$original_metadata" ]
+printf 'Protected restore directory: %s\n' "$backup_dir"
 
-Record the log inode and byte length of `/var/log/opensnitchd.log` immediately
-before `sudo systemctl restart opensnitch.service`. Inspect **only the new log
-interval**, not older successes. The principal upstream log is this file;
-journald alone is insufficient. For example, in the same subshell:
+restore_proc() {
+    # Explicit guards: never restart after a failed copy or failed validation.
+    sudo cp --preserve=all -- "$backup_dir/proc.json" "$config" || return 1
+    sudo cmp -- "$backup_dir/proc.json" "$config" || return 1
+    local restored_metadata
+    restored_metadata="$(sudo stat -c '%u:%g:%a:%C' "$config")" || return 1
+    [ "$restored_metadata" = "$original_metadata" ] || return 1
+    sudo jq -e '.ProcMonitorMethod == "proc" and .DefaultAction == "allow" and .Server.Address == "unix:opensnitchd.sock"' "$config" >/dev/null || return 1
+    sudo systemctl restart opensnitch.service || return 1
+    sudo ujust snitchwatch-system-readiness || return 1
+    printf 'Restored exact proc config, metadata and service readiness.\n'
+}
+recover() {
+    local experiment_status=$?
+    trap - EXIT
+    trap '' HUP INT TERM
+    set +e
+    until restore_proc; do
+        printf 'RECOVERY FAILED; migration lock retained. Backup: %s/proc.json\n' "$backup_dir" >&2
+        printf 'Repair the failure in another terminal; press Enter to retry. Do not kill this session.\n' >&2
+        read -r _ </dev/tty || sleep 60
+    done
+    exit "$experiment_status"
+}
+trap recover EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
-```bash
-log=/var/log/opensnitchd.log
+# Change only ProcMonitorMethod from proc to ebpf; preserve every other key.
+sudoedit "$config" </dev/tty
+sudo python3 - "$backup_dir/proc.json" "$config" <<'CHECK_CONFIG'
+import json, sys
+before, after = [json.load(open(path)) for path in sys.argv[1:]]
+before['ProcMonitorMethod'] = 'ebpf'
+assert after == before, 'Only ProcMonitorMethod may change'
+CHECK_CONFIG
 log_inode="$(sudo stat -c %i "$log")"
 log_bytes="$(sudo stat -c %s "$log")"
+ebpf_log="$(mktemp ./ebpf-experiment.XXXXXX.log)"
+printf 'New restart log interval: %s\n' "$ebpf_log"
 sudo systemctl restart opensnitch.service
-sudo systemctl is-active opensnitch.service
-# Inspect after startup; the interval file is owner-private.
-umask 077
-ebpf_log="$(mktemp ./ebpf-startup.XXXXXX.log)"
-printf 'New restart log: %s\n' "$ebpf_log"
-if [ "$(sudo stat -c %i "$log")" = "$log_inode" ] && [ "$(sudo stat -c %s "$log")" -ge "$log_bytes" ]; then
-    sudo tail -c "+$((log_bytes + 1))" "$log" > "$ebpf_log"
-else
-    echo 'Log rotated/truncated: stop; identify exact new restart log interval manually.'
-fi
+sudo systemctl is-active --quiet opensnitch.service
+
+check_interval() {
+    [ "$(sudo stat -c %i "$log")" = "$log_inode" ] || return 1
+    [ "$(sudo stat -c %s "$log")" -ge "$log_bytes" ] || return 1
+    sudo tail -c "+$((log_bytes + 1))" "$log" > "$ebpf_log" || return 1
+    grep -Fq '[eBPF] module loaded: /usr/lib/opensnitchd/ebpf/opensnitch.o' "$ebpf_log" || return 1
+    grep -Fq '[eBPF] module loaded: /usr/lib/opensnitchd/ebpf/opensnitch-procs.o' "$ebpf_log" || return 1
+    grep -Fq 'Process monitor method ebpf' "$ebpf_log" || return 1
+    if grep -Ei 'unable to load eBPF module|opensnitch-procs.o not available|error starting ebpf monitor method|module collection.*error|opening kprobe|opening kretprobe|tracepoint.*(fail|error|missing|not found)|(fail|error|missing).*tracepoint|Process monitor method (proc|audit|ftrace)' "$ebpf_log"; then
+        return 1
+    fi
+}
+sleep 120  # Same two-minute warmup as proc, then validate both loaded modules.
+check_interval
+cat "$ebpf_log"
+printf 'Inspect the new interval for any other fallback/probe errors. Type validated to sample: '
+read -r answer </dev/tty
+[ "$answer" = validated ]
+sudo /usr/libexec/bazzite-tower-snitchwatch-resources --duration 600 --interval 5 > ebpf-idle.json
+printf 'Prepare the same workload used for proc; type ready to start: '
+read -r answer </dev/tty
+[ "$answer" = ready ]
+sudo /usr/libexec/bazzite-tower-snitchwatch-resources --duration 600 --interval 5 > ebpf-workload.json
+check_interval  # Includes late workload errors, rotation and truncation.
+cat "$ebpf_log"
+# End of block triggers the EXIT trap and restores proc before the root parent releases its lock.
+EBPF_EXPERIMENT
 ```
 
-Stop and restore proc if the log does not exist, rotates/truncates before an
-unambiguous interval is captured, or lacks **any** of these exact successes:
+Missing logs, log rotation/truncation, absent successes, fallback, module load
+errors, relevant kprobe/kretprobe warnings or missing syscall/scheduler
+tracepoints abort and trigger restoration. Inspect the complete interval for
+other diagnostic wording; the pattern check cannot recognize every error.
+An active service or just the `opensnitch.o` success is insufficient. The DNS
+object's packaging check does not replace the two required module successes.
+Full system readiness **must refuse** the local eBPF override: its contract is
+the shipped allow/proc policy. Do not loosen readiness for this experiment.
 
-```text
-[eBPF] module loaded: /usr/lib/opensnitchd/ebpf/opensnitch.o
-[eBPF] module loaded: /usr/lib/opensnitchd/ebpf/opensnitch-procs.o
-Process monitor method ebpf
-```
-
-Reject `unable to load eBPF module`, `opensnitch-procs.o not available`,
-`error starting ebpf monitor method`, module-collection errors, fallback to
-another monitor, relevant `opening kprobe`/`opening kretprobe` warnings, or
-missing syscall/scheduler tracepoints. Continue checking the new interval
-through the workload for late failures. An active service and the single
-`opensnitch.o` success do not prove the process monitor started. DNS object
-presence is asserted for packaging; it is not a substitute for either required
-module success. Full system readiness **must refuse** this local eBPF override
-because its contract is the shipped allow/proc policy; do not loosen readiness
-or interpret that expected refusal as an eBPF performance result.
-
-Restore using the recorded private backup even if loading succeeds. In the
-same subshell (or set `backup_dir` to the previously recorded exact path):
-
-```bash
-sudo cp --preserve=all -- "$backup_dir/proc.json" "$config"
-sudo cmp -- "$backup_dir/proc.json" "$config"
-sudo stat -c '%U:%G %a %n' "$config"
-sudo jq -e '.ProcMonitorMethod == "proc" and .DefaultAction == "allow"' "$config"
-sudo systemctl restart opensnitch.service
-sudo ujust snitchwatch-system-readiness
-# Run the same complete tests/boot-check.sh gate used before the experiment.
-exit  # Release the migration lock only after proc restoration/checks.
-```
+The recovery trap retries only after owner acknowledgement (or every 60 seconds
+if its terminal vanished) and keeps the lock held until copy, byte comparison,
+metadata/policy checks, service restart and readiness all succeed. A failed
+copy/validation never proceeds to restart. Do not close/kill a recovery session;
+repair its reported failure from another owner terminal and retry. SIGKILL,
+power loss and a reboot cannot be trapped: use the printed protected backup
+path to restore with `sudo cp --preserve=all -- BACKUP/proc.json
+/etc/opensnitchd/default-config.json`, compare bytes/metadata, validate proc/allow,
+restart OpenSnitch and run readiness **before** resuming normal operations.
+After the block completes, run the same full `tests/boot-check.sh` gate used
+before the experiment. Preserve its result alongside the resource/log reports.
 
 Retain the protected backup and reports. `cp --preserve=all` restores original
 ownership, permissions and security context; do not relax DAC to make backup

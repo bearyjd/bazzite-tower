@@ -40,6 +40,13 @@ last-good independently). The separate `notify` job opens — and later
 auto-closes — each leg's labelled tracking issue, independently of whether
 `release` finished cleanly or was cancelled/killed partway through.
 
+The r15.1 promoter binds candidate run `40050864799` to image digest
+`sha256:df4ec1239abae0cbe1d4d4e27bce85d54f17e2b5155e431c2727c724aa879bf7` and
+provenance source `91908f11eba496cde806298f2d0cbe332213192d`. Owner runtime
+acceptance remains **UNVERIFIED**; preparing this binding does not authorize
+stable publication. The owner release environment and all signature, attestation
+and policy gates remain mandatory.
+
 All stable OCI workflows share `bazzite-tower-stable-writers` with cancellation disabled. The promoter's runtime evidence and review are recorded in the PR and release notes, not workflow variables; its steps are in [r13-publication.md](../r13-publication.md), which also covers the candidate trust bootstrap and artifact identities. `ci/r13-publication.py` is the read-only gate and `ci/r13-candidate-data.py` captures installed/OCI/RPM identity only in the credential-free builder. The primary-reviewed control store starts with null authority. Final tower heads first receive independent review and actual-head green PR CI on a separate review branch; only then may the primary record variables and fast-forward the existing fixed candidate branch to that exact tested head. Same-head pushes and detached dispatch do not supply fresh verify/artifact CI; no force/delete/main-registration shortcut. The full sequence is in the publication document.
 
 The candidate collector creates its extraction container with an explicit

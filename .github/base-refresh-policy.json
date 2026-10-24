@@ -28,7 +28,10 @@
   "bootstrap": {
     "legacy": {
       "allowMissing": true,
-      "digest": null
+      "digest": null,
+      "runNumber": "2",
+      "failedRunId": "40062419690",
+      "failedHead": "d8407c60f74ceafbcbc2e333198c9fd23ce4e260"
     },
     "system": {
       "allowMissing": false,

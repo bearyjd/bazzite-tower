@@ -25,13 +25,27 @@ The workflow resolves a fresh immutable Bazzite base, enforces the
 `44.20261023` / `7.2.9-ogc3.1.fc44` floor and rejects stale policy, then requires
 build/test/signing/SPDX/provenance/host-policy gates before publication.
 
-The missing-`:stable` bootstrap is allowed only on this workflow's first
-server-assigned run (`GITHUB_RUN_NUMBER=1`) and first attempt
-(`GITHUB_RUN_ATTEMPT=1`), on the exact `main` workflow identity. A later run or
-rerun with no canonical `:stable` tag fails closed instead of resetting the
-signed version baseline. If the first run fails before establishing `:stable`,
-recovery requires an independently reviewed recovery change; rerunning alone
-cannot bypass the bootstrap gate. Do not delete the canonical tag to recover.
+The missing-`:stable` recovery is authorized only for server-assigned workflow
+run 2, attempt 1, on the exact `main` workflow identity. Run 1
+(`40062419690`, head `d8407c60f74ceafbcbc2e333198c9fd23ce4e260`) failed during
+installed-policy collection after the legacy build, smoke and boot gates; its
+publisher jobs never ran. The reviewed policy records this exact failed run/head.
+Before allowing missing `:stable`, the publisher reads GitHub's run metadata and
+attempt-1 jobs API and requires completed failure, run 1/attempt 1, the expected
+repository/workflow/main/head, a complete job list, and both publishers skipped.
+API errors or any mismatch fail closed. Other run numbers, reruns, and later
+missing canonical tags fail closed; they cannot reset the signed version
+baseline. If this bounded recovery fails before establishing `:stable`, another
+independently reviewed recovery change is required. Do not delete the canonical
+tag or widen the missing-tag exception to recover.
+
+Installed trust validation distinguishes immutable staging intent from the active
+policy merge performed by the accepted installer. The staged policy/key/registry
+and active key/registry retain exact hash checks. Active policy requires reject
+by default and the exact repository key and `matchRepository` rule; more-specific
+tower tag/digest/child scopes are refused. Its full bytes and hash are recorded,
+bound by provenance, and independently re-extracted by the credential-free
+validator; unrelated upstream policy rules remain intact.
 
 The release sequence below remains the feature-acceptance path. A newly accepted
 feature digest still needs owner runtime acceptance and the protected `release`

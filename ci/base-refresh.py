@@ -49,7 +49,7 @@ def policy(root):
         pub.hex_value(value[key], 40)
     require(value['profiles'] == {'legacy': {'imageTag': 'latest', 'channels': ['stable', 'latest']},
                                   'system': {'imageTag': 'snitchwatch-system', 'channels': ['snitchwatch-system']}}, 'policy profile/channel substitution')
-    require(value['bootstrap'] == {'legacy': {'allowMissing': True, 'digest': None}, 'system': {'allowMissing': False, 'digest': 'sha256:df4ec1239abae0cbe1d4d4e27bce85d54f17e2b5155e431c2727c724aa879bf7'}}, 'unreviewed bootstrap exception')
+    require(value['bootstrap'] == {'legacy': {'allowMissing': True, 'digest': None, 'runNumber': '2', 'failedRunId': '40062419690', 'failedHead': 'd8407c60f74ceafbcbc2e333198c9fd23ce4e260'}, 'system': {'allowMissing': False, 'digest': 'sha256:df4ec1239abae0cbe1d4d4e27bce85d54f17e2b5155e431c2727c724aa879bf7'}}, 'unreviewed bootstrap exception')
     require(set(value['nativeSource']) == {'commit', 'tree', 'submoduleCommit'} and set(value['daemonSource']) == {'commit', 'tree'}, 'invalid native source policy')
     for identity in [*value['nativeSource'].values(), *value['daemonSource'].values()]: pub.hex_value(identity, 40)
     pub.hex_value(value['daemonPatchSha256'])
@@ -124,6 +124,21 @@ def actual_inventory(image, out):
     return rpm.parse_inventory(out)
 
 
+def active_policy(root, data):
+    """Validate the installed merge, whose unrelated rules belong to the base.
+
+    The accepted installer preserves upstream scopes and reserializes JSON;
+    its active policy cannot be byte-identical to the staged policy intent.
+    """
+    requested = pub.decode(pub.read(root / TRUST['policy.json']))
+    current = pub.decode(data)
+    require(current.get('default') == requested['default'] == [{'type': 'reject'}], 'active policy global default substitution')
+    docker = current.get('transports', {}).get('docker', {})
+    expected = [{'type': 'sigstoreSigned', 'keyPath': '/etc/pki/containers/bazzite-tower-cosign.pub', 'signedIdentity': {'type': 'matchRepository'}}]
+    require(docker.get(DEST) == requested['transports']['docker'][DEST] == expected, 'active policy repository identity substitution')
+    require(not any(scope.startswith(DEST) and scope != DEST and scope[len(DEST):len(DEST) + 1] in {':', '@', '/'} for scope in docker), 'active policy more-specific repository override')
+
+
 def installed_profile(image, expected, root):
     cid = command('podman', 'create', image, '/usr/bin/true')
     try:
@@ -133,10 +148,18 @@ def installed_profile(image, expected, root):
             require(path.read_text() == expected + '\n', 'installed bridge profile mismatch')
             result = {'profile': expected, 'trust': {}}
             for name, original in TRUST.items():
-                location = {'cosign.pub': '/etc/pki/containers/bazzite-tower-cosign.pub', 'policy.json': '/etc/containers/policy.json', 'bazzite-tower.yaml': '/etc/containers/registries.d/bazzite-tower.yaml'}[name]
+                location = {'cosign.pub': '/usr/share/bazzite-tower/containers/bazzite-tower-cosign.pub', 'policy.json': '/usr/share/bazzite-tower/containers/policy.json', 'bazzite-tower.yaml': '/usr/share/bazzite-tower/containers/registries.d/bazzite-tower.yaml'}[name]
                 subprocess.run(['podman', 'cp', cid + ':' + location, str(path)], check=True)
-                require(pub.file_sha(path) == pub.file_sha(root / original), 'installed trust policy/key substitution')
+                require(pub.file_sha(path) == pub.file_sha(root / original), 'staged trust policy/key substitution: ' + location)
                 result['trust'][name] = pub.file_sha(path)
+            for name, location in [('cosign.pub', '/etc/pki/containers/bazzite-tower-cosign.pub'), ('bazzite-tower.yaml', '/etc/containers/registries.d/bazzite-tower.yaml')]:
+                subprocess.run(['podman', 'cp', cid + ':' + location, str(path)], check=True)
+                require(pub.file_sha(path) == result['trust'][name], 'active trust file substitution: ' + location)
+            subprocess.run(['podman', 'cp', cid + ':/etc/containers/policy.json', str(path)], check=True)
+            raw_policy = pub.read(path)
+            active_policy(root, raw_policy)
+            result['activePolicy'] = raw_policy.decode('utf-8')
+            result['activePolicySha256'] = pub.sha(raw_policy)
             if expected == 'system':
                 for kind, binary in [('bridge', '/usr/bin/snitchwatch-bridge-cli'), ('daemon', '/usr/bin/opensnitchd')]:
                     subprocess.run(['podman', 'cp', cid + ':/usr/share/snitchwatch/system-' + kind + '-manifest.json', str(path)], check=True)
@@ -182,7 +205,10 @@ def validate(root, data, profile, base, version, execute=False):
     proof = evidence(p, profile, base, version, pub.image_identity(data / 'image.oci.tar'), pub.file_sha(data / 'sbom.json'), inventory_kernel(records))
     installed = pub.decode(pub.read(data / 'installed.json'))
     require(installed['profile'] == profile and installed['trust'] == {name: pub.file_sha(root / path) for name, path in TRUST.items()}, 'installed profile/trust mismatch')
-    require(set(installed) == ({'profile', 'trust', 'bridge', 'daemon'} if profile == 'system' else {'profile', 'trust'}), 'invalid installed evidence inventory')
+    require(set(installed) == ({'profile', 'trust', 'activePolicy', 'activePolicySha256', 'bridge', 'daemon'} if profile == 'system' else {'profile', 'trust', 'activePolicy', 'activePolicySha256'}), 'invalid installed evidence inventory')
+    raw_policy = installed['activePolicy'].encode('utf-8')
+    require(pub.sha(raw_policy) == installed['activePolicySha256'], 'active installed policy hash mismatch')
+    active_policy(root, raw_policy)
     if profile == 'system':
         for kind, binary in [('bridge', '/usr/bin/snitchwatch-bridge-cli'), ('daemon', '/usr/bin/opensnitchd')]:
             manifest = installed[kind]
@@ -254,20 +280,39 @@ def monotonic(p, proof, previous):
     require(kernel_version(proof['kernel']) >= kernel_version(previous['kernel']), 'kernel downgrade below signed channel baseline')
 
 
+def bootstrap_failure(p):
+    """Check the reviewed run2 recovery's immutable failed-run evidence."""
+    recovery = p['bootstrap']['legacy']
+    route = 'repos/' + p['repository'] + '/actions/runs/' + recovery['failedRunId']
+    previous = pub.decode(command('gh', 'api', route).encode())
+    expected = {'id': int(recovery['failedRunId']), 'head_sha': recovery['failedHead'],
+                'path': WORKFLOW, 'event': 'workflow_dispatch', 'head_branch': 'main',
+                'run_number': 1, 'run_attempt': 1, 'status': 'completed', 'conclusion': 'failure'}
+    require(all(previous.get(key) == value for key, value in expected.items()) and
+            previous.get('repository', {}).get('full_name') == p['repository'], 'bootstrap recovery failed-run identity/status mismatch')
+    packet = pub.decode(command('gh', 'api', route + '/attempts/1/jobs?per_page=100').encode())
+    jobs = packet.get('jobs', [])
+    require(isinstance(packet.get('total_count'), int) and 0 < packet['total_count'] <= 100 and
+            len(jobs) == packet['total_count'] and all(job.get('status') == 'completed' for job in jobs), 'bootstrap recovery incomplete job evidence')
+    publishers = [job for job in jobs if job.get('name') in {'publish-legacy', 'publish-system'}]
+    require(len(publishers) == 2 and {job['name'] for job in publishers} == {'publish-legacy', 'publish-system'} and
+            all(job.get('conclusion') == 'skipped' for job in publishers), 'bootstrap recovery publication was not conclusively skipped')
+
+
 def baseline(root, data, profile, trust_root):
     p = policy(root)
     proof = pub.decode(pub.read(data / 'build-provenance.json'))
     channel = p['profiles'][profile]['channels'][0]
     result = subprocess.run(['skopeo', 'inspect', '--raw', 'docker://' + DEST + ':' + channel], capture_output=True)
     if result.returncode:
-        # Refuse auth, transport and timeout failures. This is a deliberately
-        # reviewed exception only for the first server-assigned workflow run
-        # and first attempt. A deleted tag or failed bootstrap cannot discard
-        # the rolling signed baseline on a later run/rerun. Recovery needs review.
+        # The first-ever run failed before publication. This reviewed recovery
+        # permits exactly server run2/attempt1, with API-confirmed failed run1
+        # evidence and both publishers skipped. Later missing tags still HOLD.
         require(p['bootstrap'][profile]['allowMissing'] and
-                os.environ.get('GITHUB_RUN_NUMBER') == '1' and
+                os.environ.get('GITHUB_RUN_NUMBER') == p['bootstrap']['legacy']['runNumber'] and
                 os.environ.get('GITHUB_RUN_ATTEMPT') == '1' and
-                b'manifest unknown' in result.stderr.lower(), 'cannot establish signed channel baseline; missing-tag bootstrap requires first workflow run and first attempt')
+                b'manifest unknown' in result.stderr.lower(), 'cannot establish signed channel baseline; reviewed missing-tag recovery requires workflow run2 and first attempt')
+        bootstrap_failure(p)
         return
     current_digest = 'sha256:' + pub.sha(result.stdout)
     image = DEST + '@' + current_digest

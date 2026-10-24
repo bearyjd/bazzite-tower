@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 import tarfile
 import tempfile
 import unittest
@@ -51,7 +52,7 @@ class RefreshTests(unittest.TestCase):
             dest = self.root / path; dest.parent.mkdir(parents=True, exist_ok=True); shutil.copyfile(ROOT / path, dest)
         self.env = patch.dict(os.environ, {'CONTROL': str(self.root), 'GITHUB_REPOSITORY': 'bearyjd/bazzite-tower',
                       'GITHUB_REF': 'refs/heads/main', 'GITHUB_EVENT_NAME': 'workflow_dispatch', 'GITHUB_SHA': 'a' * 40,
-                      'GITHUB_RUN_ID': '17', 'GITHUB_RUN_NUMBER': '1', 'GITHUB_RUN_ATTEMPT': '1',
+                      'GITHUB_RUN_ID': '17', 'GITHUB_RUN_NUMBER': '2', 'GITHUB_RUN_ATTEMPT': '1',
                       'GITHUB_WORKFLOW_REF': 'bearyjd/bazzite-tower/.github/workflows/base-refresh.yml@refs/heads/main'})
         self.env.start(); self.addCleanup(self.env.stop)
         self.data = Path(self.tmp.name) / 'data'; self.data.mkdir()
@@ -61,10 +62,71 @@ class RefreshTests(unittest.TestCase):
         write(self.data / 'sbom.json', r.rpm.make_document(records, self.policy['sourceCreated']))
         self.base = self.policy['upstream'] + '@sha256:' + 'b' * 64
         self.version = '44.20261023'
-        write(self.data / 'installed.json', {'profile': 'legacy', 'trust': {name: r.pub.file_sha(self.root / path) for name, path in r.TRUST.items()}})
+        active = self.merged_policy()
+        write(self.data / 'installed.json', {'profile': 'legacy', 'trust': {name: r.pub.file_sha(self.root / path) for name, path in r.TRUST.items()}, 'activePolicy': active.decode(), 'activePolicySha256': r.pub.sha(active)})
         self.proof = r.evidence(self.policy, 'legacy', self.base, self.version, r.pub.image_identity(self.data / 'image.oci.tar'), r.pub.file_sha(self.data / 'sbom.json'), '7.2.9-ogc3.1.fc44')
         self.proof['installedSha256'] = r.pub.file_sha(self.data / 'installed.json')
         write(self.data / 'build-provenance.json', self.proof)
+
+    def merged_policy(self):
+        # Execute the accepted installer's merge against a realistic upstream
+        # policy fixture, entirely inside the test temporary directory.
+        upstream = {'default': [{'type': 'insecureAcceptAnything'}], 'transports': {
+            'docker': {'': [{'type': 'reject'}], 'quay.io/example': [{'type': 'reject'}]},
+            'atomic': {'example': [{'type': 'insecureAcceptAnything'}]}}}
+        destination = Path(self.tmp.name) / 'merged-policy.json'
+        write(destination, upstream)
+        installer = (ROOT / 'build_files/build.d/15-signature-policy.sh').read_text()
+        program = installer.split("<<'PY'\n", 1)[1].rsplit('\nPY', 1)[0]
+        with patch.object(sys, 'argv', ['policy-merge', str(self.root / r.TRUST['policy.json']), str(destination)]):
+            exec(compile(program, 'accepted-policy-installer', 'exec'), {'__name__': '__main__'})
+        return destination.read_bytes()
+
+    def installed_files(self):
+        files = {'/usr/share/bazzite-tower/snitchwatch-bridge-profile': b'legacy\n',
+                 '/etc/containers/policy.json': self.merged_policy()}
+        for name, path in r.TRUST.items():
+            staged = {'cosign.pub': '/usr/share/bazzite-tower/containers/bazzite-tower-cosign.pub', 'policy.json': '/usr/share/bazzite-tower/containers/policy.json', 'bazzite-tower.yaml': '/usr/share/bazzite-tower/containers/registries.d/bazzite-tower.yaml'}[name]
+            files[staged] = (self.root / path).read_bytes()
+        files['/etc/pki/containers/bazzite-tower-cosign.pub'] = files['/usr/share/bazzite-tower/containers/bazzite-tower-cosign.pub']
+        files['/etc/containers/registries.d/bazzite-tower.yaml'] = files['/usr/share/bazzite-tower/containers/registries.d/bazzite-tower.yaml']
+        return files
+
+    def extract_fixture(self, files):
+        def run(argv, **kwargs):
+            if argv[:2] == ['podman', 'cp']:
+                self.assertTrue(argv[2].startswith('fixture-cid:'))
+                Path(argv[3]).write_bytes(files[argv[2].split(':', 1)[1]])
+            else:
+                self.assertEqual(argv, ['podman', 'rm', 'fixture-cid'])
+        with patch.object(r, 'command', return_value='fixture-cid'), patch.object(r.subprocess, 'run', side_effect=run):
+            return r.installed_profile('fixture-image', 'legacy', self.root)
+
+    def test_realistic_installed_merge_keeps_exact_staged_hashes(self):
+        files = self.installed_files()
+        self.assertNotEqual(files['/etc/containers/policy.json'], files['/usr/share/bazzite-tower/containers/policy.json'])
+        result = self.extract_fixture(files)
+        self.assertEqual(result['trust']['policy.json'], r.pub.file_sha(self.root / r.TRUST['policy.json']))
+        self.assertEqual(result['activePolicySha256'], r.pub.sha(files['/etc/containers/policy.json']))
+        merged = json.loads(result['activePolicy'])
+        self.assertEqual(merged['transports']['docker']['quay.io/example'], [{'type': 'reject'}])
+        self.assertEqual(merged['transports']['docker'][''], [{'type': 'reject'}])
+        self.assertIn('atomic', merged['transports'])
+
+    def test_realistic_installed_file_substitution_is_refused(self):
+        originals = self.installed_files()
+        for location in ['/usr/share/bazzite-tower/containers/policy.json', '/usr/share/bazzite-tower/containers/bazzite-tower-cosign.pub', '/etc/pki/containers/bazzite-tower-cosign.pub', '/etc/containers/registries.d/bazzite-tower.yaml']:
+            files = dict(originals); files[location] += b'changed'
+            with self.subTest(location=location), self.assertRaises(ValueError): self.extract_fixture(files)
+        for mutate in [lambda p: p.update(default=[{'type': 'insecureAcceptAnything'}]),
+                       lambda p: p['transports']['docker'].update({r.DEST: [{'type': 'insecureAcceptAnything'}]}),
+                       lambda p: p['transports']['docker'][r.DEST][0].update(signedIdentity={'type': 'exactRepository', 'dockerRepository': 'attacker/image'}),
+                       lambda p: p['transports']['docker'].update({r.DEST + ':stable': [{'type': 'insecureAcceptAnything'}]}),
+                       lambda p: p['transports']['docker'].update({r.DEST + '@sha256:' + 'a' * 64: [{'type': 'insecureAcceptAnything'}]}),
+                       lambda p: p['transports']['docker'].update({r.DEST + '/child': [{'type': 'insecureAcceptAnything'}]})]:
+            current = json.loads(originals['/etc/containers/policy.json']); mutate(current)
+            files = dict(originals); files['/etc/containers/policy.json'] = r.pub.canonical(current)
+            with self.assertRaises(ValueError): self.extract_fixture(files)
 
     def valid(self):
         return r.validate(self.root, self.data, 'legacy', self.base, self.version)
@@ -170,7 +232,7 @@ class RefreshTests(unittest.TestCase):
     def test_baseline_missing_bootstrap_auth_and_network_fail_closed(self):
         from subprocess import CompletedProcess
         def result(error): return CompletedProcess([], 1, b'', error)
-        with patch.object(r.subprocess, 'run', return_value=result(b'manifest unknown')):
+        with patch.object(r.subprocess, 'run', return_value=result(b'manifest unknown')), patch.object(r, 'command', side_effect=[json.dumps(v) for v in self.bootstrap_packets()]):
             r.baseline(self.root, self.data, 'legacy', self.root)
         for error in [b'unauthorized', b'connection reset', b'timeout', b'404 proxy error']:
             with patch.object(r.subprocess, 'run', return_value=result(error)), self.assertRaises(ValueError):
@@ -178,16 +240,52 @@ class RefreshTests(unittest.TestCase):
         with patch.object(r.subprocess, 'run', return_value=result(b'manifest unknown')), self.assertRaises(ValueError):
             r.baseline(self.root, self.data, 'system', self.root)
 
-    def test_missing_stable_refused_after_first_server_run_or_attempt(self):
+    def test_missing_stable_refused_outside_reviewed_recovery_run_attempt(self):
         from subprocess import CompletedProcess
         missing = CompletedProcess([], 1, b'', b'manifest unknown')
-        for number, attempt in [('2', '1'), ('1', '2'), ('2', '2'), ('01', '1'), ('1', '01'), ('', '1'), ('1', '')]:
+        for number, attempt in [('1', '1'), ('1', '2'), ('2', '2'), ('3', '1'), ('3', '2'), ('02', '1'), ('2', '01'), ('', '1'), ('2', '')]:
             with self.subTest(number=number, attempt=attempt), patch.dict(os.environ, {'GITHUB_RUN_NUMBER': number, 'GITHUB_RUN_ATTEMPT': attempt}), patch.object(r.subprocess, 'run', return_value=missing), self.assertRaises(ValueError):
                 r.baseline(self.root, self.data, 'legacy', self.root)
         for key in ['GITHUB_RUN_NUMBER', 'GITHUB_RUN_ATTEMPT']:
             with patch.dict(os.environ), patch.object(r.subprocess, 'run', return_value=missing):
                 del os.environ[key]
                 with self.assertRaises(ValueError): r.baseline(self.root, self.data, 'legacy', self.root)
+
+    def bootstrap_packets(self):
+        failed = self.policy['bootstrap']['legacy']
+        run = {'id': int(failed['failedRunId']), 'head_sha': failed['failedHead'], 'path': r.WORKFLOW,
+               'event': 'workflow_dispatch', 'head_branch': 'main', 'run_number': 1, 'run_attempt': 1,
+               'status': 'completed', 'conclusion': 'failure', 'repository': {'full_name': 'bearyjd/bazzite-tower'}}
+        jobs = {'total_count': 3, 'jobs': [{'name': 'build (legacy)', 'status': 'completed', 'conclusion': 'failure'},
+                {'name': 'publish-legacy', 'status': 'completed', 'conclusion': 'skipped'},
+                {'name': 'publish-system', 'status': 'completed', 'conclusion': 'skipped'}]}
+        return run, jobs
+
+    def test_reviewed_bootstrap_requires_exact_failed_run_and_skipped_publishers(self):
+        run, jobs = self.bootstrap_packets()
+        with patch.object(r, 'command', side_effect=[json.dumps(run), json.dumps(jobs)]) as api:
+            r.bootstrap_failure(self.policy)
+            self.assertIn('/attempts/1/jobs?', api.call_args_list[1].args[-1])
+        for key, value in [('id', 40062419691), ('head_sha', 'a' * 40), ('path', '.github/workflows/other.yml'),
+                           ('event', 'push'), ('head_branch', 'feature'), ('run_number', 2), ('run_attempt', 2),
+                           ('status', 'in_progress'), ('conclusion', 'success'), ('repository', {'full_name': 'attacker/fork'})]:
+            invalid = {**run, key: value}
+            with self.subTest(key=key), patch.object(r, 'command', return_value=json.dumps(invalid)), self.assertRaises(ValueError): r.bootstrap_failure(self.policy)
+        for mutate in [lambda j: j.update(total_count=4), lambda j: j.update(total_count=0),
+                       lambda j: j['jobs'].pop(), lambda j: j['jobs'][1].update(name='unknown-publisher'),
+                       lambda j: j['jobs'][1].update(status='in_progress'), lambda j: j['jobs'][1].update(conclusion='success'),
+                       lambda j: j['jobs'][2].update(conclusion='failure')]:
+            invalid = copy.deepcopy(jobs); mutate(invalid)
+            with patch.object(r, 'command', side_effect=[json.dumps(run), json.dumps(invalid)]), self.assertRaises(ValueError): r.bootstrap_failure(self.policy)
+        with patch.object(r, 'command', side_effect=subprocess.CalledProcessError(1, ['gh', 'api'])), self.assertRaises(subprocess.CalledProcessError):
+            r.bootstrap_failure(self.policy)
+
+    def test_active_policy_bytes_and_hash_are_both_bound(self):
+        installed = json.loads((self.data / 'installed.json').read_bytes())
+        installed['activePolicy'] += '\n'; write(self.data / 'installed.json', installed)
+        with self.assertRaises(ValueError): self.valid()
+        installed['activePolicySha256'] = r.pub.sha(installed['activePolicy'].encode()); write(self.data / 'installed.json', installed)
+        with self.assertRaises(ValueError): self.valid()  # Exact signed installed.json provenance hash changed.
 
     def test_signed_subject_or_predicate_mismatch_refused(self):
         verified = Path(self.tmp.name) / 'verified'; verified.mkdir()

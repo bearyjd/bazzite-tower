@@ -41,9 +41,9 @@ last-good independently). The separate `notify` job opens — and later
 auto-closes — each leg's labelled tracking issue, independently of whether
 `release` finished cleanly or was cancelled/killed partway through.
 
-`base-refresh.yml` permits missing-channel initialization only on server run 1,
-attempt 1; later missing baselines hold for independently reviewed recovery.
-It reads `.github/base-refresh-policy.json`: both product
+`base-refresh.yml` permits missing-stable initialization only through the
+reviewed, API-verified run2/attempt1 recovery described below; other missing
+baselines hold for independently reviewed recovery. It reads `.github/base-refresh-policy.json`: both product
 profiles pin accepted source `91908f11eba496cde806298f2d0cbe332213192d` while
 r16 is prepared. Legacy retains `IMAGE_TAG=latest`; system retains
 `IMAGE_TAG=snitchwatch-system`. Source SHA/tree/cleanliness and profile contracts
@@ -53,6 +53,15 @@ identity and actual Bazzite/kernel floors (`44.20261023` /
 the dispatched main SHA, with no source checkout. Policy staleness blocks tag
 movement. Features still need owner runtime acceptance, protected fixed-digest
 promotion and a subsequent reviewed policy update.
+
+Refresh trust collection checks exact staged policy/key/registry bytes and active
+key/registry copies. The active policy is an intentional merge with upstream
+rules: require reject default, exact tower signing rule and no more-specific
+tower scope, then bind its complete bytes/hash and independently re-extract it.
+The single reviewed missing-stable recovery is server run2/attempt1 only, tied to
+failed run `40062419690` at `d8407c60f74ceafbcbc2e333198c9fd23ce4e260`;
+GitHub API metadata and complete attempt-1 jobs must prove both publishers were
+skipped. Run3+, reruns, API failure and identity mismatches HOLD.
 
 The r15.1 promoter binds candidate run `40050864799` to image digest
 `sha256:df4ec1239abae0cbe1d4d4e27bce85d54f17e2b5155e431c2727c724aa879bf7` and

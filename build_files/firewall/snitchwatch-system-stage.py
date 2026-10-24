@@ -56,8 +56,8 @@ def main():
         raise ValueError('actual binary --version differs from required bridge version')
     # Stage from this exact source checkout, never install the schema1 user unit.
     subprocess.run(['bash', str(source / 'packaging/system/stage.sh'), str(out), str(binary), binary_sha], check=True)
-    # stage.sh also stages upstream's daemon config (deny, but ProcMonitorMethod
-    # ebpf, which fails on this laptop's kernel: snitchwatch#6).  Drop it: a file
+    # stage.sh also stages upstream's deny/ebpf daemon config. The tower keeps
+    # its reviewed allow/proc baseline; eBPF requires owner testing. Drop it: a file
     # pre-placed at that path would meet the RPM's cpio extraction (mtime-
     # dependent overwrite, see 95-firewall.sh), and 95-firewall.sh installs the
     # reviewed tower candidate (allow + proc) there after extraction anyway.

@@ -152,3 +152,23 @@ are documented in RUNBOOK and remain separate from CI. The built-image smoke
 gate requires all three ELF BPF objects while retaining the allow/proc baseline;
 no CI fixture establishes live kernel probe compatibility. Historical
 `r13-immutable-ci.yml` stays unchanged to preserve its original publication proof.
+
+## Candidate artifact consumption recovery
+
+The two candidate consumers in `r13-candidate.yml` pin the official Node24
+`download-artifact` v8.0.2 action (`9000827ccba6bdab643e8b6fd33ac0654aef8333`),
+require archive digest mismatch to error and decompression to run, then require
+its completion-only `download-path` output to equal the expected data directory.
+The trusted candidate/publisher gates retain the exact nine-file inventory,
+source/head/run identity, per-file hashes, installed manifests and trust policy.
+Failures print bounded free-space and top-level name/type/size diagnostics only;
+no file contents, recursion or symlink following. Inventory rejection includes
+bounded escaped missing/extra names without accepting incomplete or extra data.
+
+Candidate40110051327 built and uploaded a ZIP64 archive with the exact nine root
+entries, but the consuming gate rejected its downloaded inventory. The old action
+emitted no completion message/output in the completed log; a forced runtime
+compatibility warning was observed. The precise downloader failure is unproven;
+this recovery replaces its legacy runtime/client and explicitly checks completion.
+It requires a fresh reviewed head/control and a new attempt-one run, never a rerun
+or relaxation of the failed candidate's contract.

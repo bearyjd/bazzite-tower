@@ -62,7 +62,9 @@ def context():
     require(os.environ['GITHUB_REPOSITORY'] == 'bearyjd/bazzite-tower' and os.environ['GITHUB_REF'] == 'refs/heads/main', 'main-only refresh')
     require(os.environ['GITHUB_EVENT_NAME'] in {'schedule', 'workflow_dispatch'}, 'unexpected refresh event')
     pub.hex_value(os.environ['GITHUB_SHA'], 40)
-    require(int(os.environ['GITHUB_RUN_ID']) > 0 and int(os.environ['GITHUB_RUN_ATTEMPT']) > 0, 'invalid run identity')
+    require(os.environ.get('GITHUB_WORKFLOW_REF') == 'bearyjd/bazzite-tower/' + WORKFLOW + '@refs/heads/main', 'unexpected refresh workflow identity')
+    for key in ('GITHUB_RUN_ID', 'GITHUB_RUN_NUMBER', 'GITHUB_RUN_ATTEMPT'):
+        require(re.fullmatch(r'[1-9][0-9]*', os.environ.get(key, '')) is not None, 'invalid run identity: ' + key)
 
 
 def base_version(value):
@@ -259,8 +261,13 @@ def baseline(root, data, profile, trust_root):
     result = subprocess.run(['skopeo', 'inspect', '--raw', 'docker://' + DEST + ':' + channel], capture_output=True)
     if result.returncode:
         # Refuse auth, transport and timeout failures. This is a deliberately
-        # reviewed first-publication exception for the previously absent stable.
-        require(p['bootstrap'][profile]['allowMissing'] and b'manifest unknown' in result.stderr.lower(), 'cannot establish signed channel baseline')
+        # reviewed exception only for the first server-assigned workflow run
+        # and first attempt. A deleted tag or failed bootstrap cannot discard
+        # the rolling signed baseline on a later run/rerun. Recovery needs review.
+        require(p['bootstrap'][profile]['allowMissing'] and
+                os.environ.get('GITHUB_RUN_NUMBER') == '1' and
+                os.environ.get('GITHUB_RUN_ATTEMPT') == '1' and
+                b'manifest unknown' in result.stderr.lower(), 'cannot establish signed channel baseline; missing-tag bootstrap requires first workflow run and first attempt')
         return
     current_digest = 'sha256:' + pub.sha(result.stdout)
     image = DEST + '@' + current_digest

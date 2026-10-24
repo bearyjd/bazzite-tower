@@ -51,7 +51,8 @@ class RefreshTests(unittest.TestCase):
             dest = self.root / path; dest.parent.mkdir(parents=True, exist_ok=True); shutil.copyfile(ROOT / path, dest)
         self.env = patch.dict(os.environ, {'CONTROL': str(self.root), 'GITHUB_REPOSITORY': 'bearyjd/bazzite-tower',
                       'GITHUB_REF': 'refs/heads/main', 'GITHUB_EVENT_NAME': 'workflow_dispatch', 'GITHUB_SHA': 'a' * 40,
-                      'GITHUB_RUN_ID': '17', 'GITHUB_RUN_ATTEMPT': '1'})
+                      'GITHUB_RUN_ID': '17', 'GITHUB_RUN_NUMBER': '1', 'GITHUB_RUN_ATTEMPT': '1',
+                      'GITHUB_WORKFLOW_REF': 'bearyjd/bazzite-tower/.github/workflows/base-refresh.yml@refs/heads/main'})
         self.env.start(); self.addCleanup(self.env.stop)
         self.data = Path(self.tmp.name) / 'data'; self.data.mkdir()
         archive(self.data / 'image.oci.tar')
@@ -85,8 +86,23 @@ class RefreshTests(unittest.TestCase):
         with self.assertRaises(ValueError): r.policy(self.root)
 
     def test_context_main_repo_and_event_guards(self):
-        for key, value in [('GITHUB_REF', 'refs/heads/feature'), ('GITHUB_REPOSITORY', 'attacker/fork'), ('GITHUB_SHA', 'main'), ('GITHUB_EVENT_NAME', 'push')]:
+        r.context()
+        for key, value in [('GITHUB_REF', 'refs/heads/feature'), ('GITHUB_REPOSITORY', 'attacker/fork'), ('GITHUB_SHA', 'main'), ('GITHUB_EVENT_NAME', 'push'),
+                           ('GITHUB_WORKFLOW_REF', 'bearyjd/bazzite-tower/.github/workflows/other.yml@refs/heads/main'),
+                           ('GITHUB_WORKFLOW_REF', 'bearyjd/bazzite-tower/.github/workflows/base-refresh.yml@refs/heads/feature')]:
             with self.subTest(key=key), patch.dict(os.environ, {key: value}), self.assertRaises(ValueError): r.context()
+
+    def test_missing_or_noncanonical_run_identity_refused(self):
+        for key in ['GITHUB_RUN_ID', 'GITHUB_RUN_NUMBER', 'GITHUB_RUN_ATTEMPT']:
+            for value in ['', '0', '-1', '01', '1.0', '1e0', ' 1', '1\n']:
+                with self.subTest(key=key, value=value), patch.dict(os.environ, {key: value}), self.assertRaises(ValueError):
+                    r.context()
+            with patch.dict(os.environ):
+                del os.environ[key]
+                with self.assertRaises(ValueError): r.context()
+        with patch.dict(os.environ):
+            del os.environ['GITHUB_WORKFLOW_REF']
+            with self.assertRaises(ValueError): r.context()
 
     def test_mutable_and_wrong_repository_base_refused(self):
         for value in ['ghcr.io/ublue-os/bazzite-nvidia-open:stable', 'ghcr.io/evil/base@sha256:' + 'f' * 64]:
@@ -161,6 +177,17 @@ class RefreshTests(unittest.TestCase):
                 r.baseline(self.root, self.data, 'legacy', self.root)
         with patch.object(r.subprocess, 'run', return_value=result(b'manifest unknown')), self.assertRaises(ValueError):
             r.baseline(self.root, self.data, 'system', self.root)
+
+    def test_missing_stable_refused_after_first_server_run_or_attempt(self):
+        from subprocess import CompletedProcess
+        missing = CompletedProcess([], 1, b'', b'manifest unknown')
+        for number, attempt in [('2', '1'), ('1', '2'), ('2', '2'), ('01', '1'), ('1', '01'), ('', '1'), ('1', '')]:
+            with self.subTest(number=number, attempt=attempt), patch.dict(os.environ, {'GITHUB_RUN_NUMBER': number, 'GITHUB_RUN_ATTEMPT': attempt}), patch.object(r.subprocess, 'run', return_value=missing), self.assertRaises(ValueError):
+                r.baseline(self.root, self.data, 'legacy', self.root)
+        for key in ['GITHUB_RUN_NUMBER', 'GITHUB_RUN_ATTEMPT']:
+            with patch.dict(os.environ), patch.object(r.subprocess, 'run', return_value=missing):
+                del os.environ[key]
+                with self.assertRaises(ValueError): r.baseline(self.root, self.data, 'legacy', self.root)
 
     def test_signed_subject_or_predicate_mismatch_refused(self):
         verified = Path(self.tmp.name) / 'verified'; verified.mkdir()

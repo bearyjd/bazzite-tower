@@ -41,7 +41,9 @@ last-good independently). The separate `notify` job opens — and later
 auto-closes — each leg's labelled tracking issue, independently of whether
 `release` finished cleanly or was cancelled/killed partway through.
 
-`base-refresh.yml` reads `.github/base-refresh-policy.json`: both product
+`base-refresh.yml` permits missing-channel initialization only on server run 1,
+attempt 1; later missing baselines hold for independently reviewed recovery.
+It reads `.github/base-refresh-policy.json`: both product
 profiles pin accepted source `91908f11eba496cde806298f2d0cbe332213192d` while
 r16 is prepared. Legacy retains `IMAGE_TAG=latest`; system retains
 `IMAGE_TAG=snitchwatch-system`. Source SHA/tree/cleanliness and profile contracts

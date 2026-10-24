@@ -25,6 +25,14 @@ The workflow resolves a fresh immutable Bazzite base, enforces the
 `44.20261023` / `7.2.9-ogc3.1.fc44` floor and rejects stale policy, then requires
 build/test/signing/SPDX/provenance/host-policy gates before publication.
 
+The missing-`:stable` bootstrap is allowed only on this workflow's first
+server-assigned run (`GITHUB_RUN_NUMBER=1`) and first attempt
+(`GITHUB_RUN_ATTEMPT=1`), on the exact `main` workflow identity. A later run or
+rerun with no canonical `:stable` tag fails closed instead of resetting the
+signed version baseline. If the first run fails before establishing `:stable`,
+recovery requires an independently reviewed recovery change; rerunning alone
+cannot bypass the bootstrap gate. Do not delete the canonical tag to recover.
+
 The release sequence below remains the feature-acceptance path. A newly accepted
 feature digest still needs owner runtime acceptance and the protected `release`
 environment promoter. Only a subsequent independently reviewed policy update may

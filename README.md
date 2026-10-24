@@ -328,7 +328,11 @@ upgrades retain the policy in `/etc`.
 
 Three channels use the same `Containerfile`, with separate accepted product
 profiles. `.github/base-refresh-policy.json` freezes the product source at
-`91908f11eba496cde806298f2d0cbe332213192d` while r16 is prepared.
+`1c01f086f58bd33a5d7651254671e57723d45561` for the r16.1 refresh transition.
+
+The r16.1 policy transition must merge only after protected fixed-digest promotion
+completes and independent destination signature/SPDX checks pass. Host runtime
+acceptance remains unverified; the owner authorized the CI-based release path.
 
 **`stable` — automatic Bazzite refresh of the accepted legacy product**
 
@@ -347,10 +351,10 @@ profiles. `.github/base-refresh-policy.json` freezes the product source at
   `bazzite-nvidia-open:stable`. It does not move the accepted product channels.
   Check `docs/research/i915-bug-report/` before booting it on the ThinkPad P1.
 
-**`snitchwatch-system` — automatic Bazzite refresh of the accepted r15.1 system product**
+**`snitchwatch-system` — automatic Bazzite refresh of the r16.1 system product**
 
 - Remains a separate opt-in channel; it is not an alias for `stable`.
-- Uses the accepted r15.1 system profile with `SNITCHWATCH_BRIDGE=system` and
+- Uses the reviewed r16.1 system profile with `SNITCHWATCH_BRIDGE=system` and
   `FIREWALL_DAEMON=opensnitch`, refreshed by `base-refresh.yml` against the same
   immutable upstream base. Both profiles retain `DefaultAction: allow` and
   `ProcMonitorMethod: proc`; these gates do not establish host eBPF compatibility.

@@ -7,9 +7,11 @@
 ## Accepted products and upstream base refresh
 
 `.github/base-refresh-policy.json` pins both accepted product profiles to
-`91908f11eba496cde806298f2d0cbe332213192d`. Legacy publishes `:stable` and
-compatibility `:latest` with `IMAGE_TAG=latest`; accepted r15.1 system publishes
-only `:snitchwatch-system`. Product code stays frozen during r16 preparation.
+`1c01f086f58bd33a5d7651254671e57723d45561`. Legacy publishes `:stable` and
+compatibility `:latest` with `IMAGE_TAG=latest`; reviewed r16.1 system publishes
+only `:snitchwatch-system`. The policy transition follows successful protected
+promotion and independent destination signature/SPDX checks. Host runtime
+acceptance remains unverified under the owner-authorized CI-based release path.
 
 `base-refresh.yml` resolves upstream `bazzite-nvidia-open:stable` once to an
 immutable digest and supplies `BASE_IMAGE` to that accepted checkout. Independent
@@ -20,6 +22,12 @@ attestation and host signature policy gates precede publication; a current-main
 policy hash recheck rejects stale policy before public pointers move. Daily and
 main-only dispatch refreshes need no per-base owner click. New features still
 need protected fixed-digest acceptance and a subsequent reviewed policy update.
+
+The exact system release baseline is
+`sha256:3f9a0d238e69917a33a23710a53963e70b64526cc8e44f9d24787944dcca1f27`.
+`ci/base-refresh.py` verifies its repository-key signature before the exception;
+old/arbitrary digests need destination-bound signed refresh provenance, and a
+missing system tag always fails closed. The legacy run2 recovery is unchanged.
 
 The candidate `Containerfile` default pin is Bazzite `44.20261023`, digest
 `sha256:d0e5e105ebf43c7ddbe3c4a5dfecac1628b0e0dcf152bbd2aee0eda3e4b4cdd4`.

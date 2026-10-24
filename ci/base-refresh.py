@@ -49,7 +49,7 @@ def policy(root):
         pub.hex_value(value[key], 40)
     require(value['profiles'] == {'legacy': {'imageTag': 'latest', 'channels': ['stable', 'latest']},
                                   'system': {'imageTag': 'snitchwatch-system', 'channels': ['snitchwatch-system']}}, 'policy profile/channel substitution')
-    require(value['bootstrap'] == {'legacy': {'allowMissing': True, 'digest': None, 'runNumber': '2', 'failedRunId': '40062419690', 'failedHead': 'd8407c60f74ceafbcbc2e333198c9fd23ce4e260'}, 'system': {'allowMissing': False, 'digest': 'sha256:df4ec1239abae0cbe1d4d4e27bce85d54f17e2b5155e431c2727c724aa879bf7'}}, 'unreviewed bootstrap exception')
+    require(value['bootstrap'] == {'legacy': {'allowMissing': True, 'digest': None, 'runNumber': '2', 'failedRunId': '40062419690', 'failedHead': 'd8407c60f74ceafbcbc2e333198c9fd23ce4e260'}, 'system': {'allowMissing': False, 'digest': 'sha256:3f9a0d238e69917a33a23710a53963e70b64526cc8e44f9d24787944dcca1f27'}}, 'unreviewed bootstrap exception')
     require(set(value['nativeSource']) == {'commit', 'tree', 'submoduleCommit'} and set(value['daemonSource']) == {'commit', 'tree'}, 'invalid native source policy')
     for identity in [*value['nativeSource'].values(), *value['daemonSource'].values()]: pub.hex_value(identity, 40)
     pub.hex_value(value['daemonPatchSha256'])
@@ -318,7 +318,7 @@ def baseline(root, data, profile, trust_root):
     image = DEST + '@' + current_digest
     subprocess.run(['timeout', '180', 'cosign', 'verify', '--key', str(trust_root / 'cosign.pub'), image], check=True, stdout=subprocess.DEVNULL)
     if current_digest == p['bootstrap'][profile]['digest']:
-        return  # Exact owner-accepted, key-signed r15.1 system digest only.
+        return  # Exact reviewed, key-signed system release digest only.
     verified = subprocess.check_output(['timeout', '180', 'cosign', 'verify-attestation', '--new-bundle-format', '--key', str(trust_root / 'cosign.pub'), '--type', PREDICATE, image])
     with tempfile.TemporaryDirectory() as tmp:
         path = Path(tmp) / 'baseline.json'; path.write_bytes(verified)

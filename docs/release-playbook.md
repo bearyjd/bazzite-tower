@@ -18,12 +18,22 @@ explicit owner instruction.
 
 `base-refresh.yml` runs daily and by dispatch on `main`, without a per-base owner
 approval. `.github/base-refresh-policy.json` pins accepted product source
-`91908f11eba496cde806298f2d0cbe332213192d`: legacy publishes `:stable` and its
-compatibility alias `:latest` (`IMAGE_TAG=latest`); accepted r15.1 system publishes
-only `:snitchwatch-system`. Product code stays frozen while r16 is prepared.
+`1c01f086f58bd33a5d7651254671e57723d45561`: legacy publishes `:stable` and its
+compatibility alias `:latest` (`IMAGE_TAG=latest`); reviewed r16.1 system publishes
+only `:snitchwatch-system`. Both profiles use this exact product source.
 The workflow resolves a fresh immutable Bazzite base, enforces the
 `44.20261023` / `7.2.9-ogc3.1.fc44` floor and rejects stale policy, then requires
 build/test/signing/SPDX/provenance/host-policy gates before publication.
+
+The r16.1 refresh-policy transition must merge only after protected promotion
+completes successfully, independent destination signature/SPDX checks pass, and
+the exact policy PR head has green CI and independent review. Its sole system
+release-baseline exception is `sha256:3f9a0d238e69917a33a23710a53963e70b64526cc8e44f9d24787944dcca1f27`,
+verified with the repository key before use. The prior r15.1 digest receives no
+exception. Normal destination-bound signed refresh provenance still enforces
+monotonic Bazzite/kernel versions. A missing system tag always fails closed.
+Host runtime acceptance remains unverified; the owner authorized this CI-based
+release path. This does not establish runtime or host eBPF compatibility.
 
 The missing-`:stable` recovery is authorized only for server-assigned workflow
 run 2, attempt 1, on the exact `main` workflow identity. Run 1

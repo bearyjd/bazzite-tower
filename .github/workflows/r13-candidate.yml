@@ -81,6 +81,7 @@ jobs:
         tests/test-snitchwatch-toolchain.sh
         python3 tests/test-snitchwatch-image-build.py
         python3 tests/test-snitchwatch-image-build-daemon.py
+        python3 tests/test-snitchwatch-resources.py
       working-directory: source
     - name: Recheck exact source after source contract tests
       run: python3 control/ci/r13-publication.py source --control control --source source

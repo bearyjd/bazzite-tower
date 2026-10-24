@@ -1,0 +1,131 @@
+#!/usr/bin/env python3
+"""Finite, reporting-only interval CPU/RSS sampler. No traffic or payload reads."""
+import argparse
+import json
+import math
+import os
+from pathlib import Path
+import statistics
+import subprocess
+import sys
+import time
+
+UNITS = ('opensnitch.service', 'snitchwatch-system-bridge.service')
+
+
+def snapshot(pid, proc=Path('/proc'), now=time.monotonic):
+    # comm may contain spaces and parentheses. Fields after the final ')' start
+    # at stat field 3; never collect command lines, environment or connections.
+    def read():
+        return (proc / str(pid) / 'stat').read_text().rsplit(')', 1)[1].split()
+    first = read()
+    second = read()
+    stamp = now()
+    if first[19] != second[19]:
+        raise ValueError('PID reused during sample')
+    return {'pid': pid, 'start_ticks': int(second[19]), 'monotonic': stamp,
+            'cpu_ticks': int(second[11]) + int(second[12]),
+            'rss_bytes': int(second[21]) * os.sysconf('SC_PAGE_SIZE'),
+            'threads': int(second[17])}
+
+
+def interval(previous, current, ticks):
+    if (previous['pid'], previous['start_ticks']) != (current['pid'], current['start_ticks']):
+        return None
+    elapsed = current['monotonic'] - previous['monotonic']
+    delta = current['cpu_ticks'] - previous['cpu_ticks']
+    if elapsed <= 0 or delta < 0:
+        raise ValueError('nonmonotonic sample counters')
+    return 100 * delta / ticks / elapsed
+
+
+def unit_pid(unit):
+    result = subprocess.run(['systemctl', 'show', '--property=MainPID', '--value', unit],
+                            capture_output=True, text=True, timeout=2, check=True)
+    pid = int(result.stdout.strip())
+    if pid <= 0:
+        raise ProcessLookupError('unit has no running MainPID')
+    return pid
+
+
+def collect(targets, duration, period, resolve=unit_pid, read=snapshot,
+            now=time.monotonic, sleep=time.sleep):
+    ticks = os.sysconf('SC_CLK_TCK')
+    started = now()
+    deadline = started + duration
+    previous, identities = {}, {}
+    samples = []
+    restarts = dict.fromkeys(targets, 0)
+    # The iteration cap also bounds a faulty clock or injected test clock.
+    for _ in range(math.ceil(duration / period) + 2):
+        for label, target in targets.items():
+            sample = {'target': label, 'elapsed_seconds': now() - started}
+            try:
+                current = read(target if isinstance(target, int) else resolve(target))
+                identity = (current['pid'], current['start_ticks'])
+                if label in identities and identity != identities[label]:
+                    restarts[label] += 1
+                identities[label] = identity
+                cpu = interval(previous[label], current, ticks) if label in previous else None
+                previous[label] = current
+                sample.update(current, status='ok', cpu_core_percent=cpu)
+            except PermissionError:
+                previous.pop(label, None)
+                sample['status'] = 'permission-denied'
+            except (FileNotFoundError, ProcessLookupError):
+                previous.pop(label, None)
+                sample['status'] = 'missing'
+            except (OSError, ValueError, IndexError, subprocess.SubprocessError):
+                previous.pop(label, None)
+                sample['status'] = 'unavailable'
+            samples.append(sample)
+        remaining = deadline - now()
+        if remaining <= 0:
+            break
+        sleep(min(period, remaining))
+    summaries = {}
+    for label in targets:
+        series = [row for row in samples if row['target'] == label]
+        valid = [row for row in series if row['status'] == 'ok']
+        cpu = sorted(row['cpu_core_percent'] for row in valid if row['cpu_core_percent'] is not None)
+        summaries[label] = {
+            'cpu_core_percent_median': statistics.median(cpu) if cpu else None,
+            'cpu_core_percent_p95': cpu[math.ceil(len(cpu) * .95) - 1] if cpu else None,
+            'valid_cpu_intervals': len(cpu), 'restarts_observed': restarts[label],
+            'unavailable_samples': len(series) - len(valid),
+            'rss_initial_bytes': valid[0]['rss_bytes'] if valid else None,
+            'rss_final_bytes': valid[-1]['rss_bytes'] if valid else None,
+            'rss_peak_bytes': max((row['rss_bytes'] for row in valid), default=None),
+            'threads_peak': max((row['threads'] for row in valid), default=None),
+        }
+    return {'schema_version': 1, 'duration_seconds': now() - started,
+            'requested_duration_seconds': duration, 'interval_seconds': period,
+            'cpu_units': 'percent of one CPU core; values above 100 are valid',
+            'summary': summaries, 'samples': samples}
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--duration', type=float, default=600, help='seconds, 1..3600')
+    parser.add_argument('--interval', type=float, default=5, help='seconds, 1..60')
+    parser.add_argument('--pid', action='append', default=[], metavar='LABEL=PID',
+                        help='also sample a GUI/client PID; PID reuse is detected')
+    args = parser.parse_args()
+    if not (1 <= args.duration <= 3600 and 1 <= args.interval <= 60):
+        parser.error('duration must be 1..3600 and interval 1..60 seconds')
+    targets = {unit: unit for unit in UNITS}
+    for value in args.pid:
+        try:
+            label, pid = value.split('=', 1)
+            if not label or label in targets or int(pid) <= 0 or len(targets) >= 10:
+                raise ValueError()
+            targets[label] = int(pid)
+        except ValueError:
+            parser.error('--pid requires a unique LABEL and positive PID (at most 8 extra targets)')
+    json.dump(collect(targets, args.duration, args.interval), sys.stdout, indent=2)
+    print()
+    return 0
+
+
+if __name__ == '__main__':
+    sys.exit(main())

@@ -125,3 +125,19 @@ existing Podman user namespace and image store, without sudo or runner security
 changes. The full collector regression models direct Skopeo unshare refusal and
 checks namespace-export failure cleanup. Actual runner success requires fresh CI.
 See [Podman unshare](https://docs.podman.io/en/latest/markdown/podman-unshare.1.html).
+
+## OpenSnitch resource and eBPF packaging fixtures
+
+The source-contract gates in `build.yml` (legacy and system candidate) and
+`r13-candidate.yml` run `python3 tests/test-snitchwatch-resources.py` alongside
+the daemon/image fixtures. It checks interval CPU accounting using monotonic
+elapsed time, RSS/thread series, identity changes, missing/permission/timeouts,
+and rejects absent/nonregular/wrong-format BPF object fixtures. It also executes
+the RUNBOOK backup/trap/editor sequence with recording command doubles,
+covering backup failures, editor failure, restoration retry and HUP/INT/TERM
+without privileged host actions. The installed
+reporting-only sampler is `bazzite-tower-snitchwatch-resources`; owner A/B tests
+are documented in RUNBOOK and remain separate from CI. The built-image smoke
+gate requires all three ELF BPF objects while retaining the allow/proc baseline;
+no CI fixture establishes live kernel probe compatibility. Historical
+`r13-immutable-ci.yml` stays unchanged to preserve its original publication proof.

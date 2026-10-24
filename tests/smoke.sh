@@ -311,9 +311,11 @@ check "opensnitch config is valid JSON" \
 # whitespace and cannot distinguish a key from a substring elsewhere.
 # Both profiles permanently default to allow; deny requires explicit operator
 # opt-in. Assert the selected image policy in each dispatch branch.
-# eBPF module fails to load on this image's kernel (snitchwatch#6) — "proc" is
-# mandatory here. Flipping this back to "ebpf" needs a newer opensnitch release.
-check "opensnitch ProcMonitorMethod is proc (eBPF broken on this kernel)" \
+# Keep the shipped proc baseline; owner eBPF experiments are local overrides.
+# Check all three RPM-supplied ELF BPF objects independently of selected mode.
+check "opensnitch eBPF objects packaged as ELF BPF" \
+    python3 /usr/libexec/bazzite-tower-opensnitch-ebpf-check
+check "opensnitch ProcMonitorMethod is proc (shipped baseline)" \
     jq -e '.ProcMonitorMethod == "proc"' /etc/opensnitchd/default-config.json
 # The image selector is immutable; a missing marker is not a legacy default.
 bridge_profile="$(< /usr/share/bazzite-tower/snitchwatch-bridge-profile)"

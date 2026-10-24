@@ -102,7 +102,7 @@ The image ships a Snitchwatch-tuned `/etc/opensnitchd/default-config.json` with 
 | Key | Value | Why |
 |---|---|---|
 | `Server.Address` | `127.0.0.1:50051` | The Snitchwatch bridge's gRPC listener, instead of `opensnitch-ui`'s `unix:///tmp/osui.sock`. |
-| `ProcMonitorMethod` | `proc` | **Not `ebpf`.** The v1.8.0 RPM's bundled eBPF module fails to load on this image's 6.19/7.x kernels (`unable to load eBPF module (opensnitch.o)`, [snitchwatch#6](https://github.com/bearyjd/snitchwatch/issues/6)) and the daemon degrades badly. Revisit only when an opensnitch release ships an eBPF module built for this kernel. |
+| `ProcMonitorMethod` | `proc` | Tested baseline. A historical module-load error ([snitchwatch#6](https://github.com/bearyjd/snitchwatch/issues/6)) does not establish kernel incompatibility. All three RPM eBPF objects are checked at build time; owner-only [runtime A/B testing](docs/RUNBOOK.md#opensnitch-resource-baseline-and-owner-ebpf-experiment) is still required. |
 | `DefaultAction` | `allow` (both profiles) | Permanent default; deny enforcement always requires explicit operator opt-in. |
 
 Both profiles permanently ship `DefaultAction: allow`: unanswered unruled connections use allow, so headless networking remains available. Deny enforcement is always an explicit operator opt-in, never a rollout end state. A local `DefaultAction: deny` can block every new unruled outbound connection when no decision client answers prompts. `DropWhileAsking` is not enabled by the image; explicitly opting into it can drop traffic while prompts are pending even with the allow default. Explicit firewall rules still apply.
@@ -119,8 +119,8 @@ verifies the installed executable, repair patch, build inputs and licenses.
 OpenSnitch uses `unix:opensnitchd.sock` from `/run/snitchwatch` (upstream's
 `opensnitch.service` drop-in, `WorkingDirectory=-/run/snitchwatch`) with
 `DefaultAction: allow` (deny requires explicit operator opt-in) and
-`ProcMonitorMethod: proc` (upstream's config says `ebpf`; the tower keeps `proc`,
-snitchwatch#6). If the socket fails the daemon still starts and unanswered
+`ProcMonitorMethod: proc` (upstream's config says `ebpf`; the tower keeps the
+tested `proc` baseline). If the socket fails the daemon still starts and unanswered
 unruled connections use the allow default. System readiness and migration
 require the shipped allow policy; an explicit local deny override is reported
 as policy drift. See the [runbook](docs/RUNBOOK.md#opensnitch--snitchwatch-deployment-status). GUI

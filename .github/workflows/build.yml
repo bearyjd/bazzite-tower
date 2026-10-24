@@ -137,6 +137,7 @@ jobs:
           python3 tests/test-snitchwatch-gate.py
           python3 tests/test-snitchwatch-image-build.py
           python3 tests/test-snitchwatch-image-build-daemon.py
+          python3 tests/test-snitchwatch-resources.py
           tests/test-container-templates.sh
           tests/test-docker-libvirt-forwarding.sh
           tests/test-docker-libvirt-forwarding-hooks.sh
@@ -260,6 +261,7 @@ jobs:
           python3 tests/test-snitchwatch-gate.py
           python3 tests/test-snitchwatch-image-build.py
           python3 tests/test-snitchwatch-image-build-daemon.py
+          python3 tests/test-snitchwatch-resources.py
           tests/test-container-templates.sh
           tests/test-docker-libvirt-forwarding.sh
           tests/test-docker-libvirt-forwarding-hooks.sh

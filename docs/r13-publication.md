@@ -3,7 +3,7 @@
 The system stable tag is held. `build.yml` still tests the system profile on PRs,
 but push, schedule and ordinary dispatch publish only legacy `safe-pin` and
 `latest-kernel`. A post-merge build cannot move `:snitchwatch-system`. Only
-`r13-promote.yml` can move that tag: a minimal dispatch-only promoter for one
+`release.yml` can move that tag: a minimal dispatch-only promoter for one
 fixed, already-built digest (see "Fixed-digest promotion" below). Runtime
 evidence and review for that digest are recorded in the PR and release notes,
 not in workflow variables.
@@ -175,7 +175,7 @@ does not establish remote acquisition or runtime success.
 
 ## Fixed-digest promotion
 
-`r13-promote.yml` is `workflow_dispatch` only, runs on `main` in this
+`release.yml` is `workflow_dispatch` only, runs on `main` in this
 repository, and takes one required input, `digest`. The workflow hard-codes the
 only digest it may promote (`sha256:a6a7a717...bed5f`, the r14 candidate built by `r13-candidate.yml` run 38490106535; r13 itself was `sha256:88f8ff00...b8454`) in `env`, and its first
 step fails unless the input equals it. It shares `bazzite-tower-stable-writers`

@@ -362,6 +362,11 @@ legacy)
     check "legacy OpenSnitch address is TCP" \
         jq -e '.Server.Address == "127.0.0.1:50051"' /etc/opensnitchd/default-config.json
     check "legacy image has no native system bridge" test ! -e /usr/bin/snitchwatch-bridge-cli
+    check "legacy image has no privileged scanner" test ! -e /usr/libexec/snitchwatch-scanner-privileged
+    check "legacy image has no scanner broker" test ! -e /usr/libexec/snitchwatch-scanner-broker
+    check "legacy image has no scanner activation" test ! -e /usr/share/dbus-1/services/org.snitchwatch.Scanner.service
+    check "legacy image has no scanner polkit action" test ! -e /usr/share/polkit-1/actions/org.snitchwatch.scanner.policy
+    check "legacy image has no scanner state provisioning" test ! -e /usr/lib/tmpfiles.d/snitchwatch-scanner.conf
     # The always-on OS-update rule is system-profile only (legacy is allow).
     check "legacy image ships no tower OS-update rule" \
         test ! -e /etc/opensnitchd/rules/000-snitchwatch-tower-os-update.json
@@ -415,6 +420,14 @@ system)
         bash -c 'ldd /usr/bin/snitchwatch-bridge-cli >/dev/null 2>&1 && ! ldd /usr/bin/snitchwatch-bridge-cli 2>&1 | grep -q "not found"'
     check "native bridge loader executes pinned version 0.1.1" \
         bash -c '/usr/bin/snitchwatch-bridge-cli --version | grep -qx "snitchwatch-bridge-cli 0.1.1"'
+    for scanner_binary in /usr/libexec/snitchwatch-scanner-privileged /usr/libexec/snitchwatch-scanner-broker; do
+        # shellcheck disable=SC2016 # The inner shell expands its positional argument.
+        check "scanner executable has resolved dynamic dependencies: ${scanner_binary}" \
+            bash -c 'ldd "$1" >/dev/null 2>&1 && ! ldd "$1" 2>&1 | grep -q "not found"' _ "${scanner_binary}"
+    done
+    check "scanner authentication helper present" test -x /usr/bin/pkexec
+    check "scanner state definition is root-private" \
+        grep -qx 'd /var/lib/snitchwatch-scanner 0700 root root -' /usr/lib/tmpfiles.d/snitchwatch-scanner.conf
     check "system bridge licenses shipped" test -d /usr/share/licenses/snitchwatch-bridge
     check "system bridge account present" getent passwd snitchwatch
     check "system GUI group present" getent group snitchwatch-ui

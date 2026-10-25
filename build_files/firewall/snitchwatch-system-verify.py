@@ -10,7 +10,7 @@ import sys
 
 MANIFEST = '/usr/share/snitchwatch/system-bridge-manifest.json'
 PINS = '/usr/share/snitchwatch/build-pins.json'
-EXPECTED_PINS_SHA256 = '312f838cd198b1eca7b277c0efc714d6f79af2fb39f6745ea7bf66b0dd29054b'
+EXPECTED_PINS_SHA256 = '88e941392e64b9fcf9cc363f222feb9392aeba863c82ce972466f5002c6d72ca'
 BINARY = '/usr/bin/snitchwatch-bridge-cli'
 PROFILE = '/usr/share/bazzite-tower/snitchwatch-bridge-profile'
 CONFIG = '/usr/share/bazzite-tower/opensnitchd-system-bridge-config.json'
@@ -35,6 +35,9 @@ DNS_RULE_SHA256 = '8f80789e093fd98f0b2b642268477b1e68d59006e4eb1d518acfecb7e95ea
 TOWER_RULES = {OS_UPDATE_RULE: OS_UPDATE_RULE_SHA256, DNS_RULE: DNS_RULE_SHA256}
 RESERVED_RULES = {FETCH_RULE, *TOWER_RULES}
 SOURCE_FILES = {
+    '/usr/share/dbus-1/services/org.snitchwatch.Scanner.service': 'packaging/scanner/org.snitchwatch.Scanner.service',
+    '/usr/share/polkit-1/actions/org.snitchwatch.scanner.policy': 'packaging/polkit/org.snitchwatch.scanner.policy',
+    '/usr/lib/tmpfiles.d/snitchwatch-scanner.conf': 'packaging/scanner/snitchwatch-scanner.conf',
     '/usr/lib/systemd/system/snitchwatch-system-bridge.service': 'packaging/system/snitchwatch-system-bridge.service',
     '/usr/lib/systemd/system/snitchwatch-system-bridge-grpc.socket': 'packaging/system/snitchwatch-system-bridge-grpc.socket',
     '/usr/lib/systemd/system/snitchwatch-system-bridge-gui.socket': 'packaging/system/snitchwatch-system-bridge-gui.socket',
@@ -44,6 +47,11 @@ SOURCE_FILES = {
     FETCH_RULE: 'packaging/bluebuild/files/system/etc/opensnitchd/rules/000-snitchwatch-bridge-fetch.json',
 }
 LICENSES = {'LICENSE', 'LICENSE.opensnitch', 'THIRD-PARTY-LICENSES.md'}
+SCANNER_BINARIES = {'/usr/libexec/snitchwatch-scanner-privileged', '/usr/libexec/snitchwatch-scanner-broker'}
+SCANNER_ROOT = '/usr/share/snitchwatch/scanner/'
+SCANNER_LICENSE_ROOT = '/usr/share/licenses/snitchwatch-scanner/'
+SCANNER_EVIDENCE = {'source-inputs.json', 'dependency-closure.json', 'scanner.patch', 'build.log', 'repro.log', 'test.log',
+                    'snitchwatch-scanner-privileged.ldd', 'snitchwatch-scanner-broker.ldd'}
 RECEIPTS = {
     PINS, '/usr/share/snitchwatch/native-build-provenance.json',
     '/usr/share/snitchwatch/native-rpm-inventory.txt',
@@ -53,7 +61,9 @@ RECEIPTS = {
 REQUIRED = set(SOURCE_FILES) | RECEIPTS | {
     BINARY, PROFILE, CONFIG, LEGACY_CONFIG, OS_UPDATE_RULE, DNS_RULE,
     '/usr/libexec/snitchwatch/verify-system-manifest.py',
-} | {'/usr/share/licenses/snitchwatch-bridge/' + name for name in LICENSES}
+} | {'/usr/share/licenses/snitchwatch-bridge/' + name for name in LICENSES} | SCANNER_BINARIES | {
+    SCANNER_ROOT + name for name in SCANNER_EVIDENCE | {'provenance.json'}
+} | {SCANNER_LICENSE_ROOT + name for name in {'LICENSE', 'THIRD-PARTY-LICENSES.md'}}
 
 
 def digest(data):
@@ -85,6 +95,8 @@ def read_file(root, name, mode=0o644):
         raise ValueError('missing immutable file: ' + describe(name)) from None
     if not stat.S_ISREG(info.st_mode) or stat.S_IMODE(info.st_mode) != mode:
         raise ValueError('incorrect file type/mode: ' + describe(name))
+    if root == Path('/') and (info.st_uid != 0 or info.st_gid != 0):
+        raise ValueError('immutable file is not root-owned: ' + describe(name))
     return path.read_bytes()
 
 
@@ -109,7 +121,7 @@ def verify(root):
     for name, expected in files.items():
         if not isinstance(expected, str) or not re.fullmatch('[0-9a-f]{64}', expected):
             raise ValueError('invalid immutable file digest')
-        mode = 0o755 if name in {BINARY, '/usr/libexec/snitchwatch/verify-system-manifest.py'} else 0o644
+        mode = 0o755 if name in {BINARY, '/usr/libexec/snitchwatch/verify-system-manifest.py'} | SCANNER_BINARIES else 0o644
         contents[name] = read_file(root, name, mode)
         if digest(contents[name]) != expected:
             raise ValueError('immutable file hash mismatch: ' + describe(name))
@@ -117,6 +129,9 @@ def verify(root):
         raise ValueError('binary identity differs from immutable inventory')
     if contents[BINARY][:6] != b'\x7fELF\x02\x01':
         raise ValueError('native bridge is not a little-endian ELF64 executable')
+    for name in SCANNER_BINARIES:
+        if contents[name][:6] != b'\x7fELF\x02\x01':
+            raise ValueError('native scanner is not a little-endian ELF64 executable')
     if contents[PROFILE] != b'system\n':
         raise ValueError('incorrect bridge profile marker')
     if manifest.get('symlinks') != {'/usr/lib/systemd/user/snitchwatch-bridge.service': '/dev/null'}:
@@ -160,6 +175,38 @@ def verify(root):
         raise ValueError('native build/repro provenance mismatch')
     if provenance.get('rpmInventorySha256') != files['/usr/share/snitchwatch/native-rpm-inventory.txt']:
         raise ValueError('native RPM inventory mismatch')
+    scanner = json.loads(contents[SCANNER_ROOT + 'provenance.json'])
+    if (scanner.get('schemaVersion') != 1 or scanner.get('sourceCommit') != source['commit']
+            or scanner.get('sourceTree') != source['tree'] or scanner.get('builderImage') != pins['builderImage']
+            or scanner.get('patchSha256') != pins['scannerPatch']['sha256']
+            or scanner.get('patchedFiles') != pins['scannerPatch']['patchedFiles']
+            or scanner.get('cargoLockSha256') != pins['sourceFiles']['Cargo.lock']
+            or scanner.get('cargoTomlSha256') != pins['sourceFiles']['Cargo.toml']
+            or not scanner.get('rustcVv', '').startswith('rustc ' + pins['rustVersion'] + ' ')
+            or scanner.get('reproducible') is not True or scanner.get('testsPassed') is not True
+            or scanner.get('rpmInventorySha256') != files['/usr/share/snitchwatch/native-rpm-inventory.txt']):
+        raise ValueError('scanner build/source/patch/test provenance mismatch')
+    if scanner.get('buildCommand') != ['cargo', 'build', '--release', '--locked', '--offline', '-p', 'scanner-privileged', '-p', 'scanner-broker']:
+        raise ValueError('unexpected scanner build command')
+    binaries = {Path(name).name: files[name] for name in SCANNER_BINARIES}
+    if scanner.get('binaries') != binaries:
+        raise ValueError('scanner executable differs from build provenance')
+    evidence = {name: files[SCANNER_ROOT + name] for name in SCANNER_EVIDENCE}
+    evidence.update({name: files[SCANNER_LICENSE_ROOT + name] for name in {'LICENSE', 'THIRD-PARTY-LICENSES.md'}})
+    if scanner.get('evidence') != evidence or files[SCANNER_ROOT + 'scanner.patch'] != pins['scannerPatch']['sha256']:
+        raise ValueError('scanner evidence differs from build provenance')
+    inputs = json.loads(contents[SCANNER_ROOT + 'source-inputs.json'])
+    for name, expected in {**{name: pins['sourceFiles'][name] for name in ('Cargo.toml', 'Cargo.lock')}, **pins['scannerPatch']['patchedFiles']}.items():
+        if inputs.get(name) != expected:
+            raise ValueError('scanner patched source input mismatch')
+    closure = json.loads(contents[SCANNER_ROOT + 'dependency-closure.json'])
+    if set(closure) != set(binaries) or any(not isinstance(value, list) or not value for value in closure.values()):
+        raise ValueError('incomplete scanner dependency closure')
+    # Session D-Bus activation is the sole scanner activation mechanism.
+    for directory in ('usr/lib/systemd/system', 'usr/lib/systemd/user', 'etc/systemd/system', 'etc/systemd/user'):
+        for pattern in ('*snitchwatch*scanner*.service', '*snitchwatch*scanner*.timer', '*snitchwatch*scanner*.socket'):
+            if list((root / directory).glob(pattern)):
+                raise ValueError('unexpected persistent scanner activation')
     expected_gui = {'appId': 'org.snitchwatch.Snitchwatch', 'profile': 'system', 'runtimeRef': pins['flatpakRuntimeRef'], 'sourceCommit': pins['sourceCommit'], 'manifestSha256': pins['sourceFiles']['packaging/flatpak/org.snitchwatch.Snitchwatch.system.yml'], 'finishArgs': pins['flatpakFinishArgs']}
     if manifest.get('flatpak') != expected_gui:
         raise ValueError('incorrect expected GUI system profile')

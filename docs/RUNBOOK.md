@@ -327,6 +327,44 @@ fails loudly instead. Operator subcommands still refuse on a bad state file.
 Readiness treats pending deny, or deny without a
 valid marker, as drift. Not yet exercised on real hardware/systemd.
 
+### Snitchwatch r16.2 feature preparation and owner acceptance
+
+The bridge source pin is Snitchwatch `8136b415706401802c3fb9ced1bf3826f95abbaa`
+(AI cache summary/export support included). This section covers the host components
+for the GUI's explicit **Deep Scan** action. These require a newly built,
+reviewed and booted system-profile candidate; the staged r16.1 image does not
+gain them from this preparation. Legacy images omit the scanner integration.
+Automatic base refresh continues using its separately accepted product source.
+
+Deep Scan activates an unprivileged session D-Bus broker, which sends every
+request through the fixed polkit/pkexec action. The unchanged upstream policy
+requires active-session administrator authorization (`auth_admin_keep`), so
+polkit can briefly reuse approval; inactive and other sessions are denied.
+There is no scanner root service, timer or boot scan. A desktop authentication
+agent must be available. Cancellation or denial must return an error without
+changing firewall policy. The broker caps reports at4MiB and diagnostics at64KiB,
+with a600-second deadline; the transient privileged invocation has its own
+540-second process-group watchdog.
+
+Tmpfiles must create `/var/lib/snitchwatch-scanner` as root:root0700 before the
+first request. The tower patch refuses missing, writable or symlink ancestry,
+and unsafe existing database/WAL/SHM/journal files; it does not repair ownership
+or remove state. New state uses0600 permissions. The same patch limits each
+system primitive's stdout to1MiB, stderr to64KiB and elapsed time to300seconds;
+nonzero exit status and invalid UTF-8 fail the scan rather than produce an
+apparently healthy result. A precise `rpm -qf` not-owned result is handled
+separately. Scanner patch/source/input, Cargo, dependency/license and both
+executable identities have distinct build evidence from the pristine bridge.
+
+Current upstream scans kernel arguments, loaded modules, Secure Boot/lockdown
+and optional chkrootkit signatures. **File-drift checking is explicitly skipped**
+pending upstream baseline-cache integration. Missing optional tools are shown
+as skipped checks. A scan is diagnostic evidence, not a complete integrity
+assessment. On the eventual candidate the owner must verify activation,
+authentication, cancellation/denial, repeat requests, visible skipped checks,
+root-private state and unchanged allow/proc settings. Native build/reproducibility,
+image/SELinux behavior and those runtime checks remain separate release gates.
+
 ### OpenSnitch resource baseline and owner eBPF experiment
 
 This is an optional **owner-operated** test on the candidate, after its initial
@@ -338,7 +376,10 @@ its cause. The RPM supplies `/usr/lib/opensnitchd/ebpf/opensnitch.o`,
 `opensnitch-procs.o` and `opensnitch-dns.o`; build/smoke verifies their ELF BPF
 headers, while the native daemon executable itself does not embed them.
 
-Use the same workload, GUI, power state and observation lengths in each mode.
+Use the exact same candidate digest, workload, GUI, power state and observation
+lengths in each mode. Record digest, kernel, daemon identity and backend startup
+evidence with the measurements; measurements on r16.1 cannot establish r16.2
+behavior. Keep all other configuration fixed.
 Allow two minutes of warmup, sample ten minutes idle, then ten minutes of a
 repeatable normal workload. The reporting-only sampler needs only Python's
 standard library and reads MainPID and `/proc/PID/stat`; it collects no network
@@ -362,7 +403,16 @@ unavailable/permission-denied samples and PID reuse/restarts invalidate an
 unbroken comparison. Samples spanning a missing process or identity change
 have no CPU percentage. Short-lived restarts between observations may be missed;
 extra child processes are outside the sampled PID's accounting. No automatic
-resource thresholds or performance claims follow from the report.
+resource thresholds or performance claims follow from the report. During each
+matching window also collect full-host CPU/memory (`vmstat -w 5 121`) and
+per-process CPU/RSS (`pidstat -u -r -h -p ALL 5 120`) in parallel, keeping
+GUI/bridge/scanner activity attributable. Sum-of-process RSS double-counts
+shared mappings; retain the host memory figures as well. Compare DNS lookups,
+new connections, reconnects and owner-operated suspend/resume, and inspect the
+same log interval for probe failures, fallback, restarts and instability. A
+performance improvement alone does not establish correctness. Default eBPF
+requires owner evidence and a later explicit decision; the complete restoration
+block below remains mandatory for experiments.
 
 Before editing, stop other policy writers. Run the complete block below from
 an owner terminal. A root shell holds the migration-lock descriptor while

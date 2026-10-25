@@ -50,6 +50,15 @@ class RefreshTests(unittest.TestCase):
         self.path = self.root / '.github/base-refresh-policy.json'; write(self.path, self.policy)
         for path in [*r.TRUST.values(), 'build_files/firewall/snitchwatch-system-pins.json', 'build_files/firewall/snitchwatch-system-daemon-pins.json']:
             dest = self.root / path; dest.parent.mkdir(parents=True, exist_ok=True); shutil.copyfile(ROOT / path, dest)
+        # Product preparation can advance main's bridge pins while refresh
+        # continues using a separate, explicitly accepted product checkout.
+        self.accepted = Path(self.tmp.name) / 'accepted-source'
+        shutil.copytree(self.root, self.accepted)
+        accepted_pins = self.accepted / 'build_files/firewall/snitchwatch-system-pins.json'
+        value = json.loads(accepted_pins.read_bytes())
+        for key, field in [('commit', 'sourceCommit'), ('tree', 'sourceTree'), ('submoduleCommit', 'submoduleCommit')]:
+            value[field] = self.policy['nativeSource'][key]
+        write(accepted_pins, value)
         self.env = patch.dict(os.environ, {'CONTROL': str(self.root), 'GITHUB_REPOSITORY': 'bearyjd/bazzite-tower',
                       'GITHUB_REF': 'refs/heads/main', 'GITHUB_EVENT_NAME': 'workflow_dispatch', 'GITHUB_SHA': 'a' * 40,
                       'GITHUB_RUN_ID': '17', 'GITHUB_RUN_NUMBER': '2', 'GITHUB_RUN_ATTEMPT': '1',
@@ -219,10 +228,17 @@ class RefreshTests(unittest.TestCase):
 
     def test_source_tree_and_dirty_source_refused(self):
         outputs = [self.policy['sourceCommit'], self.policy['sourceTree'], '', self.policy['sourceCreated']]
-        with patch.object(r, 'command', side_effect=outputs): r.source(self.root, self.root)
+        with patch.object(r, 'command', side_effect=outputs): r.source(self.root, self.accepted)
         for outputs in [['c' * 40], [self.policy['sourceCommit'], 'd' * 40], [self.policy['sourceCommit'], self.policy['sourceTree'], '?? injected'],
                         [self.policy['sourceCommit'], self.policy['sourceTree'], '', '2026-10-24T01:20:24Z']]:
-            with patch.object(r, 'command', side_effect=outputs), self.assertRaises(ValueError): r.source(self.root, self.root)
+            with patch.object(r, 'command', side_effect=outputs), self.assertRaises(ValueError): r.source(self.root, self.accepted)
+
+    def test_refresh_rejects_new_control_pins_as_accepted_product_source(self):
+        outputs = [self.policy['sourceCommit'], self.policy['sourceTree'], '', self.policy['sourceCreated']]
+        path = self.accepted / 'build_files/firewall/snitchwatch-system-pins.json'
+        value = json.loads(path.read_bytes()); value['sourceCommit'] = 'e' * 40; write(path, value)
+        with patch.object(r, 'command', side_effect=outputs), self.assertRaisesRegex(ValueError, 'accepted native source pins differ'):
+            r.source(self.root, self.accepted)
 
     def test_installed_trust_substitution_refused(self):
         installed = json.loads((self.data / 'installed.json').read_bytes())

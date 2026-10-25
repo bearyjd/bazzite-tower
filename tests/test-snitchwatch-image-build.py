@@ -27,6 +27,33 @@ DNS_SOURCE = FACTORY / 'snitchwatch-system-resolved-dns-rule.json'
 sha = lambda data: hashlib.sha256(data).hexdigest()
 
 
+def scanner_fixture(root, pins, inventory_sha):
+    """Nonexecuted scanner build evidence for the real inventory verifier."""
+    root.mkdir(parents=True, exist_ok=True)
+    write = lambda name, data: (root / name).write_bytes(data if isinstance(data, bytes) else data.encode())
+    names = ('snitchwatch-scanner-privileged', 'snitchwatch-scanner-broker')
+    for name in names:
+        write(name, b'\x7fELF\x02\x01' + bytes(58))
+        (root / name).chmod(0o755)
+        write(name + '.ldd', 'libc.so.6 => fixture\n')
+    write('scanner.patch', (FACTORY / 'snitchwatch-system-scanner.patch').read_bytes())
+    inputs = {name: pins['sourceFiles'][name] for name in ('Cargo.toml', 'Cargo.lock')}
+    inputs.update(pins['scannerPatch']['patchedFiles'])
+    write('source-inputs.json', json.dumps(inputs))
+    write('dependency-closure.json', json.dumps({name: [{'name': 'fixture', 'version': '1', 'license': 'MIT', 'source': 'fixture'}] for name in names}))
+    for name in ('LICENSE', 'THIRD-PARTY-LICENSES.md', 'build.log', 'repro.log', 'test.log'):
+        write(name, 'Nonexecuted fixture evidence\n')
+    evidence = {path.name: sha(path.read_bytes()) for path in root.iterdir() if path.name not in names}
+    write('provenance.json', json.dumps({
+        'schemaVersion': 1, 'sourceCommit': pins['sourceCommit'], 'sourceTree': pins['sourceTree'],
+        'patchSha256': pins['scannerPatch']['sha256'], 'patchedFiles': pins['scannerPatch']['patchedFiles'],
+        'cargoLockSha256': pins['sourceFiles']['Cargo.lock'], 'cargoTomlSha256': pins['sourceFiles']['Cargo.toml'],
+        'builderImage': pins['builderImage'], 'rustcVv': 'rustc ' + pins['rustVersion'] + ' (fixture)',
+        'rpmInventorySha256': inventory_sha, 'reproducible': True, 'testsPassed': True,
+        'buildCommand': ['cargo', 'build', '--release', '--locked', '--offline', '-p', 'scanner-privileged', '-p', 'scanner-broker'],
+        'binaries': {name: sha((root / name).read_bytes()) for name in names}, 'evidence': evidence}))
+
+
 class ImageBuildContracts(unittest.TestCase):
     def setUp(self):
         self.work = tempfile.TemporaryDirectory(prefix='sw-image-contract.')
@@ -73,6 +100,21 @@ class ImageBuildContracts(unittest.TestCase):
         self.write('usr/share/snitchwatch/schema1-artifact-MANIFEST.json', json.dumps(artifact))
         self.write('usr/share/snitchwatch/schema1-artifact-SHA256SUMS', 'Original artifact checksum metadata fixture\n')
         self.write('usr/share/snitchwatch/native-build-provenance.json', json.dumps({'sourceCommit': self.pins['sourceCommit'], 'submoduleCommit': self.pins['submoduleCommit'], 'sourceTree': self.pins['sourceTree'], 'reproducible': True, 'rpmInventorySha256': sha(inventory.encode())}))
+        with tempfile.TemporaryDirectory(prefix='sw-scanner-fixture.') as temp:
+            scanner = Path(temp)
+            scanner_fixture(scanner, self.pins, sha(inventory.encode()))
+            for path in scanner.iterdir():
+                if path.name in ('snitchwatch-scanner-privileged', 'snitchwatch-scanner-broker'):
+                    destination, mode = 'usr/libexec/' + path.name, 0o755
+                elif path.name in ('LICENSE', 'THIRD-PARTY-LICENSES.md'):
+                    destination, mode = 'usr/share/licenses/snitchwatch-scanner/' + path.name, 0o644
+                else:
+                    destination, mode = 'usr/share/snitchwatch/scanner/' + path.name, 0o644
+                self.write(destination, path.read_bytes(), mode)
+        for name, directory in [('org.snitchwatch.Scanner.service', 'usr/share/dbus-1/services/'),
+                                ('org.snitchwatch.scanner.policy', 'usr/share/polkit-1/actions/'),
+                                ('snitchwatch-scanner.conf', 'usr/lib/tmpfiles.d/')]:
+            self.write(directory + name, (FIXTURES / name).read_bytes())
         mask = self.root / 'usr/lib/systemd/user/snitchwatch-bridge.service'
         mask.parent.mkdir(parents=True); mask.symlink_to('/dev/null')
         self.manifest = {'schemaVersion': 1, 'profile': 'system', 'source': {'commit': self.pins['sourceCommit'], 'submoduleCommit': self.pins['submoduleCommit'], 'tree': self.pins['sourceTree']}, 'binary': {'path': '/' + binary, 'sha256': sha((self.root / binary).read_bytes()), 'version': self.pins['bridgeVersion']},
@@ -99,13 +141,73 @@ class ImageBuildContracts(unittest.TestCase):
         # 20 since r15: the tower's /usr/share reference copy of its own drop-in
         # is gone; upstream's pinned drop-in is the one daemon drop-in.  21 with
         # the tower's always-on OS-update rule (r15, owner decision 2026-10-17),
-        # 22 with its companion resolver DNS rule.
-        self.assertEqual(json.loads(result.stdout)['verifiedFiles'], 22)
+        # 22 with its companion resolver DNS rule, plus16 scanner files.
+        self.assertEqual(json.loads(result.stdout)['verifiedFiles'], 38)
         self.assertEqual(before, {str(p): p.read_bytes() for p in self.root.rglob('*') if p.is_file() and not p.is_symlink()})
 
     def test_binary_tamper(self):
         self.write('usr/bin/snitchwatch-bridge-cli', 'tamper', 0o755)
         self.check()
+
+    def test_scanner_inventory_rejects_missing_tampered_modes_and_links(self):
+        for name in ('usr/libexec/snitchwatch-scanner-privileged',
+                     'usr/libexec/snitchwatch-scanner-broker',
+                     'usr/share/dbus-1/services/org.snitchwatch.Scanner.service',
+                     'usr/share/polkit-1/actions/org.snitchwatch.scanner.policy',
+                     'usr/lib/tmpfiles.d/snitchwatch-scanner.conf'):
+            with self.subTest(path=name):
+                path = self.root / name
+                data, mode = path.read_bytes(), path.stat().st_mode & 0o777
+                path.unlink(); self.check()
+                self.write(name, data, mode)
+                path.chmod(0o777); self.check()
+                path.chmod(mode)
+                path.unlink(); path.symlink_to('/dev/null'); self.check()
+                path.unlink(); self.write(name, data + b'changed', mode); self.check()
+                self.write(name, data, mode)
+        self.check(valid=True)
+
+    def test_scanner_provenance_and_source_patch_refusals(self):
+        name = 'usr/share/snitchwatch/scanner/provenance.json'
+        path = self.root / name
+        original = json.loads(path.read_text())
+        for key, value in [('sourceCommit', '0' * 40), ('sourceTree', '0' * 40),
+                           ('patchSha256', '0' * 64), ('reproducible', False), ('testsPassed', False),
+                           ('binaries', {}), ('evidence', {}), ('patchedFiles', {}),
+                           ('cargoLockSha256', '0' * 64), ('rpmInventorySha256', '0' * 64)]:
+            with self.subTest(field=key):
+                self.write(name, json.dumps({**original, key: value}))
+                self.update_hash(name)
+                self.check()
+        self.write(name, json.dumps(original)); self.update_hash(name)
+        self.check(valid=True)
+
+    def test_scanner_has_no_persistent_systemd_activation(self):
+        self.write('usr/lib/systemd/system/snitchwatch-scanner.service', '[Service]\nExecStart=/usr/libexec/snitchwatch-scanner-privileged\n')
+        self.check()
+
+    def test_scanner_packaging_fixtures_match_pinned_source(self):
+        for fixture, source in [('scanner-stage.sh', 'packaging/scanner/stage.sh'),
+                                ('org.snitchwatch.Scanner.service', 'packaging/scanner/org.snitchwatch.Scanner.service'),
+                                ('snitchwatch-scanner.conf', 'packaging/scanner/snitchwatch-scanner.conf'),
+                                ('org.snitchwatch.scanner.policy', 'packaging/polkit/org.snitchwatch.scanner.policy')]:
+            self.assertEqual(sha((FIXTURES / fixture).read_bytes()), self.pins['sourceFiles'][source])
+        policy = (FIXTURES / 'org.snitchwatch.scanner.policy').read_text()
+        self.assertIn('<allow_active>auth_admin_keep</allow_active>', policy)
+        self.assertIn('<allow_inactive>no</allow_inactive>', policy)
+        self.assertIn('<allow_any>no</allow_any>', policy)
+        self.assertEqual(sha((FACTORY / self.pins['scannerPatch']['path']).read_bytes()), self.pins['scannerPatch']['sha256'])
+
+    def test_scanner_builder_discards_toolchain_override_environment(self):
+        helper = runpy.run_path(str(FACTORY / 'snitchwatch-system-scanner-build.py'))
+        keys = ('RUSTC_WRAPPER', 'RUSTC_WORKSPACE_WRAPPER', 'CARGO_BUILD_RUSTC_WRAPPER',
+                'CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER', 'RUSTC', 'RUSTDOC', 'CARGO_BUILD_RUSTC',
+                'CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER',
+                'CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS', 'CARGO_BUILD_RUSTFLAGS',
+                'CARGO_ENCODED_RUSTFLAGS', 'RUSTFLAGS')
+        environment = {key: 'untrusted fixture executable' for key in keys}
+        environment.update(CARGO_HOME='/isolated/cargo', PATH='/usr/bin')
+        self.assertEqual(helper['clean_environment'](environment), {'CARGO_HOME': '/isolated/cargo', 'PATH': '/usr/bin'})
 
     def test_incomplete_inventory(self):
         del self.manifest['files']['/usr/lib/tmpfiles.d/snitchwatch.conf']
@@ -491,6 +593,19 @@ class StageOutputContracts(unittest.TestCase):
                 'sourceFiles': {name: sha((source / name).read_bytes()) for name in (
                     'packaging/system/opensnitchd-default-config.json', 'packaging/system/stage.sh',
                     'packaging/flatpak/org.snitchwatch.Snitchwatch.system.yml')}}
+        real_pins = json.loads((FACTORY / 'snitchwatch-system-pins.json').read_text())
+        pins['scannerPatch'] = real_pins['scannerPatch']
+        pins['rustVersion'] = real_pins['rustVersion']
+        for name in ('Cargo.toml', 'Cargo.lock'):
+            pins['sourceFiles'][name] = real_pins['sourceFiles'][name]
+        self.write(source / 'packaging/scanner/stage.sh', (FIXTURES / 'scanner-stage.sh').read_bytes(), 0o755)
+        for name in ('org.snitchwatch.Scanner.service', 'snitchwatch-scanner.conf'):
+            self.write(source / 'packaging/scanner' / name, (FIXTURES / name).read_bytes())
+        self.write(source / 'packaging/polkit/org.snitchwatch.scanner.policy', (FIXTURES / 'org.snitchwatch.scanner.policy').read_bytes())
+        # Synthetic source hash inventory includes files actually present here.
+        for name in ('Cargo.toml', 'Cargo.lock'):
+            self.write(source / name, name)
+            pins['sourceFiles'][name] = sha((source / name).read_bytes())
         pins_path = self.write(self.tmp / 'pins.json', json.dumps(pins))
         # PATH shim: an exact, clean checkout at the pinned commits.
         self.write(self.tmp / 'bin/git', f'''#!/bin/sh
@@ -510,9 +625,12 @@ esac
             self.write(artifact / 'usr/share/licenses/snitchwatch-bridge' / name, 'license fixture\n')
         verifier = self.write(self.tmp / 'verifier.py', 'REQUIRED = set()\ndef verify(root):\n    pass\n')
         logs = [self.write(self.tmp / name, name) for name in ('build.log', 'repro.log', 'rpm-inventory.txt', 'artifact.tar.gz')]
+        scanner = self.tmp / 'scanner'
+        scanner_fixture(scanner, pins, sha(logs[2].read_bytes()))
         out = self.tmp / 'out'
         argv = ['python3', str(FACTORY / 'snitchwatch-system-stage.py'), '--source', str(source), '--artifact', str(artifact),
                 '--out', str(out), '--pins', str(pins_path), '--verifier', str(verifier),
+                '--scanner-artifact', str(scanner),
                 '--legacy-config', str(ROOT / 'system_files/usr/share/bazzite-tower/opensnitchd-default-config.json'),
                 '--candidate-config', str(ROOT / 'system_files/usr/share/bazzite-tower/opensnitchd-system-bridge-config.json'),
                 '--build-log', str(logs[0]), '--repro-log', str(logs[1]), '--rpm-inventory', str(logs[2]),

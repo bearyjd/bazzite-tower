@@ -49,12 +49,18 @@ mapfile -t tarballs < <(find "$OUT_DIR" -maxdepth 1 -type f -name '*.tar.gz')
 [[ ${#tarballs[@]} == 1 ]]
 first=${tarballs[0]}
 "$SRC_DIR/packaging/release/repro-check.sh" "$first" 2>&1 | tee "$work/repro.log"
+# Only fake authorization/private-bus tests run in this disposable builder.
+command -v dbus-run-session > /dev/null || timeout 240 dnf -y --setopt=install_weak_deps=False install dbus-daemon
 rpm -qa --qf '%{NAME}-%{EPOCHNUM}:%{VERSION}-%{RELEASE}.%{ARCH}\n' | LC_ALL=C sort > "$work/rpm-inventory.txt"
+python3 "$factory/snitchwatch-system-scanner-build.py" --source "$SRC_DIR" --out "$work/scanner" \
+    --pins "$factory/snitchwatch-system-pins.json" --patch "$factory/snitchwatch-system-scanner.patch" \
+    --rpm-inventory "$work/rpm-inventory.txt"
 artifact_sha=$(sha256sum "$first" | awk '{print $1}')
 python3 "$SRC_DIR/packaging/release/bridge_artifact.py" verify --tarball "$first" \
     --expect-sha256 "$artifact_sha" --expect-version "${pin[5]}" --check-ldd --run-flags --extract-to "$work/verified"
 python3 "$factory/snitchwatch-system-stage.py" \
     --source "$SRC_DIR" --artifact "$work/verified/$(basename "$first" .tar.gz)" --out "$1" \
+    --scanner-artifact "$work/scanner" \
     --pins "$factory/snitchwatch-system-pins.json" --verifier "$factory/snitchwatch-system-verify.py" \
     --legacy-config /candidate/legacy-config.json --candidate-config /candidate/system-config.json \
     --build-log "$work/build.log" --os-update-rule "$factory/snitchwatch-system-os-update-rule.json" \

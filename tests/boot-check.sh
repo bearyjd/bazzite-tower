@@ -102,6 +102,12 @@ legacy) ;;
 system)
     say "== Snitchwatch system bridge runtime =="
     hard "installed system provenance verifies" /usr/libexec/snitchwatch/verify-system-manifest.py --root /
+    hard "scanner state was safely provisioned before any request" python3 -c '
+import os, stat
+path="/var/lib/snitchwatch-scanner"
+for ancestor in ("/var", "/var/lib", path):
+ s=os.lstat(ancestor); assert stat.S_ISDIR(s.st_mode) and s.st_uid==0 and s.st_gid==0 and not s.st_mode & 0o022, ancestor
+assert stat.S_IMODE(os.lstat(path).st_mode)==0o700'
     hard "installed downstream daemon provenance verifies" /usr/libexec/snitchwatch/verify-system-daemon.py --root /
     # A rootless boot container cannot start NFQUEUE. If the service is active,
     # its executable must match the immutable manifest. VM acceptance separately

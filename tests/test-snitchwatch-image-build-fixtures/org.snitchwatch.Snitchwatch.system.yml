@@ -1,0 +1,145 @@
+# System-bridge Flatpak deployment profile — Snitchwatch GUI shell.
+#
+# This has the same app-id as the legacy profile and is an alternative
+# deployment profile, not a coinstallable second application. Select it only
+# with the socket-activated system bridge; the released primary manifest keeps
+# the existing per-user bridge contract.
+#
+# Scope: this Flatpak contains the GUI shell ONLY. The bridge
+# (snitchwatch-bridge-cli) and its gRPC connection to the privileged
+# opensnitchd daemon stay entirely host-side, outside the sandbox, running as
+# the socket-activated system bridge (../system/). See the
+# fail-open stance in docs/superpowers/plans/2026-07-05-phase2-packaging.md
+# and the feasibility research in
+# docs/superpowers/specs/2026-07-04-flatpak-feasibility-research.md.
+#
+# GUI shell: snitchwatch-kirigami (Qt6/QML + Kirigami, cxx-qt), NOT
+# snitchwatch-tauri. Per the settled architecture decision (see this repo's
+# CLAUDE.md "Settled architecture decisions" #4 and
+# docs/superpowers/plans/2026-07-04-kirigami-shell-rewrite.md), Kirigami is
+# the shell going forward — it's a native match for Bazzite's default KDE
+# Plasma desktop, has reached feature parity with the old Tauri+web shell,
+# and passed its Task 7 fullscreen-focus safety verification
+# (2026-07-11). `crates/snitchwatch-tauri/` and `web/` still exist in the
+# repo (kept until this Flatpak's first real packaged release ships — see
+# the kirigami-shell-rewrite plan's status note), but they are intentionally
+# NOT what this manifest packages.
+#
+# Why no --share=network:
+#   A Flatpak's default sandbox has its own private, isolated network
+#   namespace with its own private loopback device. It therefore CANNOT reach
+#   a host-bound 127.0.0.1 service regardless of auth, and --share=network
+#   would not scope down to loopback — it grants full, unrestricted internet
+#   access (the same grant a torrent client requests). So the GUI does NOT
+#   talk to the host-side bridge over TCP loopback. Instead it connects over
+#   a Unix domain socket under /run/snitchwatch/, reached via the
+#   filesystem permission below. This is the exact daemon-over-socket pattern
+#   virt-manager's Flathub-approved manifest uses for libvirtd.
+#
+# Build preparation and pinned Cargo generator: see README.md in this directory.
+# Both profiles use the same declared build-only protoc and mold linker inputs.
+---
+app-id: org.snitchwatch.Snitchwatch
+runtime: org.kde.Platform
+runtime-version: "6.11"
+sdk: org.kde.Sdk
+sdk-extensions:
+  - org.freedesktop.Sdk.Extension.rust-stable
+command: snitchwatch-kirigami
+
+build-options:
+  append-path: /usr/lib/sdk/rust-stable/bin
+  env:
+    CARGO_HOME: /run/build/snitchwatch-kirigami/cargo
+    PROTOC: /app/libexec/snitchwatch-build-tools/protoc
+
+finish-args:
+  # Display + GPU for QtQuick/QML rendering.
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --share=ipc
+  - --device=dri
+  # Desktop integration: notifications (notify-rust, speaks the standard
+  # org.freedesktop.Notifications D-Bus interface directly — cxx-kde-frameworks
+  # doesn't expose KNotification, so this shell dispatches via that interface
+  # rather than KNotification) + tray (Qt.labs.platform.SystemTrayIcon, which
+  # renders via the host compositor's StatusNotifierItem support on Plasma).
+  - --talk-name=org.freedesktop.Notifications
+  - --talk-name=org.kde.StatusNotifierWatcher
+  # Fixed no-input host scanner API; never permits arbitrary host commands.
+  - --talk-name=org.snitchwatch.Scanner
+  # Reach the host-side system bridge. These mounts are read-only: the host
+  # socket's root:snitchwatch-ui 0660 mode authorizes connect(), while the
+  # token remains compatibility-only during the migration. The Flatpak cannot
+  # replace either the socket or its token.
+  - --filesystem=/run/snitchwatch:ro
+  - --filesystem=/run/snitchwatch-auth:ro
+  # Select the GUI's system bridge socket/token resolver. The system profile
+  # cannot coexist with the legacy profile because both use this app-id.
+  - --env=SNITCHWATCH_SYSTEM_BRIDGE=1
+  # GUI-owned config/state/data (autostart toggle, crash log, etc.).
+  - --persist=.local/share/snitchwatch
+  - --filesystem=xdg-config/snitchwatch:create
+  - --persist=.local/state/snitchwatch
+  # App icons in the connection list: read-only views of the host's
+  # .desktop files and icon themes, so a process path can be matched to its
+  # launcher's Icon. Flatpak exports (system + user) and the user's own
+  # data dirs only. Host /usr/share/applications is reachable only via
+  # --filesystem=host-os, which is deliberately NOT granted (far too broad):
+  # system-package apps fall back to the generic executable icon in here.
+  - --filesystem=/var/lib/flatpak/exports/share:ro
+  - --filesystem=xdg-data/flatpak/exports/share:ro
+  - --filesystem=xdg-data/applications:ro
+  - --filesystem=xdg-data/icons:ro
+
+modules:
+  # Offline, release-pinned country data and redistribution attribution.
+  - ../geo/dbip-country-lite.json
+  # Compiler needed by tonic-build. Removed by cleanup before exporting the app.
+  - name: protobuf-compiler
+    buildsystem: simple
+    only-arches: [x86_64]
+    build-commands:
+      - unzip -q protoc-29.3-linux-x86_64.zip
+      - install -Dm755 bin/protoc /app/libexec/snitchwatch-build-tools/protoc
+    cleanup:
+      - /libexec/snitchwatch-build-tools
+      - /lib/debug/libexec/snitchwatch-build-tools
+    sources:
+      - type: file
+        url: https://github.com/protocolbuffers/protobuf/releases/download/v29.3/protoc-29.3-linux-x86_64.zip
+        sha256: 3e866620c5be27664f3d2fa2d656b5f3e09b5152b42f1bedbf427b333e90021a
+
+  - name: snitchwatch-kirigami
+    only-arches: [x86_64]
+    buildsystem: simple
+    build-commands:
+      # No CMake step: snitchwatch-kirigami is a plain `cargo build` — its
+      # build.rs (cxx-qt-build) drives moc/rcc/qmlcachegen directly, with no
+      # CMakeLists.txt exporting to an external C++ build system. The KDE SDK
+      # provides the Qt6 build tools (moc, rcc, qmlcachegen) cxx-qt-build
+      # shells out to.
+      # GCC supports mold directly. Append its selection after inherited SDK
+      # Rust flags, preserving optimization, relro/now and every other SDK flag.
+      # The extension supplies mold but no ld.mold name: add a build-only
+      # symlink and GCC search path, without installing a compiler adapter.
+      - test -z "${CARGO_ENCODED_RUSTFLAGS:-}"
+      - mkdir -p build-tools
+      - ln -s /usr/lib/sdk/rust-stable/bin/mold build-tools/ld.mold
+      - 'RUSTFLAGS="${RUSTFLAGS:+$RUSTFLAGS }-C link-arg=-B/run/build/snitchwatch-kirigami/build-tools -C link-arg=-fuse-ld=mold" cargo build --locked --release --offline -p snitchwatch-kirigami'
+      - install -Dm755 target/release/snitchwatch-kirigami /app/bin/snitchwatch-kirigami
+      - install -Dm644 packaging/flatpak/org.snitchwatch.Snitchwatch.desktop
+          /app/share/applications/org.snitchwatch.Snitchwatch.desktop
+      - install -Dm644 packaging/flatpak/org.snitchwatch.Snitchwatch.metainfo.xml
+          /app/share/metainfo/org.snitchwatch.Snitchwatch.metainfo.xml
+      - install -Dm644 web/icons/snitchwatch.svg /app/share/icons/hicolor/scalable/apps/org.snitchwatch.Snitchwatch.svg
+      # No web/ install step: the Kirigami shell compiles its QML in via a
+      # qrc resource (see crates/snitchwatch-kirigami/build.rs's QmlModule),
+      # it does not serve web/ over HTTP into a webview the way
+      # snitchwatch-tauri did.
+    sources:
+      - type: dir
+        path: ../..
+      # Generated with the pinned tool; README.md documents regeneration and
+      # checksum verification against Cargo.lock.
+      - generated-cargo-sources.json

@@ -1,0 +1,161 @@
+#!/usr/bin/env python3
+"""Move the snitchwatch system source pin without hand-computed values.
+
+  repin-snitchwatch.py pins   --source DIR --commit SHA [--write]
+  repin-snitchwatch.py policy --commit TOWER_SHA [--write]
+
+Default is a dry run. Edits are targeted text replacements so diffs stay minimal.
+Exit 2 means a refused/invalid request (nothing is modified).
+"""
+import argparse
+import datetime
+import hashlib
+import json
+from pathlib import Path
+import re
+import subprocess
+import sys
+
+ROOT = Path(__file__).resolve().parents[1]
+PINS = 'build_files/firewall/snitchwatch-system-pins.json'
+VERIFY = 'build_files/firewall/snitchwatch-system-verify.py'
+POLICY = '.github/base-refresh-policy.json'
+FIXTURES = 'tests/test-snitchwatch-image-build-fixtures'
+MANIFEST = 'packaging/flatpak/org.snitchwatch.Snitchwatch.system.yml'
+GITLINK = 'vendor/opensnitch'
+
+
+class Refused(Exception):
+    pass
+
+
+def git(repo, *args, raw=False):
+    r = subprocess.run(['git', '-C', str(repo), *args], capture_output=True)
+    if r.returncode:
+        raise Refused('git %s failed in %s: %s' % (' '.join(args), repo, r.stderr.decode().strip()))
+    return r.stdout if raw else r.stdout.decode().strip()
+
+
+def sha256(data):
+    return hashlib.sha256(data).hexdigest()
+
+
+def sub_once(text, pattern, repl, what):
+    new, n = re.subn(pattern, lambda m: m.group(1) + repl + m.group(2), text, flags=re.M)
+    if n != 1:
+        raise Refused('expected exactly one %s, found %d' % (what, n))
+    return new
+
+
+def set_key(text, key, value, indent='  '):
+    return sub_once(text, r'(^%s"%s": ")[^"]*(")' % (indent, key), value, key)
+
+
+def finish_args(manifest):
+    block = re.search(r'^finish-args:\n(.*?)^modules:', manifest, re.M | re.S)
+    if not block:
+        raise Refused('manifest has no finish-args block')
+    return re.findall(r'^\s+- (--\S+)\s*$', block.group(1), re.M)
+
+
+def set_finish_args(text, args):
+    body = ',\n'.join('    ' + json.dumps(a) for a in args)
+    return sub_once(text, r'(?s)(^  "flatpakFinishArgs": \[\n).*?(\n  \])', body, 'flatpakFinishArgs')
+
+
+def set_native(text, commit, tree, sub):
+    block = re.search(r'("nativeSource": \{\n)(.*?)(\n  \})', text, re.S)
+    if not block:
+        raise Refused('policy has no nativeSource block')
+    inner = block.group(2)
+    for key, val in (('commit', commit), ('tree', tree), ('submoduleCommit', sub)):
+        inner = set_key(inner, key, val, '    ')
+    return text[:block.start(2)] + inner + text[block.end(2):]
+
+
+def plan_pins(tower, source, commit):
+    commit = git(source, 'rev-parse', '--verify', commit + '^{commit}')
+    tree = git(source, 'rev-parse', commit + '^{tree}')
+    link = git(source, 'ls-tree', commit, GITLINK).split()
+    if len(link) < 3 or link[0] != '160000':
+        raise Refused('%s is not a gitlink at %s' % (GITLINK, commit))
+    sub = link[2]
+    print('target: commit %s tree %s %s %s' % (commit, tree, GITLINK, sub))
+    text = (tower / PINS).read_text()
+    pins = json.loads(text)
+    text = set_key(set_key(set_key(text, 'sourceCommit', commit), 'sourceTree', tree), 'submoduleCommit', sub)
+    blobs = {p: git(source, 'show', '%s:%s' % (commit, p), raw=True) for p in pins['sourceFiles']}
+    for path, data in blobs.items():
+        text = sub_once(text, r'(^    "%s": ")[^"]*(")' % re.escape(path), sha256(data), path)
+    if MANIFEST not in blobs:
+        raise Refused('%s is not in sourceFiles' % MANIFEST)
+    text = set_finish_args(text, finish_args(blobs[MANIFEST].decode()))
+    out = {PINS: text.encode()}
+    verify = (tower / VERIFY).read_text()
+    out[VERIFY] = sub_once(verify, r"(^EXPECTED_PINS_SHA256 = ')[^']*(')", sha256(out[PINS]), 'EXPECTED_PINS_SHA256').encode()
+    by_name = {Path(p).name: d for p, d in blobs.items()}
+    for fixture in sorted((tower / FIXTURES).iterdir()):
+        if fixture.name in by_name:
+            out['%s/%s' % (FIXTURES, fixture.name)] = by_name[fixture.name]
+    policy = set_native((tower / POLICY).read_text(), commit, tree, sub)
+    out[POLICY] = policy.encode()
+    return out
+
+
+def plan_policy(tower, commit):
+    commit = git(tower, 'rev-parse', '--verify', commit + '^{commit}')
+    if subprocess.run(['git', '-C', str(tower), 'merge-base', '--is-ancestor', commit, 'HEAD']).returncode:
+        raise Refused('%s is not an ancestor of HEAD' % commit)
+    text = (tower / POLICY).read_text()
+    policy = json.loads(text)
+    pins = json.loads(git(tower, 'show', '%s:%s' % (commit, PINS)))
+    want = {k: pins[v] for k, v in (('commit', 'sourceCommit'), ('tree', 'sourceTree'), ('submoduleCommit', 'submoduleCommit'))}
+    if want != policy['nativeSource']:
+        raise Refused('pins at %s differ from policy nativeSource: %s != %s' % (commit[:12], want, policy['nativeSource']))
+    tree = git(tower, 'rev-parse', commit + '^{tree}')
+    stamp = datetime.datetime.fromtimestamp(int(git(tower, 'log', '-1', '--format=%ct', commit)), datetime.timezone.utc)
+    text = set_key(set_key(set_key(text, 'sourceCommit', commit), 'sourceTree', tree),
+                   'sourceCreated', stamp.strftime('%Y-%m-%dT%H:%M:%SZ'))
+    return {POLICY: text.encode()}, policy['sourceCommit']
+
+
+def apply(tower, plan, write):
+    for rel, data in plan.items():
+        path = tower / rel
+        if path.read_bytes() == data:
+            continue
+        print(('wrote  ' if write else 'would change  ') + rel)
+        if write:
+            path.write_bytes(data)
+    if not write:
+        print('dry run: nothing modified (use --write)')
+
+
+def main(argv=None):
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument('--tower', type=Path, default=ROOT, help='tower tree (default: this repo)')
+    sub = ap.add_subparsers(dest='cmd', required=True)
+    p = sub.add_parser('pins'); p.add_argument('--source', type=Path, required=True)
+    q = sub.add_parser('policy')
+    for s in (p, q):
+        s.add_argument('--commit', required=True); s.add_argument('--write', action='store_true')
+    a = ap.parse_args(argv)
+    try:
+        if a.cmd == 'pins':
+            plan = plan_pins(a.tower, a.source, a.commit)
+        else:
+            plan, old = plan_policy(a.tower, a.commit)
+        apply(a.tower, plan, a.write)
+        if a.cmd == 'policy':
+            hits = subprocess.run(['git', '-C', str(a.tower), 'grep', '-lI', old],
+                                  capture_output=True, text=True).stdout.split()
+            print('files still mentioning previous sourceCommit %s (review by hand):' % old[:12])
+            print('\n'.join('  ' + h for h in hits) or '  (none)')
+    except Refused as e:
+        print('error: %s' % e, file=sys.stderr)
+        return 2
+    return 0
+
+
+if __name__ == '__main__':
+    sys.exit(main())

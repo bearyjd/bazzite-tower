@@ -11,10 +11,12 @@ import argparse
 import datetime
 import hashlib
 import json
+import os
 from pathlib import Path
 import re
 import subprocess
 import sys
+import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 PINS = 'build_files/firewall/snitchwatch-system-pins.json'
@@ -55,6 +57,9 @@ def finish_args(manifest):
     block = re.search(r'^finish-args:\n(.*?)^modules:', manifest, re.M | re.S)
     if not block:
         raise Refused('manifest has no finish-args block')
+    for line in re.findall(r'^\s*- .*$', block.group(1), re.M):
+        if not re.fullmatch(r'\s+- --\S+\s*', line):
+            raise Refused('unsupported finish-args item (only plain "- --xxx" lines are handled): %r' % line.strip())
     return re.findall(r'^\s+- (--\S+)\s*$', block.group(1), re.M)
 
 
@@ -93,10 +98,21 @@ def plan_pins(tower, source, commit):
     out = {PINS: text.encode()}
     verify = (tower / VERIFY).read_text()
     out[VERIFY] = sub_once(verify, r"(^EXPECTED_PINS_SHA256 = ')[^']*(')", sha256(out[PINS]), 'EXPECTED_PINS_SHA256').encode()
+    names = [Path(p).name for p in blobs]
     by_name = {Path(p).name: d for p, d in blobs.items()}
-    for fixture in sorted((tower / FIXTURES).iterdir()):
-        if fixture.name in by_name:
-            out['%s/%s' % (FIXTURES, fixture.name)] = by_name[fixture.name]
+    fixtures = {f.name for f in (tower / FIXTURES).iterdir()}
+    for path in blobs:
+        name = Path(path).name
+        if name not in fixtures:
+            print('no fixture for %s (skipped)' % path)
+        elif names.count(name) > 1:
+            raise Refused('duplicate basename %s among sourceFiles; cannot match fixture' % name)
+        else:
+            out['%s/%s' % (FIXTURES, name)] = by_name[name]
+    if sub != pins['submoduleCommit']:
+        print('WARNING: submoduleCommit changed %s -> %s. policy daemonSource and the daemon pins '
+              '(snitchwatch-system-daemon-pins.json, daemon verify) are NOT edited by this tool and need a separate review.'
+              % (pins['submoduleCommit'], sub))
     policy = set_native((tower / POLICY).read_text(), commit, tree, sub)
     out[POLICY] = policy.encode()
     return out
@@ -112,11 +128,29 @@ def plan_policy(tower, commit):
     want = {k: pins[v] for k, v in (('commit', 'sourceCommit'), ('tree', 'sourceTree'), ('submoduleCommit', 'submoduleCommit'))}
     if want != policy['nativeSource']:
         raise Refused('pins at %s differ from policy nativeSource: %s != %s' % (commit[:12], want, policy['nativeSource']))
+    verify = git(tower, 'show', '%s:%s' % (commit, VERIFY))
+    expected = re.search(r"^EXPECTED_PINS_SHA256 = '([^']*)'", verify, re.M)
+    pins_bytes = git(tower, 'show', '%s:%s' % (commit, PINS), raw=True)
+    if not expected or expected.group(1) != sha256(pins_bytes):
+        raise Refused('EXPECTED_PINS_SHA256 at %s does not match the pins file there (half-landed repin?)' % commit[:12])
     tree = git(tower, 'rev-parse', commit + '^{tree}')
     stamp = datetime.datetime.fromtimestamp(int(git(tower, 'log', '-1', '--format=%ct', commit)), datetime.timezone.utc)
     text = set_key(set_key(set_key(text, 'sourceCommit', commit), 'sourceTree', tree),
                    'sourceCreated', stamp.strftime('%Y-%m-%dT%H:%M:%SZ'))
-    return {POLICY: text.encode()}, policy['sourceCommit']
+    return {POLICY: text.encode()}, policy['sourceCommit'], commit
+
+
+def replace_file(path, data):
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix='.repin-')
+    try:
+        with os.fdopen(fd, 'wb') as f:
+            f.write(data)
+        os.chmod(tmp, path.stat().st_mode & 0o7777)
+        os.replace(tmp, path)
+    except BaseException:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+        raise
 
 
 def apply(tower, plan, write):
@@ -126,7 +160,7 @@ def apply(tower, plan, write):
             continue
         print(('wrote  ' if write else 'would change  ') + rel)
         if write:
-            path.write_bytes(data)
+            replace_file(path, data)
     if not write:
         print('dry run: nothing modified (use --write)')
 
@@ -141,16 +175,21 @@ def main(argv=None):
         s.add_argument('--commit', required=True); s.add_argument('--write', action='store_true')
     a = ap.parse_args(argv)
     try:
+        if a.commit.startswith('-'):
+            raise Refused('--commit value must not start with "-"')
         if a.cmd == 'pins':
             plan = plan_pins(a.tower, a.source, a.commit)
         else:
-            plan, old = plan_policy(a.tower, a.commit)
+            plan, old, new = plan_policy(a.tower, a.commit)
         apply(a.tower, plan, a.write)
         if a.cmd == 'policy':
-            hits = subprocess.run(['git', '-C', str(a.tower), 'grep', '-lI', old],
-                                  capture_output=True, text=True).stdout.split()
-            print('files still mentioning previous sourceCommit %s (review by hand):' % old[:12])
-            print('\n'.join('  ' + h for h in hits) or '  (none)')
+            if old == new:
+                print('sourceCommit unchanged; skipping stale-mention scan')
+            else:
+                hits = subprocess.run(['git', '-C', str(a.tower), 'grep', '-lIF', old],
+                                      capture_output=True, text=True).stdout.split()
+                print('files still mentioning previous sourceCommit %s (review by hand):' % old[:12])
+                print('\n'.join('  ' + h for h in hits) or '  (none)')
     except Refused as e:
         print('error: %s' % e, file=sys.stderr)
         return 2

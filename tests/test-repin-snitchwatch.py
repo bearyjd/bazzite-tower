@@ -64,7 +64,7 @@ def pins_text(commit_, tree, sub, files, args):
 
 def policy_text(commit_, tree, created, native):
     d = {'schemaVersion': 1, 'sourceCommit': commit_, 'sourceTree': tree, 'sourceCreated': created,
-         'nativeSource': native}
+         'nativeSource': native, 'daemonSource': {'commit': '2' * 40, 'tree': '4' * 40}}
     return json.dumps(d, indent=2) + '\n'
 
 
@@ -102,6 +102,17 @@ class Base(unittest.TestCase):
 
     def snapshot(self):
         return {str(p.relative_to(self.tower)): p.read_bytes() for p in self.tower.rglob('*') if p.is_file() and '.git' not in p.parts}
+
+    def src_commit(self, files, message='next'):
+        for rel, text in files.items():
+            put(self.src, rel, text)
+        git(self.src, 'add', '-A')
+        git(self.src, 'update-index', '--add', '--cacheinfo', '160000,%s,vendor/opensnitch' % FAKE_DAEMON)
+        return commit(self.src, message, add=False)
+
+    def pin_extra(self, *paths):
+        pins = self.pins(); pins['sourceFiles'].update({p: '0' * 64 for p in paths})
+        put(self.tower, PINS, pins_text(pins['sourceCommit'], pins['sourceTree'], pins['submoduleCommit'], pins['sourceFiles'], pins['flatpakFinishArgs']))
 
     def repin(self, *extra):
         return self.run_tool('pins', '--source', str(self.src), '--commit', self.sc, *extra)
@@ -154,6 +165,63 @@ class PinsTests(Base):
         self.assertEqual(git(self.tower, 'status', '--porcelain').stdout, '')
 
 
+class HardeningTests(Base):
+    def assertRefused(self, r, text, before):
+        self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+        self.assertIn(text, r.stderr)
+        self.assertEqual(before, self.snapshot())
+
+    def test_unsupported_finish_args_shapes_are_refused(self):
+        shapes = {'quoted': '  - "--share=ipc"\n', 'comment': '  - --share=ipc # why\n', 'spaces': '  - --env=A=b c\n'}
+        for name, line in shapes.items():
+            with self.subTest(name):
+                sha_ = self.src_commit({MANIFEST: manifest(self.args).replace('modules:', line + 'modules:')}, name)
+                before = self.snapshot()
+                r = self.run_tool('pins', '--source', str(self.src), '--commit', sha_, '--write', ok=False)
+                self.assertRefused(r, 'finish-args', before)
+
+    def test_submodule_change_warns_and_leaves_daemon_source(self):
+        r = self.repin('--write')
+        self.assertIn('WARNING', r.stdout)
+        self.assertIn('snitchwatch-system-daemon-pins.json', r.stdout)
+        pol = json.loads((self.tower / POLICY).read_text())
+        self.assertEqual(pol['daemonSource'], {'commit': '2' * 40, 'tree': '4' * 40})
+
+    def test_no_warning_when_submodule_unchanged(self):
+        self.repin('--write')
+        self.assertNotIn('WARNING', self.repin('--write').stdout)
+
+    def test_duplicate_basenames_are_refused(self):
+        dup = 'packaging/other/snitchwatch.conf'
+        sha_ = self.src_commit({dup: 'dup\n'})
+        self.pin_extra(dup)
+        before = self.snapshot()
+        r = self.run_tool('pins', '--source', str(self.src), '--commit', sha_, '--write', ok=False)
+        self.assertRefused(r, 'duplicate', before)
+
+    def test_pinned_file_without_fixture_is_reported_skipped(self):
+        extra = 'packaging/x/nofixture.txt'
+        sha_ = self.src_commit({extra: 'n\n'})
+        self.pin_extra(extra)
+        r = self.run_tool('pins', '--source', str(self.src), '--commit', sha_)
+        self.assertIn('no fixture', r.stdout)
+        self.assertIn('nofixture.txt', r.stdout)
+
+    def test_unmatched_replacement_is_refused(self):
+        text = (self.tower / PINS).read_text().replace('"sourceTree"', '"sourceTreeX"')
+        put(self.tower, PINS, text)
+        before = self.snapshot()
+        r = self.run_tool('pins', '--source', str(self.src), '--commit', self.sc, '--write', ok=False)
+        self.assertRefused(r, 'expected exactly one', before)
+
+    def test_option_like_commit_is_refused(self):
+        before = self.snapshot()
+        r = self.run_tool('pins', '--source', str(self.src), '--commit=--output=/tmp/x', '--write', ok=False)
+        self.assertRefused(r, 'must not start with', before)
+        r = self.run_tool('policy', '--commit=--output=/tmp/x', '--write', ok=False)
+        self.assertRefused(r, 'must not start with', before)
+
+
 class PolicyTests(Base):
     def land_pins(self):
         self.repin('--write')
@@ -178,6 +246,41 @@ class PolicyTests(Base):
         self.assertEqual(r.returncode, 2)
         self.assertIn('nativeSource', r.stderr)
         self.assertEqual(before, self.snapshot())
+
+    def refuse_after(self, edit):
+        self.land_pins()
+        edit()
+        sha_ = commit(self.tower, 'edit')
+        before = self.snapshot()
+        r = self.run_tool('policy', '--commit', sha_, '--write', ok=False)
+        self.assertEqual(r.returncode, 2, r.stdout)
+        self.assertEqual(before, self.snapshot())
+        return r
+
+    def test_refuses_half_landed_repin(self):
+        def edit():
+            v = (self.tower / VERIFY).read_text().replace(sha((self.tower / PINS).read_bytes()), '8' * 64)
+            put(self.tower, VERIFY, v)
+        self.assertIn('EXPECTED_PINS_SHA256', self.refuse_after(edit).stderr)
+
+    def test_refuses_when_only_tree_differs(self):
+        def edit():
+            pol = json.loads((self.tower / POLICY).read_text()); pol['nativeSource']['tree'] = 'e' * 40
+            put(self.tower, POLICY, json.dumps(pol, indent=2) + '\n')
+        self.assertIn('nativeSource', self.refuse_after(edit).stderr)
+
+    def test_refuses_when_only_submodule_differs(self):
+        def edit():
+            pol = json.loads((self.tower / POLICY).read_text()); pol['nativeSource']['submoduleCommit'] = 'e' * 40
+            put(self.tower, POLICY, json.dumps(pol, indent=2) + '\n')
+        self.assertIn('nativeSource', self.refuse_after(edit).stderr)
+
+    def test_unchanged_commit_skips_mentions_grep(self):
+        sha_ = self.land_pins()
+        self.run_tool('policy', '--commit', sha_, '--write')
+        commit(self.tower, 'policy')
+        r = self.run_tool('policy', '--commit', sha_)
+        self.assertIn('unchanged', r.stdout)
 
     def test_refuses_non_ancestor(self):
         sha_ = self.land_pins()

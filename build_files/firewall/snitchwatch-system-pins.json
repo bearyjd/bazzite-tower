@@ -8,6 +8,7 @@
     "--device=dri",
     "--talk-name=org.freedesktop.Notifications",
     "--talk-name=org.kde.StatusNotifierWatcher",
+    "--talk-name=org.snitchwatch.Scanner",
     "--filesystem=/run/snitchwatch:ro",
     "--filesystem=/run/snitchwatch-auth:ro",
     "--env=SNITCHWATCH_SYSTEM_BRIDGE=1",

@@ -541,5 +541,28 @@ esac
         self.assertIn('did not stage the pinned upstream daemon config', result.stderr)
 
 
+class FlatpakFinishArgsContract(unittest.TestCase):
+    """The recorded finish args must be the pinned manifest's, byte for byte in order.
+
+    The tower stages and later compares this list; if it lags the manifest the
+    installed GUI's real sandbox permissions are not what the image declares.
+    """
+    MANIFEST_NAME = 'org.snitchwatch.Snitchwatch.system.yml'
+
+    def setUp(self):
+        self.pins = json.loads((FACTORY / 'snitchwatch-system-pins.json').read_text())
+        self.manifest = (FIXTURES / self.MANIFEST_NAME).read_bytes()
+
+    def test_fixture_is_the_pinned_manifest(self):
+        pinned = self.pins['sourceFiles']['packaging/flatpak/' + self.MANIFEST_NAME]
+        self.assertEqual(sha(self.manifest), pinned)
+
+    def test_recorded_finish_args_match_the_pinned_manifest(self):
+        block = re.search(r'^finish-args:\n(.*?)^modules:', self.manifest.decode(), re.M | re.S)
+        self.assertIsNotNone(block, 'manifest has no finish-args block')
+        declared = re.findall(r'^\s+- (--\S+)\s*$', block.group(1), re.M)
+        self.assertEqual(self.pins['flatpakFinishArgs'], declared)
+
+
 if __name__ == '__main__':
     unittest.main()

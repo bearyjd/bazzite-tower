@@ -134,7 +134,7 @@ class RefreshTests(unittest.TestCase):
     def test_valid_artifact_and_stable_alias_identity(self):
         proof, hashes = self.valid()
         self.assertEqual(proof['channels'], ['stable', 'latest'])
-        self.assertEqual(proof['sourceCommit'], '1c01f086f58bd33a5d7651254671e57723d45561')
+        self.assertEqual(proof['sourceCommit'], '99409876ece111493633a9bff9fc65ab51c78577')
         self.assertEqual(set(hashes), r.FILES)
 
     def test_policy_schema_dest_ref_profile_fail_closed(self):
@@ -463,6 +463,27 @@ class RefreshTests(unittest.TestCase):
             self.assertIn('channels=(stable latest)', text)
             attest = next(s for s in steps if s.get('name') == 'Publish GitHub build provenance for exact image digest')
             self.assertEqual(attest['with']['subject-name'], r.DEST)
+
+
+class PolicySourceIdentity(unittest.TestCase):
+    """Policy sourceCreated must be the accepted commit's committer time in UTC.
+
+    RefreshTests feed the policy value back in as mocked git output, so they
+    cannot notice a wrong timestamp (a local wall-clock time stamped with Z
+    once shipped that way). This reads the real commit; it is skipped where
+    the accepted commit is not in the checkout (shallow clone).
+    """
+    def test_source_created_is_the_commit_time_in_utc(self):
+        root = Path(__file__).resolve().parents[1]
+        policy = json.loads((root / '.github/base-refresh-policy.json').read_text())
+        git = lambda *a: subprocess.run(['git', '-C', str(root), *a], text=True, capture_output=True)
+        if git('cat-file', '-e', policy['sourceCommit'] + '^{commit}').returncode:
+            self.skipTest('accepted source commit is not present in this checkout')
+        epoch = int(git('log', '-1', '--format=%ct', policy['sourceCommit']).stdout)
+        from datetime import datetime, timezone
+        expected = datetime.fromtimestamp(epoch, timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+        self.assertEqual(policy['sourceCreated'], expected)
+        self.assertEqual(git('rev-parse', policy['sourceCommit'] + '^{tree}').stdout.strip(), policy['sourceTree'])
 
 
 if __name__ == '__main__': unittest.main()

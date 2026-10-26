@@ -328,7 +328,7 @@ upgrades retain the policy in `/etc`.
 
 Three channels use the same `Containerfile`, with separate accepted product
 profiles. `.github/base-refresh-policy.json` freezes the product source at
-`1c01f086f58bd33a5d7651254671e57723d45561` for the r16.1 refresh transition.
+`99409876ece111493633a9bff9fc65ab51c78577`.
 
 The r16.1 policy transition must merge only after protected fixed-digest promotion
 completes and independent destination signature/SPDX checks pass. Host runtime

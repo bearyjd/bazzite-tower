@@ -12,6 +12,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -50,6 +51,7 @@ class DenyFixture(system_tests.Fixture):
         self.systemd_run_fails = False
         self.on_restart = None
         self.after_systemd_run = None
+        self.during_systemd_run = None
         self.leftover_unit = False
 
     def run(self, argv, **kwargs):
@@ -61,6 +63,8 @@ class DenyFixture(system_tests.Fixture):
             return subprocess.CompletedProcess(argv, 1 if failed else 0, "", "injected restart failure" if failed else "")
         if argv[0] == "systemd-run":
             self.commands.append(argv)
+            if self.during_systemd_run:
+                self.during_systemd_run()
             failed = self.systemd_run_fails or (self.leftover_unit and "--collect" not in argv)
             if not failed and self.after_systemd_run:
                 self.after_systemd_run()
@@ -90,11 +94,15 @@ class DenyBase(unittest.TestCase):
             patch.start()
         self.original = self.config_path.read_bytes()
         self.deny.LOCK_TIMEOUT, self.deny.LOCK_POLL = 0.4, 0.02
+        self.reboot("boot-A")
 
     def tearDown(self):
         for patch in reversed(self.patches):
             patch.stop()
         self.temp.cleanup()
+
+    def reboot(self, boot_id):
+        self.ctx.write("/proc/sys/kernel/random/boot_id", boot_id+"\n")
 
     def setUp_clean(self):
         # Reset to a fresh allow baseline between subtests.
@@ -103,6 +111,7 @@ class DenyBase(unittest.TestCase):
                 self.ctx.path(logical).unlink()
         self.ctx.write(common.CONFIG, self.original.decode())
         self.ctx.commands.clear()
+        self.reboot("boot-A")
 
     @property
     def config_path(self):
@@ -314,6 +323,7 @@ class Transactions(DenyBase):
 
     def test_reboot_while_pending_guard_reverts_before_firewall(self):
         self.ok("on")
+        self.reboot("boot-B")
         mark = len(self.ctx.commands)
         self.ok("revert-if-pending", "--boot")
         self.assertEqual(self.config_path.read_bytes(), self.original)
@@ -325,6 +335,7 @@ class Transactions(DenyBase):
     def test_reboot_with_confirmed_deny_keeps_it(self):
         self.ok("on")
         self.ok("confirm")
+        self.reboot("boot-B")
         self.ok("revert-if-pending", "--boot")
         self.assertEqual(self.config_path.read_bytes(), self.deny_bytes())
         self.assertTrue(self.ctx.path(MARKER).exists())
@@ -335,6 +346,7 @@ class Transactions(DenyBase):
         self.assertRegex(text, r"(?m)^ConditionPathExists=" + re.escape(STATE) + "$")
         self.assertRegex(text, r"(?m)^Before=.*\bopensnitch\.service\b")
         self.assertRegex(text, r"(?m)^ExecStart=/usr/libexec/bazzite-tower-snitchwatch-deny revert-if-pending --boot$")
+        self.assertRegex(text, r"(?m)^TimeoutStartSec=45$")
         self.assertRegex(text, r"(?m)^WantedBy=multi-user\.target$")
 
     def test_failure_after_write_restores_backup(self):
@@ -427,11 +439,13 @@ class Transactions(DenyBase):
         for action, extra in (("revert-if-pending", []), ("revert-if-pending", ["--boot"]), ("off", [])):
             with self.subTest(action=action, extra=extra):
                 self.ok("on")
+                self.reboot("boot-B")
                 fd = self.hold_lock()
                 threading.Timer(0.15, os.close, args=(fd,)).start()
                 self.ok(action, *extra)
                 self.assertEqual(self.config_path.read_bytes(), self.original)
                 self.assertFalse(self.ctx.path(STATE).exists())
+                self.reboot("boot-A")
 
     def test_revert_gives_clear_retryable_error_if_lock_never_released(self):
         self.ok("on")
@@ -483,6 +497,7 @@ class Transactions(DenyBase):
                     self.assertTrue(json.loads(files[STATE])["pending"], "deny live without pending state at "+point)
                 # Put the killed-instant disk state back, then the timer/boot guard must recover.
                 self.ctx.on_restart = self.ctx.after_systemd_run = None
+                self.reboot("boot-B")
                 for name, content in files.items():
                     path = self.ctx.path(name)
                     if content is None:
@@ -507,6 +522,7 @@ class Transactions(DenyBase):
 
     def test_failed_boot_revert_exits_nonzero_so_the_guard_unit_fails(self):
         self.ok("on")
+        self.reboot("boot-B")
         self.config_path.chmod(0o666)
         self.refused("revert-if-pending", "--boot", text="root-owned")
         self.config_path.chmod(0o644)
@@ -517,8 +533,74 @@ class Transactions(DenyBase):
         text = DROPIN.read_text()
         self.assertRegex(text, r"(?m)^Requires=bazzite-tower-snitchwatch-deny-guard\.service$")
         self.assertRegex(text, r"(?m)^After=bazzite-tower-snitchwatch-deny-guard\.service$")
-        self.ctx.properties["opensnitch.service"]["DropInPaths"] = common.DAEMON_DROPIN+" /usr/lib/systemd/system/opensnitch.service.d/bazzite-tower-snitchwatch-deny-guard.conf"
+        self.ctx.properties["opensnitch.service"]["DropInPaths"] = common.DAEMON_DROPIN+" "+common.DENY_GUARD_DROPIN
+        self.ctx.write(common.DENY_GUARD_DROPIN, text)
         self.assertEqual(self.ready()["defaultAction"], "allow")
+        self.ctx.write(common.DENY_GUARD_DROPIN, text+"ExecStartPre=/bin/true\n")
+        with self.assertRaisesRegex(common.Refusal, "drop-in"):
+            self.ready()
+
+    def guard(self):
+        return self.deny.main(["revert-if-pending", "--boot"], ctx=self.ctx)
+
+    def test_guard_ignores_a_trial_from_this_boot_without_touching_the_lock(self):
+        self.ok("on")
+        self.deny.LOCK_TIMEOUT = 5
+        fd = self.hold_lock()
+        try:
+            started = time.monotonic()
+            code, out, err = self.cli("revert-if-pending", "--boot")
+            self.assertLess(time.monotonic()-started, 1.0)
+        finally:
+            os.close(fd)
+        self.assertEqual(code, 0, err)
+        self.assertIn("this boot", out)
+        self.assertEqual(self.config_path.read_bytes(), self.deny_bytes())
+        self.assertTrue(json.loads(self.ctx.path(STATE).read_text())["pending"])
+
+    def test_guard_reverts_a_trial_from_an_earlier_boot_or_with_no_boot_id(self):
+        for label in ("different", "missing"):
+            with self.subTest(label=label):
+                self.setUp_clean()
+                self.reboot("boot-A")
+                self.ok("on")
+                self.assertEqual(json.loads(self.ctx.path(STATE).read_text())["bootId"], "boot-A")
+                if label == "different":
+                    self.reboot("boot-B")
+                else:
+                    state = json.loads(self.ctx.path(STATE).read_text())
+                    del state["bootId"]
+                    self.ctx.write(STATE, json.dumps(state), 0o600)
+                self.ok("revert-if-pending", "--boot")
+                self.assertEqual(self.config_path.read_bytes(), self.original)
+                self.assertFalse(self.ctx.path(STATE).exists())
+
+    def test_restart_inside_on_runs_the_guard_which_must_not_wait_for_on_lock(self):
+        # Real sequence: `on` holds the lock and restarts opensnitch, systemd re-queues the guard.
+        self.deny.LOCK_TIMEOUT = 5
+        results = []
+        def systemd_runs_guard():
+            started = time.monotonic()
+            results.append((self.guard(), time.monotonic()-started))
+        self.ctx.on_restart = systemd_runs_guard
+        self.ok("on")
+        self.assertEqual(results[0][0], 0)
+        self.assertLess(results[0][1], 1.0)
+        self.assertEqual(self.config_path.read_bytes(), self.deny_bytes())
+        self.assertTrue(json.loads(self.ctx.path(STATE).read_text())["pending"])
+
+    def test_sighup_and_sigterm_while_systemd_run_is_in_flight_still_stop_the_timer(self):
+        import signal
+        for sig in (signal.SIGTERM, signal.SIGHUP):
+            with self.subTest(sig=sig):
+                self.setUp_clean()
+                self.ctx.during_systemd_run = lambda sig=sig: os.kill(os.getpid(), sig)
+                self.refused("on", text="restored")
+                self.assertIn(["systemctl", "stop", TIMER+".timer"], self.ctx.commands)
+                self.assertEqual(self.config_path.read_bytes(), self.original)
+                self.assertFalse(self.ctx.path(STATE).exists())
+                self.assertIs(signal.getsignal(sig), signal.SIG_DFL)
+                self.ctx.during_systemd_run = None
 
     def test_backup_digest_mismatch_falls_back_to_key_edit(self):
         self.ok("on")

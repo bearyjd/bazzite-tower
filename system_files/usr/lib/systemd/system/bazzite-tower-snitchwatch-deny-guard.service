@@ -14,6 +14,7 @@ ConditionPathExists=/var/lib/bazzite-tower/snitchwatch-deny/state.json
 [Service]
 Type=oneshot
 RemainAfterExit=yes
+TimeoutStartSec=45
 ExecStart=/usr/libexec/bazzite-tower-snitchwatch-deny revert-if-pending --boot
 
 [Install]

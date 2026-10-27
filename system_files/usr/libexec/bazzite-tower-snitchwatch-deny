@@ -49,6 +49,13 @@ KEY = b'"DefaultAction"'
 ACTION = re.compile(rb'("DefaultAction"\s*:\s*")(allow|deny)(")')
 
 
+def boot_id(ctx):
+    try:
+        return ctx.path("/proc/sys/kernel/random/boot_id").read_text().strip() or None
+    except OSError:
+        return None
+
+
 def utcnow():
     return datetime.now(timezone.utc)
 
@@ -288,10 +295,11 @@ def turn_on(ctx, minutes):
     deny = set_action(data, "deny")
     now = utcnow()
     state = dict(schema=1, id=uuid.uuid4().hex, pending=True, createdAt=stamp(now), minutes=minutes, expiresAt=stamp(now+timedelta(minutes=minutes)),
-                 backupSha256=sha256(data), backupMetadata=metadata, denySha256=sha256(deny))
-    armed = False
-    previous = signal.getsignal(signal.SIGTERM)
-    signal.signal(signal.SIGTERM, terminated)
+                 backupSha256=sha256(data), backupMetadata=metadata, denySha256=sha256(deny), bootId=boot_id(ctx))
+    invoked = False
+    previous = {sig: signal.getsignal(sig) for sig in (signal.SIGTERM, signal.SIGHUP)}
+    for sig in previous:
+        signal.signal(sig, terminated)
     try:
         # Order matters: at every point the config is allow, or deny with pending
         # state AND an armed timer (the boot guard also reverts pending state).
@@ -300,9 +308,9 @@ def turn_on(ctx, minutes):
         save_state(ctx, state)
         # Two triggers: --on-active is monotonic and stalls across suspend, so
         # the wall-clock deadline guarantees a suspend cannot extend the trial.
+        invoked = True  # a timer may exist even if the call never returned
         ctx.command(["systemd-run", "--on-active="+str(minutes)+"m", "--on-calendar="+state["expiresAt"].replace("T", " ").replace("Z", " UTC"),
                      "--collect", "--unit="+TIMER, HELPER, "revert-if-pending"], timeout=20)
-        armed = True
         publish(ctx, common.CONFIG, deny, metadata=metadata, expected=data)
         # Restart is kept deliberately. The pinned daemon patch shows ui/client.go
         # imports fsnotify and swaps c.config on reload, but that an edit of
@@ -311,7 +319,8 @@ def turn_on(ctx, minutes):
         restart_daemon(ctx)
         common.require(service_active(ctx), "opensnitch.service is not active after restart")
     except BaseException as error:
-        signal.signal(signal.SIGTERM, signal.SIG_IGN)
+        for sig in previous:
+            signal.signal(sig, signal.SIG_IGN)
         notes = []
         try:
             method = restore_allow(ctx, state)
@@ -321,7 +330,7 @@ def turn_on(ctx, minutes):
         except BaseException as recovery:
             changed = True
             notes.append("RESTORE FAILED ("+str(recovery)+"); trial left pending so the timer/boot guard retries")
-        if armed:
+        if invoked:
             with contextlib.suppress(Exception):
                 stop_timer(ctx)
         if changed:
@@ -331,7 +340,8 @@ def turn_on(ctx, minutes):
                 notes.append("restart after restore failed: "+str(restart))
         raise common.Refusal("deny trial failed and was rolled back: "+str(error)+"; "+"; ".join(notes)) from error
     finally:
-        signal.signal(signal.SIGTERM, previous)
+        for sig, handler in previous.items():
+            signal.signal(sig, handler)
     print("deny trial started: reverts automatically at "+state["expiresAt"]+" ("+str(minutes)+" min) unless you run: ujust snitchwatch-deny confirm")
 
 
@@ -371,9 +381,30 @@ def turn_off(ctx, boot=False):
     print("DefaultAction restored to allow ("+method+"); opt-in removed"+("" if not boot else "; daemon not restarted (boot guard)"))
 
 
-def revert_if_pending(ctx, boot):
+def pending_state(ctx):
     state = load_state(ctx)
-    if not (state and state["pending"]):
+    return state if state and state["pending"] else None
+
+
+def guard_should_revert(ctx):
+    """Unlocked pre-check for the boot guard: only a trial left by an EARLIER boot is its business.
+
+    A restart of opensnitch.service during `on` re-queues the guard while `on`
+    holds the policy lock; waiting there would deadlock the restart.
+    """
+    state = pending_state(ctx)
+    if state is None:
+        print("nothing pending")
+        return False
+    current = boot_id(ctx)
+    if current and state.get("bootId") == current:
+        print("pending trial belongs to this boot; the guard leaves it to its timer")
+        return False
+    return True
+
+
+def revert_if_pending(ctx, boot):
+    if pending_state(ctx) is None:
         print("nothing pending")
         return
     turn_off(ctx, boot=boot)
@@ -408,6 +439,8 @@ def main(argv=None, ctx=None):
             ctx = common.Context()
         if args.action == "status":
             status(ctx, args.json)
+            return 0
+        if args.action == "revert-if-pending" and args.boot and not guard_should_revert(ctx):
             return 0
         with policy_lock(ctx, wait=args.action in ("off", "revert-if-pending")):
             if args.action == "on":

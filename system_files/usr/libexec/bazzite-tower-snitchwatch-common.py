@@ -39,6 +39,7 @@ RESERVED_RULES = {FETCH_RULE: "Snitchwatch fetch rule", OS_UPDATE_RULE: "tower O
 # Operator deny opt-in (bazzite-tower-snitchwatch-deny). The image always ships allow.
 DENY_MARKER = "/etc/bazzite-tower/snitchwatch-deny-optin"
 DENY_GUARD_DROPIN = "/usr/lib/systemd/system/opensnitch.service.d/bazzite-tower-snitchwatch-deny-guard.conf"
+DENY_GUARD_DROPIN_SHA256 = "b46aa696d4d8da32c2b510425eb04df03a4b19e243fdf8e6cf9158b80c5d2d43"
 DENY_STATE = "/var/lib/bazzite-tower/snitchwatch-deny/state.json"
 BASE_GLOBAL_OVERRIDE = "/var/lib/flatpak/overrides/global"
 BASE_GLOBAL_OVERRIDE_SHA256 = "85e2bf73515c8da8950f1afbbfaedfeca453777eeb0be0ea869f4db6c779bd80"
@@ -252,6 +253,10 @@ def daemon_unit_contract(ctx, props):
             and set(dropins) <= {DAEMON_DROPIN, VENDOR_DROPIN, DENY_GUARD_DROPIN}, "OpenSnitch effective unit file/drop-in drift: "+props["FragmentPath"]+" + "+props["DropInPaths"])
     if VENDOR_DROPIN in dropins:
         vendor_dropin_contract(ctx, VENDOR_DROPIN)
+    if DENY_GUARD_DROPIN in dropins:
+        info = ctx.stat(DENY_GUARD_DROPIN)
+        require(stat.S_ISREG(info.st_mode) and info.st_uid == 0 and not info.st_mode & 0o022 and digest(ctx.path(DENY_GUARD_DROPIN)) == DENY_GUARD_DROPIN_SHA256,
+                "deny-guard drop-in must be the root-owned immutable image file (byte identity drift)")
 
 
 def vendor_dropin_contract(ctx, value):

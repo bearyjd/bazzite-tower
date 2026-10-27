@@ -1,0 +1,20 @@
+[Unit]
+Description=Revert an unconfirmed OpenSnitch deny trial before the firewall starts
+Documentation=https://github.com/bearyjd/bazzite-tower
+# A pending deny trial must never survive a reboot: with no one answering
+# prompts it can cut the laptop off the network. Runs before the daemon reads
+# its config; the helper edits the file only and never restarts the daemon here.
+After=local-fs.target
+Before=opensnitch.service
+DefaultDependencies=no
+Conflicts=shutdown.target
+Before=shutdown.target
+ConditionPathExists=/var/lib/bazzite-tower/snitchwatch-deny/state.json
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/libexec/bazzite-tower-snitchwatch-deny revert-if-pending --boot
+
+[Install]
+WantedBy=multi-user.target

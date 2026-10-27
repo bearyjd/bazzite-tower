@@ -248,6 +248,40 @@ The migration journal is protected at
 `/var/lib/bazzite-tower/snitchwatch-migration/current.json`; preserve it until
 rollback is no longer needed. These migration recipes request sudo explicitly.
 
+### Opt-in deny on the system profile (`ujust snitchwatch-deny`)
+
+The image ships `DefaultAction: allow`; deny is never the default. On the
+**system profile only** (`Server.Address` = `unix:opensnitchd.sock`; the legacy
+TCP profile is refused, issue #35) an operator can try deny with automatic
+recovery. Helper: `/usr/libexec/bazzite-tower-snitchwatch-deny` (root).
+
+1. `ujust snitchwatch-deny status` - confirms preconditions (`opensnitch.service`
+   active, root-only bridge socket present, root-owned config with
+   `allow`/`proc`). Machine-readable:
+   `sudo /usr/libexec/bazzite-tower-snitchwatch-deny status --json` returns
+   `{"schema":1,"profile","defaultAction","optIn","pending","expiresAt","canEnable","blockers"}`.
+2. `ujust snitchwatch-deny on 10` - keeps an exact backup of the config under
+   `/var/lib/bazzite-tower/snitchwatch-deny/`, changes only the `DefaultAction`
+   value, restarts `opensnitch.service` and arms a transient timer
+   (`bazzite-tower-snitchwatch-deny-revert`). Any failure after the write
+   restores the config (fail-open).
+3. Inside the window, verify a Snitchwatch prompt can be answered and the network
+   works, then `ujust snitchwatch-deny confirm`. This writes
+   `/etc/bazzite-tower/snitchwatch-deny-optin` and deny persists across reboots.
+   `sudo /usr/libexec/bazzite-tower-snitchwatch-readiness` then reports
+   `deny (operator opt-in)`.
+4. `ujust snitchwatch-deny off` - restores `allow` (exact backup if untouched,
+   otherwise only the one key) and removes the marker.
+
+Recovery: an unconfirmed trial reverts at its deadline, and
+`bazzite-tower-snitchwatch-deny-guard.service` reverts it at boot before
+`opensnitch.service` starts. If the network is already unusable: wait out the
+timer, or from a TTY run `sudo /usr/libexec/bazzite-tower-snitchwatch-deny off`
+(or `revert-if-pending`), or `rpm-ostree rollback`. A lock held by another policy
+writer (`/run/lock/bazzite-tower-snitchwatch-migration.lock`) makes every
+mutating subcommand refuse. Readiness treats pending deny, or deny without a
+valid marker, as drift. Not yet exercised on real hardware/systemd.
+
 ### OpenSnitch resource baseline and owner eBPF experiment
 
 This is an optional **owner-operated** test on the candidate, after its initial

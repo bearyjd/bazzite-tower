@@ -160,6 +160,14 @@ snitchwatch-system-readiness:
 snitchwatch-system-migrate action="check":
     @sudo /usr/libexec/bazzite-tower-snitchwatch-migrate {{ quote(action) }}
 
+# Opt-in, time-boxed OpenSnitch DefaultAction=deny on the SYSTEM profile only.
+# status shows state (machine-readable: run the helper with `status --json`). on: start a trial that
+# reverts by itself after `minutes` (1-60) unless you run `confirm`; a reboot
+# before confirm also reverts it. off: back to allow. The image always ships allow.
+[group('Host')]
+snitchwatch-deny action="status" minutes="10":
+    @sudo /usr/libexec/bazzite-tower-snitchwatch-deny {{ quote(action) }}{{ if action == "on" { " --revert-after " + quote(minutes) } else { "" } }}
+
 # Summarise desktop stalls and the kernel events around them.
 #
 # bazzite-tower-stall-detect records freezes that no kernel watchdog reports:

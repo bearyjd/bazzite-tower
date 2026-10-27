@@ -19,6 +19,14 @@ def copy(source, dest, mode=0o644):
     dest.chmod(mode)
 
 
+def require_exact_clean_source(source, pins):
+    git = lambda *values: subprocess.check_output(['git', '-C', str(source), *values], text=True).strip()
+    head, tree, dirty = git('rev-parse', 'HEAD'), git('rev-parse', 'HEAD^{tree}'), git('status', '--porcelain', '--ignored')
+    if head != pins['sourceCommit'] or tree != pins['sourceTree'] or dirty:
+        raise ValueError('source checkout is not exact and completely clean: HEAD %s (want %s), tree %s (want %s), status:\n%s' % (
+            head, pins['sourceCommit'], tree, pins['sourceTree'], '\n'.join(dirty.splitlines()[:20])))
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     for arg in ('source', 'artifact', 'out', 'pins', 'verifier', 'legacy-config', 'candidate-config', 'build-log', 'repro-log', 'rpm-inventory', 'tarball', 'os-update-rule', 'resolved-dns-rule', 'scanner-artifact'):
@@ -28,9 +36,7 @@ def main():
     if out == Path('/') or out.exists():
         raise ValueError('output must be a new isolated staging directory')
     pins = json.loads(args.pins.read_text())
-    git = lambda *values: subprocess.check_output(['git', '-C', str(source), *values], text=True).strip()
-    if git('rev-parse', 'HEAD') != pins['sourceCommit'] or git('rev-parse', 'HEAD^{tree}') != pins['sourceTree'] or git('status', '--porcelain', '--ignored'):
-        raise ValueError('source checkout is not exact and completely clean')
+    require_exact_clean_source(source, pins)
     sub = source / 'vendor/opensnitch'
     if subprocess.check_output(['git', '-C', str(sub), 'rev-parse', 'HEAD'], text=True).strip() != pins['submoduleCommit']:
         raise ValueError('unexpected submodule checkout')
@@ -111,7 +117,7 @@ def main():
     legacy_mask.symlink_to('/dev/null')
     provenance = {
         'sourceCommit': pins['sourceCommit'], 'submoduleCommit': pins['submoduleCommit'],
-        'sourceTree': git('rev-parse', 'HEAD^{tree}'),
+        'sourceTree': pins['sourceTree'],
         'builderImage': pins['builderImage'], 'artifactSha256': sha(args.tarball),
         'rpmInventorySha256': sha(args.rpm_inventory), 'reproducible': True,
         'buildLogSha256': sha(args.build_log), 'reproLogSha256': sha(args.repro_log),

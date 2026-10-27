@@ -236,6 +236,64 @@ class ImageBuildContracts(unittest.TestCase):
         self.scanner_inputs(lambda inputs: inputs.pop('.cargo/config.toml'))
         self.check(valid=True)
 
+    def git_source(self, tracked):
+        source = self.root / 'git-source'
+        for name, text in tracked.items():
+            self.write(str(source.relative_to(self.root) / name), text)
+        env = {**os.environ, 'GIT_AUTHOR_NAME': 't', 'GIT_AUTHOR_EMAIL': 't@t', 'GIT_COMMITTER_NAME': 't', 'GIT_COMMITTER_EMAIL': 't@t'}
+        for command in (['init', '-q'], ['add', '.'], ['commit', '-qm', 'fixture']):
+            subprocess.run(['git', '-C', str(source), *command], check=True, env=env)
+        return source
+
+    def test_scanner_bridge_module_load_leaves_source_checkout_clean(self):
+        source = self.git_source({'packaging/release/bridge_artifact.py': 'def crate_key(p):\n    return p\n'})
+        env = {key: value for key, value in os.environ.items() if key != 'PYTHONDONTWRITEBYTECODE'}
+        code = ('import runpy,sys,pathlib; sys.dont_write_bytecode=False; '
+                'h=runpy.run_path(sys.argv[1]); m=h["load_bridge_artifact"](pathlib.Path(sys.argv[2])); assert m.crate_key(1)==1')
+        subprocess.run(['python3', '-c', code, str(FACTORY / 'snitchwatch-system-scanner-build.py'), str(source)], check=True, env=env)
+        status = subprocess.check_output(['git', '-C', str(source), 'status', '--porcelain', '--ignored'], text=True)
+        self.assertEqual(status, '')
+
+    def test_scanner_environment_disables_bytecode_for_children(self):
+        helper = runpy.run_path(str(FACTORY / 'snitchwatch-system-scanner-build.py'))
+        self.assertEqual(helper['clean_environment']({'PATH': '/usr/bin'})['PYTHONDONTWRITEBYTECODE'], '1')
+
+    def test_scanner_build_only_reads_the_source_checkout(self):
+        text = (FACTORY / 'snitchwatch-system-scanner-build.py').read_text()
+        uses = [re.sub(r'\s+', ' ', line.split('#')[0]).strip() for line in text.splitlines() if re.search(r'(?<![\w\'".-])source\b(?![\'".])', line.split('#')[0])]
+        allowed = ("source, out = args.source.resolve(), args.out.resolve()",
+                   "subprocess.run(['git', '-C', str(source), 'archive', pins['sourceCommit']], stdout=output, check=True)",
+                   "env['SOURCE_DATE_EPOCH'] = subprocess.check_output(['git', '-C', str(source), 'log', '-1', '--format=%ct'], text=True).strip()",
+                   "shutil.copyfile(source / 'LICENSE', out / 'LICENSE')",
+                   "artifact = load_bridge_artifact(source)", "def load_bridge_artifact(source):",
+                   "spec = importlib.util.spec_from_file_location('artifact', source / 'packaging/release/bridge_artifact.py')",
+                   "for name in ('source', 'out', 'pins', 'patch', 'rpm-inventory'):",
+                   "write_json(out / 'source-inputs.json', {str(path.relative_to(patched)): sha(path)",
+                   "parser.add_argument('--' + name, required=True, type=Path)")
+        extra = [line for line in uses if line not in allowed and not line.startswith(('\"\"\"', 'The caller', "'sourceIdentity'"))]
+        self.assertEqual(extra, [])
+        self.assertIn('sys.dont_write_bytecode = True', text)
+
+    def stage_check(self, source, commit, tree):
+        helper = runpy.run_path(str(FACTORY / 'snitchwatch-system-stage.py'))
+        helper['require_exact_clean_source'](source, {'sourceCommit': commit, 'sourceTree': tree})
+
+    def test_stage_source_check_reports_dirty_paths_and_mismatch(self):
+        source = self.git_source({'a.txt': 'a\n'})
+        git = lambda *v: subprocess.check_output(['git', '-C', str(source), *v], text=True).strip()
+        commit, tree = git('rev-parse', 'HEAD'), git('rev-parse', 'HEAD^{tree}')
+        self.stage_check(source, commit, tree)
+        (source / 'pkg/__pycache__').mkdir(parents=True)
+        (source / 'pkg/__pycache__/x.pyc').write_bytes(b'x')
+        (source / 'pkg/.gitignore').write_text('__pycache__/\n')
+        with self.assertRaises(ValueError) as caught:
+            self.stage_check(source, commit, tree)
+        self.assertIn('pkg/', str(caught.exception))
+        (source / 'pkg/.gitignore').unlink(); shutil.rmtree(source / 'pkg')
+        with self.assertRaises(ValueError) as caught:
+            self.stage_check(source, '0' * 40, tree)
+        self.assertIn('HEAD', str(caught.exception))
+
     def test_scanner_private_bus_step_must_have_run_exactly_one_test(self):
         helper = runpy.run_path(str(FACTORY / 'snitchwatch-system-scanner-build.py'))
         check = helper['require_private_bus_test']
@@ -267,7 +325,7 @@ class ImageBuildContracts(unittest.TestCase):
                 'CARGO_ENCODED_RUSTFLAGS', 'RUSTFLAGS')
         environment = {key: 'untrusted fixture executable' for key in keys}
         environment.update(CARGO_HOME='/isolated/cargo', PATH='/usr/bin')
-        self.assertEqual(helper['clean_environment'](environment), {'CARGO_HOME': '/isolated/cargo', 'PATH': '/usr/bin'})
+        self.assertEqual(helper['clean_environment'](environment), {'CARGO_HOME': '/isolated/cargo', 'PATH': '/usr/bin', 'PYTHONDONTWRITEBYTECODE': '1'})
 
     def test_incomplete_inventory(self):
         del self.manifest['files']['/usr/lib/tmpfiles.d/snitchwatch.conf']

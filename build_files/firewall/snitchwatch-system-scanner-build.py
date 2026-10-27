@@ -29,7 +29,18 @@ TOOLCHAIN_OVERRIDES = (
 
 
 def clean_environment(environment):
-    return {key: value for key, value in environment.items() if key not in TOOLCHAIN_OVERRIDES}
+    # Children must never write bytecode caches into the pinned checkouts.
+    return {**{key: value for key, value in environment.items() if key not in TOOLCHAIN_OVERRIDES}, 'PYTHONDONTWRITEBYTECODE': '1'}
+
+
+def load_bridge_artifact(source):
+    """Load the bridge helper from the clean checkout without writing __pycache__ into it."""
+    sys.dont_write_bytecode = True
+    spec = importlib.util.spec_from_file_location('artifact', source / 'packaging/release/bridge_artifact.py')
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
 
 
 def sha(path):
@@ -113,10 +124,7 @@ def main():
     bus_log.unlink()
     # Resolve each executable's own normal+build graph, rather than borrowing
     # the bridge's license closure. Include the actual license/notice texts.
-    spec = importlib.util.spec_from_file_location('artifact', source / 'packaging/release/bridge_artifact.py')
-    artifact = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = artifact
-    spec.loader.exec_module(artifact)
+    artifact = load_bridge_artifact(source)
     metadata = json.loads(subprocess.check_output(['cargo', 'metadata', '--locked', '--offline', '--format-version', '1', '--filter-platform', 'x86_64-unknown-linux-gnu'], cwd=patched, env=env, text=True))
     members = set(metadata['workspace_members'])
     closure = {}

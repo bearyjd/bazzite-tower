@@ -95,7 +95,7 @@ activation, polkit action and private-state tmpfiles definition from the native
 factory. No scanner service or timer is installed. Readiness permits exactly
 `org.snitchwatch.Scanner=talk` only when the verified image's expected Flatpak
 finishArgs grant that name; owning the name, suffixes and wildcards still refuse.
-The immutable scanner source/patch/build/license inventory is described in
+The immutable scanner source/build/license inventory is described in
 `image-build.md`; runtime scanner acceptance remains owner-operated.
 
 Opt-in endpoint events (Vigie): `/usr/share/snitchwatch/endpoint-events/` holds the

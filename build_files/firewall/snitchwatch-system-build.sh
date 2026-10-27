@@ -53,7 +53,7 @@ first=${tarballs[0]}
 command -v dbus-run-session > /dev/null || timeout 240 dnf -y --setopt=install_weak_deps=False install dbus-daemon
 rpm -qa --qf '%{NAME}-%{EPOCHNUM}:%{VERSION}-%{RELEASE}.%{ARCH}\n' | LC_ALL=C sort > "$work/rpm-inventory.txt"
 python3 "$factory/snitchwatch-system-scanner-build.py" --source "$SRC_DIR" --out "$work/scanner" \
-    --pins "$factory/snitchwatch-system-pins.json" --patch "$factory/snitchwatch-system-scanner.patch" \
+    --pins "$factory/snitchwatch-system-pins.json" \
     --rpm-inventory "$work/rpm-inventory.txt"
 artifact_sha=$(sha256sum "$first" | awk '{print $1}')
 python3 "$SRC_DIR/packaging/release/bridge_artifact.py" verify --tarball "$first" \

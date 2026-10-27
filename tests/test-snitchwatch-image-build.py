@@ -39,11 +39,9 @@ def scanner_fixture(root, pins, inventory_sha):
         write(name, b'\x7fELF\x02\x01' + bytes(58))
         (root / name).chmod(0o755)
         write(name + '.ldd', 'libc.so.6 => fixture\n')
-    write('scanner.patch', (FACTORY / 'snitchwatch-system-scanner.patch').read_bytes())
     inputs = {name: pins['sourceFiles'][name] for name in ('Cargo.toml', 'Cargo.lock')}
     real = json.loads((FACTORY / 'snitchwatch-system-pins.json').read_text())['sourceFiles']
-    inputs.update({name: real[name] for name in ('crates/scanner-broker/Cargo.toml', 'crates/scanner-privileged/Cargo.toml')})
-    inputs.update(pins['scannerPatch']['patchedFiles'])
+    inputs.update({name: real[name] for name in real if name.startswith('crates/scanner-')})
     write('source-inputs.json', json.dumps(inputs))
     write('dependency-closure.json', json.dumps({name: [{'name': 'fixture', 'version': '1', 'license': 'MIT', 'source': 'fixture'}] for name in names}))
     for name in ('LICENSE', 'THIRD-PARTY-LICENSES.md', 'build.log', 'repro.log', 'test.log'):
@@ -51,7 +49,6 @@ def scanner_fixture(root, pins, inventory_sha):
     evidence = {path.name: sha(path.read_bytes()) for path in root.iterdir() if path.name not in names}
     write('provenance.json', json.dumps({
         'schemaVersion': 1, 'sourceCommit': pins['sourceCommit'], 'sourceTree': pins['sourceTree'],
-        'patchSha256': pins['scannerPatch']['sha256'], 'patchedFiles': pins['scannerPatch']['patchedFiles'],
         'cargoLockSha256': pins['sourceFiles']['Cargo.lock'], 'cargoTomlSha256': pins['sourceFiles']['Cargo.toml'],
         'builderImage': pins['builderImage'], 'rustcVv': 'rustc ' + pins['rustVersion'] + ' (fixture)',
         'rpmInventorySha256': inventory_sha, 'reproducible': True, 'testsPassed': True,
@@ -150,9 +147,9 @@ class ImageBuildContracts(unittest.TestCase):
         # 20 since r15: the tower's /usr/share reference copy of its own drop-in
         # is gone; upstream's pinned drop-in is the one daemon drop-in.  21 with
         # the tower's always-on OS-update rule (r15, owner decision 2026-10-17),
-        # 22 with its companion resolver DNS rule, plus16 scanner files, plus 4
+        # 22 with its companion resolver DNS rule, plus 15 scanner files, plus 4
         # opt-in endpoint-events files (shipped inert under /usr/share).
-        self.assertEqual(json.loads(result.stdout)['verifiedFiles'], 42)
+        self.assertEqual(json.loads(result.stdout)['verifiedFiles'], 41)
         self.assertEqual(before, {str(p): p.read_bytes() for p in self.root.rglob('*') if p.is_file() and not p.is_symlink()})
 
     def test_binary_tamper(self):
@@ -269,13 +266,13 @@ class ImageBuildContracts(unittest.TestCase):
                 (self.root / name).unlink()
         self.check(valid=True)
 
-    def test_scanner_provenance_and_source_patch_refusals(self):
+    def test_scanner_provenance_and_source_refusals(self):
         name = 'usr/share/snitchwatch/scanner/provenance.json'
         path = self.root / name
         original = json.loads(path.read_text())
         for key, value in [('sourceCommit', '0' * 40), ('sourceTree', '0' * 40),
-                           ('patchSha256', '0' * 64), ('reproducible', False), ('testsPassed', False),
-                           ('binaries', {}), ('evidence', {}), ('patchedFiles', {}),
+                           ('reproducible', False), ('testsPassed', False),
+                           ('binaries', {}), ('evidence', {}),
                            ('cargoLockSha256', '0' * 64), ('rpmInventorySha256', '0' * 64)]:
             with self.subTest(field=key):
                 self.write(name, json.dumps({**original, key: value}))
@@ -367,8 +364,8 @@ class ImageBuildContracts(unittest.TestCase):
                    "shutil.copyfile(source / 'LICENSE', out / 'LICENSE')",
                    "artifact = load_bridge_artifact(source)", "def load_bridge_artifact(source):",
                    "spec = importlib.util.spec_from_file_location('artifact', source / 'packaging/release/bridge_artifact.py')",
-                   "for name in ('source', 'out', 'pins', 'patch', 'rpm-inventory'):",
-                   "write_json(out / 'source-inputs.json', {str(path.relative_to(patched)): sha(path)",
+                   "for name in ('source', 'out', 'pins', 'rpm-inventory'):",
+                   "write_json(out / 'source-inputs.json', {str(path.relative_to(exported)): sha(path)",
                    "parser.add_argument('--' + name, required=True, type=Path)")
         extra = [line for line in uses if line not in allowed and not line.startswith(('\"\"\"', 'The caller', "'sourceIdentity'"))]
         self.assertEqual(extra, [])
@@ -414,7 +411,26 @@ class ImageBuildContracts(unittest.TestCase):
         self.assertIn('<allow_active>auth_admin_keep</allow_active>', policy)
         self.assertIn('<allow_inactive>no</allow_inactive>', policy)
         self.assertIn('<allow_any>no</allow_any>', policy)
-        self.assertEqual(sha((FACTORY / self.pins['scannerPatch']['path']).read_bytes()), self.pins['scannerPatch']['sha256'])
+
+    def test_scanner_is_built_from_upstream_without_a_carried_patch(self):
+        self.assertNotIn('scannerPatch', self.pins)
+        self.assertEqual(list(FACTORY.glob('*scanner*.patch')), [])
+        for name in ('command', 'facts', 'lib', 'main'):
+            self.assertRegex(self.pins['sourceFiles']['crates/scanner-privileged/src/%s.rs' % name], '^[0-9a-f]{64}$')
+        builder = (FACTORY / 'snitchwatch-system-scanner-build.py').read_text()
+        for needle in ('apply', 'scannerPatch', '--patch', '.patch', 'patchedFiles'):
+            self.assertNotIn(needle, builder)
+        self.assertNotIn('patch', (FACTORY / 'snitchwatch-system-build.sh').read_text().lower())
+
+    def test_scanner_provenance_and_inputs_refuse_drift(self):
+        name = 'usr/share/snitchwatch/scanner/source-inputs.json'
+        inputs = json.loads((self.root / name).read_text())
+        for drift in ({'crates/scanner-privileged/src/command.rs': '0' * 64},
+                      {'crates/scanner-privileged/src/main.rs': '0' * 64}):
+            with self.subTest(drift=drift):
+                self.write(name, json.dumps({**inputs, **drift})); self.update_hash(name); self.check()
+        self.write(name, json.dumps(inputs)); self.update_hash(name)
+        self.check(valid=True)
 
     def test_scanner_builder_discards_toolchain_override_environment(self):
         helper = runpy.run_path(str(FACTORY / 'snitchwatch-system-scanner-build.py'))
@@ -812,7 +828,6 @@ class StageOutputContracts(unittest.TestCase):
                     'packaging/system/opensnitchd-default-config.json', 'packaging/system/stage.sh',
                     'packaging/flatpak/org.snitchwatch.Snitchwatch.system.yml')}}
         real_pins = json.loads((FACTORY / 'snitchwatch-system-pins.json').read_text())
-        pins['scannerPatch'] = real_pins['scannerPatch']
         pins['rustVersion'] = real_pins['rustVersion']
         for name in ('Cargo.toml', 'Cargo.lock'):
             pins['sourceFiles'][name] = real_pins['sourceFiles'][name]

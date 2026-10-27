@@ -82,11 +82,9 @@ def main():
     scanner_provenance = json.loads((scanner / 'provenance.json').read_text())
     if (scanner_provenance.get('sourceCommit') != pins['sourceCommit']
             or scanner_provenance.get('sourceTree') != pins['sourceTree']
-            or scanner_provenance.get('patchSha256') != pins['scannerPatch']['sha256']
-            or scanner_provenance.get('patchedFiles') != pins['scannerPatch']['patchedFiles']
             or scanner_provenance.get('reproducible') is not True
             or scanner_provenance.get('testsPassed') is not True):
-        raise ValueError('scanner source/patch/test/repro identity mismatch')
+        raise ValueError('scanner source/test/repro identity mismatch')
     binaries = ('snitchwatch-scanner-privileged', 'snitchwatch-scanner-broker')
     for name in binaries:
         if sha(scanner / name) != scanner_provenance['binaries'][name]:
@@ -95,7 +93,7 @@ def main():
                     str(scanner / binaries[0]), scanner_provenance['binaries'][binaries[0]],
                     str(scanner / binaries[1]), scanner_provenance['binaries'][binaries[1]]], check=True)
     for name, expected in scanner_provenance['evidence'].items():
-        if name not in {'source-inputs.json', 'dependency-closure.json', 'THIRD-PARTY-LICENSES.md', 'LICENSE', 'scanner.patch', 'build.log', 'repro.log', 'test.log', *(binary + '.ldd' for binary in binaries)}:
+        if name not in {'source-inputs.json', 'dependency-closure.json', 'THIRD-PARTY-LICENSES.md', 'LICENSE', 'build.log', 'repro.log', 'test.log', *(binary + '.ldd' for binary in binaries)}:
             raise ValueError('unexpected scanner evidence path')
         if sha(scanner / name) != expected:
             raise ValueError('scanner evidence hash mismatch: ' + name)

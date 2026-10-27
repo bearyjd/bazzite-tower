@@ -30,26 +30,17 @@
     "sha256": "93642aec521a1e5e96dd715f7ae0ec0850ebc9de09a94ce03cae5263f26cc18a"
   },
   "rustVersion": "1.99.0",
-  "scannerPatch": {
-    "patchedFiles": {
-      "crates/scanner-privileged/src/command.rs": "5af3d204be88f31492a29a11dfa14bd75e6983e155a26e1097765d0a78669c65",
-      "crates/scanner-privileged/src/facts.rs": "e6cf557c4788f0a37036cd0a002b71f9dc3afa9e9fe2cc11a1c6a92acb770a27",
-      "crates/scanner-privileged/src/lib.rs": "caf9b5565b454259716e7cfe53d4ea5b92f0941be9a09874158a689ac6fd9be8",
-      "crates/scanner-privileged/src/main.rs": "2298b50c535209a2210cdb60d2d8c7f6e7222c3b76e016bbf73a873f1ec56c9a"
-    },
-    "path": "snitchwatch-system-scanner.patch",
-    "sha256": "6de7858c359fbe71d9d8060d6de198cc384f2af90ad47afb1657f3604e58a165"
-  },
   "schemaVersion": 1,
-  "sourceCommit": "a047c759f7eec95f0498adf53b89dcb45dbdaa9f",
+  "sourceCommit": "11ca612ec860b9bde076b693dfd8c3f95c682bdc",
   "sourceFiles": {
     "Cargo.lock": "48e49bd49869ac32b38063c5356c50d31050c97235a303ba9105262c15a7a73f",
     "Cargo.toml": "ef17d9cc674731d5046110f15e747a994b93725474f1e9d2018b67bcc76bc2f2",
     "crates/scanner-broker/Cargo.toml": "6cf534926fbbcc0b592e45dff4aaad1c687891fdb8f8a1c06ee8d34b99ed8fce",
     "crates/scanner-privileged/Cargo.toml": "4f359c412bf839d83a38cdd1e95b189b7b55eefedec14427dadbfe63ad897d8c",
-    "crates/scanner-privileged/src/facts.rs": "db2d67c0fce741e210708eaa915e0b8fbd088cfc31ef2c52dd02a0c03e1ef674",
-    "crates/scanner-privileged/src/lib.rs": "ab3f35010067bc8b9a6b0a134dc03cbba75fd7c536a93abf3d8f9f0c86819cd2",
-    "crates/scanner-privileged/src/main.rs": "495b47c94ec38eb8fc1409b453d78c9c2c6b77ec30aed61c11898436f8f88487",
+    "crates/scanner-privileged/src/command.rs": "e9948cbb9d3cad53b07d4502bbdeff57348fecffd01b9271e91409209ef9def7",
+    "crates/scanner-privileged/src/facts.rs": "e6cf557c4788f0a37036cd0a002b71f9dc3afa9e9fe2cc11a1c6a92acb770a27",
+    "crates/scanner-privileged/src/lib.rs": "caf9b5565b454259716e7cfe53d4ea5b92f0941be9a09874158a689ac6fd9be8",
+    "crates/scanner-privileged/src/main.rs": "2298b50c535209a2210cdb60d2d8c7f6e7222c3b76e016bbf73a873f1ec56c9a",
     "packaging/bluebuild/files/system/etc/opensnitchd/rules/000-snitchwatch-bridge-fetch.json": "3739ab9bb74ef6309975bf0d2c3c9a766f1976e014e6f9c360b910b22daef458",
     "packaging/endpoint-events/snitchwatch-endpoint-events-nft.service": "057df27916d02a4ee8825e3e986732d782d9df7c080ddd0c4c00f1000719f59e",
     "packaging/endpoint-events/snitchwatch-endpoint-events.conf": "5632fabae16cb5dfb2ac647116d9f5984549009b61e10d78eefd94411dc9f072",
@@ -75,7 +66,7 @@
     "packaging/system/stage.sh": "64327742d69caf99ce63baae6503d3a5a5ce4c1f4c54ad4f425191b0fc44d328"
   },
   "sourceRepository": "https://github.com/bearyjd/snitchwatch.git",
-  "sourceTree": "3da0d653586a25c53ec5e1d24c3641e9162d7d09",
+  "sourceTree": "712398f6081b24af3da4dd31829d2ed941b69b47",
   "submoduleCommit": "b404c4c6316760fa7bc415509d3f8d747f7dc9cc",
   "toolchainRpms": [
     {

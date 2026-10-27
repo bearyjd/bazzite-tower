@@ -365,6 +365,60 @@ authentication, cancellation/denial, repeat requests, visible skipped checks,
 root-private state and unchanged allow/proc settings. Native build/reproducibility,
 image/SELinux behavior and those runtime checks remain separate release gates.
 
+### Endpoint events for Vigie (opt-in, everything off by default)
+
+The image carries the *packages* for an optional feed of connection events to
+Vigie (`opensnitchd` remote logger, JSON on TCP `127.0.0.1:514` -> a separate
+rsyslog instance -> mutual TLS on port 6514 only). **Nothing is enabled, no
+listener exists, and `opensnitchd` has no `Loggers` entry.** Enabling it is a
+manual operator step, not automated here. Design and the exact steps live in
+Snitchwatch `packaging/endpoint-events/README.md` and
+`docs/superpowers/specs/2026-10-26-vigie-endpoint-events.md` at the pinned
+commit (`build_files/firewall/snitchwatch-system-pins.json`).
+
+What ships:
+
+- `rsyslog`, `rsyslog-mmjsonparse`, `rsyslog-gnutls` (`build.d/64-endpoint-events-packages.sh`).
+  The stock `rsyslog.service` and every other unit those packages ship are
+  explicitly disabled at build time (never masked: the opt-in instance reuses
+  the `rsyslogd` binary). The opt-in instance is its own unit.
+- System profile only: four pristine, hash-pinned upstream files in
+  `/usr/share/snitchwatch/endpoint-events/` (root:root 0644): `snitchwatch-endpoint-events.conf`
+  (the instance's rsyslog config, with `@...@` placeholders), `.nft` (the table that
+  lets only root reach `127.0.0.1:514`), `.service`, `-nft.service`. They sit
+  in no unit search path, so nothing can enable them by accident or by preset.
+  The operator copies them to the `/etc` locations upstream names (units to
+  `/etc/systemd/system/`, `.nft` to `/etc/nftables/`, `.conf` edited into
+  `/etc/snitchwatch-endpoint-events/rsyslog.conf`). `opensnitchd-logger.json`
+  is deliberately not shipped.
+
+Guarantee checks (all offline except the last): `snitchwatch-system-verify.py`
+pins the four files' bytes and modes and refuses any enable link or unit copy
+for them in the image's `/usr` tree (and, on a staged tree, `/etc`), any
+`Loggers` key in either shipped daemon config, and any `opensnitchd-logger*`
+file; `tests/smoke.sh` asserts the three packages, `rsyslog.service` and all
+package units not enabled, no `.wants`/`.requires` link, no pre-installed
+`/etc` config, and no `Loggers` in `/etc/opensnitchd/default-config.json`;
+`tests/boot-check.sh` asserts nothing listens on 514 or 6514 and the units are
+inactive. The verifier also runs on the booted host, so it never inspects `/etc`
+there: enabling the feed does not break it.
+
+**Port 514 on loopback is a log-forgery and squat risk.** The daemon's remote
+logger is plain TCP with no authentication. Anything that can connect to the
+listener can inject daemon-shaped events that the instance would forward under
+this host's client certificate. Binding 514 needs root (below
+`ip_unprivileged_port_start`), so an unprivileged process cannot squat it, and
+the shipped nft table rejects non-root connections and any non-`lo` source for
+514. Only root can write to it, and root can always forge. That is why it is
+opt-in, why the nft unit must be installed first (the listener unit is
+`BindsTo=` it), and why this image never opens 514. Event loss is expected, not
+an error. Disabling again: stop and disable the two units, delete the `/etc`
+copies and the `Loggers` entry, reload `opensnitch.service`.
+
+Not verified: the package/unit names against the real Fedora 44 repository, the
+packages' install-time preset behavior in the real base image, a real image
+build, SELinux behavior of TCP 514 on this host, and any live flow to Vigie.
+
 ### OpenSnitch resource baseline and owner eBPF experiment
 
 This is an optional **owner-operated** test on the candidate, after its initial

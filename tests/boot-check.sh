@@ -233,5 +233,34 @@ hard "cockpit.socket disabled" \
 hard "waydroid-container.service disabled" \
     bash -c '[[ "$(systemctl is-enabled waydroid-container.service 2>/dev/null)" == "disabled" ]]'
 
+say "== Endpoint events (opt-in Vigie feed) stay off =="
+# Nothing listens on the syslog ports by default: 514 on loopback is a
+# log-forgery/squat risk and 6514 is the TLS egress port, never a listener.
+# Read /proc/net directly (no ss/netstat dependency): any socket bound to
+# 514 (0x0202) or 6514 (0x1972): TCP in LISTEN state, or any bound UDP socket.
+# shellcheck disable=SC2329 # Invoked indirectly through `hard` below.
+no_syslog_listener() {
+    local f
+    for f in /proc/net/tcp /proc/net/tcp6 /proc/net/udp /proc/net/udp6; do
+        [[ -r "${f}" ]] || continue
+        # local_address is field 2 (ADDR:PORT hex); st field 4 == 0A is LISTEN
+        # for tcp; for udp any bound socket on the port counts.
+        if awk -v f="${f}" 'NR > 1 { split($2, a, ":"); p = toupper(a[2]);
+                if ((p == "0202" || p == "1972") && (f !~ /tcp/ || $4 == "0A")) found = 1 }
+                END { exit !found }' "${f}"; then
+            echo "listener on 514/6514 in ${f}"
+            return 1
+        fi
+    done
+}
+hard "nothing listens on 514 or 6514" no_syslog_listener
+# shellcheck disable=SC2016 # The inner shell, not this script, expands $().
+hard "rsyslog.service not enabled" \
+    bash -c '[[ "$(systemctl is-enabled rsyslog.service 2>/dev/null)" != enabled* ]]'
+hard "rsyslog.service not active" \
+    bash -c '! systemctl is-active --quiet rsyslog.service'
+hard "endpoint-events units not active" \
+    bash -c '! systemctl is-active --quiet snitchwatch-endpoint-events.service snitchwatch-endpoint-events-nft.service'
+
 say "== done (fail=${fail}) =="
 exit "${fail}"

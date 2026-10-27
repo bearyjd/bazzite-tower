@@ -10,7 +10,7 @@ import sys
 
 MANIFEST = '/usr/share/snitchwatch/system-bridge-manifest.json'
 PINS = '/usr/share/snitchwatch/build-pins.json'
-EXPECTED_PINS_SHA256 = '2e7772124ac1b8c034cc79a1b1a85aaa4e0d7078eb4a9317d27d340858a60d33'
+EXPECTED_PINS_SHA256 = 'a5f626448fcdc788c293a1e3181b50a09874b0c0796b8a84759a99ff2bd7e19f'
 BINARY = '/usr/bin/snitchwatch-bridge-cli'
 PROFILE = '/usr/share/bazzite-tower/snitchwatch-bridge-profile'
 CONFIG = '/usr/share/bazzite-tower/opensnitchd-system-bridge-config.json'
@@ -46,6 +46,21 @@ SOURCE_FILES = {
     DROPIN: 'packaging/system/opensnitch-snitchwatch-system-bridge.conf',
     FETCH_RULE: 'packaging/bluebuild/files/system/etc/opensnitchd/rules/000-snitchwatch-bridge-fetch.json',
 }
+# Opt-in Vigie endpoint-event feed (docs/RUNBOOK.md): pristine upstream copies,
+# inert under /usr/share (in no unit search path, so nothing can enable them).
+# The operator copies them to /etc/... after reading upstream's README.  The
+# daemon Loggers snippet (opensnitchd-logger.json) is deliberately never shipped.
+EVENTS_ROOT = '/usr/share/snitchwatch/endpoint-events/'
+EVENTS_FILES = ('snitchwatch-endpoint-events.conf', 'snitchwatch-endpoint-events.nft',
+                'snitchwatch-endpoint-events.service', 'snitchwatch-endpoint-events-nft.service')
+SOURCE_FILES.update({EVENTS_ROOT + name: 'packaging/endpoint-events/' + name for name in EVENTS_FILES})
+EVENTS_NAME = 'snitchwatch-endpoint-events'
+EVENTS_LOGGER = 'opensnitchd-logger'
+# Image-owned unit trees are always checked.  /etc is operator state on a live
+# root (the opt-in enables units there), so it is only checked on a staged tree.
+EVENTS_IMAGE_DIRS = ('usr/lib/systemd/system', 'usr/lib/systemd/user')
+EVENTS_LOGGER_DIRS = ('etc/opensnitchd', 'usr/share/snitchwatch', 'usr/share/bazzite-tower')
+EVENTS_ETC_DIRS = ('etc/systemd/system', 'etc/systemd/user', 'etc/xdg/systemd/user')
 LICENSES = {'LICENSE', 'LICENSE.opensnitch', 'THIRD-PARTY-LICENSES.md'}
 SCANNER_BINARIES = {'/usr/libexec/snitchwatch-scanner-privileged', '/usr/libexec/snitchwatch-scanner-broker'}
 SCANNER_ROOT = '/usr/share/snitchwatch/scanner/'
@@ -153,6 +168,25 @@ def refuse_persistent_scanner_activation(root):
                 raise ValueError('unexpected persistent scanner activation: ' + relative)
 
 
+def refuse_enabled_endpoint_events(root, live=False):
+    """The endpoint-event units are never enabled or placed in a unit search path."""
+    for directory in EVENTS_IMAGE_DIRS + (() if live else EVENTS_ETC_DIRS):
+        base = root / directory
+        if base.is_dir():
+            for path in sorted(base.rglob('*')):
+                if EVENTS_NAME in path.name.lower():
+                    raise ValueError('endpoint-events unit must not be installed or enabled in the image: ' + path.relative_to(root).as_posix())
+
+
+def refuse_logger_snippet(root):
+    """No logger snippet in the image-owned daemon/Snitchwatch trees: the feed is operator opt-in."""
+    for directory in EVENTS_LOGGER_DIRS:
+        base = root / directory
+        for path in sorted(base.rglob('*')) if base.is_dir() else ():
+            if EVENTS_LOGGER in path.name.lower():
+                raise ValueError('opensnitchd logger snippet must not be shipped: ' + path.relative_to(root).as_posix())
+
+
 def verify(root):
     manifest = json.loads(read_file(root, MANIFEST))
     pins_bytes = read_file(root, PINS)
@@ -178,6 +212,9 @@ def verify(root):
         contents[name] = read_file(root, name, mode)
         if digest(contents[name]) != expected:
             raise ValueError('immutable file hash mismatch: ' + describe(name))
+    for name in (CONFIG, LEGACY_CONFIG):
+        if 'Loggers' in json.loads(contents[name]).get('Server', {}):
+            raise ValueError('default daemon config must not have a Loggers entry (endpoint events are operator opt-in): ' + name)
     if manifest.get('binary') != {'path': BINARY, 'sha256': files[BINARY], 'version': pins['bridgeVersion']}:
         raise ValueError('binary identity differs from immutable inventory')
     if contents[BINARY][:6] != b'\x7fELF\x02\x01':
@@ -264,6 +301,8 @@ def verify(root):
         raise ValueError('incomplete scanner dependency closure')
     # Session D-Bus activation is the sole scanner activation mechanism.
     refuse_persistent_scanner_activation(root)
+    refuse_enabled_endpoint_events(root, live=root == Path('/'))
+    refuse_logger_snippet(root)
     expected_gui = {'appId': 'org.snitchwatch.Snitchwatch', 'profile': 'system', 'runtimeRef': pins['flatpakRuntimeRef'], 'sourceCommit': pins['sourceCommit'], 'manifestSha256': pins['sourceFiles']['packaging/flatpak/org.snitchwatch.Snitchwatch.system.yml'], 'finishArgs': pins['flatpakFinishArgs']}
     if manifest.get('flatpak') != expected_gui:
         raise ValueError('incorrect expected GUI system profile')

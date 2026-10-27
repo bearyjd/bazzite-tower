@@ -19,7 +19,11 @@ def main():
     common.require(os.geteuid() == 0, "all-UID inspection requires explicit root invocation: sudo /usr/libexec/bazzite-tower-snitchwatch-readiness (read-only)")
     result = common.runtime_readiness(common.Context())
     print(json.dumps(result, sort_keys=True))
-    print("Local system prerequisites pass; graphical prompt/decision behavior is not checked. DefaultAction is allow; deny enforcement requires explicit operator opt-in. No state changed and no GUI user enrolled.")
+    if result["defaultAction"] == "allow":
+        policy = "DefaultAction is allow; deny enforcement requires explicit operator opt-in."
+    else:
+        policy = "DefaultAction is "+result["defaultAction"]+"; undo with: ujust snitchwatch-deny off."
+    print("Local system prerequisites pass; graphical prompt/decision behavior is not checked. "+policy+" No state changed and no GUI user enrolled.")
 
 
 if __name__ == "__main__":

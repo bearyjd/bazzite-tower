@@ -1,0 +1,536 @@
+#!/usr/bin/python3
+"""Explicit, reversible opt-in to OpenSnitch DefaultAction=deny (system profile only).
+
+The image always ships allow. `on` starts a time-boxed trial: only the
+DefaultAction key changes, an exact backup is kept, and a transient timer plus a
+boot guard revert it unless `confirm` is run. `status --json` is schema 1; fields are only ever added. "expired" (additive) is
+true when a trial is still pending after its deadline (the revert was lost or the
+timer stopped); the operator should run `off`. Policy writers hold
+/run/lock/bazzite-tower-snitchwatch-migration.lock. Linux rename cannot give a
+strict conditional replace against arbitrary root writers; a re-read just before
+replacement detects drift and refuses instead of overwriting.
+"""
+import argparse
+import base64
+import contextlib
+import fcntl
+import hashlib
+import importlib.util
+import json
+import os
+import re
+import signal
+import stat
+import subprocess
+import sys
+import tempfile
+import time
+import uuid
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+
+sys.dont_write_bytecode = True
+spec = importlib.util.spec_from_file_location("snitchwatch_common", Path(__file__).with_name("bazzite-tower-snitchwatch-common.py"))
+common = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(common)
+
+STATE_DIR = "/var/lib/bazzite-tower/snitchwatch-deny"
+STATE = STATE_DIR+"/state.json"
+BACKUP = STATE_DIR+"/config.backup"
+MARKER = common.DENY_MARKER
+LOCK = "/run/lock/bazzite-tower-snitchwatch-migration.lock"
+TIMER = "bazzite-tower-snitchwatch-deny-revert"
+HELPER = "/usr/libexec/bazzite-tower-snitchwatch-deny"
+SOCKET = "/run/snitchwatch/opensnitchd.sock"
+SYSTEM_ADDRESS = "unix:opensnitchd.sock"
+LEGACY_ADDRESS = "127.0.0.1:50051"
+TIME_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
+LOCK_TIMEOUT = 30.0
+LOCK_POLL = 0.1
+KEY = b'"DefaultAction"'
+ACTION = re.compile(rb'("DefaultAction"\s*:\s*")(allow|deny)(")')
+
+
+def boot_id(ctx):
+    try:
+        return ctx.path("/proc/sys/kernel/random/boot_id").read_text().strip() or None
+    except OSError:
+        return None
+
+
+def utcnow():
+    return datetime.now(timezone.utc)
+
+
+def stamp(moment):
+    return moment.strftime(TIME_FORMAT)
+
+
+def parse_stamp(text):
+    return datetime.strptime(text, TIME_FORMAT).replace(tzinfo=timezone.utc)
+
+
+def encoded(data):
+    return base64.b64encode(data).decode("ascii")
+
+
+def sha256(data):
+    return hashlib.sha256(data).hexdigest()
+
+
+def metadata_at(ctx, logical):
+    info = ctx.stat(logical)
+    common.require(stat.S_ISREG(info.st_mode) and info.st_uid == 0 and not info.st_mode & 0o022, "live config must be a root-owned, non-writable regular file")
+    path = ctx.path(logical)
+    return dict(uid=info.st_uid, gid=info.st_gid, mode=stat.S_IMODE(info.st_mode), xattrs={name: encoded(os.getxattr(path, name)) for name in os.listxattr(path)})
+
+
+def sync_directory(path):
+    fd = os.open(path, os.O_DIRECTORY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def publish(ctx, logical, data, mode=0o600, metadata=None, expected=None):
+    """Atomic replace. With `expected`, refuse (nothing overwritten) if the live bytes differ."""
+    path = ctx.path(logical)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, temporary = tempfile.mkstemp(prefix=".snitchwatch-deny-", dir=path.parent)
+    try:
+        with os.fdopen(fd, "wb") as target:
+            target.write(data)
+            target.flush()
+            if metadata:
+                os.fchown(target.fileno(), metadata["uid"], metadata["gid"])
+                os.fchmod(target.fileno(), metadata["mode"])
+                for name, value in metadata["xattrs"].items():
+                    os.setxattr(temporary, name, base64.b64decode(value, validate=True))
+            else:
+                os.fchmod(target.fileno(), mode)
+            os.fsync(target.fileno())
+        if expected is not None:
+            common.require(path.read_bytes() == expected, "config changed since it was read; nothing overwritten")
+        os.replace(temporary, path)
+        sync_directory(path.parent)
+    finally:
+        if os.path.lexists(temporary):
+            os.unlink(temporary)
+
+
+def private_bytes(ctx, logical, what):
+    info = ctx.stat(logical)
+    common.require(stat.S_ISREG(info.st_mode) and info.st_uid == 0 and not info.st_mode & 0o077, what+" must be a root-owned regular file with mode 0600")
+    return ctx.path(logical).read_bytes()
+
+
+def state_dir(ctx):
+    path = ctx.path(STATE_DIR)
+    path.mkdir(parents=True, exist_ok=True, mode=0o700)
+    path.chmod(0o700)
+    info = ctx.stat(STATE_DIR)
+    common.require(stat.S_ISDIR(info.st_mode) and info.st_uid == 0 and stat.S_IMODE(info.st_mode) == 0o700, "deny state directory must be a root-owned mode0700 directory")
+
+
+def load_state(ctx):
+    if not ctx.present(STATE):
+        return None
+    try:
+        state = json.loads(private_bytes(ctx, STATE, "deny state"))
+    except ValueError as error:
+        raise common.Refusal("deny state is not valid JSON") from error
+    common.require(isinstance(state, dict) and state.get("schema") == 1 and isinstance(state.get("pending"), bool), "unexpected deny state schema")
+    return state
+
+
+def save_state(ctx, state):
+    publish(ctx, STATE, (json.dumps(state, indent=2, sort_keys=True)+"\n").encode())
+
+
+def read_config(ctx):
+    metadata = metadata_at(ctx, common.CONFIG)
+    return ctx.path(common.CONFIG).read_bytes(), metadata
+
+
+def current_action(data):
+    try:
+        action = json.loads(data).get("DefaultAction")
+    except (ValueError, AttributeError):
+        return "other"
+    return action if action in ("allow", "deny") else "other"
+
+
+def set_action(data, value):
+    """Change only the DefaultAction value bytes; refuse any ambiguity."""
+    common.require(data.count(KEY) == 1 and len(ACTION.findall(data)) == 1, "cannot edit DefaultAction: key is absent, ambiguous or not an allow/deny string")
+    result = ACTION.sub(lambda match: match.group(1)+value.encode()+match.group(3), data)
+    before, after = json.loads(data), json.loads(result)
+    before["DefaultAction"] = value
+    common.require(before == after, "DefaultAction edit would change more than that key")
+    return result
+
+
+@contextlib.contextmanager
+def policy_lock(ctx, wait=False):
+    """`on`/`confirm` refuse under contention; revert paths wait (bounded) so deny never lingers."""
+    path = ctx.path(LOCK)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+    try:
+        info = os.fstat(fd)
+        common.require(stat.S_ISREG(info.st_mode) and info.st_uid == os.geteuid() and stat.S_IMODE(info.st_mode) == 0o600, "unsafe policy lock file")
+        deadline = time.monotonic()+LOCK_TIMEOUT
+        while True:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError as error:
+                if not wait:
+                    raise common.Refusal("another snitchwatch policy writer holds the lock; retry when it finishes") from error
+                if time.monotonic() >= deadline:
+                    raise common.Refusal("timed out after "+str(LOCK_TIMEOUT)+"s waiting for the policy lock; nothing was changed and any pending trial is kept; retry: "+HELPER+" revert-if-pending") from error
+                time.sleep(LOCK_POLL)
+        yield
+    finally:
+        os.close(fd)
+
+
+def service_active(ctx):
+    return ctx.command(["systemctl", "is-active", "opensnitch.service"], okay=(0, 1, 3, 4)).stdout.strip() == "active"
+
+
+def stop_timer(ctx):
+    ctx.command(["systemctl", "stop", TIMER+".timer"], okay=(0, 1, 5), timeout=20)
+
+
+def restart_daemon(ctx):
+    ctx.command(["systemctl", "restart", "opensnitch.service"], timeout=60)
+
+
+def inspect(ctx):
+    """Return (profile, defaultAction, blockers) without changing anything."""
+    blockers = []
+    profile, action = "unknown", "other"
+    try:
+        data, _ = read_config(ctx)
+        action = current_action(data)
+        address = json.loads(data).get("Server", {}).get("Address")
+        if address == SYSTEM_ADDRESS:
+            profile = "system"
+        elif address == LEGACY_ADDRESS:
+            profile = "legacy"
+            blockers.append("legacy TCP profile (127.0.0.1:50051) is squat-able (issue #35); move to the system profile first")
+        else:
+            blockers.append("unknown profile: Server.Address is "+repr(address)+"; only "+SYSTEM_ADDRESS+" is supported")
+        if action != "allow":
+            blockers.append("current DefaultAction is "+(action if action != "other" else "not allow/deny")+"; opt-in requires allow")
+        if json.loads(data).get("ProcMonitorMethod") != "proc":
+            blockers.append("ProcMonitorMethod is not proc; opt-in requires proc")
+    except (OSError, ValueError, AttributeError, common.Refusal) as error:
+        blockers.append("config is not the expected root-owned file: "+str(error))
+    if not service_active(ctx):
+        blockers.append("opensnitch.service is not active")
+    info = ctx.lookup(SOCKET)
+    if info is None or not (stat.S_ISSOCK(info.st_mode) and info.st_uid == 0 and stat.S_IMODE(info.st_mode) == 0o600):
+        blockers.append("root-only bridge socket "+SOCKET+" is missing or unsafe")
+    return profile, action, blockers
+
+
+def is_expired(state):
+    return bool(state and state["pending"] and utcnow() > parse_stamp(state["expiresAt"]))
+
+
+def pending_blocker(state):
+    if is_expired(state):
+        return "an expired deny trial is still pending (its revert did not complete); run: ujust snitchwatch-deny off"
+    return "a deny trial is already pending; confirm or off first"
+
+
+def status(ctx, as_json):
+    profile, action, blockers = inspect(ctx)
+    state = load_state(ctx)
+    pending = bool(state and state["pending"])
+    expired = is_expired(state)
+    if pending:
+        blockers.append(pending_blocker(state))
+    opt_in = common.deny_opt_in(ctx)
+    if opt_in:
+        blockers.append("deny is already confirmed; run off first")
+    report = {"schema": 1, "profile": profile, "defaultAction": action, "optIn": opt_in, "pending": pending,
+              "expiresAt": state["expiresAt"] if pending else None, "canEnable": not blockers, "blockers": blockers, "expired": expired}
+    if as_json:
+        print(json.dumps(report))
+    else:
+        print("profile: "+profile+"\ndefaultAction: "+action+"\nopt-in confirmed: "+str(opt_in).lower()+"\npending: "+str(pending).lower()
+              +(" (reverts at "+report["expiresAt"]+")" if pending else "")+("\nEXPIRED: still pending; run: ujust snitchwatch-deny off" if expired else "")+"\ncan enable: "+str(report["canEnable"]).lower())
+        for blocker in blockers:
+            print("blocker: "+blocker)
+
+
+def restore_allow(ctx, state):
+    """Return how DefaultAction=allow was restored; edits nothing when already allow."""
+    data, metadata = read_config(ctx)
+    if current_action(data) == "allow":
+        return "already-allow"
+    if state and ctx.present(BACKUP):
+        try:
+            backup = private_bytes(ctx, BACKUP, "deny backup")
+        except common.Refusal:
+            backup = None
+        if backup is not None and sha256(backup) == state.get("backupSha256") and sha256(data) == state.get("denySha256"):
+            publish(ctx, common.CONFIG, backup, metadata=state["backupMetadata"], expected=data)
+            return "backup"
+    # Backup unusable or the operator edited the file since: flip only the key.
+    publish(ctx, common.CONFIG, set_action(data, "allow"), metadata=metadata, expected=data)
+    return "key-edit"
+
+
+def discard(ctx):
+    for logical in (MARKER, STATE, BACKUP):
+        if ctx.present(logical):
+            os.unlink(ctx.path(logical))
+
+
+def terminated(signum, frame):
+    raise common.Refusal("terminated by signal "+str(signum))
+
+
+def turn_on(ctx, minutes):
+    profile, _, blockers = inspect(ctx)
+    state = load_state(ctx)
+    if state and state["pending"]:
+        blockers.append(pending_blocker(state))
+    if common.deny_opt_in(ctx):
+        blockers.append("deny is already confirmed; run off first")
+    common.require(not blockers, "cannot enable deny: "+"; ".join(blockers))
+    data, metadata = read_config(ctx)
+    deny = set_action(data, "deny")
+    now = utcnow()
+    state = dict(schema=1, id=uuid.uuid4().hex, pending=True, createdAt=stamp(now), minutes=minutes, expiresAt=stamp(now+timedelta(minutes=minutes)),
+                 backupSha256=sha256(data), backupMetadata=metadata, denySha256=sha256(deny), bootId=boot_id(ctx))
+    invoked = False
+    previous = {sig: signal.getsignal(sig) for sig in (signal.SIGTERM, signal.SIGHUP)}
+    for sig in previous:
+        signal.signal(sig, terminated)
+    try:
+        # Order matters: at every point the config is allow, or deny with pending
+        # state AND an armed timer (the boot guard also reverts pending state).
+        state_dir(ctx)
+        publish(ctx, BACKUP, data)
+        save_state(ctx, state)
+        # Two triggers: --on-active is monotonic and stalls across suspend, so
+        # the wall-clock deadline guarantees a suspend cannot extend the trial.
+        invoked = True  # a timer may exist even if the call never returned
+        ctx.command(["systemd-run", "--on-active="+str(minutes)+"m", "--on-calendar="+state["expiresAt"].replace("T", " ").replace("Z", " UTC"),
+                     "--collect", "--unit="+TIMER, HELPER, "revert-if-pending"], timeout=20)
+        publish(ctx, common.CONFIG, deny, metadata=metadata, expected=data)
+        # Restart is kept deliberately. The pinned daemon patch shows ui/client.go
+        # imports fsnotify and swaps c.config on reload, but that an edit of
+        # default-config.json applies DefaultAction live was NOT verified here;
+        # the restart is the assumed-safe way to make the daemon read it.
+        restart_daemon(ctx)
+        common.require(service_active(ctx), "opensnitch.service is not active after restart")
+    except BaseException as error:
+        for sig in previous:
+            signal.signal(sig, signal.SIG_IGN)
+        notes = []
+        try:
+            method = restore_allow(ctx, state)
+            discard(ctx)
+            notes.append("DefaultAction restored to allow ("+method+")")
+            changed = method != "already-allow"
+        except BaseException as recovery:
+            changed = True
+            notes.append("RESTORE FAILED ("+str(recovery)+"); trial left pending so the timer/boot guard retries")
+        if invoked:
+            with contextlib.suppress(Exception):
+                stop_timer(ctx)
+        if changed:
+            try:
+                restart_daemon(ctx)
+            except Exception as restart:
+                notes.append("restart after restore failed: "+str(restart))
+        raise common.Refusal("deny trial failed and was rolled back: "+str(error)+"; "+"; ".join(notes)) from error
+    finally:
+        for sig, handler in previous.items():
+            signal.signal(sig, handler)
+    print("deny trial started: reverts automatically at "+state["expiresAt"]+" ("+str(minutes)+" min) unless you run: ujust snitchwatch-deny confirm")
+
+
+def confirm(ctx):
+    state = load_state(ctx)
+    common.require(state and state["pending"], "no pending deny trial to confirm")
+    if utcnow() >= parse_stamp(state["expiresAt"]):
+        # Do not rely on a timer that suspend/clock jumps may have delayed.
+        turn_off(ctx)
+        raise common.Refusal("deny trial expired before confirm; it was reverted to allow")
+    data, _ = read_config(ctx)
+    common.require(current_action(data) == "deny", "live DefaultAction is not deny; cannot confirm")
+    common.require(service_active(ctx), "opensnitch.service is not active; cannot confirm")
+    # Marker first: while state is still pending readiness treats deny as drift.
+    marker = dict(schema=1, confirmedAt=stamp(utcnow()), id=state["id"])
+    publish(ctx, MARKER, (json.dumps(marker, indent=2, sort_keys=True)+"\n").encode(), mode=0o644)
+    save_state(ctx, dict(state, pending=False, confirmedAt=marker["confirmedAt"]))
+    stop_timer(ctx)
+    print("deny confirmed and persistent; undo with: ujust snitchwatch-deny off")
+
+
+def turn_off(ctx, boot=False):
+    state = load_state(ctx)
+    data, _ = read_config(ctx)
+    leftovers = bool(state) or ctx.present(MARKER)
+    if not leftovers and current_action(data) == "allow":
+        print("nothing to do: DefaultAction is already allow and no opt-in is recorded")
+        return
+    method = restore_allow(ctx, state)
+    discard(ctx)
+    stop_timer(ctx)
+    if not boot and method != "already-allow":
+        try:
+            restart_daemon(ctx)
+        except Exception as error:
+            raise common.Refusal("DefaultAction restored to allow ("+method+") but restarting opensnitch.service failed: "+str(error)+"; run: systemctl restart opensnitch.service") from error
+    print("DefaultAction restored to allow ("+method+"); opt-in removed"+("" if not boot else "; daemon not restarted (boot guard)"))
+
+
+def pending_state(ctx):
+    state = load_state(ctx)
+    return state if state and state["pending"] else None
+
+
+def guard_should_revert(ctx):
+    """Unlocked pre-check for the boot guard: only a trial left by an EARLIER boot is its business.
+
+    A restart of opensnitch.service during `on` re-queues the guard while `on`
+    holds the policy lock; waiting there would deadlock the restart.
+    """
+    state = pending_state(ctx)
+    if state is None:
+        print("nothing pending")
+        return False
+    current = boot_id(ctx)
+    if current and state.get("bootId") == current:
+        print("pending trial belongs to this boot; the guard leaves it to its timer")
+        return False
+    return True
+
+
+def unique_aside(ctx):
+    base = ctx.path(STATE_DIR)/("state.json.corrupt-"+utcnow().strftime("%Y%m%dT%H%M%SZ"))
+    candidate, number = base, 0
+    while os.path.lexists(candidate):
+        number += 1
+        candidate = Path(str(base)+"-"+str(number))
+    return candidate
+
+
+def recover_bad_state(ctx, reason):
+    """Boot guard only: unreadable/unsafe state must never keep the firewall down or deny live.
+
+    Force allow first (a config that cannot be edited safely still fails loudly),
+    then quarantine the state, drop the opt-in marker and stop any revert timer.
+    """
+    method = restore_allow(ctx, None)
+    notes = ["DefaultAction forced to allow ("+method+")"]
+    path = ctx.path(STATE)
+    if os.path.lexists(path):
+        aside = unique_aside(ctx)
+        os.rename(path, aside)  # renames a symlink itself; never follows it
+        if stat.S_ISREG(os.lstat(aside).st_mode):
+            os.chmod(aside, 0o600)
+        notes.append("bad state moved to "+str(aside.relative_to(ctx.root)))
+    if os.path.lexists(ctx.path(MARKER)):
+        os.unlink(ctx.path(MARKER))
+        notes.append("opt-in marker removed")
+    try:
+        stop_timer(ctx)
+        notes.append("revert timer stopped")
+    except common.Refusal as error:
+        notes.append("could not stop revert timer: "+str(error))
+    print("WARNING: deny state unusable at boot ("+str(reason)+"); "+"; ".join(notes)+"; opensnitch will start on allow", file=sys.stderr)
+
+
+def boot_guard(ctx):
+    """A single failed read proves nothing: confirm it under the lock before quarantining."""
+    try:
+        load_state(ctx)
+    except FileNotFoundError:
+        print("nothing pending")
+        return
+    except (common.Refusal, OSError, ValueError, KeyError):
+        with policy_lock(ctx, wait=True):
+            try:
+                load_state(ctx)
+            except FileNotFoundError:
+                print("nothing pending")
+                return
+            except (common.Refusal, OSError, ValueError, KeyError) as reason:
+                recover_bad_state(ctx, reason)
+                return
+            # The second read succeeded: the first failure was transient.
+            if guard_should_revert(ctx):
+                revert_if_pending(ctx, True)
+        return
+    if guard_should_revert(ctx):
+        with policy_lock(ctx, wait=True):
+            revert_if_pending(ctx, True)
+
+
+def revert_if_pending(ctx, boot):
+    if pending_state(ctx) is None:
+        print("nothing pending")
+        return
+    turn_off(ctx, boot=boot)
+
+
+def minutes_argument(value):
+    try:
+        number = int(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError("minutes must be a whole number between 1 and 60")
+    if not 1 <= number <= 60:
+        raise argparse.ArgumentTypeError("minutes must be between 1 and 60")
+    return number
+
+
+def parser():
+    top = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    commands = top.add_subparsers(dest="action", required=True)
+    commands.add_parser("status").add_argument("--json", action="store_true")
+    commands.add_parser("on").add_argument("--revert-after", type=minutes_argument, default=10, metavar="MINUTES")
+    commands.add_parser("confirm")
+    commands.add_parser("off")
+    commands.add_parser("revert-if-pending").add_argument("--boot", action="store_true", help="boot guard: do not restart the not-yet-started daemon")
+    return top
+
+
+def main(argv=None, ctx=None):
+    args = parser().parse_args(argv)
+    try:
+        if ctx is None:
+            common.require(os.geteuid() == 0, "explicit root operator invocation required (sudo); helper never escalates itself")
+            ctx = common.Context()
+        if args.action == "status":
+            status(ctx, args.json)
+            return 0
+        if args.action == "revert-if-pending" and args.boot:
+            boot_guard(ctx)
+            return 0
+        with policy_lock(ctx, wait=args.action in ("off", "revert-if-pending")):
+            if args.action == "on":
+                turn_on(ctx, args.revert_after)
+            elif args.action == "confirm":
+                confirm(ctx)
+            elif args.action == "off":
+                turn_off(ctx)
+            else:
+                revert_if_pending(ctx, args.boot)
+        return 0
+    except (common.Refusal, OSError, ValueError, KeyError, subprocess.TimeoutExpired) as error:
+        print("REFUSED: "+str(error), file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -36,6 +36,11 @@ FETCH_RULE = "/etc/opensnitchd/rules/000-snitchwatch-bridge-fetch.json"
 OS_UPDATE_RULE = "/etc/opensnitchd/rules/000-snitchwatch-tower-os-update.json"
 DNS_RULE = "/etc/opensnitchd/rules/000-snitchwatch-tower-resolved-dns.json"
 RESERVED_RULES = {FETCH_RULE: "Snitchwatch fetch rule", OS_UPDATE_RULE: "tower OS-update rule", DNS_RULE: "tower resolver DNS rule"}
+# Operator deny opt-in (bazzite-tower-snitchwatch-deny). The image always ships allow.
+DENY_MARKER = "/etc/bazzite-tower/snitchwatch-deny-optin"
+DENY_GUARD_DROPIN = "/usr/lib/systemd/system/opensnitch.service.d/bazzite-tower-snitchwatch-deny-guard.conf"
+DENY_GUARD_DROPIN_SHA256 = "b46aa696d4d8da32c2b510425eb04df03a4b19e243fdf8e6cf9158b80c5d2d43"
+DENY_STATE = "/var/lib/bazzite-tower/snitchwatch-deny/state.json"
 BASE_GLOBAL_OVERRIDE = "/var/lib/flatpak/overrides/global"
 BASE_GLOBAL_OVERRIDE_SHA256 = "85e2bf73515c8da8950f1afbbfaedfeca453777eeb0be0ea869f4db6c779bd80"
 VENDOR_DROPIN_SHA256 = "ae6b234f92bc22f1201a7572b59b454c9809f33c80d13f361b9674e1801acc37"
@@ -245,9 +250,13 @@ def daemon_unit_contract(ctx, props):
     # Fedora's global service.d timeout drop-in; nothing else may be loaded.
     dropins = props["DropInPaths"].split()
     require(props["FragmentPath"] == DAEMON_UNIT and DAEMON_DROPIN in dropins and len(dropins) == len(set(dropins))
-            and set(dropins) <= {DAEMON_DROPIN, VENDOR_DROPIN}, "OpenSnitch effective unit file/drop-in drift: "+props["FragmentPath"]+" + "+props["DropInPaths"])
+            and set(dropins) <= {DAEMON_DROPIN, VENDOR_DROPIN, DENY_GUARD_DROPIN}, "OpenSnitch effective unit file/drop-in drift: "+props["FragmentPath"]+" + "+props["DropInPaths"])
     if VENDOR_DROPIN in dropins:
         vendor_dropin_contract(ctx, VENDOR_DROPIN)
+    if DENY_GUARD_DROPIN in dropins:
+        info = ctx.stat(DENY_GUARD_DROPIN)
+        require(stat.S_ISREG(info.st_mode) and info.st_uid == 0 and not info.st_mode & 0o022 and digest(ctx.path(DENY_GUARD_DROPIN)) == DENY_GUARD_DROPIN_SHA256,
+                "deny-guard drop-in must be the root-owned immutable image file (byte identity drift)")
 
 
 def vendor_dropin_contract(ctx, value):
@@ -267,10 +276,36 @@ def daemon_exec_contract(value):
     require(re.findall(r"argv\[\]=([^;]+)", value) == [DAEMON+" "], "effective daemon ExecStart must be only "+DAEMON+"; CLI config/IPC/policy overrides are refused")
 
 
+def regular_root_json(ctx, name):
+    # None unless a root-owned, non-writable, non-symlink regular file with a JSON object.
+    info = ctx.lookup(name)
+    if info is None or not (stat.S_ISREG(info.st_mode) and info.st_uid == 0 and not info.st_mode & 0o022):
+        return None
+    try:
+        value = json.loads(ctx.path(name).read_text())
+    except (OSError, ValueError):
+        return None
+    return value if isinstance(value, dict) else None
+
+
+def deny_opt_in(ctx):
+    marker = regular_root_json(ctx, DENY_MARKER)
+    if not marker or marker.get("schema") != 1 or not isinstance(marker.get("confirmedAt"), str) or not isinstance(marker.get("id"), str):
+        return False
+    if ctx.present(DENY_STATE):
+        state = regular_root_json(ctx, DENY_STATE)
+        return bool(state) and state.get("pending") is False and state.get("id") == marker["id"]
+    return True
+
+
 def config_contract(ctx, address="unix:opensnitchd.sock"):
     config = json.loads(ctx.path(CONFIG).read_text())
     require(config.get("Server", {}).get("Address") == address, "live /etc Server.Address drift; use the explicit migration helper")
-    require(config.get("DefaultAction") == "allow", "DefaultAction drift: system readiness requires allow; deny is an explicit local opt-in")
+    action = config.get("DefaultAction")
+    if action == "deny":
+        require(deny_opt_in(ctx), "DefaultAction drift: deny is accepted only with a confirmed operator opt-in marker and no pending deny trial")
+    else:
+        require(action == "allow", "DefaultAction drift: system readiness requires allow; deny is an explicit local opt-in")
     require(config.get("ProcMonitorMethod") == "proc", "ProcMonitorMethod drift: system profile requires proc")
     return config
 
@@ -417,7 +452,7 @@ def runtime_readiness(ctx):
     immutable(ctx)
     uid, gid, ui_gid, members = account_ids(ctx)
     actual = unit_contract(ctx)
-    config_contract(ctx)
+    config = config_contract(ctx)
     local_conflicts(ctx)
     flatpak_profiles(ctx)
     pid = int(actual["MainPID"])
@@ -452,4 +487,4 @@ def runtime_readiness(ctx):
         info = ctx.stat(path)
         require(kind(info.st_mode) and info.st_uid == owner and info.st_gid == group and stat.S_IMODE(info.st_mode) == mode, "runtime DAC/type mismatch: "+path)
         require(not {"system.posix_acl_access", "system.posix_acl_default"}&set(os.listxattr(ctx.path(path))), "unexpected runtime ACL grant: "+path)
-    return dict(profile="system", bridgePid=pid, daemonPid=daemon_pid, daemonPatchSha256=daemon["patch"]["sha256"], uiGroup="snitchwatch-ui", explicitUiMembers=members.split(",") if members else [], defaultAction="allow", procMonitorMethod="proc", graphicalRoundTrip="not checked")
+    return dict(profile="system", bridgePid=pid, daemonPid=daemon_pid, daemonPatchSha256=daemon["patch"]["sha256"], uiGroup="snitchwatch-ui", explicitUiMembers=members.split(",") if members else [], defaultAction="deny (operator opt-in)" if config["DefaultAction"] == "deny" else "allow", procMonitorMethod="proc", graphicalRoundTrip="not checked")

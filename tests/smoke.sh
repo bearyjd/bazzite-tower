@@ -89,6 +89,18 @@ check "guard helper is executable" test -x /usr/libexec/bazzite-tower-wifi-backe
 # The guard falls back to the wpa_supplicant backend, so it must exist.
 check "wpa_supplicant present" command -v wpa_supplicant
 
+echo "== Snitchwatch deny opt-in (image ships allow; deny is operator opt-in) =="
+check "deny helper is executable" test -x /usr/libexec/bazzite-tower-snitchwatch-deny
+check_enabled "bazzite-tower-snitchwatch-deny-guard.service"
+check "deny guard reverts before opensnitch starts" \
+    bash -c 'grep -qx "Before=opensnitch.service" /usr/lib/systemd/system/bazzite-tower-snitchwatch-deny-guard.service'
+check "opensnitch requires+orders after the deny guard (failed guard => firewall not started)" \
+    bash -c 'f=/usr/lib/systemd/system/opensnitch.service.d/bazzite-tower-snitchwatch-deny-guard.conf; grep -qx "Requires=bazzite-tower-snitchwatch-deny-guard.service" "$f" && grep -qx "After=bazzite-tower-snitchwatch-deny-guard.service" "$f"'
+check "deny opt-in is not pre-enabled in the image" \
+    bash -c '! test -e /etc/bazzite-tower/snitchwatch-deny-optin && ! test -e /var/lib/bazzite-tower/snitchwatch-deny/state.json'
+check "snitchwatch-deny ujust recipe present" \
+    grep -q '^snitchwatch-deny ' /usr/share/ublue-os/just/60-custom.just
+
 echo "== Boot args / first-boot =="
 check "IOMMU kargs.d fragment present" test -f /usr/lib/bootc/kargs.d/00-iommu.toml
 check "i915 display kargs.d fragment present" test -f /usr/lib/bootc/kargs.d/10-i915-display.toml

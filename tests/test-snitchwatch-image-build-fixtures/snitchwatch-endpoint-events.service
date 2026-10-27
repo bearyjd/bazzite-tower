@@ -1,0 +1,34 @@
+[Unit]
+Description=Snitchwatch endpoint events: forward allowlisted connection events to Vigie
+Documentation=https://github.com/bearyjd/snitchwatch/blob/main/packaging/endpoint-events/README.md
+# A separate rsyslog instance, not the host's rsyslog.service: the host's
+# rsyslog never sees the listener, and this one has no other inputs or sinks.
+#
+# The listener exists only while the nftables table does:
+# - BindsTo + After: it starts only after the table loaded successfully (a
+#   failed load means it never starts), and it is stopped first whenever the
+#   table's unit stops, fails or is restarted;
+# - PartOf: restarting the table's unit restarts this one after it.
+BindsTo=snitchwatch-endpoint-events-nft.service
+After=snitchwatch-endpoint-events-nft.service network-online.target
+PartOf=snitchwatch-endpoint-events-nft.service
+Wants=network-online.target
+# Up before the daemon's logger dials it.
+Before=opensnitch.service
+
+[Service]
+Type=notify
+# Refuse to start on any config error (the config also sets
+# abortOnUncleanConfig): never a listener with a broken ruleset.
+ExecStartPre=/usr/sbin/rsyslogd -N1 -f /etc/snitchwatch-endpoint-events/rsyslog.conf
+ExecStart=/usr/sbin/rsyslogd -n -iNONE -f /etc/snitchwatch-endpoint-events/rsyslog.conf
+# Under /var/lib/rsyslog, so it carries rsyslog's SELinux label
+# (syslogd_var_lib_t); the README creates and labels it before the first -N1.
+StateDirectory=rsyslog/snitchwatch-endpoint-events
+StateDirectoryMode=0700
+UMask=0077
+Restart=on-failure
+RestartSec=5s
+
+[Install]
+WantedBy=multi-user.target

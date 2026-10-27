@@ -1,0 +1,18 @@
+[Unit]
+Description=Snitchwatch endpoint events: only root may connect to 127.0.0.1:514
+Documentation=https://github.com/bearyjd/snitchwatch/blob/main/packaging/endpoint-events/README.md
+# snitchwatch-endpoint-events.service (the listener) BindsTo= this unit and is
+# ordered After= it: it starts only once the table is loaded, and stops before
+# the table is deleted, so the listener is never up unprotected.
+After=firewalld.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/sbin/nft -f /etc/nftables/snitchwatch-endpoint-events.nft
+# The file replaces the table in one transaction: a reload never deletes it.
+ExecReload=/usr/sbin/nft -f /etc/nftables/snitchwatch-endpoint-events.nft
+ExecStop=/usr/sbin/nft delete table inet snitchwatch_endpoint_events
+
+[Install]
+WantedBy=multi-user.target

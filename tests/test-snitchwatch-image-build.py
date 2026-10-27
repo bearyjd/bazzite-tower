@@ -24,6 +24,9 @@ OS_UPDATE_RULE = 'etc/opensnitchd/rules/000-snitchwatch-tower-os-update.json'
 OS_UPDATE_SOURCE = FACTORY / 'snitchwatch-system-os-update-rule.json'
 DNS_RULE = 'etc/opensnitchd/rules/000-snitchwatch-tower-resolved-dns.json'
 DNS_SOURCE = FACTORY / 'snitchwatch-system-resolved-dns-rule.json'
+EVENTS_DIR = 'usr/share/snitchwatch/endpoint-events/'
+EVENTS_FILES = ('snitchwatch-endpoint-events.conf', 'snitchwatch-endpoint-events.nft',
+                'snitchwatch-endpoint-events.service', 'snitchwatch-endpoint-events-nft.service')
 sha = lambda data: hashlib.sha256(data).hexdigest()
 
 
@@ -117,6 +120,8 @@ class ImageBuildContracts(unittest.TestCase):
                                 ('org.snitchwatch.scanner.policy', 'usr/share/polkit-1/actions/'),
                                 ('snitchwatch-scanner.conf', 'usr/lib/tmpfiles.d/')]:
             self.write(directory + name, (FIXTURES / name).read_bytes())
+        for name in EVENTS_FILES:
+            self.write(EVENTS_DIR + name, (FIXTURES / name).read_bytes())
         mask = self.root / 'usr/lib/systemd/user/snitchwatch-bridge.service'
         mask.parent.mkdir(parents=True); mask.symlink_to('/dev/null')
         self.manifest = {'schemaVersion': 1, 'profile': 'system', 'source': {'commit': self.pins['sourceCommit'], 'submoduleCommit': self.pins['submoduleCommit'], 'tree': self.pins['sourceTree']}, 'binary': {'path': '/' + binary, 'sha256': sha((self.root / binary).read_bytes()), 'version': self.pins['bridgeVersion']},
@@ -128,9 +133,11 @@ class ImageBuildContracts(unittest.TestCase):
     def save(self):
         self.write(MANIFEST, json.dumps(self.manifest))
 
-    def check(self, valid=False):
+    def check(self, valid=False, live=False):
+        # Default is an image/staged tree (--image-tree); live=True is the booted host's invocation.
         self.save()
-        result = subprocess.run(['python3', str(FACTORY / 'snitchwatch-system-verify.py'), '--root', str(self.root)], capture_output=True, text=True)
+        flags = [] if live else ['--image-tree']
+        result = subprocess.run(['python3', str(FACTORY / 'snitchwatch-system-verify.py'), '--root', str(self.root), *flags], capture_output=True, text=True)
         self.assertEqual(result.returncode, 0 if valid else 1, result.stdout + result.stderr)
         return result
 
@@ -143,8 +150,9 @@ class ImageBuildContracts(unittest.TestCase):
         # 20 since r15: the tower's /usr/share reference copy of its own drop-in
         # is gone; upstream's pinned drop-in is the one daemon drop-in.  21 with
         # the tower's always-on OS-update rule (r15, owner decision 2026-10-17),
-        # 22 with its companion resolver DNS rule, plus16 scanner files.
-        self.assertEqual(json.loads(result.stdout)['verifiedFiles'], 38)
+        # 22 with its companion resolver DNS rule, plus16 scanner files, plus 4
+        # opt-in endpoint-events files (shipped inert under /usr/share).
+        self.assertEqual(json.loads(result.stdout)['verifiedFiles'], 42)
         self.assertEqual(before, {str(p): p.read_bytes() for p in self.root.rglob('*') if p.is_file() and not p.is_symlink()})
 
     def test_binary_tamper(self):
@@ -167,6 +175,98 @@ class ImageBuildContracts(unittest.TestCase):
                 path.unlink(); path.symlink_to('/dev/null'); self.check()
                 path.unlink(); self.write(name, data + b'changed', mode); self.check()
                 self.write(name, data, mode)
+        self.check(valid=True)
+
+    def test_endpoint_events_inventory_rejects_missing_tampered_modes_and_links(self):
+        for base in EVENTS_FILES:
+            name = EVENTS_DIR + base
+            with self.subTest(path=name):
+                path = self.root / name
+                data, mode = path.read_bytes(), path.stat().st_mode & 0o777
+                path.unlink(); self.check()
+                self.write(name, data, mode)
+                path.chmod(0o755); self.check()
+                path.chmod(mode)
+                path.unlink(); path.symlink_to('/dev/null'); self.check()
+                path.unlink(); self.write(name, data + b'changed', mode); self.check()
+                self.write(name, data, mode)
+        self.check(valid=True)
+
+    def test_endpoint_events_files_are_pinned_source_inert_under_usr_share(self):
+        for base in EVENTS_FILES:
+            self.assertEqual(sha((FIXTURES / base).read_bytes()), self.pins['sourceFiles']['packaging/endpoint-events/' + base])
+        self.check(valid=True)
+
+    def test_endpoint_events_units_are_never_enabled_or_in_a_unit_path(self):
+        def link(name):
+            path = self.root / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.symlink_to('/usr/share/snitchwatch/endpoint-events/snitchwatch-endpoint-events.service')
+        cases = {
+            'usr/lib/systemd/system/multi-user.target.wants/snitchwatch-endpoint-events.service': link,
+            'usr/lib/systemd/system/multi-user.target.wants/snitchwatch-endpoint-events-nft.service': link,
+            'etc/systemd/system/multi-user.target.wants/snitchwatch-endpoint-events.service': link,
+            'etc/systemd/system/multi-user.target.requires/snitchwatch-endpoint-events-nft.service': link,
+            'usr/lib/systemd/system/snitchwatch-endpoint-events.service': lambda n: self.write(n, '[Service]\n'),
+            'etc/systemd/system/snitchwatch-endpoint-events-nft.service': lambda n: self.write(n, '[Service]\n'),
+        }
+        for name, create in cases.items():
+            with self.subTest(case=name):
+                create(name)
+                self.assertIn('endpoint-events', self.check().stderr)
+                (self.root / name).unlink()
+        self.check(valid=True)
+
+    def test_endpoint_events_etc_state_is_operator_state_on_a_live_host(self):
+        # The verifier also runs on the booted host (bridge helper, no flag); an
+        # operator following the opt-in README must not make it refuse.  The
+        # image-owned /usr tree is still refused there; /etc only with --image-tree.
+        name = 'etc/systemd/system/multi-user.target.wants/snitchwatch-endpoint-events.service'
+        self.write('etc/systemd/system/snitchwatch-endpoint-events.service', '[Service]\n')
+        (self.root / name).parent.mkdir(parents=True)
+        (self.root / name).symlink_to('/etc/systemd/system/snitchwatch-endpoint-events.service')
+        self.assertIn('endpoint-events', self.check().stderr)
+        self.check(valid=True, live=True)
+        usr = 'usr/lib/systemd/system/multi-user.target.wants/snitchwatch-endpoint-events.service'
+        (self.root / usr).parent.mkdir(parents=True)
+        (self.root / usr).symlink_to('/dev/null')
+        self.assertIn('endpoint-events', self.check(live=True).stderr)
+
+    def test_operator_saved_logger_copy_in_etc_does_not_break_a_live_host(self):
+        self.write('etc/opensnitchd/opensnitchd-logger.json', '{"name": "remote"}')
+        self.assertIn('opensnitchd-logger', self.check().stderr)
+        self.check(valid=True, live=True)
+        self.write('usr/share/snitchwatch/endpoint-events/opensnitchd-logger.json', '{}')
+        self.assertIn('opensnitchd-logger', self.check(live=True).stderr)
+
+    def test_endpoint_events_preset_pins_stock_rsyslog_off(self):
+        # RPM %post and first-boot `systemctl preset-all` apply Fedora's
+        # `enable rsyslog.*`; the image preset (first match wins) must beat it.
+        path = ROOT / 'system_files/usr/lib/systemd/system-preset/00-bazzite-tower-endpoint-events.preset'
+        self.assertTrue(path.is_file() and not path.is_symlink())
+        self.assertEqual(path.stat().st_mode & 0o7777, 0o644)
+        lines = [l for l in path.read_text().splitlines() if l and not l.startswith('#')]
+        self.assertIn('disable rsyslog.service', lines)
+        self.assertTrue(all(l.startswith('disable ') for l in lines), lines)
+
+    def test_no_logger_entry_and_no_logger_snippet_anywhere(self):
+        for name in ('usr/share/bazzite-tower/opensnitchd-system-bridge-config.json',):
+            config = json.loads((self.root / name).read_text())
+            self.assertNotIn('Loggers', config['Server'])
+        for name in ('usr/share/bazzite-tower/opensnitchd-system-bridge-config.json',
+                     'usr/share/bazzite-tower/opensnitchd-default-config.json'):
+            with self.subTest(path=name):
+                original = (self.root / name).read_bytes()
+                config = json.loads(original)
+                config['Server']['Loggers'] = [{'name': 'remote', 'format': 'json', 'server': 'tcp://127.0.0.1:514'}]
+                self.write(name, json.dumps(config)); self.update_hash(name)
+                self.assertIn('Loggers', self.check().stderr)
+                self.write(name, original); self.update_hash(name)
+        for name in ('etc/opensnitchd/opensnitchd-logger.json', 'usr/share/snitchwatch/endpoint-events/opensnitchd-logger.json'):
+            with self.subTest(path=name):
+                self.write(name, '{"name": "remote"}')
+                self.assertIn('opensnitchd-logger', self.check().stderr)
+                (self.root / name).unlink()
         self.check(valid=True)
 
     def test_scanner_provenance_and_source_patch_refusals(self):
@@ -698,7 +798,7 @@ class StageOutputContracts(unittest.TestCase):
         path.chmod(mode)
         return path
 
-    def run_stage(self, stage_script):
+    def run_stage(self, stage_script, tamper=None):
         source, artifact = self.tmp / 'source', self.tmp / 'artifact'
         upstream_config = b'{"DefaultAction": "deny", "ProcMonitorMethod": "ebpf"}\n'
         self.write(source / 'packaging/system/opensnitchd-default-config.json', upstream_config)
@@ -720,10 +820,15 @@ class StageOutputContracts(unittest.TestCase):
         for name in ('org.snitchwatch.Scanner.service', 'snitchwatch-scanner.conf'):
             self.write(source / 'packaging/scanner' / name, (FIXTURES / name).read_bytes())
         self.write(source / 'packaging/polkit/org.snitchwatch.scanner.policy', (FIXTURES / 'org.snitchwatch.scanner.policy').read_bytes())
+        for name in EVENTS_FILES:
+            self.write(source / 'packaging/endpoint-events' / name, (FIXTURES / name).read_bytes())
+            pins['sourceFiles']['packaging/endpoint-events/' + name] = sha((FIXTURES / name).read_bytes())
         # Synthetic source hash inventory includes files actually present here.
         for name in ('Cargo.toml', 'Cargo.lock'):
             self.write(source / name, name)
             pins['sourceFiles'][name] = sha((source / name).read_bytes())
+        if tamper:
+            self.write(source / tamper, b'tampered\n')
         pins_path = self.write(self.tmp / 'pins.json', json.dumps(pins))
         # PATH shim: an exact, clean checkout at the pinned commits.
         self.write(self.tmp / 'bin/git', f'''#!/bin/sh
@@ -741,7 +846,7 @@ esac
         self.write(artifact / 'usr/bin/snitchwatch-bridge-cli', '#!/bin/sh\necho snitchwatch-bridge-cli 0.1.1\n', 0o755)
         for name in ('LICENSE', 'LICENSE.opensnitch', 'THIRD-PARTY-LICENSES.md'):
             self.write(artifact / 'usr/share/licenses/snitchwatch-bridge' / name, 'license fixture\n')
-        verifier = self.write(self.tmp / 'verifier.py', 'REQUIRED = set()\ndef verify(root):\n    pass\n')
+        verifier = self.write(self.tmp / 'verifier.py', 'REQUIRED = set()\ndef verify(root, image_tree=False):\n    assert image_tree\n    pass\n')
         logs = [self.write(self.tmp / name, name) for name in ('build.log', 'repro.log', 'rpm-inventory.txt', 'artifact.tar.gz')]
         scanner = self.tmp / 'scanner'
         scanner_fixture(scanner, pins, sha(logs[2].read_bytes()))
@@ -770,6 +875,25 @@ esac
         self.assertEqual(staged_rule.stat().st_mode & 0o7777, 0o644)
         self.assertEqual((out / DNS_RULE).read_bytes(), DNS_SOURCE.read_bytes())
         self.assertEqual((out / DNS_RULE).stat().st_mode & 0o7777, 0o644)
+
+    def test_endpoint_events_files_are_staged_inert_from_pinned_source(self):
+        result, out = self.run_stage('mkdir -p "$1/etc/opensnitchd"\ncp "$(dirname "$0")/opensnitchd-default-config.json" "$1/etc/opensnitchd/default-config.json"\n')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(sorted(p.name for p in (out / EVENTS_DIR).iterdir()), sorted(EVENTS_FILES))
+        for name in EVENTS_FILES:
+            staged = out / EVENTS_DIR / name
+            self.assertEqual(staged.read_bytes(), (FIXTURES / name).read_bytes())
+            self.assertEqual(staged.stat().st_mode & 0o7777, 0o644)
+        # Nothing is in a unit search path, enabled, or a logger snippet.
+        self.assertEqual([p for p in out.rglob('*') if 'endpoint-events' in p.name and EVENTS_DIR not in p.as_posix() + '/'], [])
+        self.assertEqual([p for p in out.rglob('*') if 'logger' in p.name.lower()], [])
+        self.assertEqual([p for p in out.rglob('*.wants')], [])
+
+    def test_stage_refuses_endpoint_events_file_that_differs_from_pin(self):
+        result, _ = self.run_stage('mkdir -p "$1/etc/opensnitchd"\ncp "$(dirname "$0")/opensnitchd-default-config.json" "$1/etc/opensnitchd/default-config.json"\n',
+                                   tamper='packaging/endpoint-events/snitchwatch-endpoint-events.nft')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('differs from pin', result.stderr)
 
     def test_stage_refuses_when_upstream_config_was_not_staged(self):
         result, _ = self.run_stage('mkdir -p "$1/etc/opensnitchd"\nprintf "{}" > "$1/etc/opensnitchd/default-config.json"\n')

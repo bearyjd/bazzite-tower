@@ -136,6 +136,48 @@ done
 check "sysstat sleep hook retained" test -f /usr/lib/systemd/system-sleep/sysstat.sleep
 check "sysstat sleep hook is not executable" test ! -x /usr/lib/systemd/system-sleep/sysstat.sleep
 
+echo "== Endpoint events (opt-in Vigie feed: packages only, everything disabled) =="
+# docs/RUNBOOK.md. Nothing here may run, listen or forward by default; the
+# operator-enabled separate rsyslog instance is its own unit, not these.
+for package in rsyslog rsyslog-mmjsonparse rsyslog-gnutls; do
+    check "endpoint-events package: ${package}" rpm -q "${package}"
+done
+# rpmdb entries have reverted while files persisted before (95-firewall.sh), so
+# pair the rpm -q with the files the opt-in instance actually loads.
+check "rsyslogd executable present" test -x /usr/sbin/rsyslogd
+# shellcheck disable=SC2016 # Expanded by the inner shell.
+check "rsyslog mmjsonparse module shipped on disk" \
+    bash -c '[[ -n "$(rpm -ql rsyslog-mmjsonparse | grep -E "mmjsonparse\.so$" | while read -r f; do test -f "$f" && echo ok; done)" ]]'
+# shellcheck disable=SC2016 # Expanded by the inner shell.
+check "rsyslog gnutls stream driver shipped on disk" \
+    bash -c '[[ -n "$(rpm -ql rsyslog-gnutls | grep -E "lmnsd_gtls\.so$" | while read -r f; do test -f "$f" && echo ok; done)" ]]'
+check_disabled "rsyslog.service"
+check "image preset pins rsyslog.service off" \
+    grep -qx 'disable rsyslog.service' /usr/lib/systemd/system-preset/00-bazzite-tower-endpoint-events.preset
+# Fedora's 90-default.preset enables rsyslog.*; re-applying presets (first boot,
+# `systemctl preset-all`) must still leave it disabled.
+# shellcheck disable=SC2016 # Expanded by the inner shell.
+check "systemctl preset leaves rsyslog.service disabled" \
+    bash -c 'systemctl preset rsyslog.service && [[ "$(systemctl is-enabled rsyslog.service 2>/dev/null)" == disabled ]]'
+# Every unit any of the three packages ship stays off (disabled or static).
+for unit in $(rpm -ql rsyslog rsyslog-mmjsonparse rsyslog-gnutls 2>/dev/null | grep -E '^/(usr/)?lib/systemd/system/[^/]+\.(service|socket|timer|path)$' | sed 's|.*/||' | sort -u); do
+    case "$(unit_state "${unit}")" in
+        disabled | static) pass "not enabled: ${unit}" ;;
+        *) bad "not enabled: ${unit} (got '$(unit_state "${unit}")')" ;;
+    esac
+done
+check "no rsyslog or endpoint-events unit is enabled by any .wants/.requires link" \
+    bash -c '! find /etc/systemd /usr/lib/systemd -path "*.wants/*" -o -path "*.requires/*" 2>/dev/null | grep -Eq "rsyslog|syslog\.service|snitchwatch-endpoint-events"'
+check "no endpoint-events unit in any unit search path" \
+    bash -c '! find /etc/systemd /usr/lib/systemd -name "snitchwatch-endpoint-events*" 2>/dev/null | grep -q .'
+check "no operator rsyslog config or nft table is pre-installed" \
+    bash -c '! test -e /etc/snitchwatch-endpoint-events && ! test -e /etc/nftables/snitchwatch-endpoint-events.nft'
+check "no opensnitchd logger snippet shipped" \
+    bash -c '! find /etc /usr/share -name "opensnitchd-logger*" 2>/dev/null | grep -q .'
+# Value parsed, not grepped: no Loggers key anywhere in the default daemon config.
+check "default opensnitchd config has no Loggers entry" \
+    jq -e '[.. | objects | select(has("Loggers"))] | length == 0' /etc/opensnitchd/default-config.json
+
 echo "== CPU power tuning =="
 check "thermald present"                command -v thermald
 check_enabled "thermald.service"
@@ -376,6 +418,8 @@ legacy)
         test ! -e /usr/share/snitchwatch/system-daemon-manifest.json
     check "legacy image has no system bridge service" \
         test ! -e /usr/lib/systemd/system/snitchwatch-system-bridge.service
+    check "legacy image has no endpoint-events files" \
+        test ! -e /usr/share/snitchwatch/endpoint-events
     ;;
 system)
     check "system staged config actually overwrote the RPM's" \
@@ -386,7 +430,7 @@ system)
     check "system OpenSnitch address is relative Unix" \
         jq -e '.Server.Address == "unix:opensnitchd.sock"' /etc/opensnitchd/default-config.json
     check "installed system manifest and immutable overlay verify" \
-        /usr/libexec/snitchwatch/verify-system-manifest.py --root /
+        /usr/libexec/snitchwatch/verify-system-manifest.py --root / --image-tree
     check "downstream daemon source, patch, binary and licenses verify" \
         /usr/libexec/snitchwatch/verify-system-daemon.py --root /
     # The one opensnitchd rule Snitchwatch ships (its hash is pinned and
@@ -433,6 +477,15 @@ system)
     check "system GUI group present" getent group snitchwatch-ui
     for unit in snitchwatch-system-bridge-grpc.socket snitchwatch-system-bridge-gui.socket; do
         check_enabled "${unit}"
+    done
+    # Opt-in endpoint-event files: pristine pinned copies, inert (the manifest
+    # verifier above already pins their bytes and refuses any enabled link).
+    for f in snitchwatch-endpoint-events.conf snitchwatch-endpoint-events.nft \
+        snitchwatch-endpoint-events.service snitchwatch-endpoint-events-nft.service; do
+        # shellcheck disable=SC2016 # Expanded by the inner shell.
+        check "endpoint-events file ${f} is root:root 0644 regular" \
+            bash -c '[[ -f "$1" && ! -L "$1" && "$(stat -c "%a %U:%G" "$1")" == "644 root:root" ]]' _ \
+            "/usr/share/snitchwatch/endpoint-events/${f}"
     done
     check "system bridge units parse" \
         systemd-analyze verify --man=no --recursive-errors=no \

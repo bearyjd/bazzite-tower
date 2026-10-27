@@ -61,6 +61,7 @@ carry, because line ranges drift and filenames do not.
 | `40-sysusers-fixup.sh` | **generic** orphan strip (keep only shadow/gshadow lines with a matching passwd/group) -> `systemd-sysusers` -> guarded `groupadd -r qemu` + `useradd qemu` + **`groupadd -r docker`**. Fixes virtqemud + docker.socket "Unknown group" boot failures. The most fragile piece; kept isolated on purpose |
 | `50-docker-networking.sh` | intentional no-op: `ujust enable-docker` creates the Docker-only `iptable_nat` modules-load file locally |
 | `60-libvirt-services.sh` | mask `libvirtd.service`; enable `virtqemud/virtnetworkd/virtnodedevd/virtnwfilterd/virtstoraged/virtproxyd.socket`; explicitly disable Docker service/socket; default NAT net autostart symlink (virsh can't run at build time); polkit `wheel` -> `qemu:///system`; enable `bazzite-tower-firstboot.service` (kvm/libvirt only); enable `docker-libvirt-forwarding.path` / `.timer` |
+| `64-endpoint-events-packages.sh` | dnf: rsyslog, rsyslog-mmjsonparse, rsyslog-gnutls for the opt-in Vigie endpoint-event feed; explicitly `systemctl disable` every unit those RPMs ship (no mask, no `|| true`), fails if `rsyslog.service` is absent or any unit is still enabled. Tested with PATH shims in `tests/test-endpoint-events-packages.py` |
 | `70-guards-monitoring.sh` | Wi-Fi guard + SMART, opt-in Cockpit; install bpftool/sysstat/igt-gpu-tools/trace-cmd, explicitly disable sysstat.service + collect/summary/rotate timers and trace-cmd.service, retain sysstat.sleep bytes but force0644 to prevent unconditional suspend collection (intentional RPM mode override) |
 | `80-ras-microcode.sh` | dnf rasdaemon (enable); **mask `mcelog.service`**; dnf microcode_ctl (latest) |
 | `90-power-thermal.sh` | dnf thermald (enable); enable `bazzite-tower-power-tuning.service` (balanced EPP + platform-profile). SOF audio: **no install** — bypassed via the `dsp_driver=1` karg |
@@ -131,8 +132,11 @@ path and unchanged upstream dependency-list cmp remain independent.
 for exactly two0755 executables, one session-bus activation file, the unchanged
 auth_admin_keep polkit action and root0700 tmpfiles definition, then installs
 scanner license/provenance receipts under `/usr/share`. The system verifier's
-exact38-file inventory binds those inputs, patch/evidence and both ELF hashes;
-it refuses persistent scanner systemd service/timer/socket activation. The patch
+exact 42-file inventory binds those inputs, patch/evidence and both ELF hashes;
+it refuses persistent scanner systemd service/timer/socket activation. Four more
+files are the inert opt-in endpoint-events set (pinned from `packaging/endpoint-events/`,
+staged under `/usr/share/snitchwatch/endpoint-events/`); the verifier refuses any enabled
+link or unit copy of them, any daemon `Loggers` key and any `opensnitchd-logger*` file. The patch
 hardens fixed external primitives (bounded/status-checked output, trusted PATH,
 stable locale, process-group cleanup coordinated with the540s root watchdog)
 and refuses unsafe existing private state/database/sidecars. It does not run

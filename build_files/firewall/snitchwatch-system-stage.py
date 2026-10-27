@@ -9,6 +9,13 @@ import shutil
 import subprocess
 
 
+# Opt-in Vigie endpoint-event feed: pristine pinned upstream copies, shipped
+# inert under /usr/share (no unit search path, nothing enabled).  The verifier
+# pins the same names; the operator installs them by hand (docs/RUNBOOK.md).
+ENDPOINT_EVENTS = ('snitchwatch-endpoint-events.conf', 'snitchwatch-endpoint-events.nft',
+                   'snitchwatch-endpoint-events.service', 'snitchwatch-endpoint-events-nft.service')
+
+
 def sha(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
@@ -96,6 +103,11 @@ def main():
                        else 'usr/share/snitchwatch/scanner/')
         copy(scanner / name, out / destination / name)
     copy(scanner / 'provenance.json', out / 'usr/share/snitchwatch/scanner/provenance.json')
+    for name in ENDPOINT_EVENTS:
+        pinned = 'packaging/endpoint-events/' + name
+        if sha(source / pinned) != pins['sourceFiles'][pinned]:
+            raise ValueError('endpoint-events file differs from pin: ' + pinned)
+        copy(source / pinned, out / 'usr/share/snitchwatch/endpoint-events' / name)
     licenses = args.artifact / 'usr/share/licenses/snitchwatch-bridge'
     for name in ('LICENSE', 'LICENSE.opensnitch', 'THIRD-PARTY-LICENSES.md'):
         copy(licenses / name, out / 'usr/share/licenses/snitchwatch-bridge' / name)
@@ -139,7 +151,7 @@ def main():
     }
     p = out / 'usr/share/snitchwatch/system-bridge-manifest.json'
     p.write_text(json.dumps(manifest, sort_keys=True, indent=2) + '\n'); p.chmod(0o644)
-    validator['verify'](out)
+    validator['verify'](out, image_tree=True)
     print(json.dumps({'stagingRoot': str(out), 'manifestSha256': sha(p), 'binarySha256': binary_sha}, sort_keys=True))
 
 

@@ -1,0 +1,4 @@
+# Early first-match image defaults. Fedora's 90-default.preset says `enable rsyslog.*`;
+# first-boot/preset-all must not re-enable stock rsyslog. The opt-in Vigie feed is a
+# separate, operator-installed unit (docs/RUNBOOK.md).
+disable rsyslog.service

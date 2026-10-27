@@ -98,6 +98,12 @@ finishArgs grant that name; owning the name, suffixes and wildcards still refuse
 The immutable scanner source/patch/build/license inventory is described in
 `image-build.md`; runtime scanner acceptance remains owner-operated.
 
+Opt-in endpoint events (Vigie): `/usr/share/snitchwatch/endpoint-events/` holds the
+four pinned upstream files (`.conf` template, `.nft`, `.service`, `-nft.service`),
+root:root 0644, in no unit path and enabled nowhere; packages come from
+`build.d/64-endpoint-events-packages.sh` with all their units disabled. No listener
+on 514/6514 and no daemon `Loggers` entry by default; see `docs/RUNBOOK.md`.
+
 Readiness retains the historical exact `wayland;fallback-x11` socket profile.
 The serialized `x11;wayland;fallback-x11` form is accepted only when the host
 `flatpak --version` reports exactly Flatpak 1.18.1, whose reviewed upstream

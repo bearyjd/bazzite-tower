@@ -1,0 +1,35 @@
+#!/usr/sbin/nft -f
+# Snitchwatch endpoint events (opt-in): only root may connect to the loopback
+# listener rsyslog opens for opensnitchd's logger (127.0.0.1:514).
+#
+# Binding 514 already needs root; this closes the other half: without it any
+# local user could connect and inject daemon-shaped events, which rsyslog would
+# forward under this host's client certificate. opensnitchd and rsyslog run as
+# root, so they are unaffected.
+#
+# Installed as /etc/nftables/snitchwatch-endpoint-events.nft and loaded by
+# snitchwatch-endpoint-events-nft.service (see README.md). It is its own
+# table: firewalld and opensnitchd manage only their own tables and leave it
+# alone, and it adds no policy of theirs.
+
+# Replace any earlier copy atomically: declare, delete, then define.
+table inet snitchwatch_endpoint_events
+delete table inet snitchwatch_endpoint_events
+
+table inet snitchwatch_endpoint_events {
+    # Local sockets: only root's may connect.
+    chain output {
+        type filter hook output priority filter; policy accept;
+        ip daddr 127.0.0.0/8 tcp dport 514 meta skuid != 0 reject with tcp reset
+        ip6 daddr ::1 tcp dport 514 meta skuid != 0 reject with tcp reset
+    }
+    # Routed packets: with net.ipv4.conf.<if>.route_localnet=1 (netavark sets
+    # it on the bridges it manages), a container can send packets for
+    # 127.0.0.1 into this host. They arrive on INPUT from an interface other
+    # than lo, with no local socket for the output rule to check.
+    chain input {
+        type filter hook input priority filter; policy accept;
+        iifname != "lo" ip daddr 127.0.0.0/8 tcp dport 514 reject with tcp reset
+        iifname != "lo" ip6 daddr ::1 tcp dport 514 reject with tcp reset
+    }
+}

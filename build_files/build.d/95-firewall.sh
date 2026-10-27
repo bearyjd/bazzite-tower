@@ -106,7 +106,7 @@ if [[ "${FIREWALL_DAEMON:-opensnitch}" == "opensnitch" ]]; then
         /etc/opensnitchd/default-config.json
 
     if [[ "${SNITCHWATCH_BRIDGE:-legacy}" == system ]]; then
-        python3 /usr/libexec/snitchwatch/verify-system-manifest.py
+        python3 /usr/libexec/snitchwatch/verify-system-manifest.py --image-tree
         # RPM payload extraction above must finish before replacing its daemon.
         # The separate immutable Go receipt binds the candidate and installed
         # executable to the reviewed downstream patch and reproducible build.

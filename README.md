@@ -293,6 +293,16 @@ External repos (currently just Docker CE) are dropped on disk with `enabled=0`. 
 
 To keep the image lean and focused, these are **not** installed even though some sibling images include them: `python3-ramalama`, `bcc`, `bpftrace`, `bpftop`, `tiptop`, `sysprof`, `nicstat`, `numactl`, `usbmuxd`, VS Code. Install any of them via `rpm-ostree install` or `flatpak` as needed.
 
+### Opt-in endpoint events for Vigie (off by default)
+
+The image ships the packages (`rsyslog`, `rsyslog-mmjsonparse`, `rsyslog-gnutls`) and,
+on the system profile, pristine copies of Snitchwatch's endpoint-events config and
+units under `/usr/share/snitchwatch/endpoint-events/`. Nothing is enabled, nothing
+listens on 514 or 6514, and `opensnitchd` has no `Loggers` entry. Turning it on is a
+manual operator step that follows Snitchwatch's `packaging/endpoint-events/README.md`;
+it is not automated here. Risks and the exact guarantees are in
+[docs/RUNBOOK.md](./docs/RUNBOOK.md#endpoint-events-for-vigie-opt-in-everything-off-by-default).
+
 ## Continuous testing & upstream tracking
 
 This image rides upstream Bazzite's base and the laptop rebases onto `:latest`, so **"the build is green" has to also mean "the image works."** A green build can still publish a silently-broken image — e.g. an upstream change makes the qemu-user logic create nothing, `virtqemud` crash-loops on boot, and `qemu:///system` never comes up, yet nothing ever errors at build time. Three layers guard that gap; the full failure model and the reasoning behind each layer live in [`docs/downstream-change-tracking.md`](./docs/downstream-change-tracking.md).

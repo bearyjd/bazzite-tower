@@ -50,6 +50,37 @@ LICENSES = {'LICENSE', 'LICENSE.opensnitch', 'THIRD-PARTY-LICENSES.md'}
 SCANNER_BINARIES = {'/usr/libexec/snitchwatch-scanner-privileged', '/usr/libexec/snitchwatch-scanner-broker'}
 SCANNER_ROOT = '/usr/share/snitchwatch/scanner/'
 SCANNER_LICENSE_ROOT = '/usr/share/licenses/snitchwatch-scanner/'
+SCANNER_CRATE_MANIFESTS = ('crates/scanner-broker/Cargo.toml', 'crates/scanner-privileged/Cargo.toml')
+SCANNER_CRATE_DIRS = ('crates/scanner-privileged/', 'crates/scanner-broker/')
+# Every file of the two built crates at the pinned upstream commit, plus the
+# file the tower patch adds.  Anything else (e.g. a new build.rs) is refused.
+SCANNER_SOURCE_ALLOWLIST = frozenset({
+    'crates/scanner-broker/Cargo.toml',
+    'crates/scanner-broker/src/lib.rs',
+    'crates/scanner-broker/src/main.rs',
+    'crates/scanner-privileged/Cargo.toml',
+    'crates/scanner-privileged/src/checks/kargs.rs',
+    'crates/scanner-privileged/src/checks/lockdown.rs',
+    'crates/scanner-privileged/src/checks/mod.rs',
+    'crates/scanner-privileged/src/checks/modules.rs',
+    'crates/scanner-privileged/src/checks/rootkit.rs',
+    'crates/scanner-privileged/src/command.rs',
+    'crates/scanner-privileged/src/error.rs',
+    'crates/scanner-privileged/src/facts.rs',
+    'crates/scanner-privileged/src/lib.rs',
+    'crates/scanner-privileged/src/main.rs',
+    'crates/scanner-privileged/src/model.rs',
+    'crates/scanner-privileged/src/scan.rs',
+    'crates/scanner-privileged/src/store.rs',
+    'crates/scanner-privileged/tests/end_to_end.rs',
+})
+SCANNER_ACTIVATION_NAMES = ('snitchwatch-scanner-privileged', 'snitchwatch-scanner-broker')
+SCANNER_SESSION_ACTIVATION = 'usr/share/dbus-1/services/org.snitchwatch.Scanner.service'
+SCANNER_ACTIVATION_DIRS = ('usr/lib/systemd/system', 'usr/lib/systemd/user', 'etc/systemd/system', 'etc/systemd/user',
+                           'etc/xdg/systemd/user', 'usr/share/dbus-1/system-services', 'etc/dbus-1/system-services',
+                           'usr/share/dbus-1/services', 'etc/dbus-1/services')
+SCANNER_UNIT_SUFFIXES = ('.service', '.timer', '.socket', '.path')
+SCANNER_WANTS_SUFFIXES = ('.wants', '.requires')
 SCANNER_EVIDENCE = {'source-inputs.json', 'dependency-closure.json', 'scanner.patch', 'build.log', 'repro.log', 'test.log',
                     'snitchwatch-scanner-privileged.ldd', 'snitchwatch-scanner-broker.ldd'}
 RECEIPTS = {
@@ -98,6 +129,28 @@ def read_file(root, name, mode=0o644):
     if root == Path('/') and (info.st_uid != 0 or info.st_gid != 0):
         raise ValueError('immutable file is not root-owned: ' + describe(name))
     return path.read_bytes()
+
+
+def refuse_persistent_scanner_activation(root):
+    """Only the session D-Bus activation file may reference the scanner binaries."""
+    for directory in SCANNER_ACTIVATION_DIRS:
+        base = root / directory
+        if not base.is_dir():
+            continue
+        for path in sorted(base.rglob('*')):
+            name = path.name.lower()
+            relative = path.relative_to(root).as_posix()
+            if relative == SCANNER_SESSION_ACTIVATION and path.is_file() and not path.is_symlink():
+                continue
+            in_wants = any(part.lower().endswith(SCANNER_WANTS_SUFFIXES) for part in path.relative_to(base).parts[:-1])
+            nameable = name.endswith(SCANNER_UNIT_SUFFIXES + SCANNER_WANTS_SUFFIXES) or path.is_symlink() or in_wants
+            if nameable and ('scanner' in name or name.startswith('dbus-org.snitchwatch.')):
+                raise ValueError('unexpected persistent scanner activation: ' + relative)
+            if path.is_symlink() or not path.is_file():
+                continue
+            data = path.read_bytes()
+            if any(value.encode() in data for value in SCANNER_ACTIVATION_NAMES):
+                raise ValueError('unexpected persistent scanner activation: ' + relative)
 
 
 def verify(root):
@@ -196,17 +249,21 @@ def verify(root):
     if scanner.get('evidence') != evidence or files[SCANNER_ROOT + 'scanner.patch'] != pins['scannerPatch']['sha256']:
         raise ValueError('scanner evidence differs from build provenance')
     inputs = json.loads(contents[SCANNER_ROOT + 'source-inputs.json'])
-    for name, expected in {**{name: pins['sourceFiles'][name] for name in ('Cargo.toml', 'Cargo.lock')}, **pins['scannerPatch']['patchedFiles']}.items():
+    expected_inputs = {**{name: pins['sourceFiles'][name] for name in ('Cargo.toml', 'Cargo.lock') + SCANNER_CRATE_MANIFESTS}, **pins['scannerPatch']['patchedFiles']}
+    for name, expected in expected_inputs.items():
         if inputs.get(name) != expected:
             raise ValueError('scanner patched source input mismatch')
+    # The complete upstream tree is not derivable from the pins, so the built
+    # crates and build-affecting config are restricted to an explicit allowlist.
+    for name in inputs:
+        if ((name.startswith(SCANNER_CRATE_DIRS) and name not in SCANNER_SOURCE_ALLOWLIST)
+                or name.startswith('.cargo/') or Path(name).name.startswith('rust-toolchain')):
+            raise ValueError('unexpected scanner source input: ' + name)
     closure = json.loads(contents[SCANNER_ROOT + 'dependency-closure.json'])
     if set(closure) != set(binaries) or any(not isinstance(value, list) or not value for value in closure.values()):
         raise ValueError('incomplete scanner dependency closure')
     # Session D-Bus activation is the sole scanner activation mechanism.
-    for directory in ('usr/lib/systemd/system', 'usr/lib/systemd/user', 'etc/systemd/system', 'etc/systemd/user'):
-        for pattern in ('*snitchwatch*scanner*.service', '*snitchwatch*scanner*.timer', '*snitchwatch*scanner*.socket'):
-            if list((root / directory).glob(pattern)):
-                raise ValueError('unexpected persistent scanner activation')
+    refuse_persistent_scanner_activation(root)
     expected_gui = {'appId': 'org.snitchwatch.Snitchwatch', 'profile': 'system', 'runtimeRef': pins['flatpakRuntimeRef'], 'sourceCommit': pins['sourceCommit'], 'manifestSha256': pins['sourceFiles']['packaging/flatpak/org.snitchwatch.Snitchwatch.system.yml'], 'finishArgs': pins['flatpakFinishArgs']}
     if manifest.get('flatpak') != expected_gui:
         raise ValueError('incorrect expected GUI system profile')

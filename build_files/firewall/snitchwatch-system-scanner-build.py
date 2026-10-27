@@ -10,6 +10,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
@@ -37,6 +38,13 @@ def sha(path):
 
 def write_json(path, value):
     path.write_text(json.dumps(value, indent=2, sort_keys=True) + '\n')
+
+
+def require_private_bus_test(log_text):
+    """The ignored private-bus test must really have run: exactly one passed, none failed."""
+    passed = [int(count) for count in re.findall(r'test result: ok\. (\d+) passed', log_text)]
+    if 'test result: FAILED' in log_text or sum(passed) != 1:
+        raise ValueError('scanner private-bus test did not run exactly one passing test')
 
 
 def run(command, cwd, env, log):
@@ -97,7 +105,12 @@ def main():
     env['CARGO_TARGET_DIR'] = str(targets[0])
     env['RUSTFLAGS'] = f'--remap-path-prefix={patched}=/snitchwatch --remap-path-prefix={env["CARGO_HOME"]}=/cargo --remap-path-prefix={targets[0]}=/target'
     run(['cargo', 'test', '--locked', '--offline', '-p', PACKAGES[0], '-p', PACKAGES[1], '--', '--test-threads=1'], patched, env, out / 'test.log')
-    run(['dbus-run-session', '--', 'cargo', 'test', '--locked', '--offline', '-p', PACKAGES[1], 'private_bus', '--', '--ignored', '--test-threads=1'], patched, env, out / 'test.log')
+    bus_log = out / 'private-bus.log'
+    run(['dbus-run-session', '--', 'cargo', 'test', '--locked', '--offline', '-p', PACKAGES[1], 'private_bus', '--', '--ignored', '--test-threads=1'], patched, env, bus_log)
+    require_private_bus_test(bus_log.read_text(errors='replace'))
+    with (out / 'test.log').open('ab') as combined:
+        combined.write(bus_log.read_bytes())
+    bus_log.unlink()
     # Resolve each executable's own normal+build graph, rather than borrowing
     # the bridge's license closure. Include the actual license/notice texts.
     spec = importlib.util.spec_from_file_location('artifact', source / 'packaging/release/bridge_artifact.py')

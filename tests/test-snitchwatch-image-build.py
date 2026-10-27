@@ -38,6 +38,8 @@ def scanner_fixture(root, pins, inventory_sha):
         write(name + '.ldd', 'libc.so.6 => fixture\n')
     write('scanner.patch', (FACTORY / 'snitchwatch-system-scanner.patch').read_bytes())
     inputs = {name: pins['sourceFiles'][name] for name in ('Cargo.toml', 'Cargo.lock')}
+    real = json.loads((FACTORY / 'snitchwatch-system-pins.json').read_text())['sourceFiles']
+    inputs.update({name: real[name] for name in ('crates/scanner-broker/Cargo.toml', 'crates/scanner-privileged/Cargo.toml')})
     inputs.update(pins['scannerPatch']['patchedFiles'])
     write('source-inputs.json', json.dumps(inputs))
     write('dependency-closure.json', json.dumps({name: [{'name': 'fixture', 'version': '1', 'license': 'MIT', 'source': 'fixture'}] for name in names}))
@@ -185,6 +187,64 @@ class ImageBuildContracts(unittest.TestCase):
     def test_scanner_has_no_persistent_systemd_activation(self):
         self.write('usr/lib/systemd/system/snitchwatch-scanner.service', '[Service]\nExecStart=/usr/libexec/snitchwatch-scanner-privileged\n')
         self.check()
+
+    def test_scanner_persistent_activation_refusals_are_broad(self):
+        def link(name):
+            path = self.root / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.symlink_to('/dev/null')
+        def file(name, text):
+            self.write(name, text)
+        binary = '[Service]\nExecStart=/usr/libexec/snitchwatch-scanner-%s\n'
+        cases = {
+            'usr/lib/systemd/system/dbus-org.snitchwatch.Scanner.service': lambda n: link(n),
+            'etc/systemd/system/SnitchWatch-SCANNER.timer': lambda n: file(n, '[Timer]\n'),
+            'usr/lib/systemd/user/deep-scanner.path': lambda n: file(n, '[Path]\n'),
+            'etc/systemd/system/multi-user.target.wants/scanner-run.service': lambda n: link(n),
+            'usr/lib/systemd/system/other.service': lambda n: file(n, binary % 'broker'),
+            'usr/share/dbus-1/system-services/org.example.Thing.service': lambda n: file(n, binary % 'privileged'),
+            'usr/share/dbus-1/services/org.example.Thing.service': lambda n: file(n, binary % 'broker'),
+        }
+        for name, create in cases.items():
+            with self.subTest(case=name):
+                create(name)
+                self.assertIn('persistent scanner activation', self.check().stderr)
+                (self.root / name).unlink()
+        self.check(valid=True)
+
+    def scanner_inputs(self, mutate):
+        name = 'usr/share/snitchwatch/scanner/source-inputs.json'
+        inputs = json.loads((self.root / name).read_text())
+        mutate(inputs)
+        self.write(name, json.dumps(inputs))
+        self.update_hash(name)
+        provenance_name = 'usr/share/snitchwatch/scanner/provenance.json'
+        provenance = json.loads((self.root / provenance_name).read_text())
+        provenance['evidence']['source-inputs.json'] = sha((self.root / name).read_bytes())
+        self.write(provenance_name, json.dumps(provenance))
+        self.update_hash(provenance_name)
+
+    def test_scanner_source_inputs_refuse_unexpected_and_changed_files(self):
+        self.scanner_inputs(lambda inputs: inputs.update({'crates/scanner-privileged/build.rs': '0' * 64}))
+        self.assertIn('source input', self.check().stderr)
+
+    def test_scanner_source_inputs_refuse_changed_crate_manifest_and_cargo_config(self):
+        self.scanner_inputs(lambda inputs: inputs.update({'crates/scanner-broker/Cargo.toml': '0' * 64}))
+        self.assertIn('source input', self.check().stderr)
+        self.scanner_inputs(lambda inputs: inputs.update({'crates/scanner-broker/Cargo.toml': self.pins['sourceFiles']['crates/scanner-broker/Cargo.toml'], '.cargo/config.toml': '0' * 64}))
+        self.assertIn('source input', self.check().stderr)
+        self.scanner_inputs(lambda inputs: inputs.pop('.cargo/config.toml'))
+        self.check(valid=True)
+
+    def test_scanner_private_bus_step_must_have_run_exactly_one_test(self):
+        helper = runpy.run_path(str(FACTORY / 'snitchwatch-system-scanner-build.py'))
+        check = helper['require_private_bus_test']
+        ok = 'test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 9 filtered out\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out\n'
+        check(ok)
+        for bad in ('', 'test result: ok. 0 passed; 0 failed; 1 ignored; 0 measured; 10 filtered out\n',
+                    'test result: ok. 2 passed; 0 failed\n', ok + 'test result: FAILED. 0 passed; 1 failed\n'):
+            with self.subTest(log=bad[:40]), self.assertRaises(ValueError):
+                check(bad)
 
     def test_scanner_packaging_fixtures_match_pinned_source(self):
         for fixture, source in [('scanner-stage.sh', 'packaging/scanner/stage.sh'),

@@ -133,9 +133,11 @@ class ImageBuildContracts(unittest.TestCase):
     def save(self):
         self.write(MANIFEST, json.dumps(self.manifest))
 
-    def check(self, valid=False):
+    def check(self, valid=False, live=False):
+        # Default is an image/staged tree (--image-tree); live=True is the booted host's invocation.
         self.save()
-        result = subprocess.run(['python3', str(FACTORY / 'snitchwatch-system-verify.py'), '--root', str(self.root)], capture_output=True, text=True)
+        flags = [] if live else ['--image-tree']
+        result = subprocess.run(['python3', str(FACTORY / 'snitchwatch-system-verify.py'), '--root', str(self.root), *flags], capture_output=True, text=True)
         self.assertEqual(result.returncode, 0 if valid else 1, result.stdout + result.stderr)
         return result
 
@@ -215,15 +217,37 @@ class ImageBuildContracts(unittest.TestCase):
                 (self.root / name).unlink()
         self.check(valid=True)
 
-    def test_endpoint_events_enable_state_in_etc_is_operator_state_on_a_live_root(self):
-        # The verifier also runs on the booted host (bridge helper); an operator
-        # who follows the opt-in README must not make it refuse.  Only the
-        # image-owned /usr tree is refused there; /etc is checked at stage time.
-        helper = runpy.run_path(str(FACTORY / 'snitchwatch-system-verify.py'))
-        self.write('etc/systemd/system/multi-user.target.wants/snitchwatch-endpoint-events.service', 'x')
-        with self.assertRaises(ValueError):
-            helper['refuse_enabled_endpoint_events'](self.root)
-        helper['refuse_enabled_endpoint_events'](self.root, live=True)
+    def test_endpoint_events_etc_state_is_operator_state_on_a_live_host(self):
+        # The verifier also runs on the booted host (bridge helper, no flag); an
+        # operator following the opt-in README must not make it refuse.  The
+        # image-owned /usr tree is still refused there; /etc only with --image-tree.
+        name = 'etc/systemd/system/multi-user.target.wants/snitchwatch-endpoint-events.service'
+        self.write('etc/systemd/system/snitchwatch-endpoint-events.service', '[Service]\n')
+        (self.root / name).parent.mkdir(parents=True)
+        (self.root / name).symlink_to('/etc/systemd/system/snitchwatch-endpoint-events.service')
+        self.assertIn('endpoint-events', self.check().stderr)
+        self.check(valid=True, live=True)
+        usr = 'usr/lib/systemd/system/multi-user.target.wants/snitchwatch-endpoint-events.service'
+        (self.root / usr).parent.mkdir(parents=True)
+        (self.root / usr).symlink_to('/dev/null')
+        self.assertIn('endpoint-events', self.check(live=True).stderr)
+
+    def test_operator_saved_logger_copy_in_etc_does_not_break_a_live_host(self):
+        self.write('etc/opensnitchd/opensnitchd-logger.json', '{"name": "remote"}')
+        self.assertIn('opensnitchd-logger', self.check().stderr)
+        self.check(valid=True, live=True)
+        self.write('usr/share/snitchwatch/endpoint-events/opensnitchd-logger.json', '{}')
+        self.assertIn('opensnitchd-logger', self.check(live=True).stderr)
+
+    def test_endpoint_events_preset_pins_stock_rsyslog_off(self):
+        # RPM %post and first-boot `systemctl preset-all` apply Fedora's
+        # `enable rsyslog.*`; the image preset (first match wins) must beat it.
+        path = ROOT / 'system_files/usr/lib/systemd/system-preset/00-bazzite-tower-endpoint-events.preset'
+        self.assertTrue(path.is_file() and not path.is_symlink())
+        self.assertEqual(path.stat().st_mode & 0o7777, 0o644)
+        lines = [l for l in path.read_text().splitlines() if l and not l.startswith('#')]
+        self.assertIn('disable rsyslog.service', lines)
+        self.assertTrue(all(l.startswith('disable ') for l in lines), lines)
 
     def test_no_logger_entry_and_no_logger_snippet_anywhere(self):
         for name in ('usr/share/bazzite-tower/opensnitchd-system-bridge-config.json',):
@@ -822,7 +846,7 @@ esac
         self.write(artifact / 'usr/bin/snitchwatch-bridge-cli', '#!/bin/sh\necho snitchwatch-bridge-cli 0.1.1\n', 0o755)
         for name in ('LICENSE', 'LICENSE.opensnitch', 'THIRD-PARTY-LICENSES.md'):
             self.write(artifact / 'usr/share/licenses/snitchwatch-bridge' / name, 'license fixture\n')
-        verifier = self.write(self.tmp / 'verifier.py', 'REQUIRED = set()\ndef verify(root):\n    pass\n')
+        verifier = self.write(self.tmp / 'verifier.py', 'REQUIRED = set()\ndef verify(root, image_tree=False):\n    assert image_tree\n    pass\n')
         logs = [self.write(self.tmp / name, name) for name in ('build.log', 'repro.log', 'rpm-inventory.txt', 'artifact.tar.gz')]
         scanner = self.tmp / 'scanner'
         scanner_fixture(scanner, pins, sha(logs[2].read_bytes()))

@@ -8,6 +8,10 @@ set -euo pipefail
 # /usr/share/snitchwatch/endpoint-events (staged by the Snitchwatch system
 # overlay), and enabling the feed is a manual operator step (docs/RUNBOOK.md).
 # rsyslog: the daemon; mmjsonparse: JSON field parsing; gnutls: the TLS driver.
+# The image preset (system_files/.../00-bazzite-tower-endpoint-events.preset) is
+# already present when RPM scriptlets apply Fedora's `enable rsyslog.*` preset,
+# and keeps first-boot/preset-all from re-enabling it later.
+preset="${ENDPOINT_EVENTS_PRESET:-/usr/lib/systemd/system-preset/00-bazzite-tower-endpoint-events.preset}"
 dnf install -y rsyslog rsyslog-mmjsonparse rsyslog-gnutls
 
 # The stock rsyslog.service is NOT the opt-in instance (that is its own unit)
@@ -21,6 +25,14 @@ if [[ ! " ${units[*]} " == *" rsyslog.service "* ]]; then
     echo "rsyslog.service not shipped by the rsyslog packages; unit names drifted" >&2
     exit 1
 fi
+# The build-time disable is not durable on its own: every shipped unit needs a
+# `disable` line in the image preset too.
+for unit in "${units[@]}"; do
+    if ! grep -qxF "disable ${unit}" "${preset}"; then
+        echo "${unit} has no 'disable' line in ${preset}" >&2
+        exit 1
+    fi
+done
 systemctl disable "${units[@]}"
 for unit in "${units[@]}"; do
     state="$(systemctl is-enabled "${unit}" 2>/dev/null || true)"

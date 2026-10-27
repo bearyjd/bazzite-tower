@@ -151,7 +151,7 @@ def main():
     }
     p = out / 'usr/share/snitchwatch/system-bridge-manifest.json'
     p.write_text(json.dumps(manifest, sort_keys=True, indent=2) + '\n'); p.chmod(0o644)
-    validator['verify'](out)
+    validator['verify'](out, image_tree=True)
     print(json.dumps({'stagingRoot': str(out), 'manifestSha256': sha(p), 'binarySha256': binary_sha}, sort_keys=True))
 
 

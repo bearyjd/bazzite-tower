@@ -380,8 +380,11 @@ What ships:
 
 - `rsyslog`, `rsyslog-mmjsonparse`, `rsyslog-gnutls` (`build.d/64-endpoint-events-packages.sh`).
   The stock `rsyslog.service` and every other unit those packages ship are
-  explicitly disabled at build time (never masked: the opt-in instance reuses
-  the `rsyslogd` binary). The opt-in instance is its own unit.
+  explicitly disabled at build time and pinned off by
+  `system-preset/00-bazzite-tower-endpoint-events.preset` (Fedora's own preset says
+  `enable rsyslog.*`, which first boot or `systemctl preset-all` would re-apply; the
+  build fails if a shipped unit lacks a `disable` line). Never masked: the opt-in
+  instance reuses the `rsyslogd` binary. The opt-in instance is its own unit.
 - System profile only: four pristine, hash-pinned upstream files in
   `/usr/share/snitchwatch/endpoint-events/` (root:root 0644): `snitchwatch-endpoint-events.conf`
   (the instance's rsyslog config, with `@...@` placeholders), `.nft` (the table that
@@ -400,8 +403,21 @@ file; `tests/smoke.sh` asserts the three packages, `rsyslog.service` and all
 package units not enabled, no `.wants`/`.requires` link, no pre-installed
 `/etc` config, and no `Loggers` in `/etc/opensnitchd/default-config.json`;
 `tests/boot-check.sh` asserts nothing listens on 514 or 6514 and the units are
-inactive. The verifier also runs on the booted host, so it never inspects `/etc`
-there: enabling the feed does not break it.
+inactive. The verifier also runs on the booted host (no flag), where it skips the
+operator-owned `/etc` checks (enable links, a saved `opensnitchd-logger*.json`
+copy), so enabling the feed does not break it. The image build, staging and smoke
+pass `--image-tree` and do check `/etc`.
+
+Operating notes once the feed is enabled:
+
+- A `Loggers` entry makes the config differ from the recorded reference, so
+  `bazzite-tower-snitchwatch-migrate` and rollback refuse (fail closed, expected).
+  Remove the entry first, or restore the reference deliberately.
+- The deny opt-in edits only the `DefaultAction` bytes, so `Loggers` survives it.
+  Under deny, add an OpenSnitch allow rule for the rsyslog instance's egress to
+  Vigie on port 6514, or the forward is blocked.
+- Upstream README step 1 (`rpm-ostree install rsyslog ...`) must be SKIPPED on this
+  image: the packages are already present.
 
 **Port 514 on loopback is a log-forgery and squat risk.** The daemon's remote
 logger is plain TCP with no authentication. Anything that can connect to the

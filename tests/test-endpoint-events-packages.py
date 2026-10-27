@@ -30,13 +30,14 @@ class PackageScript(unittest.TestCase):
         path.write_text('#!/bin/sh\n' + body)
         path.chmod(0o755)
 
-    def run_script(self, rpm_files=RPM_FILES, dnf_rc=0, enabled_state='disabled'):
+    def run_script(self, rpm_files=RPM_FILES, dnf_rc=0, enabled_state='disabled', preset='disable rsyslog.service\n'):
+        (self.tmp / 'preset').write_text(preset)
         (self.tmp / 'rpm-files').write_text(rpm_files)
         self.shim('dnf', 'echo "dnf $*" >> "%s"\nexit %d\n' % (self.log, dnf_rc))
         self.shim('rpm', 'echo "rpm $*" >> "%s"\ncat "%s"\n' % (self.log, self.tmp / 'rpm-files'))
         self.shim('systemctl', 'echo "systemctl $*" >> "%s"\nif [ "$1" = is-enabled ]; then echo %s; [ %s = disabled ] || [ %s = static ]; exit $?; fi\n'
                   % (self.log, enabled_state, enabled_state, enabled_state))
-        env = {**os.environ, 'PATH': str(self.tmp / 'bin') + os.pathsep + os.environ['PATH']}
+        env = {**os.environ, 'ENDPOINT_EVENTS_PRESET': str(self.tmp / 'preset'), 'PATH': str(self.tmp / 'bin') + os.pathsep + os.environ['PATH']}
         result = subprocess.run(['bash', str(SCRIPT)], env=env, capture_output=True, text=True)
         calls = self.log.read_text().splitlines() if self.log.exists() else []
         return result, calls
@@ -56,7 +57,7 @@ class PackageScript(unittest.TestCase):
 
     def test_every_unit_the_packages_ship_is_disabled(self):
         files = RPM_FILES + '/usr/lib/systemd/system/rsyslog-extra.socket\n/usr/lib/systemd/system/rsyslog-x.timer\n/usr/lib/systemd/system/rsyslog.service.d/o.conf\n'
-        result, calls = self.run_script(rpm_files=files)
+        result, calls = self.run_script(rpm_files=files, preset='disable rsyslog.service\ndisable rsyslog-extra.socket\ndisable rsyslog-x.timer\n')
         self.assertEqual(result.returncode, 0, result.stderr)
         disabled = ' '.join(c for c in calls if c.startswith('systemctl disable'))
         for unit in ('rsyslog.service', 'rsyslog-extra.socket', 'rsyslog-x.timer'):
@@ -73,6 +74,18 @@ class PackageScript(unittest.TestCase):
         result, _ = self.run_script(enabled_state='enabled')
         self.assertNotEqual(result.returncode, 0)
         self.assertIn('not disabled', result.stderr)
+
+    def test_fails_if_a_shipped_unit_has_no_disable_preset(self):
+        # Build-time disable is not durable (preset-all re-applies Fedora's
+        # `enable rsyslog.*`); every shipped unit needs an image preset line.
+        files = RPM_FILES + '/usr/lib/systemd/system/rsyslog-extra.socket\n'
+        result, _ = self.run_script(rpm_files=files)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('rsyslog-extra.socket', result.stderr)
+        result, _ = self.run_script(preset='')
+        self.assertNotEqual(result.returncode, 0)
+        result, _ = self.run_script(rpm_files=files, preset='disable rsyslog.service\ndisable rsyslog-extra.socket\n')
+        self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_fails_when_dnf_fails(self):
         result, calls = self.run_script(dnf_rc=1)

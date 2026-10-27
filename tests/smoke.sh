@@ -152,6 +152,13 @@ check "rsyslog mmjsonparse module shipped on disk" \
 check "rsyslog gnutls stream driver shipped on disk" \
     bash -c '[[ -n "$(rpm -ql rsyslog-gnutls | grep -E "lmnsd_gtls\.so$" | while read -r f; do test -f "$f" && echo ok; done)" ]]'
 check_disabled "rsyslog.service"
+check "image preset pins rsyslog.service off" \
+    grep -qx 'disable rsyslog.service' /usr/lib/systemd/system-preset/00-bazzite-tower-endpoint-events.preset
+# Fedora's 90-default.preset enables rsyslog.*; re-applying presets (first boot,
+# `systemctl preset-all`) must still leave it disabled.
+# shellcheck disable=SC2016 # Expanded by the inner shell.
+check "systemctl preset leaves rsyslog.service disabled" \
+    bash -c 'systemctl preset rsyslog.service && [[ "$(systemctl is-enabled rsyslog.service 2>/dev/null)" == disabled ]]'
 # Every unit any of the three packages ship stays off (disabled or static).
 for unit in $(rpm -ql rsyslog rsyslog-mmjsonparse rsyslog-gnutls 2>/dev/null | grep -E '^/(usr/)?lib/systemd/system/[^/]+\.(service|socket|timer|path)$' | sed 's|.*/||' | sort -u); do
     case "$(unit_state "${unit}")" in
@@ -423,7 +430,7 @@ system)
     check "system OpenSnitch address is relative Unix" \
         jq -e '.Server.Address == "unix:opensnitchd.sock"' /etc/opensnitchd/default-config.json
     check "installed system manifest and immutable overlay verify" \
-        /usr/libexec/snitchwatch/verify-system-manifest.py --root /
+        /usr/libexec/snitchwatch/verify-system-manifest.py --root / --image-tree
     check "downstream daemon source, patch, binary and licenses verify" \
         /usr/libexec/snitchwatch/verify-system-daemon.py --root /
     # The one opensnitchd rule Snitchwatch ships (its hash is pinned and

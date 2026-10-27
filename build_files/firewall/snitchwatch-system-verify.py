@@ -56,10 +56,13 @@ EVENTS_FILES = ('snitchwatch-endpoint-events.conf', 'snitchwatch-endpoint-events
 SOURCE_FILES.update({EVENTS_ROOT + name: 'packaging/endpoint-events/' + name for name in EVENTS_FILES})
 EVENTS_NAME = 'snitchwatch-endpoint-events'
 EVENTS_LOGGER = 'opensnitchd-logger'
-# Image-owned unit trees are always checked.  /etc is operator state on a live
-# root (the opt-in enables units there), so it is only checked on a staged tree.
+# Image-owned unit trees are always checked.  /etc is operator state on the
+# booted host (the opt-in enables units and saves logger copies there), so the
+# /etc checks run only when the caller says this is an image/staged tree
+# (--image-tree; stage.py, the image build and smoke).
 EVENTS_IMAGE_DIRS = ('usr/lib/systemd/system', 'usr/lib/systemd/user')
-EVENTS_LOGGER_DIRS = ('etc/opensnitchd', 'usr/share/snitchwatch', 'usr/share/bazzite-tower')
+EVENTS_LOGGER_DIRS_LIVE = ('usr/share/snitchwatch', 'usr/share/bazzite-tower')
+EVENTS_LOGGER_DIRS = ('etc/opensnitchd',) + EVENTS_LOGGER_DIRS_LIVE
 EVENTS_ETC_DIRS = ('etc/systemd/system', 'etc/systemd/user', 'etc/xdg/systemd/user')
 LICENSES = {'LICENSE', 'LICENSE.opensnitch', 'THIRD-PARTY-LICENSES.md'}
 SCANNER_BINARIES = {'/usr/libexec/snitchwatch-scanner-privileged', '/usr/libexec/snitchwatch-scanner-broker'}
@@ -168,9 +171,9 @@ def refuse_persistent_scanner_activation(root):
                 raise ValueError('unexpected persistent scanner activation: ' + relative)
 
 
-def refuse_enabled_endpoint_events(root, live=False):
+def refuse_enabled_endpoint_events(root, image_tree=False):
     """The endpoint-event units are never enabled or placed in a unit search path."""
-    for directory in EVENTS_IMAGE_DIRS + (() if live else EVENTS_ETC_DIRS):
+    for directory in EVENTS_IMAGE_DIRS + (EVENTS_ETC_DIRS if image_tree else ()):
         base = root / directory
         if base.is_dir():
             for path in sorted(base.rglob('*')):
@@ -178,16 +181,16 @@ def refuse_enabled_endpoint_events(root, live=False):
                     raise ValueError('endpoint-events unit must not be installed or enabled in the image: ' + path.relative_to(root).as_posix())
 
 
-def refuse_logger_snippet(root):
+def refuse_logger_snippet(root, image_tree=False):
     """No logger snippet in the image-owned daemon/Snitchwatch trees: the feed is operator opt-in."""
-    for directory in EVENTS_LOGGER_DIRS:
+    for directory in EVENTS_LOGGER_DIRS if image_tree else EVENTS_LOGGER_DIRS_LIVE:
         base = root / directory
         for path in sorted(base.rglob('*')) if base.is_dir() else ():
             if EVENTS_LOGGER in path.name.lower():
                 raise ValueError('opensnitchd logger snippet must not be shipped: ' + path.relative_to(root).as_posix())
 
 
-def verify(root):
+def verify(root, image_tree=False):
     manifest = json.loads(read_file(root, MANIFEST))
     pins_bytes = read_file(root, PINS)
     if digest(pins_bytes) != EXPECTED_PINS_SHA256:
@@ -301,8 +304,8 @@ def verify(root):
         raise ValueError('incomplete scanner dependency closure')
     # Session D-Bus activation is the sole scanner activation mechanism.
     refuse_persistent_scanner_activation(root)
-    refuse_enabled_endpoint_events(root, live=root == Path('/'))
-    refuse_logger_snippet(root)
+    refuse_enabled_endpoint_events(root, image_tree)
+    refuse_logger_snippet(root, image_tree)
     expected_gui = {'appId': 'org.snitchwatch.Snitchwatch', 'profile': 'system', 'runtimeRef': pins['flatpakRuntimeRef'], 'sourceCommit': pins['sourceCommit'], 'manifestSha256': pins['sourceFiles']['packaging/flatpak/org.snitchwatch.Snitchwatch.system.yml'], 'finishArgs': pins['flatpakFinishArgs']}
     if manifest.get('flatpak') != expected_gui:
         raise ValueError('incorrect expected GUI system profile')
@@ -312,9 +315,10 @@ def verify(root):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--root', type=Path, default=Path('/'), help='image staging root; default /')
+    parser.add_argument('--image-tree', action='store_true', help='root is an image/staged tree, not the live host: also check operator-owned /etc state')
     args = parser.parse_args()
     try:
-        print(json.dumps(verify(args.root.resolve()), sort_keys=True))
+        print(json.dumps(verify(args.root.resolve(), args.image_tree), sort_keys=True))
         return 0
     except (ValueError, OSError, KeyError, TypeError) as error:
         print('system-manifest: ' + str(error), file=sys.stderr)

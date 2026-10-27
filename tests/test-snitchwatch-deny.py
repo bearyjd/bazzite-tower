@@ -8,6 +8,7 @@ import io
 import json
 import os
 import re
+import stat
 import subprocess
 import sys
 import tempfile
@@ -966,6 +967,235 @@ class ReadinessSemantics(DenyBase):
             if path.exists():
                 self.assertNotIn("opt-in marker", path.read_text())
                 self.assertNotIn(MARKER, path.read_text())
+
+SNAP = "/run/snitchwatch/deny-status.json"
+STATUS_UNIT = REPO/"system_files/usr/lib/systemd/system/bazzite-tower-snitchwatch-deny-status.service"
+SCHEMA_KEYS = ["schema", "profile", "defaultAction", "optIn", "pending", "expiresAt", "canEnable", "blockers", "expired"]
+
+
+class StatusExport(DenyBase):
+    def snap(self):
+        return json.loads(self.ctx.path(SNAP).read_text())
+
+    def assert_snapshot_matches_status(self):
+        path = self.ctx.path(SNAP)
+        info = os.lstat(path)
+        self.assertTrue(stat.S_ISREG(info.st_mode))
+        self.assertEqual(oct(stat.S_IMODE(info.st_mode)), oct(0o644))
+        self.assertEqual(info.st_uid, os.geteuid())
+        raw = self.snap()
+        self.assertEqual(list(raw), SCHEMA_KEYS+["updatedAt", "bootId"])
+        self.assertEqual(raw["updatedAt"], self.deny.stamp(self.now))
+        self.assertEqual(raw["bootId"], self.ctx.path("/proc/sys/kernel/random/boot_id").read_text().strip())
+        body = {key: raw[key] for key in SCHEMA_KEYS}
+        self.assertEqual(body, self.status())
+        self.assertEqual([p.name for p in path.parent.iterdir() if p.name.startswith(".")], [])
+        return raw
+
+    def fail_snapshot_writes(self):
+        real = tempfile.mkstemp
+        def broken(*args, **kwargs):
+            if str(kwargs.get("dir")).endswith("run/snitchwatch"):
+                raise OSError(30, "Read-only file system")
+            return real(*args, **kwargs)
+        return mock.patch.object(self.deny.tempfile, "mkstemp", side_effect=broken)
+
+    def test_status_is_read_only_and_json_is_byte_identical(self):
+        before = sorted(p.name for p in self.ctx.path("/run/snitchwatch").iterdir())
+        out = self.ok("status", "--json")
+        self.ok("status")
+        self.assertEqual(sorted(p.name for p in self.ctx.path("/run/snitchwatch").iterdir()), before)
+        self.assertFalse(os.path.lexists(self.ctx.path(SNAP)))
+        self.assertEqual(out, json.dumps({"schema": 1, "profile": "system", "defaultAction": "allow", "optIn": False, "pending": False,
+                                          "expiresAt": None, "canEnable": True, "blockers": [], "expired": False})+"\n")
+
+    def test_every_state_change_publishes(self):
+        self.ok("on", "--revert-after", "5")
+        raw = self.assert_snapshot_matches_status()
+        self.assertEqual((raw["pending"], raw["defaultAction"], raw["expiresAt"]), (True, "deny", "2026-10-26T12:05:00Z"))
+        self.now = NOW+timedelta(seconds=30)
+        self.ok("confirm")
+        raw = self.assert_snapshot_matches_status()
+        self.assertEqual((raw["pending"], raw["optIn"]), (False, True))
+        self.ok("off")
+        raw = self.assert_snapshot_matches_status()
+        self.assertEqual((raw["optIn"], raw["defaultAction"], raw["canEnable"]), (False, "allow", True))
+
+    def test_timer_fired_revert_publishes_allow(self):
+        self.ok("on", "--revert-after", "5")
+        self.now = NOW+timedelta(minutes=6)
+        self.ok("revert-if-pending")
+        self.assertEqual(self.assert_snapshot_matches_status()["defaultAction"], "allow")
+
+    def assert_boot_path_is_snapshot_free(self, run):
+        with mock.patch.object(self.deny, "write_snapshot") as write:
+            mark = len(self.ctx.commands)
+            code, out, err = run()
+        self.assertEqual(code, 0, err)
+        write.assert_not_called()
+        self.assertFalse(os.path.lexists(self.ctx.path(SNAP)))
+        self.assertNotIn("snapshot", err)
+        # assertIn on exact lists: assertLessEqual compared strings, so an extra
+        # `systemctl is-active` (< "stop") would have passed.
+        self.assertIn(self.ctx.commands[mark:], ([], [["systemctl", "stop", TIMER+".timer"]]))
+        self.assertEqual(self.config_path.read_bytes(), self.original)
+
+    def test_boot_revert_makes_no_snapshot_write_and_no_extra_systemctl(self):
+        self.ok("on")
+        self.ctx.path(SNAP).unlink()
+        self.reboot("boot-B")
+        self.assert_boot_path_is_snapshot_free(lambda: self.cli("revert-if-pending", "--boot"))
+
+    def test_late_confirm_revert_publishes(self):
+        self.ok("on", "--revert-after", "5")
+        self.now = NOW+timedelta(minutes=6)
+        self.refused("confirm", text="expired")
+        self.assertEqual(self.assert_snapshot_matches_status()["defaultAction"], "allow")
+
+    def test_quarantine_path_makes_no_snapshot_write_and_no_extra_systemctl(self):
+        self.ok("on")
+        self.ok("confirm")
+        self.ctx.path(SNAP).unlink()
+        self.reboot("boot-B")
+        self.ctx.path(STATE).write_text("{")
+        self.assert_boot_path_is_snapshot_free(lambda: self.cli("revert-if-pending", "--boot"))
+
+    def test_confirm_partial_failure_still_refreshes_snapshot(self):
+        self.ok("on")
+        self.now = NOW+timedelta(seconds=30)
+        with mock.patch.object(self.deny, "stop_timer", side_effect=common.Refusal("injected stop failure")):
+            self.refused("confirm", text="injected")
+        raw = self.assert_snapshot_matches_status()
+        self.assertEqual((raw["pending"], raw["optIn"]), (False, True))
+
+    def test_off_partial_failure_still_refreshes_snapshot(self):
+        self.ok("on")
+        self.now = NOW+timedelta(seconds=30)
+        with mock.patch.object(self.deny, "restore_allow", side_effect=common.Refusal("injected restore failure")):
+            self.refused("off", text="injected")
+        self.assertEqual(self.snap()["updatedAt"], "2026-10-26T12:00:30Z")
+        self.assert_snapshot_matches_status()
+
+    def test_failed_on_rolls_back_and_snapshot_shows_allow(self):
+        self.ctx.systemd_run_fails = True
+        self.refused("on", text="rolled back")
+        raw = self.assert_snapshot_matches_status()
+        self.assertEqual((raw["defaultAction"], raw["pending"]), ("allow", False))
+
+    def test_snapshot_failure_never_fails_or_rolls_back(self):
+        with self.fail_snapshot_writes():
+            code, out, err = self.cli("on")
+            self.assertEqual(code, 0, err)
+            self.assertRegex(err, "WARNING.*status snapshot")
+            self.assertEqual(self.config_path.read_bytes(), self.deny_bytes())
+            self.assertEqual(self.status()["pending"], True)
+            self.assertEqual(self.cli("confirm")[0], 0)
+            self.assertEqual(self.status()["optIn"], True)
+            self.assertEqual(self.cli("off")[0], 0)
+            self.assertEqual(self.config_path.read_bytes(), self.original)
+            self.ok("on")
+            self.reboot("boot-B")
+            code, out, err = self.cli("revert-if-pending", "--boot")
+            self.assertEqual(code, 0, err)
+            self.assertEqual(self.config_path.read_bytes(), self.original)
+        self.assertFalse(os.path.lexists(self.ctx.path(SNAP)))
+
+    def test_unexpected_snapshot_exception_is_also_contained(self):
+        with mock.patch.object(self.deny, "write_snapshot", side_effect=RuntimeError("boom")):
+            code, out, err = self.cli("on")
+        self.assertEqual(code, 0, err)
+        self.assertEqual(self.config_path.read_bytes(), self.deny_bytes())
+
+    def test_missing_directory_is_not_created(self):
+        with mock.patch.object(self.deny, "SNAPSHOT_DIR", "/run/absent"), mock.patch.object(self.deny, "SNAPSHOT", "/run/absent/deny-status.json"):
+            code, out, err = self.cli("on")
+        self.assertEqual(code, 0, err)
+        self.assertIn("WARNING", err)
+        self.assertFalse(self.ctx.path("/run/absent").exists())
+
+    def test_symlinked_or_writable_directory_is_refused(self):
+        directory = self.ctx.path("/run/snitchwatch")
+        directory.chmod(0o777)
+        self.assertEqual(self.cli("publish-status")[0], 1)
+        self.assertFalse(os.path.lexists(directory/"deny-status.json"))
+        directory.chmod(0o711)
+        moved = directory.with_name("real")
+        directory.rename(moved)
+        directory.symlink_to(moved)
+        self.assertEqual(self.cli("publish-status")[0], 1)
+        self.assertFalse(os.path.lexists(moved/"deny-status.json"))
+
+    def test_target_symlink_is_replaced_not_followed(self):
+        victim = self.ctx.path("/run/victim")
+        victim.write_text("keep")
+        self.ctx.path(SNAP).symlink_to(victim)
+        self.ok("publish-status")
+        self.assertFalse(self.ctx.path(SNAP).is_symlink())
+        self.assertEqual(victim.read_text(), "keep")
+        self.assert_snapshot_matches_status()
+
+    def test_publish_status_recomputes_and_fails_loudly_when_it_cannot_write(self):
+        self.ok("publish-status")
+        self.assert_snapshot_matches_status()
+        self.ok("on")
+        self.ctx.path(SNAP).unlink()
+        self.ok("publish-status")
+        self.assertEqual(self.snap()["pending"], True)
+        with self.fail_snapshot_writes():
+            self.refused("publish-status", text="snapshot")
+
+    def test_publish_status_requires_root_like_other_subcommands(self):
+        with mock.patch.object(self.deny.os, "geteuid", return_value=1000), contextlib.redirect_stderr(io.StringIO()) as err:
+            self.assertEqual(self.deny.main(["publish-status"]), 1)
+        self.assertIn("root", err.getvalue())
+
+    def test_publish_status_skips_when_a_writer_holds_the_lock(self):
+        fd = self.hold_lock()
+        try:
+            code, out, err = self.cli("publish-status")
+        finally:
+            os.close(fd)
+        self.assertEqual(code, 0, err)
+        self.assertIn("skipped", out)
+        self.assertFalse(os.path.lexists(self.ctx.path(SNAP)))
+
+    def test_interrupted_write_leaves_old_snapshot_or_none(self):
+        self.ok("publish-status")
+        old = self.ctx.path(SNAP).read_bytes()
+        self.ok("on")
+        for target, error in (("replace", SystemExit(9)), ("fsync", OSError(5, "io"))):
+            with self.subTest(kill=target):
+                with mock.patch.object(self.deny.os, target, side_effect=error):
+                    with contextlib.suppress(SystemExit):
+                        self.cli("publish-status")
+                self.assertEqual(json.loads(self.ctx.path(SNAP).read_bytes())["schema"], 1)
+                self.assertEqual([p.name for p in self.ctx.path("/run/snitchwatch").iterdir() if p.name.startswith(".")], [])
+        self.assertNotEqual(old, b"")
+
+    def test_snapshot_has_only_schema_fields_and_no_paths(self):
+        self.ok("on")
+        text = self.ctx.path(SNAP).read_text()
+        self.assertNotIn(self.temp.name, text)
+        self.assertNotIn("/var/lib", text)
+        self.assertEqual(set(json.loads(text)), set(SCHEMA_KEYS)|{"updatedAt", "bootId"})
+
+    def test_boot_publish_unit_cannot_block_or_fail_the_firewall(self):
+        text = STATUS_UNIT.read_text()
+        self.assertRegex(text, r"(?m)^Type=oneshot$")
+        self.assertRegex(text, r"(?m)^ExecStart=-/usr/libexec/bazzite-tower-snitchwatch-deny publish-status$")
+        self.assertRegex(text, r"(?m)^TimeoutStartSec=20$")
+        self.assertRegex(text, r"(?m)^After=.*bazzite-tower-snitchwatch-deny-guard\.service")
+        self.assertRegex(text, r"(?m)^After=.*\blocal-fs\.target\b")
+        self.assertRegex(text, r"(?m)^DefaultDependencies=no$")
+        self.assertRegex(text, r"(?m)^WantedBy=multi-user\.target$")
+        self.assertNotRegex(text, r"(?m)^(Requires|Requisite|BindsTo|RequiredBy)=")
+        self.assertNotRegex(text, r"(?m)^Before=.*opensnitch")
+        self.assertNotIn("status", DROPIN.read_text())
+        self.assertNotIn("ExecStartPost", GUARD_UNIT.read_text())
+        self.assertIn("deny-status", (REPO/"build_files/build.d/96-snitchwatch-deny-guard.sh").read_text())
+        smoke = (REPO/"tests/smoke.sh").read_text()
+        self.assertIn("bazzite-tower-snitchwatch-deny-status.service", smoke)
+        self.assertIn("local-fs", smoke)
 
 
 if __name__ == "__main__":

@@ -9,6 +9,12 @@ timer stopped); the operator should run `off`. Policy writers hold
 /run/lock/bazzite-tower-snitchwatch-migration.lock. Linux rename cannot give a
 strict conditional replace against arbitrary root writers; a re-read just before
 replacement detects drift and refuses instead of overwriting.
+
+After every state change the helper also publishes a read-only display snapshot
+(the `status --json` fields plus "updatedAt" and "bootId") at SNAPSHOT for the
+sandboxed GUI, which already mounts /run/snitchwatch read-only. It is advisory,
+best effort (a failed write only warns) and `status` itself never writes.
+`publish-status` recomputes it on demand and at boot.
 """
 import argparse
 import base64
@@ -42,6 +48,8 @@ LOCK = "/run/lock/bazzite-tower-snitchwatch-migration.lock"
 TIMER = "bazzite-tower-snitchwatch-deny-revert"
 HELPER = "/usr/libexec/bazzite-tower-snitchwatch-deny"
 SOCKET = "/run/snitchwatch/opensnitchd.sock"
+SNAPSHOT_DIR = "/run/snitchwatch"
+SNAPSHOT = SNAPSHOT_DIR+"/deny-status.json"
 SYSTEM_ADDRESS = "unix:opensnitchd.sock"
 LEGACY_ADDRESS = "127.0.0.1:50051"
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
@@ -187,7 +195,9 @@ def policy_lock(ctx, wait=False):
                 break
             except BlockingIOError as error:
                 if not wait:
-                    raise common.Refusal("another snitchwatch policy writer holds the lock; retry when it finishes") from error
+                    busy = common.Refusal("another snitchwatch policy writer holds the lock; retry when it finishes")
+                    busy.busy = True
+                    raise busy from error
                 if time.monotonic() >= deadline:
                     raise common.Refusal("timed out after "+str(LOCK_TIMEOUT)+"s waiting for the policy lock; nothing was changed and any pending trial is kept; retry: "+HELPER+" revert-if-pending") from error
                 time.sleep(LOCK_POLL)
@@ -247,7 +257,7 @@ def pending_blocker(state):
     return "a deny trial is already pending; confirm or off first"
 
 
-def status(ctx, as_json):
+def build_report(ctx):
     profile, action, blockers = inspect(ctx)
     state = load_state(ctx)
     pending = bool(state and state["pending"])
@@ -259,6 +269,13 @@ def status(ctx, as_json):
         blockers.append("deny is already confirmed; run off first")
     report = {"schema": 1, "profile": profile, "defaultAction": action, "optIn": opt_in, "pending": pending,
               "expiresAt": state["expiresAt"] if pending else None, "canEnable": not blockers, "blockers": blockers, "expired": expired}
+    return report
+
+
+def status(ctx, as_json):
+    report = build_report(ctx)
+    profile, action, blockers = report["profile"], report["defaultAction"], report["blockers"]
+    pending, expired, opt_in = report["pending"], report["expired"], report["optIn"]
     if as_json:
         print(json.dumps(report))
     else:
@@ -266,6 +283,35 @@ def status(ctx, as_json):
               +(" (reverts at "+report["expiresAt"]+")" if pending else "")+("\nEXPIRED: still pending; run: ujust snitchwatch-deny off" if expired else "")+"\ncan enable: "+str(report["canEnable"]).lower())
         for blocker in blockers:
             print("blocker: "+blocker)
+
+
+def write_snapshot(ctx):
+    """Atomically publish the display snapshot; raises on any problem. Never creates the directory."""
+    directory = ctx.path(SNAPSHOT_DIR)
+    info = os.lstat(directory)
+    common.require(stat.S_ISDIR(info.st_mode) and info.st_uid == os.geteuid() and not info.st_mode & 0o022, SNAPSHOT_DIR+" must be a root-owned, non-writable directory")
+    report = dict(build_report(ctx), updatedAt=stamp(utcnow()), bootId=boot_id(ctx))
+    fd, temporary = tempfile.mkstemp(prefix=".deny-status-", dir=directory)
+    try:
+        with os.fdopen(fd, "wb") as target:
+            target.write((json.dumps(report)+"\n").encode())
+            target.flush()
+            os.fchown(target.fileno(), 0, 0)
+            os.fchmod(target.fileno(), 0o644)
+            os.fsync(target.fileno())
+        os.replace(temporary, ctx.path(SNAPSHOT))  # replaces a symlink itself; never follows it
+        sync_directory(directory)
+    finally:
+        if os.path.lexists(temporary):
+            os.unlink(temporary)
+
+
+def publish_snapshot(ctx):
+    """Best effort after a state change: a display file must never fail or undo the change."""
+    try:
+        write_snapshot(ctx)
+    except Exception as error:
+        print("WARNING: could not publish the deny status snapshot: "+str(error), file=sys.stderr)
 
 
 def restore_allow(ctx, state):
@@ -351,10 +397,12 @@ def turn_on(ctx, minutes):
                 restart_daemon(ctx)
             except Exception as restart:
                 notes.append("restart after restore failed: "+str(restart))
+        publish_snapshot(ctx)
         raise common.Refusal("deny trial failed and was rolled back: "+str(error)+"; "+"; ".join(notes)) from error
     finally:
         for sig, handler in previous.items():
             signal.signal(sig, handler)
+    publish_snapshot(ctx)
     print("deny trial started: reverts automatically at "+state["expiresAt"]+" ("+str(minutes)+" min) unless you run: ujust snitchwatch-deny confirm")
 
 
@@ -372,7 +420,10 @@ def confirm(ctx):
     marker = dict(schema=1, confirmedAt=stamp(utcnow()), id=state["id"])
     publish(ctx, MARKER, (json.dumps(marker, indent=2, sort_keys=True)+"\n").encode(), mode=0o644)
     save_state(ctx, dict(state, pending=False, confirmedAt=marker["confirmedAt"]))
-    stop_timer(ctx)
+    try:
+        stop_timer(ctx)
+    finally:
+        publish_snapshot(ctx)
     print("deny confirmed and persistent; undo with: ujust snitchwatch-deny off")
 
 
@@ -383,14 +434,20 @@ def turn_off(ctx, boot=False):
     if not leftovers and current_action(data) == "allow":
         print("nothing to do: DefaultAction is already allow and no opt-in is recorded")
         return
-    method = restore_allow(ctx, state)
-    discard(ctx)
-    stop_timer(ctx)
-    if not boot and method != "already-allow":
-        try:
-            restart_daemon(ctx)
-        except Exception as error:
-            raise common.Refusal("DefaultAction restored to allow ("+method+") but restarting opensnitch.service failed: "+str(error)+"; run: systemctl restart opensnitch.service") from error
+    # The boot guard (boot=True) never publishes or adds systemctl calls: its time
+    # budget gates the firewall. deny-status.service regenerates the file after boot.
+    try:
+        method = restore_allow(ctx, state)
+        discard(ctx)
+        stop_timer(ctx)
+        if not boot and method != "already-allow":
+            try:
+                restart_daemon(ctx)
+            except Exception as error:
+                raise common.Refusal("DefaultAction restored to allow ("+method+") but restarting opensnitch.service failed: "+str(error)+"; run: systemctl restart opensnitch.service") from error
+    finally:
+        if not boot:
+            publish_snapshot(ctx)
     print("DefaultAction restored to allow ("+method+"); opt-in removed"+("" if not boot else "; daemon not restarted (boot guard)"))
 
 
@@ -484,6 +541,19 @@ def revert_if_pending(ctx, boot):
     turn_off(ctx, boot=boot)
 
 
+def publish_status(ctx):
+    """Explicit/boot recompute. Never waits for the lock: a busy writer publishes when it finishes."""
+    try:
+        with policy_lock(ctx):
+            write_snapshot(ctx)
+    except Exception as error:
+        if getattr(error, "busy", False):
+            print("skipped: a policy writer holds the lock and publishes the snapshot when it finishes")
+            return
+        raise common.Refusal("could not publish the deny status snapshot: "+str(error)) from error
+    print("published "+SNAPSHOT)
+
+
 def minutes_argument(value):
     try:
         number = int(value)
@@ -499,6 +569,7 @@ def parser():
     commands = top.add_subparsers(dest="action", required=True)
     commands.add_parser("status").add_argument("--json", action="store_true")
     commands.add_parser("on").add_argument("--revert-after", type=minutes_argument, default=10, metavar="MINUTES")
+    commands.add_parser("publish-status")
     commands.add_parser("confirm")
     commands.add_parser("off")
     commands.add_parser("revert-if-pending").add_argument("--boot", action="store_true", help="boot guard: do not restart the not-yet-started daemon")
@@ -513,6 +584,9 @@ def main(argv=None, ctx=None):
             ctx = common.Context()
         if args.action == "status":
             status(ctx, args.json)
+            return 0
+        if args.action == "publish-status":
+            publish_status(ctx)
             return 0
         if args.action == "revert-if-pending" and args.boot:
             boot_guard(ctx)

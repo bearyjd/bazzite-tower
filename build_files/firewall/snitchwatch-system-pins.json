@@ -41,7 +41,7 @@
     "sha256": "6de7858c359fbe71d9d8060d6de198cc384f2af90ad47afb1657f3604e58a165"
   },
   "schemaVersion": 1,
-  "sourceCommit": "8136b415706401802c3fb9ced1bf3826f95abbaa",
+  "sourceCommit": "a047c759f7eec95f0498adf53b89dcb45dbdaa9f",
   "sourceFiles": {
     "Cargo.lock": "48e49bd49869ac32b38063c5356c50d31050c97235a303ba9105262c15a7a73f",
     "Cargo.toml": "ef17d9cc674731d5046110f15e747a994b93725474f1e9d2018b67bcc76bc2f2",
@@ -71,7 +71,7 @@
     "packaging/system/stage.sh": "64327742d69caf99ce63baae6503d3a5a5ce4c1f4c54ad4f425191b0fc44d328"
   },
   "sourceRepository": "https://github.com/bearyjd/snitchwatch.git",
-  "sourceTree": "aa5d43f8f13942ba7ffae1fc0de3a71cbed53bdc",
+  "sourceTree": "3da0d653586a25c53ec5e1d24c3641e9162d7d09",
   "submoduleCommit": "b404c4c6316760fa7bc415509d3f8d747f7dc9cc",
   "toolchainRpms": [
     {

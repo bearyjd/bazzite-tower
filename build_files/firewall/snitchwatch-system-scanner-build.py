@@ -47,6 +47,13 @@ def sha(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def require_pinned_scanner_sources(exported, pins):
+    """Every pinned scanner crate file in the exported tree must hash to its pin."""
+    for name, expected in pins['sourceFiles'].items():
+        if name.startswith('crates/scanner-') and sha(exported / name) != expected:
+            raise ValueError('scanner input differs from pinned upstream: ' + name)
+
+
 def write_json(path, value):
     path.write_text(json.dumps(value, indent=2, sort_keys=True) + '\n')
 
@@ -83,9 +90,7 @@ def main():
     with tarfile.open(archive) as stream:
         stream.extractall(exported, filter='data')
     archive.unlink()
-    for name, expected in pins['sourceFiles'].items():
-        if name.startswith('crates/scanner-') and sha(exported / name) != expected:
-            raise ValueError('scanner input differs from pinned upstream: ' + name)
+    require_pinned_scanner_sources(exported, pins)
     write_json(out / 'source-inputs.json', {str(path.relative_to(exported)): sha(path)
                for path in sorted(exported.rglob('*')) if path.is_file()})
     # Each build gets an empty target and identical remapped source/cargo/target

@@ -423,14 +423,26 @@ class ImageBuildContracts(unittest.TestCase):
         self.assertNotIn('patch', (FACTORY / 'snitchwatch-system-build.sh').read_text().lower())
 
     def test_scanner_provenance_and_inputs_refuse_drift(self):
-        name = 'usr/share/snitchwatch/scanner/source-inputs.json'
-        inputs = json.loads((self.root / name).read_text())
-        for drift in ({'crates/scanner-privileged/src/command.rs': '0' * 64},
-                      {'crates/scanner-privileged/src/main.rs': '0' * 64}):
-            with self.subTest(drift=drift):
-                self.write(name, json.dumps({**inputs, **drift})); self.update_hash(name); self.check()
-        self.write(name, json.dumps(inputs)); self.update_hash(name)
+        for src in ('command', 'facts', 'lib', 'main'):
+            key = 'crates/scanner-privileged/src/%s.rs' % src
+            with self.subTest(source=src):
+                self.scanner_inputs(lambda inputs: inputs.update({key: '0' * 64}))
+                self.assertIn('differs from pinned upstream', self.check().stderr)
+                self.scanner_inputs(lambda inputs: inputs.update({key: self.pins['sourceFiles'][key]}))
         self.check(valid=True)
+
+    def test_scanner_builder_refuses_exported_files_that_differ_from_pins(self):
+        helper = runpy.run_path(str(FACTORY / 'snitchwatch-system-scanner-build.py'))
+        tree = self.root / 'exported'
+        pins = {'sourceFiles': {}}
+        for name, content in (('crates/scanner-privileged/src/main.rs', b'main'), ('crates/scanner-privileged/src/command.rs', b'cmd'),
+                              ('Cargo.toml', b'toml')):
+            self.write('exported/' + name, content)
+            pins['sourceFiles'][name] = sha(content)
+        helper['require_pinned_scanner_sources'](tree, pins)
+        self.write('exported/crates/scanner-privileged/src/command.rs', b'tampered')
+        with self.assertRaisesRegex(ValueError, 'differs from pinned upstream'):
+            helper['require_pinned_scanner_sources'](tree, pins)
 
     def test_scanner_builder_discards_toolchain_override_environment(self):
         helper = runpy.run_path(str(FACTORY / 'snitchwatch-system-scanner-build.py'))

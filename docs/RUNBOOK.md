@@ -331,7 +331,9 @@ valid marker, as drift. Not yet exercised on real hardware/systemd.
 
 The bridge source pin is Snitchwatch `11ca612ec860b9bde076b693dfd8c3f95c682bdc`
 (AI cache export and the Deep Scan scanner, upstream snitchwatch #243 plus its
-follow-up 9a0a222; the scanner is built unmodified from upstream). This section covers the host components
+follow-up 9a0a222; the scanner is built unmodified from upstream; the previous pin was a047c759 with identical scanner files).
+This pin move also advances the recorded GUI `sourceCommit` across about 5k lines of
+kirigami changes that are not compiled into the image. This section covers the host components
 for the GUI's explicit **Deep Scan** action. These require a newly built,
 reviewed and booted system-profile candidate; the staged r16.1 image does not
 gain them from this preparation. Legacy images omit the scanner integration.

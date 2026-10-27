@@ -277,6 +277,29 @@ recovery. Helper: `/usr/libexec/bazzite-tower-snitchwatch-deny` (root).
 4. `ujust snitchwatch-deny off` - restores `allow` (exact backup if untouched,
    otherwise only the one key) and removes the marker.
 
+GUI status snapshot (display only): after every state change (`on`, `confirm`,
+`off`, every revert incl. the expiry timer, `revert-if-pending --boot` and the
+corrupt-state quarantine) the helper atomically writes
+`/run/snitchwatch/deny-status.json` (root-owned, 0644, temp+fsync+rename; a
+symlink at that path is replaced, never followed). `/run/snitchwatch` is created
+by the pinned tmpfiles rule as `root:root 0711`, so the desktop user can look up
+that one name but not list or replace anything, and the Flatpak already mounts it
+`:ro` (`--filesystem=/run/snitchwatch:ro` in `snitchwatch-system-pins.json`
+`flatpakFinishArgs`): no new permission. Content is exactly the `status --json`
+schema-1 fields plus `updatedAt` (ISO UTC, write time) and `bootId`
+(`/proc/sys/kernel/random/boot_id`), e.g.
+`{"schema":1,"profile":"system","defaultAction":"allow","optIn":false,"pending":false,"expiresAt":null,"canEnable":true,"blockers":[],"expired":false,"updatedAt":"2026-10-26T12:00:00Z","bootId":"..."}`.
+`status` never writes. `/run` is tmpfs: `bazzite-tower-snitchwatch-deny-status.service`
+(oneshot, `ExecStart=-` ... `publish-status`, 20 s timeout, ordered after the guard
+and `opensnitch.service`, required by nothing) regenerates it each boot, and
+`sudo /usr/libexec/bazzite-tower-snitchwatch-deny publish-status` does it on
+demand (skips without waiting if a policy writer holds the lock). A failed
+snapshot write only logs a warning and never fails or rolls back a change. The
+snapshot is advisory display data, not authorization. Consumer rules: a missing
+file means unknown/helper not installed; `bootId` differing from the current
+boot means unknown (stale); `pending: false` or `expired: true` ends the trial
+display; treat `updatedAt` older than `expiresAt` while `pending` as unreliable.
+
 Recovery: an unconfirmed trial reverts at its deadline, and
 `bazzite-tower-snitchwatch-deny-guard.service` reverts it at boot before
 `opensnitch.service` starts. If the network is already unusable: wait out the

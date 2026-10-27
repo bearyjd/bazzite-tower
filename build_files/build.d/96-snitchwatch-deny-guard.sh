@@ -8,3 +8,7 @@ set -euo pipefail
 # is conditional on the helper's state file, so it is inert unless a trial exists.
 # Ships in system_files/; only enablement belongs here.
 systemctl enable bazzite-tower-snitchwatch-deny-guard.service
+
+# Display-only snapshot for the GUI (/run/snitchwatch/deny-status.json); /run is
+# tmpfs so this regenerates it each boot. Not a dependency of the firewall.
+systemctl enable bazzite-tower-snitchwatch-deny-status.service

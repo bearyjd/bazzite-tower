@@ -92,6 +92,9 @@ check "wpa_supplicant present" command -v wpa_supplicant
 echo "== Snitchwatch deny opt-in (image ships allow; deny is operator opt-in) =="
 check "deny helper is executable" test -x /usr/libexec/bazzite-tower-snitchwatch-deny
 check_enabled "bazzite-tower-snitchwatch-deny-guard.service"
+check_enabled "bazzite-tower-snitchwatch-deny-status.service"
+check "deny status publisher is non-fatal and not a firewall dependency" \
+    bash -c 'f=/usr/lib/systemd/system/bazzite-tower-snitchwatch-deny-status.service; grep -qx "ExecStart=-/usr/libexec/bazzite-tower-snitchwatch-deny publish-status" "$f" && ! grep -Eq "^(Requires|Before|BindsTo)=.*opensnitch" "$f"'
 check "deny guard reverts before opensnitch starts" \
     bash -c 'grep -qx "Before=opensnitch.service" /usr/lib/systemd/system/bazzite-tower-snitchwatch-deny-guard.service'
 check "opensnitch requires+orders after the deny guard (failed guard => firewall not started)" \

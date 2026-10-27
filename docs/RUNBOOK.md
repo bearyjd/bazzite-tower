@@ -299,6 +299,14 @@ snapshot is advisory display data, not authorization. Consumer rules: a missing
 file means unknown/helper not installed; `bootId` differing from the current
 boot means unknown (stale); `pending: false` or `expired: true` ends the trial
 display; treat `updatedAt` older than `expiresAt` while `pending` as unreliable.
+The snapshot is world-readable on purpose and deliberately exposes the state and
+`blockers` text (which can include config paths and the `Server.Address` value)
+to any local user. Consumers should compute expiry themselves from `expiresAt`
+against the clock (and `updatedAt`) rather than trust the stored `expired`, which
+is only as fresh as the last write. The `--boot` guard path never writes the
+snapshot (its time budget gates the firewall); `deny-status.service` does it after
+boot, so right after a boot-time revert the file may be missing or carry an older
+`bootId` (treat as unknown).
 
 Recovery: an unconfirmed trial reverts at its deadline, and
 `bazzite-tower-snitchwatch-deny-guard.service` reverts it at boot before

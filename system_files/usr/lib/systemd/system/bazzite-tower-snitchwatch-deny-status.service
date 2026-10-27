@@ -4,8 +4,9 @@ Documentation=https://github.com/bearyjd/bazzite-tower
 # /run is tmpfs, so the snapshot vanishes every reboot; regenerate it once the
 # firewall has had its chance to start. Nothing depends on this unit and it has
 # no Requires=/Before= on the firewall: it can fail, time out or be skipped
-# without affecting opensnitch.service. The helper never waits for the policy lock.
-After=bazzite-tower-snitchwatch-deny-guard.service opensnitch.service systemd-tmpfiles-setup.service
+# without affecting opensnitch.service. local-fs.target keeps it from running
+# before /var and publishing a wrong 'allow, nothing pending'. The helper never waits for the policy lock.
+After=local-fs.target bazzite-tower-snitchwatch-deny-guard.service opensnitch.service systemd-tmpfiles-setup.service
 DefaultDependencies=no
 Conflicts=shutdown.target
 Before=shutdown.target

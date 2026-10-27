@@ -420,8 +420,10 @@ def confirm(ctx):
     marker = dict(schema=1, confirmedAt=stamp(utcnow()), id=state["id"])
     publish(ctx, MARKER, (json.dumps(marker, indent=2, sort_keys=True)+"\n").encode(), mode=0o644)
     save_state(ctx, dict(state, pending=False, confirmedAt=marker["confirmedAt"]))
-    stop_timer(ctx)
-    publish_snapshot(ctx)
+    try:
+        stop_timer(ctx)
+    finally:
+        publish_snapshot(ctx)
     print("deny confirmed and persistent; undo with: ujust snitchwatch-deny off")
 
 
@@ -432,18 +434,20 @@ def turn_off(ctx, boot=False):
     if not leftovers and current_action(data) == "allow":
         print("nothing to do: DefaultAction is already allow and no opt-in is recorded")
         return
-    method = restore_allow(ctx, state)
-    discard(ctx)
-    stop_timer(ctx)
-    failure = None
-    if not boot and method != "already-allow":
-        try:
-            restart_daemon(ctx)
-        except Exception as error:
-            failure = error
-    publish_snapshot(ctx)
-    if failure is not None:
-        raise common.Refusal("DefaultAction restored to allow ("+method+") but restarting opensnitch.service failed: "+str(failure)+"; run: systemctl restart opensnitch.service") from failure
+    # The boot guard (boot=True) never publishes or adds systemctl calls: its time
+    # budget gates the firewall. deny-status.service regenerates the file after boot.
+    try:
+        method = restore_allow(ctx, state)
+        discard(ctx)
+        stop_timer(ctx)
+        if not boot and method != "already-allow":
+            try:
+                restart_daemon(ctx)
+            except Exception as error:
+                raise common.Refusal("DefaultAction restored to allow ("+method+") but restarting opensnitch.service failed: "+str(error)+"; run: systemctl restart opensnitch.service") from error
+    finally:
+        if not boot:
+            publish_snapshot(ctx)
     print("DefaultAction restored to allow ("+method+"); opt-in removed"+("" if not boot else "; daemon not restarted (boot guard)"))
 
 
@@ -501,7 +505,6 @@ def recover_bad_state(ctx, reason):
         notes.append("revert timer stopped")
     except common.Refusal as error:
         notes.append("could not stop revert timer: "+str(error))
-    publish_snapshot(ctx)
     print("WARNING: deny state unusable at boot ("+str(reason)+"); "+"; ".join(notes)+"; opensnitch will start on allow", file=sys.stderr)
 
 

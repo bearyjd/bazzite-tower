@@ -1021,17 +1021,28 @@ class StatusExport(DenyBase):
         raw = self.assert_snapshot_matches_status()
         self.assertEqual((raw["optIn"], raw["defaultAction"], raw["canEnable"]), (False, "allow", True))
 
-    def test_timer_revert_and_boot_revert_publish_allow(self):
+    def test_timer_fired_revert_publishes_allow(self):
         self.ok("on", "--revert-after", "5")
         self.now = NOW+timedelta(minutes=6)
         self.ok("revert-if-pending")
         self.assertEqual(self.assert_snapshot_matches_status()["defaultAction"], "allow")
-        self.setUp_clean()
+
+    def assert_boot_path_is_snapshot_free(self, run):
+        with mock.patch.object(self.deny, "write_snapshot") as write:
+            mark = len(self.ctx.commands)
+            code, out, err = run()
+        self.assertEqual(code, 0, err)
+        write.assert_not_called()
+        self.assertFalse(os.path.lexists(self.ctx.path(SNAP)))
+        self.assertNotIn("snapshot", err)
+        self.assertLessEqual(self.ctx.commands[mark:], [["systemctl", "stop", TIMER+".timer"]])
+        self.assertEqual(self.config_path.read_bytes(), self.original)
+
+    def test_boot_revert_makes_no_snapshot_write_and_no_extra_systemctl(self):
         self.ok("on")
+        self.ctx.path(SNAP).unlink()
         self.reboot("boot-B")
-        self.ok("revert-if-pending", "--boot")
-        raw = self.assert_snapshot_matches_status()
-        self.assertEqual((raw["defaultAction"], raw["pending"], raw["bootId"]), ("allow", False, "boot-B"))
+        self.assert_boot_path_is_snapshot_free(lambda: self.cli("revert-if-pending", "--boot"))
 
     def test_late_confirm_revert_publishes(self):
         self.ok("on", "--revert-after", "5")
@@ -1039,15 +1050,29 @@ class StatusExport(DenyBase):
         self.refused("confirm", text="expired")
         self.assertEqual(self.assert_snapshot_matches_status()["defaultAction"], "allow")
 
-    def test_quarantine_path_publishes_allow(self):
+    def test_quarantine_path_makes_no_snapshot_write_and_no_extra_systemctl(self):
         self.ok("on")
         self.ok("confirm")
+        self.ctx.path(SNAP).unlink()
         self.reboot("boot-B")
         self.ctx.path(STATE).write_text("{")
-        code, out, err = self.cli("revert-if-pending", "--boot")
-        self.assertEqual(code, 0, err)
+        self.assert_boot_path_is_snapshot_free(lambda: self.cli("revert-if-pending", "--boot"))
+
+    def test_confirm_partial_failure_still_refreshes_snapshot(self):
+        self.ok("on")
+        self.now = NOW+timedelta(seconds=30)
+        with mock.patch.object(self.deny, "stop_timer", side_effect=common.Refusal("injected stop failure")):
+            self.refused("confirm", text="injected")
         raw = self.assert_snapshot_matches_status()
-        self.assertEqual((raw["defaultAction"], raw["optIn"], raw["pending"]), ("allow", False, False))
+        self.assertEqual((raw["pending"], raw["optIn"]), (False, True))
+
+    def test_off_partial_failure_still_refreshes_snapshot(self):
+        self.ok("on")
+        self.now = NOW+timedelta(seconds=30)
+        with mock.patch.object(self.deny, "restore_allow", side_effect=common.Refusal("injected restore failure")):
+            self.refused("off", text="injected")
+        self.assertEqual(self.snap()["updatedAt"], "2026-10-26T12:00:30Z")
+        self.assert_snapshot_matches_status()
 
     def test_failed_on_rolls_back_and_snapshot_shows_allow(self):
         self.ctx.systemd_run_fails = True
@@ -1158,6 +1183,8 @@ class StatusExport(DenyBase):
         self.assertRegex(text, r"(?m)^ExecStart=-/usr/libexec/bazzite-tower-snitchwatch-deny publish-status$")
         self.assertRegex(text, r"(?m)^TimeoutStartSec=20$")
         self.assertRegex(text, r"(?m)^After=.*bazzite-tower-snitchwatch-deny-guard\.service")
+        self.assertRegex(text, r"(?m)^After=.*\blocal-fs\.target\b")
+        self.assertRegex(text, r"(?m)^DefaultDependencies=no$")
         self.assertRegex(text, r"(?m)^WantedBy=multi-user\.target$")
         self.assertNotRegex(text, r"(?m)^(Requires|Requisite|BindsTo|RequiredBy)=")
         self.assertNotRegex(text, r"(?m)^Before=.*opensnitch")
@@ -1166,6 +1193,7 @@ class StatusExport(DenyBase):
         self.assertIn("deny-status", (REPO/"build_files/build.d/96-snitchwatch-deny-guard.sh").read_text())
         smoke = (REPO/"tests/smoke.sh").read_text()
         self.assertIn("bazzite-tower-snitchwatch-deny-status.service", smoke)
+        self.assertIn("local-fs", smoke)
 
 
 if __name__ == "__main__":

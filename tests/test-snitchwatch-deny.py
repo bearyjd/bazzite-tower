@@ -1035,7 +1035,9 @@ class StatusExport(DenyBase):
         write.assert_not_called()
         self.assertFalse(os.path.lexists(self.ctx.path(SNAP)))
         self.assertNotIn("snapshot", err)
-        self.assertLessEqual(self.ctx.commands[mark:], [["systemctl", "stop", TIMER+".timer"]])
+        # assertIn on exact lists: assertLessEqual compared strings, so an extra
+        # `systemctl is-active` (< "stop") would have passed.
+        self.assertIn(self.ctx.commands[mark:], ([], [["systemctl", "stop", TIMER+".timer"]]))
         self.assertEqual(self.config_path.read_bytes(), self.original)
 
     def test_boot_revert_makes_no_snapshot_write_and_no_extra_systemctl(self):

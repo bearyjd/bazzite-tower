@@ -277,9 +277,13 @@ Recovery: an unconfirmed trial reverts at its deadline, and
 `bazzite-tower-snitchwatch-deny-guard.service` reverts it at boot before
 `opensnitch.service` starts. If the network is already unusable: wait out the
 timer, or from a TTY run `sudo /usr/libexec/bazzite-tower-snitchwatch-deny off`
-(or `revert-if-pending`), or `rpm-ostree rollback`. A lock held by another policy
-writer (`/run/lock/bazzite-tower-snitchwatch-migration.lock`) makes every
-mutating subcommand refuse. Readiness treats pending deny, or deny without a
+(or `revert-if-pending`), or `rpm-ostree rollback`. `opensnitch.service` `Requires=`/`After=` the guard, so if the guard fails the
+firewall does not start (network open, not locked). A lock held by another policy
+writer (`/run/lock/bazzite-tower-snitchwatch-migration.lock`) makes `on`/`confirm`
+refuse at once, while `off`/`revert-if-pending` wait up to 30 s for it and then
+fail loudly (retry-able). The timer carries both `--on-active` and a wall-clock
+`--on-calendar` deadline so suspend cannot extend a trial; `confirm` after the
+deadline reverts immediately. Readiness treats pending deny, or deny without a
 valid marker, as drift. Not yet exercised on real hardware/systemd.
 
 ### OpenSnitch resource baseline and owner eBPF experiment

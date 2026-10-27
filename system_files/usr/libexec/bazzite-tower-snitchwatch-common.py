@@ -38,6 +38,7 @@ DNS_RULE = "/etc/opensnitchd/rules/000-snitchwatch-tower-resolved-dns.json"
 RESERVED_RULES = {FETCH_RULE: "Snitchwatch fetch rule", OS_UPDATE_RULE: "tower OS-update rule", DNS_RULE: "tower resolver DNS rule"}
 # Operator deny opt-in (bazzite-tower-snitchwatch-deny). The image always ships allow.
 DENY_MARKER = "/etc/bazzite-tower/snitchwatch-deny-optin"
+DENY_GUARD_DROPIN = "/usr/lib/systemd/system/opensnitch.service.d/bazzite-tower-snitchwatch-deny-guard.conf"
 DENY_STATE = "/var/lib/bazzite-tower/snitchwatch-deny/state.json"
 BASE_GLOBAL_OVERRIDE = "/var/lib/flatpak/overrides/global"
 BASE_GLOBAL_OVERRIDE_SHA256 = "85e2bf73515c8da8950f1afbbfaedfeca453777eeb0be0ea869f4db6c779bd80"
@@ -248,7 +249,7 @@ def daemon_unit_contract(ctx, props):
     # Fedora's global service.d timeout drop-in; nothing else may be loaded.
     dropins = props["DropInPaths"].split()
     require(props["FragmentPath"] == DAEMON_UNIT and DAEMON_DROPIN in dropins and len(dropins) == len(set(dropins))
-            and set(dropins) <= {DAEMON_DROPIN, VENDOR_DROPIN}, "OpenSnitch effective unit file/drop-in drift: "+props["FragmentPath"]+" + "+props["DropInPaths"])
+            and set(dropins) <= {DAEMON_DROPIN, VENDOR_DROPIN, DENY_GUARD_DROPIN}, "OpenSnitch effective unit file/drop-in drift: "+props["FragmentPath"]+" + "+props["DropInPaths"])
     if VENDOR_DROPIN in dropins:
         vendor_dropin_contract(ctx, VENDOR_DROPIN)
 
@@ -284,11 +285,11 @@ def regular_root_json(ctx, name):
 
 def deny_opt_in(ctx):
     marker = regular_root_json(ctx, DENY_MARKER)
-    if not marker or marker.get("schema") != 1 or not isinstance(marker.get("confirmedAt"), str):
+    if not marker or marker.get("schema") != 1 or not isinstance(marker.get("confirmedAt"), str) or not isinstance(marker.get("id"), str):
         return False
     if ctx.present(DENY_STATE):
         state = regular_root_json(ctx, DENY_STATE)
-        return bool(state) and state.get("pending") is False
+        return bool(state) and state.get("pending") is False and state.get("id") == marker["id"]
     return True
 
 

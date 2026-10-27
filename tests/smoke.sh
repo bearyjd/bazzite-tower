@@ -94,6 +94,8 @@ check "deny helper is executable" test -x /usr/libexec/bazzite-tower-snitchwatch
 check_enabled "bazzite-tower-snitchwatch-deny-guard.service"
 check "deny guard reverts before opensnitch starts" \
     bash -c 'grep -qx "Before=opensnitch.service" /usr/lib/systemd/system/bazzite-tower-snitchwatch-deny-guard.service'
+check "opensnitch requires+orders after the deny guard (failed guard => firewall not started)" \
+    bash -c 'f=/usr/lib/systemd/system/opensnitch.service.d/bazzite-tower-snitchwatch-deny-guard.conf; grep -qx "Requires=bazzite-tower-snitchwatch-deny-guard.service" "$f" && grep -qx "After=bazzite-tower-snitchwatch-deny-guard.service" "$f"'
 check "deny opt-in is not pre-enabled in the image" \
     bash -c '! test -e /etc/bazzite-tower/snitchwatch-deny-optin && ! test -e /var/lib/bazzite-tower/snitchwatch-deny/state.json'
 check "snitchwatch-deny ujust recipe present" \

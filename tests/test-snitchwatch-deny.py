@@ -11,6 +11,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -20,6 +21,7 @@ sys.dont_write_bytecode = True
 REPO = Path(__file__).resolve().parents[1]
 LIBEXEC = REPO/"system_files/usr/libexec"
 HELPER = LIBEXEC/"bazzite-tower-snitchwatch-deny"
+DROPIN = REPO/"system_files/usr/lib/systemd/system/opensnitch.service.d/bazzite-tower-snitchwatch-deny-guard.conf"
 GUARD_UNIT = REPO/"system_files/usr/lib/systemd/system/bazzite-tower-snitchwatch-deny-guard.service"
 
 
@@ -47,6 +49,8 @@ class DenyFixture(system_tests.Fixture):
         self.restart_fails = False
         self.systemd_run_fails = False
         self.on_restart = None
+        self.after_systemd_run = None
+        self.leftover_unit = False
 
     def run(self, argv, **kwargs):
         if argv[:2] in (["systemctl", "restart"], ["systemctl", "try-restart"]):
@@ -57,7 +61,9 @@ class DenyFixture(system_tests.Fixture):
             return subprocess.CompletedProcess(argv, 1 if failed else 0, "", "injected restart failure" if failed else "")
         if argv[0] == "systemd-run":
             self.commands.append(argv)
-            failed = self.systemd_run_fails
+            failed = self.systemd_run_fails or (self.leftover_unit and "--collect" not in argv)
+            if not failed and self.after_systemd_run:
+                self.after_systemd_run()
             return subprocess.CompletedProcess(argv, 1 if failed else 0, "", "injected systemd-run failure" if failed else "")
         if argv[:2] == ["systemctl", "stop"] and argv[2].startswith(TIMER):
             self.commands.append(argv)
@@ -83,11 +89,20 @@ class DenyBase(unittest.TestCase):
         for patch in self.patches:
             patch.start()
         self.original = self.config_path.read_bytes()
+        self.deny.LOCK_TIMEOUT, self.deny.LOCK_POLL = 0.4, 0.02
 
     def tearDown(self):
         for patch in reversed(self.patches):
             patch.stop()
         self.temp.cleanup()
+
+    def setUp_clean(self):
+        # Reset to a fresh allow baseline between subtests.
+        for logical in (STATE, BACKUP, MARKER):
+            if self.ctx.path(logical).exists():
+                self.ctx.path(logical).unlink()
+        self.ctx.write(common.CONFIG, self.original.decode())
+        self.ctx.commands.clear()
 
     @property
     def config_path(self):
@@ -211,7 +226,8 @@ class Transactions(DenyBase):
         self.assertEqual(oct(self.config_path.stat().st_mode & 0o777), oct(0o644))
         self.assertEqual([p.name for p in self.config_path.parent.iterdir() if p.name.startswith(".")], [])
         run = [c for c in self.ctx.commands if c[0] == "systemd-run"]
-        self.assertEqual(run, [["systemd-run", "--on-active=7m", "--unit="+TIMER, "/usr/libexec/bazzite-tower-snitchwatch-deny", "revert-if-pending"]])
+        self.assertEqual(run, [["systemd-run", "--on-active=7m", "--on-calendar=2026-10-26 12:07:00 UTC", "--collect", "--unit="+TIMER,
+                                "/usr/libexec/bazzite-tower-snitchwatch-deny", "revert-if-pending"]])
         self.assertLess(self.ctx.commands.index(run[0]), self.ctx.commands.index(["systemctl", "restart", "opensnitch.service"]))
         self.assertEqual(oct(self.ctx.path(STATE).stat().st_mode & 0o777), oct(0o600))
         self.assertEqual(self.ctx.path(BACKUP).read_bytes(), self.original)
@@ -245,18 +261,37 @@ class Transactions(DenyBase):
         self.assertIn(["systemctl", "stop", TIMER+".timer"], self.ctx.commands)
         self.assertFalse(self.ctx.path(STATE).exists())
 
-    def test_timeout_revert_and_late_confirm_refused(self):
+    def test_timeout_revert(self):
         self.ok("on", "--revert-after", "5")
         self.now = NOW+timedelta(minutes=5, seconds=1)
-        self.refused("confirm", text="expired")
-        self.assertFalse(self.ctx.path(MARKER).exists())
-        self.assertEqual(self.config_path.read_bytes(), self.deny_bytes())
         restarts = self.ctx.commands.count(["systemctl", "restart", "opensnitch.service"])
         self.ok("revert-if-pending")
         self.assertEqual(self.config_path.read_bytes(), self.original)
         self.assertEqual(self.ctx.commands.count(["systemctl", "restart", "opensnitch.service"]), restarts+1)
         self.assertFalse(self.ctx.path(STATE).exists())
         self.assertEqual(self.ready()["defaultAction"], "allow")
+
+    def test_late_confirm_after_suspend_reverts_immediately(self):
+        # Suspend can stall the monotonic timer; confirm must not trust it.
+        self.ok("on", "--revert-after", "5")
+        self.now = NOW+timedelta(hours=3)
+        restarts = self.ctx.commands.count(["systemctl", "restart", "opensnitch.service"])
+        self.refused("confirm", text="expired")
+        self.assertFalse(self.ctx.path(MARKER).exists())
+        self.assertEqual(self.config_path.read_bytes(), self.original)
+        self.assertFalse(self.ctx.path(STATE).exists())
+        self.assertEqual(self.ctx.commands.count(["systemctl", "restart", "opensnitch.service"]), restarts+1)
+
+    def test_timer_also_uses_wall_clock_deadline_so_suspend_cannot_extend_it(self):
+        self.ok("on", "--revert-after", "12")
+        argv = next(c for c in self.ctx.commands if c[0] == "systemd-run")
+        self.assertIn("--on-active=12m", argv)
+        self.assertIn("--on-calendar="+json.loads(self.ctx.path(STATE).read_text())["expiresAt"].replace("T", " ").replace("Z", " UTC"), argv)
+
+    def test_leftover_failed_transient_unit_does_not_block_next_on(self):
+        self.ctx.leftover_unit = True
+        self.ok("on")
+        self.assertIn("--collect", next(c for c in self.ctx.commands if c[0] == "systemd-run"))
 
     def test_confirm_requires_pending(self):
         self.refused("confirm", text="pending")
@@ -304,10 +339,9 @@ class Transactions(DenyBase):
 
     def test_failure_after_write_restores_backup(self):
         for label, setup in (("restart", lambda: setattr(self.ctx, "restart_fails", True)),
-                             ("systemd-run", lambda: setattr(self.ctx, "systemd_run_fails", True)),
                              ("daemon down", lambda: setattr(self.ctx, "on_restart", lambda: self.ctx.states["opensnitch.service"].update(active="failed")))):
             with self.subTest(label=label):
-                self.ctx.restart_fails = self.ctx.systemd_run_fails = False
+                self.ctx.restart_fails = False
                 self.ctx.on_restart = None
                 self.ctx.states["opensnitch.service"]["active"] = "active"
                 setup()
@@ -317,6 +351,27 @@ class Transactions(DenyBase):
                 self.assertFalse(self.ctx.path(BACKUP).exists())
                 self.assertFalse(self.ctx.path(MARKER).exists())
                 self.assertIn(["systemctl", "stop", TIMER+".timer"], self.ctx.commands)
+
+    def test_timer_is_armed_before_deny_is_written(self):
+        order = []
+        real = self.deny.publish
+        def watching(ctx, logical, *args, **kwargs):
+            if logical == common.CONFIG:
+                order.append("config")
+            return real(ctx, logical, *args, **kwargs)
+        self.ctx.after_systemd_run = lambda: order.append("timer")
+        with mock.patch.object(self.deny, "publish", side_effect=watching):
+            self.ok("on")
+        self.assertEqual(order, ["timer", "config"])
+
+    def test_systemd_run_failure_leaves_config_untouched(self):
+        self.ctx.systemd_run_fails = True
+        original_mtime = self.config_path.stat().st_mtime_ns
+        self.refused("on", text="systemd-run")
+        self.assertEqual(self.config_path.read_bytes(), self.original)
+        self.assertEqual(self.config_path.stat().st_mtime_ns, original_mtime)
+        self.assertFalse(self.ctx.path(STATE).exists())
+        self.assertFalse(any(c[:2] == ["systemctl", "restart"] for c in self.ctx.commands))
 
     def test_failure_restore_keeps_concurrent_operator_edit(self):
         def operator_edit():
@@ -341,25 +396,129 @@ class Transactions(DenyBase):
             return real(*args, **kwargs)
         with mock.patch.object(self.deny.tempfile, "mkstemp", side_effect=racing):
             self.refused("on", text="changed")
+        self.assertFalse(any(c[:2] == ["systemctl", "restart"] for c in self.ctx.commands))
         self.assertEqual(json.loads(self.config_path.read_text())["LogLevel"], 3)
         self.assertEqual(json.loads(self.config_path.read_text())["DefaultAction"], "allow")
         self.assertFalse(self.ctx.path(STATE).exists())
-        self.assertEqual(self.ctx.mutating(), [])
 
-    def test_lock_held_by_another_policy_writer(self):
+    def hold_lock(self):
         lock = self.ctx.path("/run/lock/bazzite-tower-snitchwatch-migration.lock")
         lock.parent.mkdir(parents=True, exist_ok=True)
         fd = os.open(lock, os.O_CREAT | os.O_RDWR, 0o600)
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return fd
+
+    def test_on_and_confirm_refuse_immediately_under_lock_contention(self):
+        fd = self.hold_lock()
         try:
-            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            for action in ("on", "confirm", "off", "revert-if-pending"):
-                with self.subTest(action=action):
-                    self.refused(action, text="lock")
+            self.refused("on", text="lock")
             self.assert_untouched()
-            self.assertEqual(self.status()["pending"], False)
+            self.assertFalse(self.status()["pending"])
         finally:
             os.close(fd)
         self.ok("on")
+        fd = self.hold_lock()
+        try:
+            self.refused("confirm", text="lock")
+        finally:
+            os.close(fd)
+
+    def test_revert_paths_wait_for_the_lock_then_still_revert(self):
+        for action, extra in (("revert-if-pending", []), ("revert-if-pending", ["--boot"]), ("off", [])):
+            with self.subTest(action=action, extra=extra):
+                self.ok("on")
+                fd = self.hold_lock()
+                threading.Timer(0.15, os.close, args=(fd,)).start()
+                self.ok(action, *extra)
+                self.assertEqual(self.config_path.read_bytes(), self.original)
+                self.assertFalse(self.ctx.path(STATE).exists())
+
+    def test_revert_gives_clear_retryable_error_if_lock_never_released(self):
+        self.ok("on")
+        fd = self.hold_lock()
+        try:
+            for action in ("revert-if-pending", "off"):
+                with self.subTest(action=action):
+                    self.refused(action, text="timed out")
+                    self.assertEqual(self.config_path.read_bytes(), self.deny_bytes())
+                    self.assertTrue(json.loads(self.ctx.path(STATE).read_text())["pending"])
+        finally:
+            os.close(fd)
+        self.ok("revert-if-pending")
+        self.assertEqual(self.config_path.read_bytes(), self.original)
+
+    def test_hard_kill_between_any_two_steps_leaves_allow_or_armed_deny(self):
+        class Killed(BaseException):
+            pass
+        real_publish = self.deny.publish
+        for point in ("backup", "state", "timer", "config", "restart"):
+            with self.subTest(point=point):
+                self.setUp_clean()
+                snapshot = {}
+                def die(*_):
+                    # What a SIGKILL at this instant would leave on disk.
+                    snapshot["files"] = {name: (self.ctx.path(name).read_bytes() if self.ctx.path(name).exists() else None)
+                                         for name in (common.CONFIG, STATE, BACKUP, MARKER)}
+                    snapshot["armed"] = any(c[0] == "systemd-run" for c in self.ctx.commands)
+                    raise Killed()
+                def publishing(ctx, logical, *args, **kwargs):
+                    result = real_publish(ctx, logical, *args, **kwargs)
+                    if logical == {"backup": BACKUP, "state": STATE, "config": common.CONFIG}.get(point) and not snapshot:
+                        die()
+                    return result
+                if point == "timer":
+                    self.ctx.after_systemd_run = die
+                if point == "restart":
+                    self.ctx.on_restart = die
+                with mock.patch.object(self.deny, "publish", side_effect=publishing):
+                    try:
+                        self.deny.main(["on"], ctx=self.ctx)
+                    except Killed:
+                        pass
+                self.assertTrue(snapshot, "injection point never reached: "+point)
+                files = snapshot["files"]
+                if files[common.CONFIG] != self.original:
+                    self.assertEqual(files[common.CONFIG], self.deny_bytes())
+                    self.assertTrue(snapshot["armed"], "deny live without an armed revert timer at "+point)
+                    self.assertTrue(json.loads(files[STATE])["pending"], "deny live without pending state at "+point)
+                # Put the killed-instant disk state back, then the timer/boot guard must recover.
+                self.ctx.on_restart = self.ctx.after_systemd_run = None
+                for name, content in files.items():
+                    path = self.ctx.path(name)
+                    if content is None:
+                        if path.exists():
+                            path.unlink()
+                    else:
+                        self.ctx.write(name, content.decode())
+                        path.chmod(0o600 if name in (STATE, BACKUP) else 0o644)
+                self.ok("revert-if-pending", "--boot")
+                self.assertEqual(self.config_path.read_bytes(), self.original)
+                self.assertFalse(self.ctx.path(STATE).exists())
+
+    def test_sigterm_during_on_rolls_back_like_a_failure(self):
+        import signal
+        def term():
+            os.kill(os.getpid(), signal.SIGTERM)
+        self.ctx.on_restart = term
+        self.refused("on", text="restored")
+        self.assertEqual(self.config_path.read_bytes(), self.original)
+        self.assertFalse(self.ctx.path(STATE).exists())
+        self.assertIs(signal.getsignal(signal.SIGTERM), signal.SIG_DFL)
+
+    def test_failed_boot_revert_exits_nonzero_so_the_guard_unit_fails(self):
+        self.ok("on")
+        self.config_path.chmod(0o666)
+        self.refused("revert-if-pending", "--boot", text="root-owned")
+        self.config_path.chmod(0o644)
+        self.assertEqual(self.config_path.read_bytes(), self.deny_bytes())
+        self.assertTrue(json.loads(self.ctx.path(STATE).read_text())["pending"])
+
+    def test_opensnitch_requires_the_guard_so_a_failed_guard_blocks_the_firewall(self):
+        text = DROPIN.read_text()
+        self.assertRegex(text, r"(?m)^Requires=bazzite-tower-snitchwatch-deny-guard\.service$")
+        self.assertRegex(text, r"(?m)^After=bazzite-tower-snitchwatch-deny-guard\.service$")
+        self.ctx.properties["opensnitch.service"]["DropInPaths"] = common.DAEMON_DROPIN+" /usr/lib/systemd/system/opensnitch.service.d/bazzite-tower-snitchwatch-deny-guard.conf"
+        self.assertEqual(self.ready()["defaultAction"], "allow")
 
     def test_backup_digest_mismatch_falls_back_to_key_edit(self):
         self.ok("on")
@@ -435,11 +594,11 @@ class ReadinessSemantics(DenyBase):
         self.ctx.write(common.CONFIG, self.deny_bytes().decode())
 
     def marker(self, text=None, mode=0o644):
-        text = text or json.dumps({"schema": 1, "confirmedAt": "2026-10-26T12:00:00Z"})
+        text = text or json.dumps({"schema": 1, "confirmedAt": "2026-10-26T12:00:00Z", "id": "trial1"})
         self.ctx.write(MARKER, text, mode)
 
     def state(self, pending):
-        self.ctx.write(STATE, json.dumps({"schema": 1, "pending": pending}), 0o600)
+        self.ctx.write(STATE, json.dumps({"schema": 1, "pending": pending, "id": "trial1"}), 0o600)
 
     def test_allow_still_passes(self):
         self.assertEqual(self.ready()["defaultAction"], "allow")
@@ -482,6 +641,16 @@ class ReadinessSemantics(DenyBase):
                     if self.ctx.path(path).exists():
                         self.ctx.path(path).unlink()
                 self.state(False)
+
+    def test_marker_must_belong_to_the_current_trial(self):
+        self.deny_config()
+        self.state(False)
+        self.marker(json.dumps({"schema": 1, "confirmedAt": "2026-10-26T12:00:00Z", "id": "someone-else"}))
+        with self.assertRaisesRegex(common.Refusal, "DefaultAction"):
+            self.ready()
+        self.marker(json.dumps({"schema": 1, "confirmedAt": "2026-10-26T12:00:00Z"}))
+        with self.assertRaisesRegex(common.Refusal, "DefaultAction"):
+            self.ready()
 
     def test_symlinked_marker_does_not_count(self):
         self.deny_config()

@@ -17,10 +17,12 @@ import importlib.util
 import json
 import os
 import re
+import signal
 import stat
 import subprocess
 import sys
 import tempfile
+import time
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -41,6 +43,8 @@ SOCKET = "/run/snitchwatch/opensnitchd.sock"
 SYSTEM_ADDRESS = "unix:opensnitchd.sock"
 LEGACY_ADDRESS = "127.0.0.1:50051"
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
+LOCK_TIMEOUT = 30.0
+LOCK_POLL = 0.1
 KEY = b'"DefaultAction"'
 ACTION = re.compile(rb'("DefaultAction"\s*:\s*")(allow|deny)(")')
 
@@ -159,17 +163,25 @@ def set_action(data, value):
 
 
 @contextlib.contextmanager
-def policy_lock(ctx):
+def policy_lock(ctx, wait=False):
+    """`on`/`confirm` refuse under contention; revert paths wait (bounded) so deny never lingers."""
     path = ctx.path(LOCK)
     path.parent.mkdir(parents=True, exist_ok=True)
     fd = os.open(path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
     try:
         info = os.fstat(fd)
         common.require(stat.S_ISREG(info.st_mode) and info.st_uid == os.geteuid() and stat.S_IMODE(info.st_mode) == 0o600, "unsafe policy lock file")
-        try:
-            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError as error:
-            raise common.Refusal("another snitchwatch policy writer holds the lock; retry when it finishes") from error
+        deadline = time.monotonic()+LOCK_TIMEOUT
+        while True:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError as error:
+                if not wait:
+                    raise common.Refusal("another snitchwatch policy writer holds the lock; retry when it finishes") from error
+                if time.monotonic() >= deadline:
+                    raise common.Refusal("timed out after "+str(LOCK_TIMEOUT)+"s waiting for the policy lock; nothing was changed and any pending trial is kept; retry: "+HELPER+" revert-if-pending") from error
+                time.sleep(LOCK_POLL)
         yield
     finally:
         os.close(fd)
@@ -260,6 +272,10 @@ def discard(ctx):
             os.unlink(ctx.path(logical))
 
 
+def terminated(signum, frame):
+    raise common.Refusal("terminated by signal "+str(signum))
+
+
 def turn_on(ctx, minutes):
     profile, _, blockers = inspect(ctx)
     state = load_state(ctx)
@@ -273,42 +289,59 @@ def turn_on(ctx, minutes):
     now = utcnow()
     state = dict(schema=1, id=uuid.uuid4().hex, pending=True, createdAt=stamp(now), minutes=minutes, expiresAt=stamp(now+timedelta(minutes=minutes)),
                  backupSha256=sha256(data), backupMetadata=metadata, denySha256=sha256(deny))
-    state_dir(ctx)
-    publish(ctx, BACKUP, data)
-    save_state(ctx, state)
-    wrote = armed = False
+    armed = False
+    previous = signal.getsignal(signal.SIGTERM)
+    signal.signal(signal.SIGTERM, terminated)
     try:
-        publish(ctx, common.CONFIG, deny, metadata=metadata, expected=data)
-        wrote = True
-        # Arm the revert before the restart so a hung or killed helper still reverts.
+        # Order matters: at every point the config is allow, or deny with pending
+        # state AND an armed timer (the boot guard also reverts pending state).
+        state_dir(ctx)
+        publish(ctx, BACKUP, data)
+        save_state(ctx, state)
+        # Two triggers: --on-active is monotonic and stalls across suspend, so
+        # the wall-clock deadline guarantees a suspend cannot extend the trial.
+        ctx.command(["systemd-run", "--on-active="+str(minutes)+"m", "--on-calendar="+state["expiresAt"].replace("T", " ").replace("Z", " UTC"),
+                     "--collect", "--unit="+TIMER, HELPER, "revert-if-pending"], timeout=20)
         armed = True
-        ctx.command(["systemd-run", "--on-active="+str(minutes)+"m", "--unit="+TIMER, HELPER, "revert-if-pending"], timeout=20)
+        publish(ctx, common.CONFIG, deny, metadata=metadata, expected=data)
+        # Restart is kept deliberately. The pinned daemon patch shows ui/client.go
+        # imports fsnotify and swaps c.config on reload, but that an edit of
+        # default-config.json applies DefaultAction live was NOT verified here;
+        # the restart is the assumed-safe way to make the daemon read it.
         restart_daemon(ctx)
         common.require(service_active(ctx), "opensnitch.service is not active after restart")
     except BaseException as error:
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
         notes = []
         try:
             method = restore_allow(ctx, state)
             discard(ctx)
             notes.append("DefaultAction restored to allow ("+method+")")
+            changed = method != "already-allow"
         except BaseException as recovery:
+            changed = True
             notes.append("RESTORE FAILED ("+str(recovery)+"); trial left pending so the timer/boot guard retries")
         if armed:
             with contextlib.suppress(Exception):
                 stop_timer(ctx)
-        if wrote:
+        if changed:
             try:
                 restart_daemon(ctx)
             except Exception as restart:
                 notes.append("restart after restore failed: "+str(restart))
         raise common.Refusal("deny trial failed and was rolled back: "+str(error)+"; "+"; ".join(notes)) from error
+    finally:
+        signal.signal(signal.SIGTERM, previous)
     print("deny trial started: reverts automatically at "+state["expiresAt"]+" ("+str(minutes)+" min) unless you run: ujust snitchwatch-deny confirm")
 
 
 def confirm(ctx):
     state = load_state(ctx)
     common.require(state and state["pending"], "no pending deny trial to confirm")
-    common.require(utcnow() < parse_stamp(state["expiresAt"]), "deny trial expired; it will be reverted (run: ujust snitchwatch-deny off)")
+    if utcnow() >= parse_stamp(state["expiresAt"]):
+        # Do not rely on a timer that suspend/clock jumps may have delayed.
+        turn_off(ctx)
+        raise common.Refusal("deny trial expired before confirm; it was reverted to allow")
     data, _ = read_config(ctx)
     common.require(current_action(data) == "deny", "live DefaultAction is not deny; cannot confirm")
     common.require(service_active(ctx), "opensnitch.service is not active; cannot confirm")
@@ -330,7 +363,7 @@ def turn_off(ctx, boot=False):
     method = restore_allow(ctx, state)
     discard(ctx)
     stop_timer(ctx)
-    if not boot:
+    if not boot and method != "already-allow":
         try:
             restart_daemon(ctx)
         except Exception as error:
@@ -376,7 +409,7 @@ def main(argv=None, ctx=None):
         if args.action == "status":
             status(ctx, args.json)
             return 0
-        with policy_lock(ctx):
+        with policy_lock(ctx, wait=args.action in ("off", "revert-if-pending")):
             if args.action == "on":
                 turn_on(ctx, args.revert_after)
             elif args.action == "confirm":

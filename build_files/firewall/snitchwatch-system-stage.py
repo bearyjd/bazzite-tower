@@ -19,18 +19,24 @@ def copy(source, dest, mode=0o644):
     dest.chmod(mode)
 
 
+def require_exact_clean_source(source, pins):
+    git = lambda *values: subprocess.check_output(['git', '-C', str(source), *values], text=True).strip()
+    head, tree, dirty = git('rev-parse', 'HEAD'), git('rev-parse', 'HEAD^{tree}'), git('status', '--porcelain', '--ignored')
+    if head != pins['sourceCommit'] or tree != pins['sourceTree'] or dirty:
+        raise ValueError('source checkout is not exact and completely clean: HEAD %s (want %s), tree %s (want %s), status:\n%s' % (
+            head, pins['sourceCommit'], tree, pins['sourceTree'], '\n'.join(dirty.splitlines()[:20])))
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    for arg in ('source', 'artifact', 'out', 'pins', 'verifier', 'legacy-config', 'candidate-config', 'build-log', 'repro-log', 'rpm-inventory', 'tarball', 'os-update-rule', 'resolved-dns-rule'):
+    for arg in ('source', 'artifact', 'out', 'pins', 'verifier', 'legacy-config', 'candidate-config', 'build-log', 'repro-log', 'rpm-inventory', 'tarball', 'os-update-rule', 'resolved-dns-rule', 'scanner-artifact'):
         parser.add_argument('--' + arg, required=True, type=Path)
     args = parser.parse_args()
     source, out = args.source.resolve(), args.out.resolve()
     if out == Path('/') or out.exists():
         raise ValueError('output must be a new isolated staging directory')
     pins = json.loads(args.pins.read_text())
-    git = lambda *values: subprocess.check_output(['git', '-C', str(source), *values], text=True).strip()
-    if git('rev-parse', 'HEAD') != pins['sourceCommit'] or git('rev-parse', 'HEAD^{tree}') != pins['sourceTree'] or git('status', '--porcelain', '--ignored'):
-        raise ValueError('source checkout is not exact and completely clean')
+    require_exact_clean_source(source, pins)
     sub = source / 'vendor/opensnitch'
     if subprocess.check_output(['git', '-C', str(sub), 'rev-parse', 'HEAD'], text=True).strip() != pins['submoduleCommit']:
         raise ValueError('unexpected submodule checkout')
@@ -65,6 +71,31 @@ def main():
     if sha(staged_config) != pins['sourceFiles']['packaging/system/opensnitchd-default-config.json']:
         raise ValueError('stage.sh did not stage the pinned upstream daemon config')
     staged_config.unlink()
+    scanner = args.scanner_artifact
+    scanner_provenance = json.loads((scanner / 'provenance.json').read_text())
+    if (scanner_provenance.get('sourceCommit') != pins['sourceCommit']
+            or scanner_provenance.get('sourceTree') != pins['sourceTree']
+            or scanner_provenance.get('patchSha256') != pins['scannerPatch']['sha256']
+            or scanner_provenance.get('patchedFiles') != pins['scannerPatch']['patchedFiles']
+            or scanner_provenance.get('reproducible') is not True
+            or scanner_provenance.get('testsPassed') is not True):
+        raise ValueError('scanner source/patch/test/repro identity mismatch')
+    binaries = ('snitchwatch-scanner-privileged', 'snitchwatch-scanner-broker')
+    for name in binaries:
+        if sha(scanner / name) != scanner_provenance['binaries'][name]:
+            raise ValueError('scanner executable differs from build receipt')
+    subprocess.run(['bash', str(source / 'packaging/scanner/stage.sh'), str(out),
+                    str(scanner / binaries[0]), scanner_provenance['binaries'][binaries[0]],
+                    str(scanner / binaries[1]), scanner_provenance['binaries'][binaries[1]]], check=True)
+    for name, expected in scanner_provenance['evidence'].items():
+        if name not in {'source-inputs.json', 'dependency-closure.json', 'THIRD-PARTY-LICENSES.md', 'LICENSE', 'scanner.patch', 'build.log', 'repro.log', 'test.log', *(binary + '.ldd' for binary in binaries)}:
+            raise ValueError('unexpected scanner evidence path')
+        if sha(scanner / name) != expected:
+            raise ValueError('scanner evidence hash mismatch: ' + name)
+        destination = ('usr/share/licenses/snitchwatch-scanner/' if name in {'LICENSE', 'THIRD-PARTY-LICENSES.md'}
+                       else 'usr/share/snitchwatch/scanner/')
+        copy(scanner / name, out / destination / name)
+    copy(scanner / 'provenance.json', out / 'usr/share/snitchwatch/scanner/provenance.json')
     licenses = args.artifact / 'usr/share/licenses/snitchwatch-bridge'
     for name in ('LICENSE', 'LICENSE.opensnitch', 'THIRD-PARTY-LICENSES.md'):
         copy(licenses / name, out / 'usr/share/licenses/snitchwatch-bridge' / name)
@@ -86,7 +117,7 @@ def main():
     legacy_mask.symlink_to('/dev/null')
     provenance = {
         'sourceCommit': pins['sourceCommit'], 'submoduleCommit': pins['submoduleCommit'],
-        'sourceTree': git('rev-parse', 'HEAD^{tree}'),
+        'sourceTree': pins['sourceTree'],
         'builderImage': pins['builderImage'], 'artifactSha256': sha(args.tarball),
         'rpmInventorySha256': sha(args.rpm_inventory), 'reproducible': True,
         'buildLogSha256': sha(args.build_log), 'reproLogSha256': sha(args.repro_log),

@@ -25,6 +25,7 @@ INPUTS = (
     'build_files/build.d/95-firewall.sh', 'system_files',
     'scripts/install-signature-policy.sh', 'scripts/snitchwatch-gate.py',
     'tests/test-snitchwatch-image-build-fixtures',
+    'tests/fixtures/r13-installed-branch-metadata.json',
     'tests/test-snitchwatch-system.py', 'tests/test-snitchwatch-gate.py',
     *(command[1] for _, command, _ in CHECKS),
 )

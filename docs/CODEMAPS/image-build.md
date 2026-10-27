@@ -116,6 +116,37 @@ before tmpfiles and socket startup. Existing live bootc `/etc` drift is a
 migration decision, not an implicit policy overwrite. Migration retains allow;
 system readiness rejects an explicit local deny override as policy drift.
 
+r16.2 preparation keeps the bridge pin at Snitchwatch 8136b41 (AI cache export and
+Deep Scan host interface). `snitchwatch-system-scanner-build.py` archives the
+verified source into a separate build copy, applies the SHA-pinned
+`snitchwatch-system-scanner.patch`, verifies the post-patch file hashes, and
+performs two locked offline release builds with separate target directories.
+It requires byte-identical scanner/broker binaries, resolved ELF dependencies,
+Rust tests plus fake-authorization private-D-Bus tests, and records source input,
+Cargo, actual Rust/RPM toolchain, normal/build dependency closure, license text,
+test/build/repro log and executable hashes. The pristine bridge release/repro
+path and unchanged upstream dependency-list cmp remain independent.
+
+`snitchwatch-system-stage.py` invokes the pinned upstream scanner stage script
+for exactly two0755 executables, one session-bus activation file, the unchanged
+auth_admin_keep polkit action and root0700 tmpfiles definition, then installs
+scanner license/provenance receipts under `/usr/share`. The system verifier's
+exact38-file inventory binds those inputs, patch/evidence and both ELF hashes;
+it refuses persistent scanner systemd service/timer/socket activation. The patch
+hardens fixed external primitives (bounded/status-checked output, trusted PATH,
+stable locale, process-group cleanup coordinated with the540s root watchdog)
+and refuses unsafe existing private state/database/sidecars. It does not run
+scans or repair host state. Smoke adds runtime linker/pkexec and legacy-exclusion
+assertions; the boot gate requires tmpfiles-provisioned root:root0700 state.
+`tests/test-snitchwatch-image-build.py` covers negative inventory, evidence,
+source-patch and environment-override cases. Actual root authorization, SELinux,
+AI export and owner scan behavior require later candidate runtime acceptance;
+upstream file-drift checking remains skipped. Base-refresh policy is unchanged;
+its tests model accepted source separately from newer control/product pins.
+The offline snapshot gate now includes the installed-branch metadata fixture
+used by the system authority tests; fixture absence cannot masquerade as a
+working readiness check.
+
 Daemon toolchain (golang, golang-bin, golang-src, protobuf, protobuf-compiler,
 libnetfilter_queue, libnetfilter_queue-devel) is not installed from live repos:
 `snitchwatch-system-toolchain.sh` downloads the exact Koji RPMs pinned in

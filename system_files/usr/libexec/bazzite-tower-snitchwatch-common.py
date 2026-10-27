@@ -397,7 +397,8 @@ def flatpak_profiles(ctx):
     system_stores = ctx.command(["flatpak", "--installations"]).stdout.splitlines()
     require(system_stores and all(name.startswith("/") and ".." not in Path(name).parts for name in system_stores), "cannot enumerate system Flatpak installations")
     stores = sorted(set(system_stores+[home+"/.local/share/flatpak" for home in ctx.homes()]))
-    expected_runtime = json.loads(ctx.path(MANIFEST).read_text()).get("flatpak", {}).get("runtimeRef", "")
+    expected_flatpak = json.loads(ctx.path(MANIFEST).read_text()).get("flatpak", {})
+    expected_runtime = expected_flatpak.get("runtimeRef", "")
     require(re.fullmatch(r"org\.kde\.Platform/x86_64/[0-9]+\.[0-9]+", expected_runtime), "missing verified Flatpak runtime reference")
     for store in stores:
         for override in ("global", APP):
@@ -433,6 +434,8 @@ def flatpak_profiles(ctx):
             require(not meta.has_section("System Bus Policy") or not dict(meta["System Bus Policy"]), "same-ID Flatpak has system bus authority")
             policies = dict(meta["Session Bus Policy"]) if meta.has_section("Session Bus Policy") else {}
             allowed_names = {"org.freedesktop.Notifications", "org.kde.StatusNotifierWatcher", "com.canonical.AppMenu.Registrar", "org.kde.kconfig.notify", "org.kde.KGlobalSettings", "org.kde.kdeconnect"}
+            if "--talk-name=org.snitchwatch.Scanner" in expected_flatpak.get("finishArgs", []):
+                allowed_names.add("org.snitchwatch.Scanner")
             require(set(policies) <= allowed_names and all(value == "talk" for value in policies.values()), "same-ID Flatpak session bus grants mismatch")
     return stores
 

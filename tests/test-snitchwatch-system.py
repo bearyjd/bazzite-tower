@@ -675,6 +675,20 @@ class SystemBehavior(unittest.TestCase):
         common.runtime_readiness(self.ctx)
         self.assertNotIn(["flatpak", "--version"], self.ctx.commands)
 
+    def test_scanner_bus_grant_requires_verified_image_profile(self):
+        self.ctx.system_config(); path = self.ctx.flatpak()
+        text = path.read_text() + "org.snitchwatch.Scanner=talk\n"
+        path.write_text(text)
+        with self.assertRaises(common.Refusal): common.flatpak_profiles(self.ctx)
+        self.ctx.manifest['flatpak']['finishArgs'] = ['--talk-name=org.snitchwatch.Scanner']
+        self.ctx.write(common.MANIFEST, json.dumps(self.ctx.manifest))
+        common.flatpak_profiles(self.ctx)
+        for changed in (text.replace('org.snitchwatch.Scanner=talk', 'org.snitchwatch.Scanner=own'),
+                        text + 'org.snitchwatch.Scanner.Other=talk\n',
+                        text + 'org.snitchwatch.*=talk\n'):
+            path.write_text(changed)
+            with self.assertRaises(common.Refusal): common.flatpak_profiles(self.ctx)
+
     def test_flatpak_actual_canonical_metadata_on_reviewed_version(self):
         self.ctx.system_config();self.canonical_flatpak()
         common.runtime_readiness(self.ctx)

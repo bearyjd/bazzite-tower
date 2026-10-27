@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE policyconfig PUBLIC
+ "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN"
+ "http://www.freedesktop.org/standards/PolicyKit/1/policyconfig.dtd">
+<!--
+  polkit policy for Component B's privileged-tier security scanner.
+
+  The scanner is an ON-DEMAND binary invoked via pkexec against this action —
+  it is NOT a persistent daemon and installs NO systemd service or timer.
+  A single action gates the whole deep scan: all sub-checks (file integrity,
+  kargs drift, loaded-module audit, Secure Boot/lockdown state, chkrootkit)
+  share the same trust boundary (elevated read access to /proc, /sys,
+  rpm-ostree, rpm), so splitting them into multiple actions would only prompt
+  the user repeatedly with no added security benefit (privileged-tier design
+  spec §3).
+
+  auth_admin_keep: an administrator must authenticate to run a deep scan; the
+  authorization is briefly cached so a "scan again" within the session does
+  not re-prompt. Downgrade to auth_admin (no keep) if even short-lived
+  caching is undesirable for your deployment.
+-->
+<policyconfig>
+
+  <vendor>Snitchwatch</vendor>
+  <vendor_url>https://github.com/bearyjd/snitchwatch</vendor_url>
+
+  <action id="org.snitchwatch.scanner.run-deep-scan">
+    <description>Run a privileged Snitchwatch security scan</description>
+    <message>Authentication is required to run a privileged system integrity and rootkit scan</message>
+    <defaults>
+      <allow_any>no</allow_any>
+      <allow_inactive>no</allow_inactive>
+      <allow_active>auth_admin_keep</allow_active>
+    </defaults>
+    <!--
+      Path is a packaging-time substitution. Adjust to the installed prefix
+      (e.g. /usr/libexec/snitchwatch-scanner-privileged) in the package spec.
+    -->
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/libexec/snitchwatch-scanner-privileged</annotate>
+  </action>
+
+</policyconfig>

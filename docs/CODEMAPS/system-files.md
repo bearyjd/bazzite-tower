@@ -90,6 +90,14 @@ profile and migration preserves a recorded legacy baseline. The GUI remains
 an explicitly selected per-user system Flatpak profile. See
 [validation and migration gates](../research/snitchwatch-system-bridge.md).
 
+The r16.2 image also stages the two scanner executables, session D-Bus
+activation, polkit action and private-state tmpfiles definition from the native
+factory. No scanner service or timer is installed. Readiness permits exactly
+`org.snitchwatch.Scanner=talk` only when the verified image's expected Flatpak
+finishArgs grant that name; owning the name, suffixes and wildcards still refuse.
+The immutable scanner source/patch/build/license inventory is described in
+`image-build.md`; runtime scanner acceptance remains owner-operated.
+
 Readiness retains the historical exact `wayland;fallback-x11` socket profile.
 The serialized `x11;wayland;fallback-x11` form is accepted only when the host
 `flatpak --version` reports exactly Flatpak 1.18.1, whose reviewed upstream

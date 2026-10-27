@@ -452,11 +452,25 @@ def recover_bad_state(ctx, reason):
 
 
 def boot_guard(ctx):
+    """A single failed read proves nothing: confirm it under the lock before quarantining."""
     try:
         load_state(ctx)
-    except (common.Refusal, OSError, ValueError, KeyError) as reason:
+    except FileNotFoundError:
+        print("nothing pending")
+        return
+    except (common.Refusal, OSError, ValueError, KeyError):
         with policy_lock(ctx, wait=True):
-            recover_bad_state(ctx, reason)
+            try:
+                load_state(ctx)
+            except FileNotFoundError:
+                print("nothing pending")
+                return
+            except (common.Refusal, OSError, ValueError, KeyError) as reason:
+                recover_bad_state(ctx, reason)
+                return
+            # The second read succeeded: the first failure was transient.
+            if guard_should_revert(ctx):
+                revert_if_pending(ctx, True)
         return
     if guard_should_revert(ctx):
         with policy_lock(ctx, wait=True):

@@ -101,6 +101,13 @@ class DenyBase(unittest.TestCase):
             patch.stop()
         self.temp.cleanup()
 
+    def hold_lock(self):
+        lock = self.ctx.path("/run/lock/bazzite-tower-snitchwatch-migration.lock")
+        lock.parent.mkdir(parents=True, exist_ok=True)
+        fd = os.open(lock, os.O_CREAT | os.O_RDWR, 0o600)
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return fd
+
     def reboot(self, boot_id):
         self.ctx.write("/proc/sys/kernel/random/boot_id", boot_id+"\n")
 
@@ -794,6 +801,67 @@ class BootGuardRecovery(DenyBase):
             self.assertEqual(self.cli("revert-if-pending", "--boot")[0], 0)
         asides = self.asides()
         self.assertEqual(sorted(p.read_text() for p in asides), ["{broken-0", "{broken-1"])
+
+    def flaky_load(self, failures, error):
+        real = self.deny.load_state
+        calls = []
+        def load(ctx):
+            calls.append(1)
+            if len(calls) <= failures:
+                raise error
+            return real(ctx)
+        return mock.patch.object(self.deny, "load_state", side_effect=load), calls
+
+    def test_single_read_error_does_not_quarantine_a_confirmed_opt_in(self):
+        self.trial(True)
+        patch, calls = self.flaky_load(1, OSError(5, "Input/output error"))
+        with patch:
+            code, out, err = self.cli("revert-if-pending", "--boot")
+        self.assertEqual(code, 0, err)
+        self.assertGreater(len(calls), 1)
+        self.assertEqual(self.asides(), [])
+        self.assertTrue(self.ctx.path(MARKER).exists())
+        self.assertEqual(self.config_path.read_bytes(), self.deny_bytes())
+        self.assertTrue(self.ctx.path(STATE).exists())
+
+    def test_single_read_error_then_pending_earlier_boot_still_reverts_normally(self):
+        self.trial(False)
+        patch, _ = self.flaky_load(1, OSError(5, "Input/output error"))
+        with patch:
+            self.assertEqual(self.cli("revert-if-pending", "--boot")[0], 0)
+        self.assertEqual(self.config_path.read_bytes(), self.original)
+        self.assertEqual(self.asides(), [])
+
+    def test_enoent_race_is_nothing_pending(self):
+        self.trial(True)
+        patch, _ = self.flaky_load(99, FileNotFoundError(2, "No such file"))
+        with patch:
+            code, out, err = self.cli("revert-if-pending", "--boot")
+        self.assertEqual(code, 0, err)
+        self.assertEqual(self.asides(), [])
+        self.assertTrue(self.ctx.path(MARKER).exists())
+        self.assertEqual(self.config_path.read_bytes(), self.deny_bytes())
+
+    def test_two_failures_quarantine_as_before(self):
+        self.trial(True)
+        patch, calls = self.flaky_load(2, OSError(5, "Input/output error"))
+        with patch:
+            code, out, err = self.cli("revert-if-pending", "--boot")
+        self.assert_recovered(code, err)
+
+    def test_bad_state_lock_timeout_changes_nothing_and_fails_retryably(self):
+        self.trial(True)
+        self.corrupt("json")
+        fd = self.hold_lock()
+        try:
+            code, out, err = self.cli("revert-if-pending", "--boot")
+        finally:
+            os.close(fd)
+        self.assertEqual(code, 1)
+        self.assertIn("timed out", err)
+        self.assertEqual(self.asides(), [])
+        self.assertTrue(self.ctx.path(MARKER).exists())
+        self.assertEqual(self.config_path.read_bytes(), self.deny_bytes())
 
     def test_operator_subcommands_still_refuse_on_bad_state(self):
         self.trial(False)

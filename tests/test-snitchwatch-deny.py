@@ -664,11 +664,144 @@ class Transactions(DenyBase):
 class StatusSchema(DenyBase):
     def test_json_schema_is_stable(self):
         report = self.status()
-        self.assertEqual(list(report), ["schema", "profile", "defaultAction", "optIn", "pending", "expiresAt", "canEnable", "blockers"])
+        self.assertEqual(list(report), ["schema", "profile", "defaultAction", "optIn", "pending", "expiresAt", "canEnable", "blockers", "expired"])
         self.assertEqual(report, {"schema": 1, "profile": "system", "defaultAction": "allow", "optIn": False, "pending": False,
-                                  "expiresAt": None, "canEnable": True, "blockers": []})
+                                  "expiresAt": None, "canEnable": True, "blockers": [], "expired": False})
         self.edit_config(DefaultAction="ask")
         self.assertEqual(self.status()["defaultAction"], "other")
+
+
+class ExpiredTrial(DenyBase):
+    def test_not_expired_expired_not_pending_and_clock_skew(self):
+        self.ok("on")
+        report = self.status()
+        self.assertEqual((report["pending"], report["expired"]), (True, False))
+        self.assertFalse(any("expired" in b for b in report["blockers"]))
+        self.now = NOW+timedelta(minutes=10)
+        self.assertFalse(self.status()["expired"])
+        self.now = NOW+timedelta(minutes=10, seconds=1)
+        report = self.status()
+        self.assertEqual((report["pending"], report["expired"], report["canEnable"]), (True, True, False))
+        self.assertTrue(any("expired" in b and "ujust snitchwatch-deny off" in b for b in report["blockers"]))
+        self.assertEqual(report["schema"], 1)
+        self.now = NOW-timedelta(hours=1)
+        self.assertFalse(self.status()["expired"])
+        self.now = NOW+timedelta(hours=5)
+        self.ctx.commands.clear()
+        before = self.config_path.read_bytes()
+        out = self.ok("status")
+        self.assertIn("EXPIRED: still pending; run: ujust snitchwatch-deny off", out)
+        self.assertEqual((self.ctx.commands, self.config_path.read_bytes()), ([c for c in self.ctx.commands if c[:2] == ["systemctl", "is-active"]], before))
+
+    def test_confirmed_or_idle_is_never_expired(self):
+        self.assertFalse(self.status()["expired"])
+        self.ok("on")
+        self.ok("confirm")
+        self.now = NOW+timedelta(days=2)
+        report = self.status()
+        self.assertEqual((report["pending"], report["expired"]), (False, False))
+        self.assertNotIn("EXPIRED", self.ok("status"))
+
+    def test_on_while_expired_tells_the_operator_to_run_off(self):
+        self.ok("on")
+        self.now = NOW+timedelta(hours=1)
+        err = self.refused("on", text="expired")
+        self.assertIn("ujust snitchwatch-deny off", err)
+
+
+class BootGuardRecovery(DenyBase):
+    def trial(self, confirmed):
+        self.ok("on")
+        if confirmed:
+            self.ok("confirm")
+        self.reboot("boot-B")
+
+    def corrupt(self, kind, text="{"):
+        state = self.ctx.path(STATE)
+        if kind == "json":
+            state.write_text(text)
+        elif kind == "mode":
+            state.chmod(0o644)
+        elif kind == "symlink":
+            target = state.with_name("real.json")
+            state.rename(target)
+            state.symlink_to(target)
+
+    def asides(self):
+        return sorted(p for p in self.ctx.path(STATE_DIR).iterdir() if p.name.startswith("state.json.corrupt-"))
+
+    def assert_recovered(self, code, err):
+        self.assertEqual(code, 0, err)
+        self.assertIn("WARNING", err)
+        self.assertEqual(self.config_path.read_bytes(), self.original)
+        self.assertFalse(os.path.lexists(self.ctx.path(STATE)))
+        self.assertEqual(len(self.asides()), 1)
+        self.assertFalse(os.path.lexists(self.ctx.path(MARKER)))
+        self.assertIn(["systemctl", "stop", TIMER+".timer"], self.ctx.commands)
+
+    def test_bad_state_at_boot_forces_allow_moves_it_aside_and_exits_zero(self):
+        for confirmed in (False, True):
+            for kind in ("json", "mode", "symlink", "unreadable"):
+                with self.subTest(kind=kind, confirmed=confirmed):
+                    self.setUp_clean()
+                    for leftover in self.ctx.path(STATE_DIR).glob("state.json.corrupt-*") if self.ctx.path(STATE_DIR).exists() else []:
+                        leftover.unlink()
+                    self.trial(confirmed)
+                    mark = len(self.ctx.commands)
+                    if kind == "unreadable":
+                        real = self.deny.private_bytes
+                        def denied(ctx, logical, what, real=real):
+                            if logical == STATE:
+                                raise PermissionError(13, "Permission denied")
+                            return real(ctx, logical, what)
+                        with mock.patch.object(self.deny, "private_bytes", side_effect=denied):
+                            code, out, err = self.cli("revert-if-pending", "--boot")
+                    else:
+                        self.corrupt(kind)
+                        code, out, err = self.cli("revert-if-pending", "--boot")
+                    self.assert_recovered(code, err)
+                    self.assertFalse(any(c[:2] in (["systemctl", "restart"], ["systemctl", "try-restart"]) for c in self.ctx.commands[mark:]))
+                    aside = self.asides()[0]
+                    if not aside.is_symlink():
+                        self.assertEqual(oct(aside.stat().st_mode & 0o777), oct(0o600))
+
+    def test_bad_state_with_unsafe_or_ambiguous_config_still_fails_loudly(self):
+        for label in ("unsafe", "ambiguous"):
+            with self.subTest(label=label):
+                self.setUp_clean()
+                self.trial(False)
+                self.corrupt("json")
+                if label == "unsafe":
+                    self.config_path.chmod(0o666)
+                else:
+                    config = json.loads(self.config_path.read_text())
+                    config["Extra"] = {"DefaultAction": "deny"}
+                    self.ctx.write(common.CONFIG, json.dumps(config, indent=4)+"\n")
+                before = self.config_path.read_bytes()
+                code, out, err = self.cli("revert-if-pending", "--boot")
+                self.config_path.chmod(0o644)
+                self.assertEqual(code, 1)
+                self.assertIn("REFUSED", err)
+                self.assertEqual(self.config_path.read_bytes(), before)
+                self.assertTrue(os.path.lexists(self.ctx.path(STATE)))
+                self.assertEqual(self.asides(), [])
+
+    def test_aside_files_are_never_overwritten(self):
+        for index in range(2):
+            self.setUp_clean()
+            self.trial(False)
+            self.corrupt("json", "{broken-%d" % index)
+            self.assertEqual(self.cli("revert-if-pending", "--boot")[0], 0)
+        asides = self.asides()
+        self.assertEqual(sorted(p.read_text() for p in asides), ["{broken-0", "{broken-1"])
+
+    def test_operator_subcommands_still_refuse_on_bad_state(self):
+        self.trial(False)
+        self.corrupt("json")
+        for action in ("off", "confirm", "on"):
+            self.refused(action, text="state")
+        self.assertEqual(self.config_path.read_bytes(), self.deny_bytes())
+        self.assertTrue(os.path.lexists(self.ctx.path(STATE)))
 
 
 class ReadinessSemantics(DenyBase):

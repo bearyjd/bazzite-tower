@@ -3,7 +3,9 @@
 
 The image always ships allow. `on` starts a time-boxed trial: only the
 DefaultAction key changes, an exact backup is kept, and a transient timer plus a
-boot guard revert it unless `confirm` is run. Policy writers hold
+boot guard revert it unless `confirm` is run. `status --json` is schema 1; fields are only ever added. "expired" (additive) is
+true when a trial is still pending after its deadline (the revert was lost or the
+timer stopped); the operator should run `off`. Policy writers hold
 /run/lock/bazzite-tower-snitchwatch-migration.lock. Linux rename cannot give a
 strict conditional replace against arbitrary root writers; a re-read just before
 replacement detects drift and refuses instead of overwriting.
@@ -235,22 +237,33 @@ def inspect(ctx):
     return profile, action, blockers
 
 
+def is_expired(state):
+    return bool(state and state["pending"] and utcnow() > parse_stamp(state["expiresAt"]))
+
+
+def pending_blocker(state):
+    if is_expired(state):
+        return "an expired deny trial is still pending (its revert did not complete); run: ujust snitchwatch-deny off"
+    return "a deny trial is already pending; confirm or off first"
+
+
 def status(ctx, as_json):
     profile, action, blockers = inspect(ctx)
     state = load_state(ctx)
     pending = bool(state and state["pending"])
+    expired = is_expired(state)
     if pending:
-        blockers.append("a deny trial is already pending; confirm or off first")
+        blockers.append(pending_blocker(state))
     opt_in = common.deny_opt_in(ctx)
     if opt_in:
         blockers.append("deny is already confirmed; run off first")
     report = {"schema": 1, "profile": profile, "defaultAction": action, "optIn": opt_in, "pending": pending,
-              "expiresAt": state["expiresAt"] if pending else None, "canEnable": not blockers, "blockers": blockers}
+              "expiresAt": state["expiresAt"] if pending else None, "canEnable": not blockers, "blockers": blockers, "expired": expired}
     if as_json:
         print(json.dumps(report))
     else:
         print("profile: "+profile+"\ndefaultAction: "+action+"\nopt-in confirmed: "+str(opt_in).lower()+"\npending: "+str(pending).lower()
-              +(" (reverts at "+report["expiresAt"]+")" if pending else "")+"\ncan enable: "+str(report["canEnable"]).lower())
+              +(" (reverts at "+report["expiresAt"]+")" if pending else "")+("\nEXPIRED: still pending; run: ujust snitchwatch-deny off" if expired else "")+"\ncan enable: "+str(report["canEnable"]).lower())
         for blocker in blockers:
             print("blocker: "+blocker)
 
@@ -287,7 +300,7 @@ def turn_on(ctx, minutes):
     profile, _, blockers = inspect(ctx)
     state = load_state(ctx)
     if state and state["pending"]:
-        blockers.append("a deny trial is already pending; confirm or off first")
+        blockers.append(pending_blocker(state))
     if common.deny_opt_in(ctx):
         blockers.append("deny is already confirmed; run off first")
     common.require(not blockers, "cannot enable deny: "+"; ".join(blockers))
@@ -403,6 +416,53 @@ def guard_should_revert(ctx):
     return True
 
 
+def unique_aside(ctx):
+    base = ctx.path(STATE_DIR)/("state.json.corrupt-"+utcnow().strftime("%Y%m%dT%H%M%SZ"))
+    candidate, number = base, 0
+    while os.path.lexists(candidate):
+        number += 1
+        candidate = Path(str(base)+"-"+str(number))
+    return candidate
+
+
+def recover_bad_state(ctx, reason):
+    """Boot guard only: unreadable/unsafe state must never keep the firewall down or deny live.
+
+    Force allow first (a config that cannot be edited safely still fails loudly),
+    then quarantine the state, drop the opt-in marker and stop any revert timer.
+    """
+    method = restore_allow(ctx, None)
+    notes = ["DefaultAction forced to allow ("+method+")"]
+    path = ctx.path(STATE)
+    if os.path.lexists(path):
+        aside = unique_aside(ctx)
+        os.rename(path, aside)  # renames a symlink itself; never follows it
+        if stat.S_ISREG(os.lstat(aside).st_mode):
+            os.chmod(aside, 0o600)
+        notes.append("bad state moved to "+str(aside.relative_to(ctx.root)))
+    if os.path.lexists(ctx.path(MARKER)):
+        os.unlink(ctx.path(MARKER))
+        notes.append("opt-in marker removed")
+    try:
+        stop_timer(ctx)
+        notes.append("revert timer stopped")
+    except common.Refusal as error:
+        notes.append("could not stop revert timer: "+str(error))
+    print("WARNING: deny state unusable at boot ("+str(reason)+"); "+"; ".join(notes)+"; opensnitch will start on allow", file=sys.stderr)
+
+
+def boot_guard(ctx):
+    try:
+        load_state(ctx)
+    except (common.Refusal, OSError, ValueError, KeyError) as reason:
+        with policy_lock(ctx, wait=True):
+            recover_bad_state(ctx, reason)
+        return
+    if guard_should_revert(ctx):
+        with policy_lock(ctx, wait=True):
+            revert_if_pending(ctx, True)
+
+
 def revert_if_pending(ctx, boot):
     if pending_state(ctx) is None:
         print("nothing pending")
@@ -440,7 +500,8 @@ def main(argv=None, ctx=None):
         if args.action == "status":
             status(ctx, args.json)
             return 0
-        if args.action == "revert-if-pending" and args.boot and not guard_should_revert(ctx):
+        if args.action == "revert-if-pending" and args.boot:
+            boot_guard(ctx)
             return 0
         with policy_lock(ctx, wait=args.action in ("off", "revert-if-pending")):
             if args.action == "on":

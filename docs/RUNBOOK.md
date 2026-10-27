@@ -259,7 +259,11 @@ recovery. Helper: `/usr/libexec/bazzite-tower-snitchwatch-deny` (root).
    active, root-only bridge socket present, root-owned config with
    `allow`/`proc`). Machine-readable:
    `sudo /usr/libexec/bazzite-tower-snitchwatch-deny status --json` returns
-   `{"schema":1,"profile","defaultAction","optIn","pending","expiresAt","canEnable","blockers"}`.
+   `{"schema":1,"profile","defaultAction","optIn","pending","expiresAt","canEnable","blockers","expired"}`.
+   `expired` is an additive field (schema stays 1): true when a trial is still
+   pending past its deadline because the revert did not complete; `status` then
+   prints `EXPIRED: still pending; run: ujust snitchwatch-deny off`, adds a blocker,
+   and `on` refuses until `off` is run.
 2. `ujust snitchwatch-deny on 10` - keeps an exact backup of the config under
    `/var/lib/bazzite-tower/snitchwatch-deny/`, changes only the `DefaultAction`
    value, restarts `opensnitch.service` and arms a transient timer
@@ -283,7 +287,13 @@ writer (`/run/lock/bazzite-tower-snitchwatch-migration.lock`) makes `on`/`confir
 refuse at once, while `off`/`revert-if-pending` wait up to 30 s for it and then
 fail loudly (retry-able). The timer carries both `--on-active` and a wall-clock
 `--on-calendar` deadline so suspend cannot extend a trial; `confirm` after the
-deadline reverts immediately. Readiness treats pending deny, or deny without a
+deadline reverts immediately. If the state file is corrupt, unsafe or unreadable at boot, the guard (boot path
+only) forces `DefaultAction` to allow, moves the file to
+`state.json.corrupt-<UTC time>` in the state directory, removes the opt-in
+marker, stops the revert timer, logs a WARNING to the journal and exits 0 so
+the firewall starts on allow; if the config itself cannot be edited safely it
+fails loudly instead. Operator subcommands still refuse on a bad state file.
+Readiness treats pending deny, or deny without a
 valid marker, as drift. Not yet exercised on real hardware/systemd.
 
 ### OpenSnitch resource baseline and owner eBPF experiment

@@ -16,6 +16,10 @@ work=$(mktemp -d /work/snitchwatch-native.XXXXXX)
 # The unchanged upstream dependency list omits the RPM helper downloader.
 command -v curl > /dev/null || timeout 240 dnf -y --setopt=install_weak_deps=False install curl
 bash "$factory/snitchwatch-system-toolchain.sh" install "$factory/snitchwatch-system-pins.json" "$work/toolchain"
+# Fingerprint the installed toolchain files now, before any third-party build script runs;
+# the scanner build re-hashes them and refuses on mismatch.
+python3 "$factory/snitchwatch-system-scanner-build.py" --record-toolchain "$work/toolchain.sha256" \
+    --pins "$factory/snitchwatch-system-pins.json"
 readarray -t pin < <(python3 - "$factory/snitchwatch-system-pins.json" <<'PY'
 import json,sys
 p=json.load(open(sys.argv[1]))
@@ -54,7 +58,7 @@ command -v dbus-run-session > /dev/null || timeout 240 dnf -y --setopt=install_w
 rpm -qa --qf '%{NAME}-%{EPOCHNUM}:%{VERSION}-%{RELEASE}.%{ARCH}\n' | LC_ALL=C sort > "$work/rpm-inventory.txt"
 python3 "$factory/snitchwatch-system-scanner-build.py" --source "$SRC_DIR" --out "$work/scanner" \
     --pins "$factory/snitchwatch-system-pins.json" \
-    --rpm-inventory "$work/rpm-inventory.txt"
+    --rpm-inventory "$work/rpm-inventory.txt" --toolchain-digest "$work/toolchain.sha256"
 artifact_sha=$(sha256sum "$first" | awk '{print $1}')
 python3 "$SRC_DIR/packaging/release/bridge_artifact.py" verify --tarball "$first" \
     --expect-sha256 "$artifact_sha" --expect-version "${pin[5]}" --check-ldd --run-flags --extract-to "$work/verified"

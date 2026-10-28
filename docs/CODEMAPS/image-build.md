@@ -126,7 +126,16 @@ performs two locked offline release builds with separate target directories.
 It requires byte-identical scanner/broker binaries, resolved ELF dependencies,
 Rust tests plus fake-authorization private-D-Bus tests, and records source input,
 Cargo, actual Rust/RPM toolchain, normal/build dependency closure, license text,
-test/build/repro log and executable hashes. The pristine bridge release/repro
+test/build/repro log and executable hashes. Isolation from the bridge build (which ran ~660 third-party build scripts with network):
+the scanner build uses a fresh `CARGO_HOME` (`out/cargo-home`) rebuilt only from the bridge's
+cached `.crate` files after checking each sha256 against `Cargo.lock` (extracted `registry/src`,
+config and `bin` are never carried over; cargo re-extracts); refuses any `.cargo/config[.toml]` in the
+export, every ancestor to `/` and the fresh `CARGO_HOME`; and compares the installed toolchain RPM files'
+digest (recorded by `--record-toolchain` right after install in `snitchwatch-system-build.sh`) before building.
+The child environment is an allowlist and build-steering variables (`CC*`, `*FLAGS`, `LD_*`, `RUST*`,
+`CARGO_*` beyond home/target/jobs) are refused. `bridge_artifact.py` and `LICENSE` now come from the
+hash-checked export. Evidence is still written by the same builder (follow-up).
+The pristine bridge release/repro
 path and unchanged upstream dependency-list cmp remain independent.
 
 `snitchwatch-system-stage.py` invokes the pinned upstream scanner stage script

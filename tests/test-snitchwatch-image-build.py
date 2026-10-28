@@ -519,16 +519,19 @@ class ImageBuildContracts(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'differs from pinned upstream'):
             helper['require_pinned_scanner_sources'](tree, pins)
 
-    def test_scanner_builder_discards_toolchain_override_environment(self):
+    def test_scanner_builder_refuses_toolchain_override_environment(self):
         helper = runpy.run_path(str(FACTORY / 'snitchwatch-system-scanner-build.py'))
         keys = ('RUSTC_WRAPPER', 'RUSTC_WORKSPACE_WRAPPER', 'CARGO_BUILD_RUSTC_WRAPPER',
                 'CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER', 'RUSTC', 'RUSTDOC', 'CARGO_BUILD_RUSTC',
                 'CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER',
                 'CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS', 'CARGO_BUILD_RUSTFLAGS',
                 'CARGO_ENCODED_RUSTFLAGS', 'RUSTFLAGS')
-        environment = {key: 'untrusted fixture executable' for key in keys}
-        environment.update(CARGO_HOME='/isolated/cargo', PATH='/usr/bin')
-        self.assertEqual(helper['clean_environment'](environment), {'CARGO_HOME': '/isolated/cargo', 'PATH': '/usr/bin', 'PYTHONDONTWRITEBYTECODE': '1'})
+        # Stricter than discarding: an allowlist drops the unknown, and these now fail closed.
+        for key in keys:
+            with self.assertRaisesRegex(ValueError, key):
+                helper['clean_environment']({key: 'untrusted fixture executable', 'CARGO_HOME': '/isolated/cargo', 'PATH': '/usr/bin'})
+        self.assertEqual(helper['clean_environment']({'CARGO_HOME': '/isolated/cargo', 'PATH': '/usr/bin'}),
+                         {'CARGO_HOME': '/isolated/cargo', 'PATH': '/usr/bin', 'LANG': 'C', 'PYTHONDONTWRITEBYTECODE': '1'})
 
     def test_incomplete_inventory(self):
         del self.manifest['files']['/usr/lib/tmpfiles.d/snitchwatch.conf']
@@ -1001,6 +1004,128 @@ esac
         result, _ = self.run_stage('mkdir -p "$1/etc/opensnitchd"\nprintf "{}" > "$1/etc/opensnitchd/default-config.json"\n')
         self.assertNotEqual(result.returncode, 0)
         self.assertIn('did not stage the pinned upstream daemon config', result.stderr)
+
+
+class ScannerBuildHardening(unittest.TestCase):
+    """Pure-function contracts for the scanner build's isolation from the bridge build."""
+
+    def setUp(self):
+        self.h = runpy.run_path(str(FACTORY / 'snitchwatch-system-scanner-build.py'))
+        self._temp = tempfile.TemporaryDirectory(prefix='sw-harden.')
+        self.addCleanup(self._temp.cleanup)
+        self.root = Path(self._temp.name).resolve()
+
+    def lock(self, crates):
+        return ''.join('[[package]]\nname = "%s"\nversion = "%s"\nsource = "registry+https://github.com/rust-lang/crates.io-index"\nchecksum = "%s"\n\n' % (n, v, sha(d))
+                       for n, v, d in crates)
+
+    def home(self, files):
+        """A bridge-style CARGO_HOME: cache and index (trusted inputs) plus a mutable src tree."""
+        home = self.root / 'cargo'
+        for name, data in files.items():
+            (home / name).parent.mkdir(parents=True, exist_ok=True)
+            (home / name).write_bytes(data)
+        return home
+
+    def fresh(self, home, lock):
+        fresh = self.root / 'fresh'
+        self.h['make_fresh_cargo_home'](home, fresh, lock)
+        return fresh
+
+    def test_fresh_cargo_home_drops_extracted_registry_src_and_config(self):
+        crate = b'crate-bytes'
+        home = self.home({'registry/cache/idx/a-1.0.0.crate': crate, 'registry/index/idx/.cache/a': b'i',
+                          'registry/src/idx/a-1.0.0/build.rs': b'EVIL', 'registry/src/idx/a-1.0.0/.cargo-ok': b'',
+                          'config.toml': b'[build]\nrustflags=["-Cevil"]\n', 'bin/cargo-evil': b'x'})
+        fresh = self.fresh(home, self.lock([('a', '1.0.0', crate)]))
+        self.assertEqual((fresh / 'registry/cache/idx/a-1.0.0.crate').read_bytes(), crate)
+        self.assertFalse((fresh / 'registry/src').exists())
+        self.assertFalse((fresh / 'config.toml').exists())
+        self.assertFalse((fresh / 'bin').exists())
+        self.assertNotEqual(fresh, home)
+
+    def test_fresh_cargo_home_refuses_tampered_unknown_and_unchecksummed_crates(self):
+        lock = self.lock([('a', '1.0.0', b'good')])
+        for name, files in (('tampered', {'registry/cache/idx/a-1.0.0.crate': b'bad'}),
+                            ('unknown', {'registry/cache/idx/a-1.0.0.crate': b'good', 'registry/cache/idx/b-2.0.0.crate': b'x'}),
+                            ('stray', {'registry/cache/idx/a-1.0.0.crate': b'good', 'registry/cache/idx/notes.txt': b'x'})):
+            with self.subTest(name):
+                shutil.rmtree(self.root / 'fresh', ignore_errors=True)
+                shutil.rmtree(self.root / 'cargo', ignore_errors=True)
+                with self.assertRaises(ValueError):
+                    self.fresh(self.home(files), lock)
+
+    def test_cargo_config_refused_in_export_ancestors_and_cargo_home(self):
+        refuse = self.h['require_no_cargo_config']
+        export = self.root / 'a/b/source'
+        export.mkdir(parents=True)
+        cargo_home = self.root / 'fresh'
+        cargo_home.mkdir()
+        refuse(export, cargo_home)
+        for where in (export / '.cargo/config.toml', export / '.cargo/config', self.root / 'a/.cargo/config.toml',
+                      self.root / '.cargo/config', cargo_home / 'config.toml', cargo_home / 'config'):
+            with self.subTest(str(where.relative_to(self.root))):
+                where.parent.mkdir(exist_ok=True)
+                where.write_text('[build]\n')
+                with self.assertRaises(ValueError):
+                    refuse(export, cargo_home)
+                where.unlink()
+        (export / '.cargo').mkdir(exist_ok=True)
+        (export / '.cargo/config.toml').symlink_to('/nonexistent')
+        with self.assertRaises(ValueError):
+            refuse(export, cargo_home)
+
+    def test_toolchain_digest_detects_changed_added_removed_files_and_link_retargets(self):
+        digest = self.h['toolchain_digest']
+        files = []
+        for name in ('rustc', 'cargo'):
+            (self.root / name).write_bytes(name.encode())
+            files.append(self.root / name)
+        (self.root / 'link').symlink_to('rustc')
+        files.append(self.root / 'link')
+        base = digest(files)
+        self.assertEqual(base, digest(list(reversed(files))))
+        (self.root / 'cargo').write_bytes(b'tampered')
+        self.assertNotEqual(base, digest(files))
+        (self.root / 'cargo').write_bytes(b'cargo')
+        self.assertEqual(base, digest(files))
+        (self.root / 'link').unlink()
+        (self.root / 'link').symlink_to('cargo')
+        self.assertNotEqual(base, digest(files))
+        self.assertNotEqual(base, digest(files[:2]))
+
+    def test_toolchain_digest_mismatch_refused(self):
+        record = self.root / 'toolchain.sha256'
+        record.write_text('a' * 64 + '\n')
+        self.h['require_toolchain_digest'](record, 'a' * 64)
+        with self.assertRaises(ValueError):
+            self.h['require_toolchain_digest'](record, 'b' * 64)
+        with self.assertRaises(ValueError):
+            self.h['require_toolchain_digest'](self.root / 'missing', 'a' * 64)
+
+    def test_environment_is_an_allowlist_that_fails_closed(self):
+        clean = self.h['clean_environment']
+        got = clean({'PATH': '/usr/bin', 'HOME': '/root', 'CARGO_HOME': '/c', 'LANG': 'en_US.UTF-8', 'SECRET': 'x', 'CARGO_BUILD_JOBS': '4', 'SRC_DIR': '/s'})
+        self.assertEqual(got, {'PATH': '/usr/bin', 'HOME': '/root', 'CARGO_HOME': '/c', 'LANG': 'C', 'CARGO_BUILD_JOBS': '4', 'PYTHONDONTWRITEBYTECODE': '1'})
+        for bad in ('CC', 'CXX', 'CFLAGS', 'LDFLAGS', 'AR', 'LD_PRELOAD', 'LD_LIBRARY_PATH', 'RUSTFLAGS', 'RUSTC_WRAPPER',
+                    'CARGO_PROFILE_RELEASE_LTO', 'CARGO_BUILD_TARGET', 'CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER', 'CARGO_ENCODED_RUSTFLAGS',
+                    'CARGO_HTTP_PROXY', 'RUSTUP_TOOLCHAIN'):
+            with self.subTest(bad):
+                with self.assertRaises(ValueError):
+                    clean({'PATH': '/usr/bin', bad: 'x'})
+
+    def test_builder_uses_checked_export_and_fresh_home(self):
+        text = (FACTORY / 'snitchwatch-system-scanner-build.py').read_text()
+        self.assertIn('load_bridge_artifact(exported)', text)
+        self.assertIn("exported / 'LICENSE'", text)
+        self.assertNotIn("source / 'LICENSE'", text)
+        self.assertIn('make_fresh_cargo_home', text)
+        self.assertIn('require_no_cargo_config', text)
+        self.assertIn('require_toolchain_digest', text)
+        build = (FACTORY / 'snitchwatch-system-build.sh').read_text()
+        self.assertRegex(build, r'--record-toolchain')
+        self.assertRegex(build, r'--toolchain-digest')
+        self.assertLess(build.index('--record-toolchain'), build.index('build-bridge.sh'))
 
 
 class FlatpakFinishArgsContract(unittest.TestCase):

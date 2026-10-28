@@ -694,12 +694,27 @@ class SystemBehavior(unittest.TestCase):
         common.runtime_readiness(self.ctx)
         self.assertIn(["flatpak", "--version"], self.ctx.commands)
 
+    def test_flatpak_canonical_sockets_accept_every_reviewed_version(self):
+        self.canonical_flatpak()
+        original = self.ctx.runner
+        for patch in (1, 2, 3, 4):
+            for suffix in ("", "\n"):
+                with self.subTest(patch=patch, newline=bool(suffix)):
+                    def version(argv, **kwargs):
+                        if argv == ["flatpak", "--version"]:
+                            return SimpleNamespace(stdout=f"Flatpak 1.18.{patch}{suffix}", stderr="", returncode=0)
+                        return original(argv, **kwargs)
+                    self.ctx.runner = version
+                    common.flatpak_profiles(self.ctx)
+
     def test_flatpak_canonical_sockets_refuse_unreviewed_or_failed_version(self):
         self.canonical_flatpak()
         original = self.ctx.runner
-        cases = ["Flatpak 1.14.6\n", "Flatpak 1.18.0\n", "Flatpak 1.18.2\n",
-                 "Flatpak 1.20.0\n", "Flatpak 1.18.1.vendor\n", "1.18.1\n", "",
-                 "Flatpak 1.18.1\nFlatpak 1.18.2\n", "Flatpak 1.18.1 \n",
+        cases = ["Flatpak 1.14.6\n", "Flatpak 1.16.9\n", "Flatpak 1.17.0\n", "Flatpak 1.17.9\n",
+                 "Flatpak 1.18.0\n", "Flatpak 1.18.5\n", "Flatpak 1.18.9\n", "Flatpak 1.18.10\n",
+                 "Flatpak 1.19.0\n", "Flatpak 1.20.0\n", "Flatpak 2.0.0\n", "Flatpak 11.18.1\n",
+                 "Flatpak 1.18.4.vendor\n", "Flatpak 1.18.1.vendor\n", "1.18.1\n", "1.18.4\n", "", "garbled\n",
+                 "Flatpak 1.18.1\nFlatpak 1.18.2\n", "Flatpak 1.18.1 \n", "Flatpak 1.18.4 \n",
                  "failed", FileNotFoundError("missing"), subprocess.TimeoutExpired("flatpak", 5)]
         for reply in cases:
             with self.subTest(reply=str(reply)):

@@ -48,10 +48,22 @@ def sha(path):
 
 
 def require_pinned_scanner_sources(exported, pins):
-    """Every pinned scanner crate file in the exported tree must hash to its pin."""
-    for name, expected in pins['sourceFiles'].items():
-        if name.startswith('crates/scanner-') and sha(exported / name) != expected:
+    """Every file in the built scanner crates must be pinned, present and hash to its pin."""
+    prefixes = tuple('crates/%s/' % package for package in PACKAGES)
+    pinned = {name: expected for name, expected in pins['sourceFiles'].items() if name.startswith('crates/scanner-')}
+    for package in PACKAGES:
+        crate = exported / 'crates' / package
+        for path in sorted(crate.rglob('*')) if crate.is_dir() else ():
+            name = str(path.relative_to(exported))
+            if path.is_file() and name not in pinned:
+                raise ValueError('unpinned scanner input: ' + name)
+    for name, expected in pinned.items():
+        if not (exported / name).is_file():
+            raise ValueError('missing pinned scanner input: ' + name)
+        if sha(exported / name) != expected:
             raise ValueError('scanner input differs from pinned upstream: ' + name)
+    if not any(name.startswith(prefixes) for name in pinned):
+        raise ValueError('no scanner crate files are pinned')
 
 
 def write_json(path, value):

@@ -10,7 +10,7 @@ import sys
 
 MANIFEST = '/usr/share/snitchwatch/system-bridge-manifest.json'
 PINS = '/usr/share/snitchwatch/build-pins.json'
-EXPECTED_PINS_SHA256 = '834b0e0864f748252f90d722d2d7f72992fdf588e6e61db24831aeb1d0c2a426'
+EXPECTED_PINS_SHA256 = '626a05a1d0468a049b7f744a41f799138211e34e8657597758a83b9d584cc21c'
 BINARY = '/usr/bin/snitchwatch-bridge-cli'
 PROFILE = '/usr/share/bazzite-tower/snitchwatch-bridge-profile'
 CONFIG = '/usr/share/bazzite-tower/opensnitchd-system-bridge-config.json'
@@ -69,7 +69,6 @@ SCANNER_BINARIES = {'/usr/libexec/snitchwatch-scanner-privileged', '/usr/libexec
 SCANNER_ROOT = '/usr/share/snitchwatch/scanner/'
 SCANNER_LICENSE_ROOT = '/usr/share/licenses/snitchwatch-scanner/'
 SCANNER_CRATE_MANIFESTS = ('crates/scanner-broker/Cargo.toml', 'crates/scanner-privileged/Cargo.toml')
-SCANNER_PINNED_SOURCES = tuple('crates/scanner-privileged/src/%s.rs' % name for name in ('command', 'facts', 'lib', 'main'))
 SCANNER_CRATE_DIRS = ('crates/scanner-privileged/', 'crates/scanner-broker/')
 # Every file of the two built crates at the pinned upstream commit.  Anything else (e.g. a new build.rs) is refused.
 SCANNER_SOURCE_ALLOWLIST = frozenset({
@@ -287,7 +286,10 @@ def verify(root, image_tree=False):
     if scanner.get('evidence') != evidence:
         raise ValueError('scanner evidence differs from build provenance')
     inputs = json.loads(contents[SCANNER_ROOT + 'source-inputs.json'])
-    expected_inputs = {name: pins['sourceFiles'][name] for name in ('Cargo.toml', 'Cargo.lock') + SCANNER_CRATE_MANIFESTS + SCANNER_PINNED_SOURCES}
+    pinned_scanner = {name for name in pins['sourceFiles'] if name.startswith(SCANNER_CRATE_DIRS)}
+    if pinned_scanner != SCANNER_SOURCE_ALLOWLIST:
+        raise ValueError('scanner source pins differ from the built-file allowlist')
+    expected_inputs = {name: pins['sourceFiles'][name] for name in ('Cargo.toml', 'Cargo.lock') + tuple(sorted(pinned_scanner))}
     for name, expected in expected_inputs.items():
         if inputs.get(name) != expected:
             raise ValueError('scanner source input differs from pinned upstream')

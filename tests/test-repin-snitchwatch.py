@@ -306,5 +306,49 @@ class PolicyTests(Base):
         self.assertEqual(first, self.snapshot())
 
 
+class ScannerSourceTests(Base):
+    PRIV = 'crates/scanner-privileged/'
+    BROKER = 'crates/scanner-broker/'
+
+    def setUp(self):
+        super().setUp()
+        self.files = {self.PRIV + 'Cargo.toml': 'p\n', self.PRIV + 'src/main.rs': 'main\n', self.PRIV + 'src/checks/mod.rs': 'mod\n',
+                      self.BROKER + 'Cargo.toml': 'b\n', self.BROKER + 'src/lib.rs': 'lib\n',
+                      'crates/scanner-core/src/lib.rs': 'not built\n'}
+        self.sc = self.src_commit(self.files)
+
+    def scanner_pins(self):
+        return {k: v for k, v in self.pins()['sourceFiles'].items() if k.startswith('crates/scanner-')}
+
+    def test_pins_derives_every_built_scanner_file_and_only_those(self):
+        self.pin_extra(self.PRIV + 'src/main.rs')  # stale pre-existing entry
+        self.repin('--write')
+        want = {k: sha(v.encode()) for k, v in self.files.items() if not k.startswith('crates/scanner-core/')}
+        self.assertEqual(self.scanner_pins(), want)
+
+    def test_dry_run_is_clean_after_write(self):
+        self.repin('--write')
+        r = self.repin()
+        self.assertNotIn('would change', r.stdout)
+        self.assertEqual(git(self.tower, 'status', '--porcelain').stdout.count('\n'), 5)
+
+    def test_canonical_layout_and_verifier_hash_follow_new_entries(self):
+        self.repin('--write')
+        pins = self.pins()
+        self.assertEqual((self.tower / PINS).read_text(), pins_text(self.sc, self.tree_of(), FAKE_DAEMON, pins['sourceFiles'], self.args))
+        self.assertIn("EXPECTED_PINS_SHA256 = '%s'" % sha((self.tower / PINS).read_bytes()), (self.tower / VERIFY).read_text())
+
+    def tree_of(self):
+        return git(self.src, 'rev-parse', self.sc + '^{tree}').stdout.strip()
+
+    def test_file_removed_upstream_is_dropped_from_pins(self):
+        self.repin('--write')
+        git(self.src, 'rm', '-q', self.BROKER + 'src/lib.rs')
+        newer = commit(self.src, 'drop', add=False)
+        self.run_tool('pins', '--source', str(self.src), '--commit', newer, '--write')
+        self.assertNotIn(self.BROKER + 'src/lib.rs', self.scanner_pins())
+        self.assertIn(self.PRIV + 'src/main.rs', self.scanner_pins())
+
+
 if __name__ == '__main__':
     unittest.main()

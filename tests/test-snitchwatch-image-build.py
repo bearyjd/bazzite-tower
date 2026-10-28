@@ -431,6 +431,53 @@ class ImageBuildContracts(unittest.TestCase):
                 self.scanner_inputs(lambda inputs: inputs.update({key: self.pins['sourceFiles'][key]}))
         self.check(valid=True)
 
+    SCANNER_SOURCES = tuple(sorted(
+        ['crates/scanner-broker/' + n for n in ('Cargo.toml', 'src/lib.rs', 'src/main.rs')]
+        + ['crates/scanner-privileged/' + n for n in (
+            'Cargo.toml', 'src/checks/kargs.rs', 'src/checks/lockdown.rs', 'src/checks/mod.rs', 'src/checks/modules.rs',
+            'src/checks/rootkit.rs', 'src/command.rs', 'src/error.rs', 'src/facts.rs', 'src/lib.rs', 'src/main.rs',
+            'src/model.rs', 'src/scan.rs', 'src/store.rs', 'tests/end_to_end.rs')]))
+
+    def test_every_built_scanner_source_file_is_hash_pinned(self):
+        pinned = sorted(name for name in self.pins['sourceFiles'] if name.startswith('crates/scanner-'))
+        self.assertEqual(len(self.SCANNER_SOURCES), 18)
+        self.assertEqual(pinned, list(self.SCANNER_SOURCES))
+        for name in pinned:
+            self.assertRegex(self.pins['sourceFiles'][name], '^[0-9a-f]{64}$')
+
+    def test_verifier_refuses_any_scanner_source_that_is_changed_missing_or_extra(self):
+        for key in self.SCANNER_SOURCES:
+            with self.subTest(changed=key):
+                self.scanner_inputs(lambda inputs: inputs.update({key: '0' * 64}))
+                self.assertIn('differs from pinned upstream', self.check().stderr)
+                self.scanner_inputs(lambda inputs: inputs.update({key: self.pins['sourceFiles'][key]}))
+            with self.subTest(missing=key):
+                self.scanner_inputs(lambda inputs: inputs.pop(key))
+                self.assertIn('differs from pinned upstream', self.check().stderr)
+                self.scanner_inputs(lambda inputs: inputs.update({key: self.pins['sourceFiles'][key]}))
+        for extra in ('crates/scanner-privileged/src/extra.rs', 'crates/scanner-broker/build.rs', 'crates/scanner-privileged/src/bin/x.rs'):
+            with self.subTest(extra=extra):
+                self.scanner_inputs(lambda inputs: inputs.update({extra: '0' * 64}))
+                self.assertIn('unexpected scanner source input', self.check().stderr)
+                self.scanner_inputs(lambda inputs: inputs.pop(extra))
+        self.check(valid=True)
+
+    def test_scanner_builder_refuses_unpinned_missing_and_changed_crate_files(self):
+        helper = runpy.run_path(str(FACTORY / 'snitchwatch-system-scanner-build.py'))
+        tree = self.root / 'exported'
+        pins = {'sourceFiles': {}}
+        for name in ('crates/scanner-privileged/src/main.rs', 'crates/scanner-broker/src/lib.rs'):
+            self.write('exported/' + name, name.encode())
+            pins['sourceFiles'][name] = sha(name.encode())
+        helper['require_pinned_scanner_sources'](tree, pins)
+        self.write('exported/crates/scanner-privileged/build.rs', b'fn main() {}')
+        with self.assertRaisesRegex(ValueError, 'unpinned scanner input: crates/scanner-privileged/build.rs'):
+            helper['require_pinned_scanner_sources'](tree, pins)
+        (self.root / 'exported/crates/scanner-privileged/build.rs').unlink()
+        (self.root / 'exported/crates/scanner-broker/src/lib.rs').unlink()
+        with self.assertRaisesRegex(ValueError, 'missing pinned scanner input: crates/scanner-broker/src/lib.rs'):
+            helper['require_pinned_scanner_sources'](tree, pins)
+
     def test_scanner_builder_refuses_exported_files_that_differ_from_pins(self):
         helper = runpy.run_path(str(FACTORY / 'snitchwatch-system-scanner-build.py'))
         tree = self.root / 'exported'

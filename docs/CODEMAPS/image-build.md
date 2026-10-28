@@ -120,7 +120,8 @@ system readiness rejects an explicit local deny override as policy drift.
 r16.2 preparation keeps the bridge pin at Snitchwatch 5860dcd (AI cache export and
 the upstream Deep Scan host scanner). `snitchwatch-system-scanner-build.py` archives the
 verified source into a separate build copy (no tower patch is applied),
-verifies the scanner file hashes against the pinned `sourceFiles`, and
+verifies every file of the two built crates (18: `scanner-privileged` 15, `scanner-broker` 3) against the pinned `sourceFiles`
+(unpinned, missing or changed files are refused; the verifier requires the pinned set to equal its allowlist), and
 performs two locked offline release builds with separate target directories.
 It requires byte-identical scanner/broker binaries, resolved ELF dependencies,
 Rust tests plus fake-authorization private-D-Bus tests, and records source input,

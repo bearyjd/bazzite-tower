@@ -25,6 +25,8 @@ POLICY = '.github/base-refresh-policy.json'
 FIXTURES = 'tests/test-snitchwatch-image-build-fixtures'
 MANIFEST = 'packaging/flatpak/org.snitchwatch.Snitchwatch.system.yml'
 GITLINK = 'vendor/opensnitch'
+# Crates the scanner build compiles (snitchwatch-system-scanner-build.py PACKAGES); every tracked file is pinned.
+SCANNER_CRATES = ('crates/scanner-privileged', 'crates/scanner-broker')
 
 
 class Refused(Exception):
@@ -68,6 +70,11 @@ def set_finish_args(text, args):
     return sub_once(text, r'(?s)(^  "flatpakFinishArgs": \[\n).*?(\n  \])', body, 'flatpakFinishArgs')
 
 
+def set_source_files(text, hashes):
+    body = ',\n'.join('    %s: %s' % (json.dumps(p), json.dumps(h)) for p, h in sorted(hashes.items()))
+    return sub_once(text, r'(?s)(^  "sourceFiles": \{\n).*?(\n  \})', body, 'sourceFiles')
+
+
 def set_native(text, commit, tree, sub):
     block = re.search(r'("nativeSource": \{\n)(.*?)(\n  \})', text, re.S)
     if not block:
@@ -89,9 +96,13 @@ def plan_pins(tower, source, commit):
     text = (tower / PINS).read_text()
     pins = json.loads(text)
     text = set_key(set_key(set_key(text, 'sourceCommit', commit), 'sourceTree', tree), 'submoduleCommit', sub)
-    blobs = {p: git(source, 'show', '%s:%s' % (commit, p), raw=True) for p in pins['sourceFiles']}
-    for path, data in blobs.items():
-        text = sub_once(text, r'(^    "%s": ")[^"]*(")' % re.escape(path), sha256(data), path)
+    scanner = git(source, 'ls-tree', '-r', '--name-only', commit, '--', *SCANNER_CRATES).splitlines()
+    kept = [p for p in pins['sourceFiles'] if not p.startswith(tuple(c + '/' for c in SCANNER_CRATES))]
+    paths = sorted(set(kept) | set(scanner))
+    for gone in sorted(set(pins['sourceFiles']) - set(paths)):
+        print('dropping %s (no longer in the scanner crates)' % gone)
+    blobs = {p: git(source, 'show', '%s:%s' % (commit, p), raw=True) for p in paths}
+    text = set_source_files(text, {p: sha256(d) for p, d in blobs.items()})
     if MANIFEST not in blobs:
         raise Refused('%s is not in sourceFiles' % MANIFEST)
     text = set_finish_args(text, finish_args(blobs[MANIFEST].decode()))
@@ -104,7 +115,8 @@ def plan_pins(tower, source, commit):
     for path in blobs:
         name = Path(path).name
         if name not in fixtures:
-            print('no fixture for %s (skipped)' % path)
+            if not path.startswith('crates/scanner-'):
+                print('no fixture for %s (skipped)' % path)
         elif names.count(name) > 1:
             raise Refused('duplicate basename %s among sourceFiles; cannot match fixture' % name)
         else:

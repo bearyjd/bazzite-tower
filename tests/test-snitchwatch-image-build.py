@@ -462,6 +462,34 @@ class ImageBuildContracts(unittest.TestCase):
                 self.scanner_inputs(lambda inputs: inputs.pop(extra))
         self.check(valid=True)
 
+    def check_with_pins(self, pins):
+        """Run a scratch verifier whose reviewed pins digest matches the mutated pins, so only later checks can object."""
+        name = 'usr/share/snitchwatch/build-pins.json'
+        data = json.dumps(pins).encode()
+        self.write(name, data); self.update_hash(name)
+        scratch = self.root.parent / 'scratch-verify.py'
+        text = (FACTORY / 'snitchwatch-system-verify.py').read_text()
+        self.assertEqual(text.count("EXPECTED_PINS_SHA256 = '"), 1)
+        scratch.write_text(re.sub(r"EXPECTED_PINS_SHA256 = '[0-9a-f]*'", "EXPECTED_PINS_SHA256 = '%s'" % sha(data), text))
+        self.save()
+        return subprocess.run(['python3', str(scratch), '--root', str(self.root), '--image-tree'], capture_output=True, text=True)
+
+    def test_verifier_refuses_dropped_or_extra_scanner_pin(self):
+        for key in self.SCANNER_SOURCES:
+            with self.subTest(dropped=key):
+                pins = json.loads((FACTORY / 'snitchwatch-system-pins.json').read_text())
+                del pins['sourceFiles'][key]
+                result = self.check_with_pins(pins)
+                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                self.assertIn('scanner source pins differ', result.stderr)
+        pins = json.loads((FACTORY / 'snitchwatch-system-pins.json').read_text())
+        pins['sourceFiles']['crates/scanner-privileged/src/extra.rs'] = '0' * 64
+        result = self.check_with_pins(pins)
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn('scanner source pins differ', result.stderr)
+        pins = json.loads((FACTORY / 'snitchwatch-system-pins.json').read_text())
+        self.assertEqual(self.check_with_pins(pins).returncode, 0)
+
     def test_scanner_builder_refuses_unpinned_missing_and_changed_crate_files(self):
         helper = runpy.run_path(str(FACTORY / 'snitchwatch-system-scanner-build.py'))
         tree = self.root / 'exported'

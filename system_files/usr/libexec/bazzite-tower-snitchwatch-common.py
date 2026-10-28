@@ -47,6 +47,14 @@ VENDOR_DROPIN_SHA256 = "ae6b234f92bc22f1201a7572b59b454c9809f33c80d13f361b9674e1
 TYPED_EMPTY_PROPERTIES = {"EnvironmentFiles": "a(sb)", **{name: "a(sasbttttuii)" for name in ("ExecStartPre", "ExecStartPost", "ExecStop", "ExecStopPost", "ExecCondition")}}
 
 
+# Single table of every helper the privileged tools may run, by absolute path
+# (all verified in /usr/bin on the Bazzite host; /bin and /usr/sbin are symlinks
+# or empty merges there). Resolution never consults the caller's PATH.
+COMMANDS = {name: "/usr/bin/"+name for name in ("flatpak", "systemctl", "ss", "busctl", "getent", "python3", "systemd-run")}
+# The only environment a helper sees: no inherited PATH, LD_*, PYTHON* or locale.
+COMMAND_ENV = {"PATH": "/usr/sbin:/usr/bin", "LC_ALL": "C"}
+
+
 class Refusal(RuntimeError):
     pass
 
@@ -57,9 +65,17 @@ def require(condition, message):
 
 
 class Context:
-    def __init__(self, root=Path("/"), runner=subprocess.run):
+    def __init__(self, root=Path("/"), runner=None):
         self.root = Path(root)
-        self.runner = runner
+        self.runner = runner or self.spawn
+
+    @staticmethod
+    def spawn(argv, **kwargs):
+        # Default runner. Injected test runners see the logical argv unchanged.
+        program = COMMANDS.get(argv[0], argv[0])
+        require(program.startswith("/"), "not a trusted command: "+argv[0])
+        require(os.access(program, os.X_OK), "required command missing: "+program)
+        return subprocess.run([program, *argv[1:]], env=dict(COMMAND_ENV), **kwargs)
 
     def path(self, absolute):
         require(absolute.startswith("/") and ".." not in Path(absolute).parts, "unsafe internal path")
@@ -421,7 +437,10 @@ def flatpak_profiles(ctx):
         for path in deployments:
             meta = configparser.ConfigParser(interpolation=None)
             meta.optionxform = str
-            meta.read(path)
+            try:
+                meta.read(path)
+            except configparser.Error as error:
+                raise Refusal("unreadable Flatpak metadata "+str(path)+": "+str(error)) from error
             context = meta["Context"] if meta.has_section("Context") else {}
             def values(key):
                 return set(context.get(key, "").strip(";").split(";"))-{ "" }

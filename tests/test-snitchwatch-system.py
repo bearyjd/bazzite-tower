@@ -675,6 +675,20 @@ class SystemBehavior(unittest.TestCase):
         common.runtime_readiness(self.ctx)
         self.assertNotIn(["flatpak", "--version"], self.ctx.commands)
 
+    def test_flatpak_duplicate_key_metadata_is_a_clean_refusal(self):
+        self.ctx.system_config()
+        self.ctx.flatpak(self.ctx.flatpak().read_text().replace("sockets=wayland;fallback-x11;\n", "sockets=wayland;fallback-x11;\nsockets=x11;\n"))
+        with self.assertRaisesRegex(common.Refusal, r"unreadable Flatpak metadata .*sockets"):
+            common.flatpak_profiles(self.ctx)
+
+    def test_flatpak_malformed_metadata_is_a_clean_refusal(self):
+        self.ctx.system_config()
+        for text in ("no section header\n", "[Application]\nname=a\n[Application]\nname=b\n"):
+            with self.subTest(text=text):
+                self.ctx.flatpak(text)
+                with self.assertRaisesRegex(common.Refusal, "unreadable Flatpak metadata"):
+                    common.flatpak_profiles(self.ctx)
+
     def test_scanner_bus_grant_requires_verified_image_profile(self):
         self.ctx.system_config(); path = self.ctx.flatpak()
         text = path.read_text() + "org.snitchwatch.Scanner=talk\n"
@@ -1119,6 +1133,62 @@ class SystemBehavior(unittest.TestCase):
         with self.assertRaisesRegex(common.Refusal,"journal directory"):
             migration.Migration(self.ctx).apply()
         self.assertFalse(any(cmd[:2] in (["systemctl","start"],["systemctl","stop"]) for cmd in self.ctx.commands))
+
+
+class CommandResolution(unittest.TestCase):
+    """Privileged helpers run by fixed absolute path with a minimal environment."""
+
+    def spawn(self, argv, **kwargs):
+        calls = []
+        def fake_run(call, **options):
+            calls.append((call, options))
+            return subprocess.CompletedProcess(call, 0, "", "")
+        with mock.patch.object(common.subprocess, "run", fake_run), mock.patch.object(common.os, "access", return_value=True):
+            common.Context().command(argv, **kwargs)
+        return calls[0]
+
+    def test_every_bare_name_resolves_to_a_fixed_absolute_path(self):
+        self.assertEqual(set(common.COMMANDS), {"flatpak", "systemctl", "ss", "busctl", "getent", "python3", "systemd-run"})
+        for name, path in common.COMMANDS.items():
+            with self.subTest(name=name):
+                call, _ = self.spawn([name, "x"])
+                self.assertEqual(call, [path, "x"])
+                self.assertTrue(path.startswith(("/usr/bin/", "/usr/sbin/")))
+
+    def test_environment_is_minimal_and_ignores_caller_environment(self):
+        hostile = dict(PATH="/tmp/evil", LD_PRELOAD="/tmp/evil.so", LD_LIBRARY_PATH="/tmp", PYTHONPATH="/tmp", PYTHONSTARTUP="/tmp/s", LANG="de_DE.UTF-8", LC_ALL="de_DE.UTF-8")
+        with mock.patch.dict(common.os.environ, hostile):
+            _, options = self.spawn(["flatpak", "--version"])
+        self.assertEqual(options["env"], dict(PATH="/usr/sbin:/usr/bin", LC_ALL="C"))
+
+    def test_absolute_argv0_is_kept_and_unknown_bare_name_refuses(self):
+        call, options = self.spawn([common.BINARY, "--version"])
+        self.assertEqual(call, [common.BINARY, "--version"])
+        self.assertEqual(options["env"], dict(PATH="/usr/sbin:/usr/bin", LC_ALL="C"))
+        with self.assertRaisesRegex(common.Refusal, "not a trusted command"):
+            self.spawn(["curl", "x"])
+
+    def test_missing_trusted_command_fails_closed_with_clear_message(self):
+        with mock.patch.object(common.os, "access", return_value=False), mock.patch.object(common.subprocess, "run") as run:
+            with self.assertRaisesRegex(common.Refusal, r"required command missing: /usr/bin/flatpak"):
+                common.Context().command(["flatpak", "--version"])
+        run.assert_not_called()
+
+    def test_path_planted_fake_is_never_executed(self):
+        with tempfile.TemporaryDirectory(prefix="sw-planted-") as temp:
+            marker = Path(temp)/"ran"
+            for name in ("flatpak", "ss"):
+                fake = Path(temp)/name
+                fake.write_text("#!/bin/sh\ntouch "+str(marker)+"\necho Flatpak 1.18.1\n");fake.chmod(0o755)
+            with mock.patch.dict(common.os.environ, dict(PATH=temp+":"+common.os.environ.get("PATH", ""))):
+                for name, argv in (("flatpak", ["flatpak", "--version"]), ("ss", ["ss", "-H", "-ltn"])):
+                    if not common.os.access(common.COMMANDS[name], common.os.X_OK):
+                        continue
+                    try:
+                        common.Context().command(argv, okay=(0, 1, 2))
+                    except (common.Refusal, OSError):
+                        pass
+            self.assertFalse(marker.exists(), "a PATH-planted command was executed")
 
 
 if __name__ == "__main__":

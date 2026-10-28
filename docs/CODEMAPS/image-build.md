@@ -117,10 +117,10 @@ before tmpfiles and socket startup. Existing live bootc `/etc` drift is a
 migration decision, not an implicit policy overwrite. Migration retains allow;
 system readiness rejects an explicit local deny override as policy drift.
 
-r16.2 preparation keeps the bridge pin at Snitchwatch 8136b41 (AI cache export and
-Deep Scan host interface). `snitchwatch-system-scanner-build.py` archives the
-verified source into a separate build copy, applies the SHA-pinned
-`snitchwatch-system-scanner.patch`, verifies the post-patch file hashes, and
+r16.2 preparation keeps the bridge pin at Snitchwatch 11ca612 (AI cache export and
+the upstream Deep Scan host scanner). `snitchwatch-system-scanner-build.py` archives the
+verified source into a separate build copy (no tower patch is applied),
+verifies the scanner file hashes against the pinned `sourceFiles`, and
 performs two locked offline release builds with separate target directories.
 It requires byte-identical scanner/broker binaries, resolved ELF dependencies,
 Rust tests plus fake-authorization private-D-Bus tests, and records source input,

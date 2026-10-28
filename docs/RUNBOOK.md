@@ -329,8 +329,11 @@ valid marker, as drift. Not yet exercised on real hardware/systemd.
 
 ### Snitchwatch r16.2 feature preparation and owner acceptance
 
-The bridge source pin is Snitchwatch `8136b415706401802c3fb9ced1bf3826f95abbaa`
-(AI cache summary/export support included). This section covers the host components
+The bridge source pin is Snitchwatch `11ca612ec860b9bde076b693dfd8c3f95c682bdc`
+(AI cache export and the Deep Scan scanner, upstream snitchwatch #243 plus its
+follow-up 9a0a222; the scanner is built unmodified from upstream; the previous pin was a047c759 with identical scanner files).
+This pin move also advances the recorded GUI `sourceCommit` across about 5k lines of
+kirigami changes that are not compiled into the image. This section covers the host components
 for the GUI's explicit **Deep Scan** action. These require a newly built,
 reviewed and booted system-profile candidate; the staged r16.1 image does not
 gain them from this preparation. Legacy images omit the scanner integration.
@@ -347,13 +350,13 @@ with a600-second deadline; the transient privileged invocation has its own
 540-second process-group watchdog.
 
 Tmpfiles must create `/var/lib/snitchwatch-scanner` as root:root0700 before the
-first request. The tower patch refuses missing, writable or symlink ancestry,
+first request. The scanner refuses missing, writable or symlink ancestry,
 and unsafe existing database/WAL/SHM/journal files; it does not repair ownership
-or remove state. New state uses0600 permissions. The same patch limits each
+or remove state. New state uses0600 permissions. The same code limits each
 system primitive's stdout to1MiB, stderr to64KiB and elapsed time to300seconds;
 nonzero exit status and invalid UTF-8 fail the scan rather than produce an
 apparently healthy result. A precise `rpm -qf` not-owned result is handled
-separately. Scanner patch/source/input, Cargo, dependency/license and both
+separately. Scanner source/input, Cargo, dependency/license and both
 executable identities have distinct build evidence from the pristine bridge.
 
 Current upstream scans kernel arguments, loaded modules, Secure Boot/lockdown

@@ -10,7 +10,7 @@ import sys
 
 MANIFEST = '/usr/share/snitchwatch/system-bridge-manifest.json'
 PINS = '/usr/share/snitchwatch/build-pins.json'
-EXPECTED_PINS_SHA256 = 'a5f626448fcdc788c293a1e3181b50a09874b0c0796b8a84759a99ff2bd7e19f'
+EXPECTED_PINS_SHA256 = 'a156211eb44592666bdef6102e3e97901aa644355f1176ef43e872400a355cfe'
 BINARY = '/usr/bin/snitchwatch-bridge-cli'
 PROFILE = '/usr/share/bazzite-tower/snitchwatch-bridge-profile'
 CONFIG = '/usr/share/bazzite-tower/opensnitchd-system-bridge-config.json'
@@ -69,9 +69,9 @@ SCANNER_BINARIES = {'/usr/libexec/snitchwatch-scanner-privileged', '/usr/libexec
 SCANNER_ROOT = '/usr/share/snitchwatch/scanner/'
 SCANNER_LICENSE_ROOT = '/usr/share/licenses/snitchwatch-scanner/'
 SCANNER_CRATE_MANIFESTS = ('crates/scanner-broker/Cargo.toml', 'crates/scanner-privileged/Cargo.toml')
+SCANNER_PINNED_SOURCES = tuple('crates/scanner-privileged/src/%s.rs' % name for name in ('command', 'facts', 'lib', 'main'))
 SCANNER_CRATE_DIRS = ('crates/scanner-privileged/', 'crates/scanner-broker/')
-# Every file of the two built crates at the pinned upstream commit, plus the
-# file the tower patch adds.  Anything else (e.g. a new build.rs) is refused.
+# Every file of the two built crates at the pinned upstream commit.  Anything else (e.g. a new build.rs) is refused.
 SCANNER_SOURCE_ALLOWLIST = frozenset({
     'crates/scanner-broker/Cargo.toml',
     'crates/scanner-broker/src/lib.rs',
@@ -99,7 +99,7 @@ SCANNER_ACTIVATION_DIRS = ('usr/lib/systemd/system', 'usr/lib/systemd/user', 'et
                            'usr/share/dbus-1/services', 'etc/dbus-1/services')
 SCANNER_UNIT_SUFFIXES = ('.service', '.timer', '.socket', '.path')
 SCANNER_WANTS_SUFFIXES = ('.wants', '.requires')
-SCANNER_EVIDENCE = {'source-inputs.json', 'dependency-closure.json', 'scanner.patch', 'build.log', 'repro.log', 'test.log',
+SCANNER_EVIDENCE = {'source-inputs.json', 'dependency-closure.json', 'build.log', 'repro.log', 'test.log',
                     'snitchwatch-scanner-privileged.ldd', 'snitchwatch-scanner-broker.ldd'}
 RECEIPTS = {
     PINS, '/usr/share/snitchwatch/native-build-provenance.json',
@@ -271,14 +271,12 @@ def verify(root, image_tree=False):
     scanner = json.loads(contents[SCANNER_ROOT + 'provenance.json'])
     if (scanner.get('schemaVersion') != 1 or scanner.get('sourceCommit') != source['commit']
             or scanner.get('sourceTree') != source['tree'] or scanner.get('builderImage') != pins['builderImage']
-            or scanner.get('patchSha256') != pins['scannerPatch']['sha256']
-            or scanner.get('patchedFiles') != pins['scannerPatch']['patchedFiles']
             or scanner.get('cargoLockSha256') != pins['sourceFiles']['Cargo.lock']
             or scanner.get('cargoTomlSha256') != pins['sourceFiles']['Cargo.toml']
             or not scanner.get('rustcVv', '').startswith('rustc ' + pins['rustVersion'] + ' ')
             or scanner.get('reproducible') is not True or scanner.get('testsPassed') is not True
             or scanner.get('rpmInventorySha256') != files['/usr/share/snitchwatch/native-rpm-inventory.txt']):
-        raise ValueError('scanner build/source/patch/test provenance mismatch')
+        raise ValueError('scanner build/source/test provenance mismatch')
     if scanner.get('buildCommand') != ['cargo', 'build', '--release', '--locked', '--offline', '-p', 'scanner-privileged', '-p', 'scanner-broker']:
         raise ValueError('unexpected scanner build command')
     binaries = {Path(name).name: files[name] for name in SCANNER_BINARIES}
@@ -286,13 +284,13 @@ def verify(root, image_tree=False):
         raise ValueError('scanner executable differs from build provenance')
     evidence = {name: files[SCANNER_ROOT + name] for name in SCANNER_EVIDENCE}
     evidence.update({name: files[SCANNER_LICENSE_ROOT + name] for name in {'LICENSE', 'THIRD-PARTY-LICENSES.md'}})
-    if scanner.get('evidence') != evidence or files[SCANNER_ROOT + 'scanner.patch'] != pins['scannerPatch']['sha256']:
+    if scanner.get('evidence') != evidence:
         raise ValueError('scanner evidence differs from build provenance')
     inputs = json.loads(contents[SCANNER_ROOT + 'source-inputs.json'])
-    expected_inputs = {**{name: pins['sourceFiles'][name] for name in ('Cargo.toml', 'Cargo.lock') + SCANNER_CRATE_MANIFESTS}, **pins['scannerPatch']['patchedFiles']}
+    expected_inputs = {name: pins['sourceFiles'][name] for name in ('Cargo.toml', 'Cargo.lock') + SCANNER_CRATE_MANIFESTS + SCANNER_PINNED_SOURCES}
     for name, expected in expected_inputs.items():
         if inputs.get(name) != expected:
-            raise ValueError('scanner patched source input mismatch')
+            raise ValueError('scanner source input differs from pinned upstream')
     # The complete upstream tree is not derivable from the pins, so the built
     # crates and build-affecting config are restricted to an explicit allowlist.
     for name in inputs:

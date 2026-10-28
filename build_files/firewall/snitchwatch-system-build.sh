@@ -16,8 +16,8 @@ work=$(mktemp -d /work/snitchwatch-native.XXXXXX)
 # The unchanged upstream dependency list omits the RPM helper downloader.
 command -v curl > /dev/null || timeout 240 dnf -y --setopt=install_weak_deps=False install curl
 bash "$factory/snitchwatch-system-toolchain.sh" install "$factory/snitchwatch-system-pins.json" "$work/toolchain"
-# Fingerprint the installed toolchain files now, before any third-party build script runs;
-# the scanner build re-hashes them and refuses on mismatch.
+# Fingerprint the pinned rust/cargo/rust-std-static files now; the scanner build re-hashes them.
+# Partial, defence in depth only: the bridge build scripts later run as root in this same RUN.
 python3 "$factory/snitchwatch-system-scanner-build.py" --record-toolchain "$work/toolchain.sha256" \
     --pins "$factory/snitchwatch-system-pins.json"
 readarray -t pin < <(python3 - "$factory/snitchwatch-system-pins.json" <<'PY'
@@ -60,7 +60,8 @@ python3 "$factory/snitchwatch-system-scanner-build.py" --source "$SRC_DIR" --out
     --pins "$factory/snitchwatch-system-pins.json" \
     --rpm-inventory "$work/rpm-inventory.txt" --toolchain-digest "$work/toolchain.sha256"
 artifact_sha=$(sha256sum "$first" | awk '{print $1}')
-python3 "$SRC_DIR/packaging/release/bridge_artifact.py" verify --tarball "$first" \
+# Run the hash-checked export copy of the helper (checked against the pin by the scanner build), not the mutable checkout.
+python3 "$work/scanner/source/packaging/release/bridge_artifact.py" verify --tarball "$first" \
     --expect-sha256 "$artifact_sha" --expect-version "${pin[5]}" --check-ldd --run-flags --extract-to "$work/verified"
 python3 "$factory/snitchwatch-system-stage.py" \
     --source "$SRC_DIR" --artifact "$work/verified/$(basename "$first" .tar.gz)" --out "$1" \

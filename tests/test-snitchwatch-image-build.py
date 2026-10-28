@@ -1007,7 +1007,7 @@ esac
 
 
 class ScannerBuildHardening(unittest.TestCase):
-    """Pure-function contracts for the scanner build's isolation from the bridge build."""
+    """Defence-in-depth contracts for scanner build inputs (these do not isolate it from the bridge build; H1 stays open)."""
 
     def setUp(self):
         self.h = runpy.run_path(str(FACTORY / 'snitchwatch-system-scanner-build.py'))
@@ -1114,18 +1114,69 @@ class ScannerBuildHardening(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     clean({'PATH': '/usr/bin', bad: 'x'})
 
-    def test_builder_uses_checked_export_and_fresh_home(self):
+    def test_python_bytecode_variable_is_allowed_but_other_python_steering_refused(self):
+        clean = self.h['clean_environment']
+        self.assertEqual(clean({'PYTHONDONTWRITEBYTECODE': '0'})['PYTHONDONTWRITEBYTECODE'], '1')
+        for bad in ('PYTHONPATH', 'PYTHONSTARTUP', 'PYTHONHOME'):
+            with self.assertRaises(ValueError):
+                clean({bad: 'x'})
+
+    def test_pinned_file_check_gates_cargo_lock_and_helper(self):
+        check = self.h['require_pinned_file']
+        (self.root / 'Cargo.lock').write_text('lock')
+        pins = {'sourceFiles': {'Cargo.lock': sha(b'lock')}}
+        check(self.root, pins, 'Cargo.lock')
+        (self.root / 'Cargo.lock').write_text('tampered')
+        for name, tree in (('changed', pins), ('unpinned', {'sourceFiles': {}})):
+            with self.subTest(name), self.assertRaises(ValueError):
+                check(self.root, tree, 'Cargo.lock')
+        with self.assertRaises(ValueError):
+            check(self.root, {'sourceFiles': {'x': sha(b'')}}, 'x')
+
+    def test_cargo_home_must_be_set_and_existing(self):
+        require = self.h['require_bridge_cargo_home']
+        for bad in (None, '', str(self.root / 'nope')):
+            with self.subTest(bad), self.assertRaises(ValueError):
+                require(bad)
+        self.assertEqual(require(str(self.root)), self.root)
+
+    def main_calls(self):
+        """Ordered (name, first-arg-name) of every call in main(), from the AST."""
+        import ast
+        tree = ast.parse((FACTORY / 'snitchwatch-system-scanner-build.py').read_text())
+        main = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == 'main')
+        calls = sorted((n for n in ast.walk(main) if isinstance(n, ast.Call)), key=lambda n: (n.lineno, n.col_offset))
+        name = lambda f: f.id if isinstance(f, ast.Name) else None
+        return [(name(c.func), name(c.args[0]) if c.args and isinstance(c.args[0], ast.Name) else None) for c in calls]
+
+    def test_main_wires_checks_in_order_before_the_first_cargo_run(self):
+        names = [n for n, _ in self.main_calls()]
+        order = ['require_pinned_scanner_sources', 'require_pinned_file', 'make_fresh_cargo_home',
+                 'require_no_cargo_config', 'require_toolchain_digest', 'run']
+        positions = []
+        for need in order:
+            self.assertIn(need, names, need + ' is not called from main()')
+            positions.append(names.index(need))
+        self.assertEqual(positions, sorted(positions))
+        # The Cargo.lock pin check must precede its use as the checksum source.
+        self.assertLess(names.index('require_pinned_file'), names.index('make_fresh_cargo_home'))
+        self.assertGreaterEqual(names.count('require_pinned_file'), 2, 'both Cargo.lock and the helper must be pinned-checked')
+
+    def test_main_loads_helper_from_the_checked_export(self):
+        loads = [arg for name, arg in self.main_calls() if name == 'load_bridge_artifact']
+        self.assertEqual(loads, ['exported'])
         text = (FACTORY / 'snitchwatch-system-scanner-build.py').read_text()
-        self.assertIn('load_bridge_artifact(exported)', text)
-        self.assertIn("exported / 'LICENSE'", text)
         self.assertNotIn("source / 'LICENSE'", text)
-        self.assertIn('make_fresh_cargo_home', text)
-        self.assertIn('require_no_cargo_config', text)
-        self.assertIn('require_toolchain_digest', text)
+        self.assertIn("exported / 'LICENSE'", text)
+
+    def test_build_script_verifies_the_checked_helper_not_the_mutable_checkout(self):
         build = (FACTORY / 'snitchwatch-system-build.sh').read_text()
+        self.assertNotIn('"$SRC_DIR/packaging/release/bridge_artifact.py" verify', build)
+        self.assertIn('"$work/scanner/source/packaging/release/bridge_artifact.py" verify', build)
         self.assertRegex(build, r'--record-toolchain')
         self.assertRegex(build, r'--toolchain-digest')
         self.assertLess(build.index('--record-toolchain'), build.index('build-bridge.sh'))
+        self.assertLess(build.index('snitchwatch-system-scanner-build.py" --source'), build.index('scanner/source/packaging/release/bridge_artifact.py" verify'))
 
 
 class FlatpakFinishArgsContract(unittest.TestCase):

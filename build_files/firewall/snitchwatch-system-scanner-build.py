@@ -28,12 +28,14 @@ ENV_KEEP = ('PATH', 'HOME', 'CARGO_HOME', 'CARGO_TARGET_DIR', 'CARGO_BUILD_JOBS'
 ENV_REFUSE = re.compile(
     r'^(CC|CXX|CPP|AR|LD|NM|RANLIB|STRIP|OBJCOPY|PKG_CONFIG\w*|(CC|CXX|CFLAGS|CXXFLAGS|CPPFLAGS|LDFLAGS|AR)_\w+'
     r'|C(XX|PP)?FLAGS|LDFLAGS|LD_\w+|RUST\w*|CARGO_\w+|SSL_CERT\w*|PYTHON\w*)$')
+# Set by the builder itself below, so an inherited value is overwritten rather than refused.
+ENV_SET_BY_BUILDER = ('PYTHONDONTWRITEBYTECODE',)
 
 
 def clean_environment(environment):
     """Allowlisted child environment; refuse unexpected toolchain-steering variables."""
     for key in sorted(environment):
-        if key not in ENV_KEEP and key != 'LANG' and ENV_REFUSE.match(key):
+        if key not in ENV_KEEP and key not in ENV_SET_BY_BUILDER and key != 'LANG' and ENV_REFUSE.match(key):
             raise ValueError('refusing build-steering environment variable: ' + key)
     # Children must never write bytecode caches into the pinned checkouts.
     return {**{key: environment[key] for key in ENV_KEEP if key in environment}, 'LANG': 'C', 'PYTHONDONTWRITEBYTECODE': '1'}
@@ -56,7 +58,9 @@ def toolchain_digest(paths):
 
 
 def installed_toolchain_digest(pins):
-    """Digest of every file the pinned toolchain RPMs installed (rpm -ql)."""
+    """Digest of the files installed by the pinned rust, cargo and rust-std-static RPMs only (rpm -ql).
+
+    A partial fingerprint: it does not cover cc, ld, the linker/libc, PATH or /etc/ld.so.preload."""
     paths = []
     for rpm in pins['toolchainRpms']:
         listing = subprocess.check_output(['rpm', '-ql', rpm['name']], text=True)
@@ -82,7 +86,7 @@ def require_no_cargo_config(exported, cargo_home):
 
 
 def make_fresh_cargo_home(bridge_home, fresh, lock_text):
-    """Rebuild CARGO_HOME from checksum-verified .crate files; registry/src, config and bin are never carried over."""
+    """Rebuild CARGO_HOME from checksum-verified .crate files; registry/src, config and bin are not carried over (hardening, not isolation)."""
     wanted = {'%s-%s.crate' % (p['name'], p['version']): p['checksum']
               for p in tomllib.loads(lock_text).get('package', ()) if 'checksum' in p}
     cache = bridge_home / 'registry' / 'cache'
@@ -147,11 +151,18 @@ def require_pinned_scanner_sources(exported, pins):
         raise ValueError('no scanner crate files are pinned')
 
 
-def require_pinned_helper(exported, pins):
-    """The bridge helper executed after the build must be the pinned file from the checked export."""
-    expected = pins['sourceFiles'].get(HELPER)
-    if expected is None or not (exported / HELPER).is_file() or sha(exported / HELPER) != expected:
-        raise ValueError('bridge helper differs from pinned upstream: ' + HELPER)
+def require_pinned_file(exported, pins, name):
+    """A file of the export that the builder trusts (Cargo.lock, the bridge helper) must match its pin."""
+    expected = pins['sourceFiles'].get(name)
+    if expected is None or not (exported / name).is_file() or sha(exported / name) != expected:
+        raise ValueError('file differs from pinned upstream: ' + name)
+
+
+def require_bridge_cargo_home(value):
+    """CARGO_HOME of the bridge build must be set and an existing directory (never Path('') == '.')."""
+    if not value or not Path(value).is_dir():
+        raise ValueError('CARGO_HOME of the bridge build is unset or missing')
+    return Path(value)
 
 
 def write_json(path, value):
@@ -190,9 +201,7 @@ def main():
     if out.exists() or out == Path('/'):
         raise ValueError('output must be a new isolated directory')
     pins = json.loads(args.pins.read_text())
-    bridge_cargo_home = Path(os.environ.get('CARGO_HOME', ''))
-    if not bridge_cargo_home.is_dir():
-        raise ValueError('CARGO_HOME of the bridge build is missing')
+    bridge_cargo_home = require_bridge_cargo_home(os.environ.get('CARGO_HOME'))
     out.mkdir()
     exported = out / 'source'
     exported.mkdir()
@@ -203,15 +212,18 @@ def main():
         stream.extractall(exported, filter='data')
     archive.unlink()
     require_pinned_scanner_sources(exported, pins)
-    require_pinned_helper(exported, pins)
+    require_pinned_file(exported, pins, HELPER)
+    require_pinned_file(exported, pins, 'Cargo.lock')
     write_json(out / 'source-inputs.json', {str(path.relative_to(exported)): sha(path)
                for path in sorted(exported.rglob('*')) if path.is_file()})
     # Each build gets an empty target and identical remapped source/cargo/target
     # paths. Network is disabled after the bridge factory's locked cargo fetch.
     env = clean_environment(os.environ)
-    # The bridge build ran ~660 third-party build scripts with network access in
-    # bridge_cargo_home. Reuse only its checksum-verified .crate files; cargo
-    # re-extracts them, and no config may exist anywhere cargo would look.
+    # Defence in depth only, NOT isolation (H1 stays open): the bridge build's
+    # third-party build scripts ran as root with network before this code and
+    # could have tampered with this checker, PATH tools or the toolchain.
+    # Reuse only the checksum-verified .crate files (Cargo.lock is pin-checked
+    # above); cargo re-extracts them; no cargo config may exist where it looks.
     env['CARGO_HOME'] = str(make_fresh_cargo_home(bridge_cargo_home, out / 'cargo-home', (exported / 'Cargo.lock').read_text()))
     require_no_cargo_config(exported, out / 'cargo-home')
     require_toolchain_digest(args.toolchain_digest, installed_toolchain_digest(pins))

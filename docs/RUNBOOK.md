@@ -340,9 +340,9 @@ gain them from this preparation. Legacy images omit the scanner integration.
 Automatic base refresh continues using its separately accepted product source.
 
 Deep Scan activates an unprivileged session D-Bus broker, which sends every
-request through the fixed polkit/pkexec action. The unchanged upstream policy
-requires active-session administrator authorization (`auth_admin_keep`), so
-polkit can briefly reuse approval; inactive and other sessions are denied.
+request through the fixed polkit/pkexec action. The upstream policy
+requires active-session administrator authorization (`auth_admin`), so
+every deep scan prompts again (no cached approval); inactive and other sessions are denied.
 There is no scanner root service, timer or boot scan. A desktop authentication
 agent must be available. Cancellation or denial must return an error without
 changing firewall policy. The broker caps reports at4MiB and diagnostics at64KiB,

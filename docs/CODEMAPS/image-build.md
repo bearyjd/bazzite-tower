@@ -130,7 +130,7 @@ path and unchanged upstream dependency-list cmp remain independent.
 
 `snitchwatch-system-stage.py` invokes the pinned upstream scanner stage script
 for exactly two0755 executables, one session-bus activation file, the unchanged
-auth_admin_keep polkit action and root0700 tmpfiles definition, then installs
+auth_admin polkit action and root0700 tmpfiles definition, then installs
 scanner license/provenance receipts under `/usr/share`. The system verifier's
 exact 42-file inventory binds those inputs, patch/evidence and both ELF hashes;
 it refuses persistent scanner systemd service/timer/socket activation. Four more

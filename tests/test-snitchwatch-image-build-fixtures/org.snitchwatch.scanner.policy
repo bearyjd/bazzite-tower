@@ -14,10 +14,10 @@
   the user repeatedly with no added security benefit (privileged-tier design
   spec §3).
 
-  auth_admin_keep: an administrator must authenticate to run a deep scan; the
-  authorization is briefly cached so a "scan again" within the session does
-  not re-prompt. Downgrade to auth_admin (no keep) if even short-lived
-  caching is undesirable for your deployment.
+  auth_admin: an administrator must authenticate for every deep scan. Not
+  auth_admin_keep: its cached authorization (about 5 minutes) could be reused
+  by any other process in the same session to run the scanner as root without
+  a prompt. Inactive and other sessions are denied outright.
 -->
 <policyconfig>
 
@@ -30,7 +30,7 @@
     <defaults>
       <allow_any>no</allow_any>
       <allow_inactive>no</allow_inactive>
-      <allow_active>auth_admin_keep</allow_active>
+      <allow_active>auth_admin</allow_active>
     </defaults>
     <!--
       Path is a packaging-time substitution. Adjust to the installed prefix

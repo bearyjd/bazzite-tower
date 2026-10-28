@@ -329,7 +329,7 @@ valid marker, as drift. Not yet exercised on real hardware/systemd.
 
 ### Snitchwatch r16.2 feature preparation and owner acceptance
 
-The bridge source pin is Snitchwatch `11ca612ec860b9bde076b693dfd8c3f95c682bdc`
+The bridge source pin is Snitchwatch `5860dcdb118917daf61bb9f5ef0c999595bc0edc`
 (AI cache export and the Deep Scan scanner, upstream snitchwatch #243 plus its
 follow-up 9a0a222; the scanner is built unmodified from upstream; the previous pin was a047c759 with identical scanner files).
 This pin move also advances the recorded GUI `sourceCommit` across about 5k lines of
@@ -340,9 +340,9 @@ gain them from this preparation. Legacy images omit the scanner integration.
 Automatic base refresh continues using its separately accepted product source.
 
 Deep Scan activates an unprivileged session D-Bus broker, which sends every
-request through the fixed polkit/pkexec action. The unchanged upstream policy
-requires active-session administrator authorization (`auth_admin_keep`), so
-polkit can briefly reuse approval; inactive and other sessions are denied.
+request through the fixed polkit/pkexec action. The upstream policy
+requires active-session administrator authorization (`auth_admin`), so
+every deep scan prompts again (no cached approval); inactive and other sessions are denied.
 There is no scanner root service, timer or boot scan. A desktop authentication
 agent must be available. Cancellation or denial must return an error without
 changing firewall policy. The broker caps reports at4MiB and diagnostics at64KiB,

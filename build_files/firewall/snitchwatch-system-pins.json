@@ -31,7 +31,7 @@
   },
   "rustVersion": "1.99.0",
   "schemaVersion": 1,
-  "sourceCommit": "11ca612ec860b9bde076b693dfd8c3f95c682bdc",
+  "sourceCommit": "5860dcdb118917daf61bb9f5ef0c999595bc0edc",
   "sourceFiles": {
     "Cargo.lock": "48e49bd49869ac32b38063c5356c50d31050c97235a303ba9105262c15a7a73f",
     "Cargo.toml": "ef17d9cc674731d5046110f15e747a994b93725474f1e9d2018b67bcc76bc2f2",
@@ -47,7 +47,7 @@
     "packaging/endpoint-events/snitchwatch-endpoint-events.nft": "cc32cb557f94e7c92b28b0adb036727981dc623ac786d8f1f862904cd17c8f31",
     "packaging/endpoint-events/snitchwatch-endpoint-events.service": "d18c14e5b61e1d97b7aa44756dcef89f07ab9a4976e6c21fa47166481e0099c8",
     "packaging/flatpak/org.snitchwatch.Snitchwatch.system.yml": "9293e029e8f6599be3d0f2b5341e8f625ba018f3048d84f0b36359f8358cf256",
-    "packaging/polkit/org.snitchwatch.scanner.policy": "64c74da4ddac1052083c82405726aae974c4d1cdf6fe8ed3933adf7642b5a1f7",
+    "packaging/polkit/org.snitchwatch.scanner.policy": "61f4fbaf0c301d4c45c0eecd7824071c1c5230c6d8018502a5e8ded29fbb2cf9",
     "packaging/release/bridge_artifact.py": "6a82d12348772446d57ca0163d0b31fadf268db2345b6de3db485896d279d3e2",
     "packaging/release/build-bridge.sh": "b752941d3fd9c2ab7d986006eed7398c1a73110707df133fdec5ac1c241b2006",
     "packaging/release/install-deps.sh": "247a396c0f3d504023f001c33bb1211f5f0f9bfd2c6685077d4bd312ac95f8cb",
@@ -66,7 +66,7 @@
     "packaging/system/stage.sh": "64327742d69caf99ce63baae6503d3a5a5ce4c1f4c54ad4f425191b0fc44d328"
   },
   "sourceRepository": "https://github.com/bearyjd/snitchwatch.git",
-  "sourceTree": "712398f6081b24af3da4dd31829d2ed941b69b47",
+  "sourceTree": "b44cb6674cf67de8fedfeceaab0c6e926735fbd8",
   "submoduleCommit": "b404c4c6316760fa7bc415509d3f8d747f7dc9cc",
   "toolchainRpms": [
     {

@@ -408,7 +408,7 @@ class ImageBuildContracts(unittest.TestCase):
                                 ('org.snitchwatch.scanner.policy', 'packaging/polkit/org.snitchwatch.scanner.policy')]:
             self.assertEqual(sha((FIXTURES / fixture).read_bytes()), self.pins['sourceFiles'][source])
         policy = (FIXTURES / 'org.snitchwatch.scanner.policy').read_text()
-        self.assertIn('<allow_active>auth_admin_keep</allow_active>', policy)
+        self.assertIn('<allow_active>auth_admin</allow_active>', policy)
         self.assertIn('<allow_inactive>no</allow_inactive>', policy)
         self.assertIn('<allow_any>no</allow_any>', policy)
 

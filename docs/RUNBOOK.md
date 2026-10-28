@@ -329,7 +329,7 @@ valid marker, as drift. Not yet exercised on real hardware/systemd.
 
 ### Snitchwatch r16.2 feature preparation and owner acceptance
 
-The bridge source pin is Snitchwatch `11ca612ec860b9bde076b693dfd8c3f95c682bdc`
+The bridge source pin is Snitchwatch `5860dcdb118917daf61bb9f5ef0c999595bc0edc`
 (AI cache export and the Deep Scan scanner, upstream snitchwatch #243 plus its
 follow-up 9a0a222; the scanner is built unmodified from upstream; the previous pin was a047c759 with identical scanner files).
 This pin move also advances the recorded GUI `sourceCommit` across about 5k lines of

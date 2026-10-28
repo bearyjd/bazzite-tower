@@ -66,7 +66,7 @@ jobs:
           remove-codeql: true
 
       - name: Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
 
       # Root cause of the 2026-08-16 deterministic failure (issue #47 / PR #48):
       # the ubuntu-24.04 runner's podman bundle rework (the same one behind

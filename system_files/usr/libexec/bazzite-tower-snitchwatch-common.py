@@ -381,14 +381,16 @@ def flatpak_sockets_match(ctx, sockets):
         return True
     if sockets != normative | {"x11"}:
         return False
-    # Flatpak 1.18.1 compute_allowed_sockets replaces X11 with !has-wayland
-    # when fallback-x11 is allowed, including serialized redundant X11.
-    # Only this reviewed evaluator version supports the canonical exception.
+    # Flatpak's compute_allowed_sockets replaces X11 with !has-wayland when
+    # fallback-x11 is allowed, including serialized redundant X11. Upstream
+    # tags 1.18.1 through 1.18.4 were diffed and that evaluator is unchanged
+    # (1.18.2 only swaps the permissions-table constructor). Only these
+    # reviewed versions support the canonical exception; widen after review.
     try:
         version = ctx.command(["flatpak", "--version"]).stdout
     except (OSError, subprocess.TimeoutExpired) as error:
         raise Refusal("cannot detect Flatpak version for canonical sockets") from error
-    require(re.fullmatch(r"Flatpak 1\.18\.1\n?", version) is not None,
+    require(re.fullmatch(r"Flatpak 1\.18\.[1-4]\n?", version) is not None,
             "unreviewed Flatpak version for canonical sockets")
     return True
 

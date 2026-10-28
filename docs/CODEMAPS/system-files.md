@@ -106,8 +106,10 @@ on 514/6514 and no daemon `Loggers` entry by default; see `docs/RUNBOOK.md`.
 
 Readiness retains the historical exact `wayland;fallback-x11` socket profile.
 The serialized `x11;wayland;fallback-x11` form is accepted only when the host
-`flatpak --version` reports exactly Flatpak 1.18.1, whose reviewed upstream
-socket evaluator makes X11 conditional on `!has-wayland` with fallback-X11.
+`flatpak --version` reports exactly Flatpak 1.18.1 through 1.18.4, whose
+upstream socket evaluator (diffed across those tags; unchanged in behaviour)
+makes X11 conditional on `!has-wayland` with fallback-X11. Later versions need
+a fresh review before the range is widened.
 Unknown, ambiguous or failed version detection refuses that exception; other
 socket sets and all existing network, device, filesystem, persistence, IPC
 environment, bus and override checks retain their refusal rules. The actual

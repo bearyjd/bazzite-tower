@@ -7,11 +7,13 @@ guards (snitchwatch-system-handoff.py) and of stage.py's unprivileged bridge
 execution. Runs offline with python3 only (no rpm, cargo, dnf or containers).
 What only a real CI build can prove is listed in docs/CODEMAPS/image-build.md.
 """
+import hashlib
 import json
 import os
 from pathlib import Path
 import re
 import runpy
+import shutil
 import stat
 import subprocess
 import tempfile
@@ -30,6 +32,20 @@ BRIDGE_SCRIPT = FACTORY / 'snitchwatch-system-bridge-build.sh'
 # Scripts and fragments that execute third-party build code or the bridge binary.
 BRIDGE_ONLY = ('snitchwatch-system-bridge-build.sh', 'build-bridge.sh', 'repro-check.sh', '--run-flags', '--check-ldd')
 HANDOFF = FACTORY / 'snitchwatch-system-handoff.py'
+# Lines allowed before an offline stage's network probe: our own mode check,
+# argument/container guards and plain assignments. A guard is `[[ ]]` tests
+# joined by `&&` and ending in a refusal; nothing can be chained after it.
+TEST = r'\[\[ (?:(?!\]\]|\$\(|`).)+ \]\]'
+GUARD = TEST + r'(?: && ' + TEST + r")* \|\| \{(?: echo '[^']*' >&2; exit 1; \})?"
+PRE_PROBE = re.compile(r'(set -euo pipefail|factory=\$\(cd -- "\$\(dirname -- "\$\{BASH_SOURCE\[0\]\}"\)" && pwd\)'
+                       r'|bash "\$factory/snitchwatch-system-mode\.sh"|' + GUARD + r"|echo '[^']*' >&2; exit 1;|\}"
+                       r'|(?:[a-z_]+=(?:\$\d|"\$factory/[\w.-]+")\s*)+)')
+
+
+def pre_probe_line_ok(line):
+    if not PRE_PROBE.fullmatch(line):
+        return False
+    return line.startswith('factory=$(cd -- ') or '$(' not in line
 
 
 def instructions(text):
@@ -163,18 +179,13 @@ class ContainerfileStages(unittest.TestCase):
     def test_offline_stage_scripts_probe_the_network_first(self):
         # Stricter than the old index check: before the probe only our own mode
         # check, the argument/container guards and plain assignments may run.
-        preamble = re.compile(r'(set -euo pipefail|factory=\$\(cd -- "\$\(dirname -- "\$\{BASH_SOURCE\[0\]\}"\)" && pwd\)'
-                              r'|bash "\$factory/snitchwatch-system-mode\.sh"|\[\[ .*|echo \'[^\']*\' >&2; exit 1;|\}'
-                              r'|(?:[a-z_]+=(?:\$\d|"\$factory/[\w.-]+")\s*)+)')
         for script in OFFLINE_SCRIPTS:
             lines = [line.strip() for line in (FACTORY / script).read_text().splitlines()[1:]
                      if line.strip() and not line.lstrip().startswith('#')]
             probe = lines.index('python3 "$factory/snitchwatch-system-handoff.py" probe-network offline'
                                 if script != 'snitchwatch-system-assemble.sh' else 'python3 "$guard" probe-network offline')
             for line in lines[:probe]:
-                self.assertRegex(line, r'\A' + preamble.pattern + r'\Z', script)
-                if not line.startswith('factory=$(cd -- '):
-                    self.assertNotIn('$(', line, script)  # no command substitution in a guard before the probe
+                self.assertTrue(pre_probe_line_ok(line), (script, line))
             for later in ('rpm -qa', 'cargo', 'build-bridge.sh', 'repro-check.sh', 'readarray', 'scanner-build.py'):
                 if later in '\n'.join(lines):
                     self.assertGreater('\n'.join(lines).index(later), '\n'.join(lines).index('probe-network offline'), (script, later))
@@ -266,11 +277,32 @@ class ContainerfileStages(unittest.TestCase):
     def bridge_body(self):
         return '\n'.join(line for line in BRIDGE_SCRIPT.read_text().splitlines() if not line.lstrip().startswith('#'))
 
+    def test_pre_probe_guards_cannot_chain_or_substitute_commands(self):
+        for line in ('[[ "${SNITCHWATCH_BRIDGE:-legacy}" == system ]] || { echo \'native factory requires system mode\' >&2; exit 1; }',
+                     '[[ $# -eq 2 && -d "$1/source" && "$2" == /?* && ! -e "$2" ]] || { echo \'bridge stage: usage WORK NEW-HANDOFF\' >&2; exit 1; }',
+                     '[[ -e /run/.containerenv || -e /.dockerenv ]] && [[ ! -e /run/.toolboxenv && ! -e /run/host ]] || {',
+                     'echo \'native factory requires a fresh builder container\' >&2; exit 1;', '}', 'work=$1',
+                     'work=$1 handoff=$2 out=$3', 'pins="$factory/snitchwatch-system-pins.json"'):
+            with self.subTest(accepted=line):
+                self.assertTrue(pre_probe_line_ok(line))
+        for line in ('[[ -e /x ]] || curl https://evil', '[[ -e /x ]] && python3 /tmp/y', '[[ -e /x ]]; cargo build',
+                     '[[ -e /x ]] || { cargo fetch; }', '[[ -e /x ]] || { echo \'m\' >&2; exit 1; }; wget x',
+                     '[[ -n "$(python3 -c 1)" ]] || exit 1', '[[ -n "`python3 -c 1`" ]]', '[[ -e /x ]] | sh',
+                     '[[ -e /x ]] || exit 1', 'work=$(curl x)', 'cargo fetch'):
+            with self.subTest(refused=line):
+                self.assertFalse(pre_probe_line_ok(line))
+
     def test_bridge_stage_runs_no_network_needing_command(self):
         body = self.bridge_body()
-        for needle in ('dnf', 'curl', 'wget', 'git fetch', 'git clone', 'git submodule', 'rustup', 'pip ',
-                       'SW_INSTALL_DEPS=1', 'install-deps', 'probe-network online', 'cargo install', 'cargo update'):
+        for needle in ('dnf', 'curl', 'wget', 'git fetch', 'git clone', 'git pull', 'git submodule', 'rustup', 'pip ', 'pip3',
+                       'npm', 'go get', 'go mod download', 'cargo vendor', 'SW_INSTALL_DEPS=1', 'install-deps',
+                       'probe-network online', 'cargo install', 'cargo update'):
             self.assertNotIn(needle, body)
+        # Every cargo fetch here must be the offline form.
+        fetches = re.findall(r'cargo fetch[^\n]*', re.sub(r"'[^'\n]*'", "''", body))
+        self.assertTrue(fetches)
+        for fetch in fetches:
+            self.assertIn('--offline', fetch.split('||')[0], fetch)
         self.assertIn('unset ALLOW_DIRTY SW_RELEASE_TAG SW_INSTALL_DEPS', body)
         # No snitchwatch build stage mounts anything (a cache or bind would bypass the netns argument).
         for name in BUILD_STAGES:
@@ -305,7 +337,6 @@ class ContainerfileStages(unittest.TestCase):
         return '\n'.join(lines[start:end + 1])
 
     def test_fresh_cargo_home_fragment_refuses_unpinned_or_altered_crates(self):
-        import hashlib
         fragment = self.bridge_fragment('python3 -B - "$factory/snitchwatch-system-scanner-build.py"', 'bridge stage: prep cargo cache', trailing=1)
         self.assertTrue(fragment.endswith('\n}'), fragment)
         with tempfile.TemporaryDirectory() as tmp:
@@ -342,7 +373,7 @@ class ContainerfileStages(unittest.TestCase):
     def run_bridge_build_fragment(self, cargo_status):
         fragment = self.bridge_fragment('export SRC_DIR=', '"$SRC_DIR/packaging/release/build-bridge.sh"')
         tmp = Path(tempfile.mkdtemp())
-        self.addCleanup(__import__('shutil').rmtree, tmp)
+        self.addCleanup(shutil.rmtree, tmp)
         release = tmp / 'work/source/packaging/release'
         release.mkdir(parents=True)
         # The fake build runs a nested child the way repro-check.sh re-runs build-bridge.sh.

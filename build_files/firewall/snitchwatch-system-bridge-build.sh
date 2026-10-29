@@ -4,7 +4,8 @@
 # other stage descends from this one; the assembly stage receives just the
 # allowlisted tarball, its sidecar and the two logs ($2) and re-checks them.
 # Offline (M1 step 1): the crates come only from prep's `cargo fetch --locked`,
-# so build scripts cannot download a payload or send data out. Everything in
+# so build scripts cannot reach the network (no second-stage download, no
+# exfiltration over the network; the tarball itself still leaves). Everything in
 # this stage, those outputs included, is still untrusted and its evidence is
 # still self-attesting (sha, logs, repro-check are all made here; open: M1).
 set -euo pipefail

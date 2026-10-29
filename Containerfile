@@ -39,7 +39,7 @@ COPY build_files/firewall/snitchwatch-system-legacy-marker /out/usr/share/bazzit
 # stages is prep only; the bridge stage, where ~660 crates' build scripts run
 # as root (offline), is an ancestor of nothing. Stage outputs cross only as
 # allowlisted /handoff/* data that the assembly stage re-checks. The network is off
-# for the scanner, bridge and assembly RUNs (prep and daemon fetch): if a
+# for the scanner, bridge and assembly RUNs (only prep and daemon keep network, to fetch): if a
 # builder rejects it, revert this block to the previous single RUN (git revert
 # of the H1 commit). The bridge build is offline (M1 step 1) but its evidence
 # is still produced by that stage itself (M1 open).

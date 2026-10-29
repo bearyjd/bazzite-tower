@@ -66,8 +66,9 @@ and base-refresh `validate-system` do not move. Static contracts: `tests/test-sn
 Only a CI build proves: buildah 1.33.7 accepts and enforces `RUN --network=none` (the in-build probe
 fails loudly if not), unused-stage skipping still keeps `fedora:44` out of the legacy legs, 65534
 can be entered in the build user namespace, and disk fits the extra stage commits.
-M1 step 1 (bridge offline): the bridge build scripts can no longer download a payload or send data out;
-the output is a function of the pinned inputs plus the live Fedora RPMs. Only CI proves that the bridge
+M1 step 1 (bridge offline): the bridge build scripts cannot reach the network (no second-stage download,
+no exfiltration over the network; the tarball and the public CI log still leave the stage). The build uses
+only pinned inputs plus the live Fedora RPMs; byte-reproducibility is not verified by this step. Only CI proves that the bridge
 build (including `build-bridge.sh`'s own license `cargo fetch` and `repro-check.sh`'s nested rebuild)
 succeeds offline from prep's cache; the preflight fails first, with its own message, if the cache is short.
 The hand-over is allowlisted, not read-only: read-only means nothing against root in the stage (step 3).

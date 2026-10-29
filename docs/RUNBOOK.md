@@ -237,10 +237,13 @@ wanted network; `failed to download` / `--offline was specified` means `cargo bu
 a crate outside prep's fetch set (fix prep's fetch). If a
 builder rejects `RUN --network=none` itself, every leg fails before step 1:
 revert the H1 commit (single-RUN layout) rather than removing the probes.
-The bridge stage is offline (M1 step 1), so its crates cannot download or exfiltrate.
-To revert only that step, revert the #154 merge commit (`git revert -m 1 <merge>`):
-it takes the stricter tests, the code and the docs together (reverting only the fix
-commit leaves tests that require an offline bridge and fails source safety).
+The bridge stage is offline (M1 step 1): its crates cannot reach the network (no
+second-stage download, no exfiltration over the network; the tarball and the CI log
+still leave the stage). To revert only that step, revert the whole of #154 so the
+stricter tests, the code and the docs go together: `git revert -m 1 <merge>` if it
+landed as a merge commit (this repo's usual style), or `git revert <commit>` if it
+was squash-merged. Reverting only the fix commit leaves tests that require an
+offline bridge and fails source safety.
 Still open: the bridge tarball is built by its own crates as root, and its sha,
 logs and repro-check are produced in that same stage (`reproducible: True` is a
 literal), so the evidence is self-attesting (M1); the split contains it, it does not verify it.

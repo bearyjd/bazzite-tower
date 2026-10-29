@@ -99,6 +99,8 @@ class ResourceTests(unittest.TestCase):
             with self.assertRaises(ProcessLookupError):
                 RESOURCE['unit_pid']('missing.service')
             self.assertEqual(run.call_args.kwargs['timeout'], 2)
+            self.assertEqual(run.call_args.args[0][0], '/usr/bin/systemctl')
+            self.assertEqual(run.call_args.kwargs['env'], {'PATH': '/usr/sbin:/usr/bin', 'LC_ALL': 'C'})
         clock = [0.0]
         def timeout(_):
             raise subprocess.TimeoutExpired('systemctl', 2)

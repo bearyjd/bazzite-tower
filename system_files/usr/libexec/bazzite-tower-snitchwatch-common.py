@@ -53,6 +53,8 @@ TYPED_EMPTY_PROPERTIES = {"EnvironmentFiles": "a(sb)", **{name: "a(sasbttttuii)"
 COMMANDS = {name: "/usr/bin/"+name for name in ("flatpak", "systemctl", "ss", "busctl", "getent", "python3", "systemd-run")}
 # The only environment a helper sees: no inherited PATH, LD_*, PYTHON* or locale.
 COMMAND_ENV = {"PATH": "/usr/sbin:/usr/bin", "LC_ALL": "C"}
+# Real Flatpak metadata is well under 2 KiB; the store is user-writable.
+METADATA_MAX_BYTES = 64*1024
 
 
 class Refusal(RuntimeError):
@@ -411,6 +413,28 @@ def flatpak_sockets_match(ctx, sockets):
     return True
 
 
+def read_user_metadata(path):
+    # User-writable store: never block on a FIFO, follow a symlink, or read unboundedly.
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
+    except OSError as error:
+        raise Refusal("unreadable Flatpak metadata "+str(path)+": "+str(error)) from error
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise Refusal("unreadable Flatpak metadata "+str(path)+": not a regular file")
+        handle = os.fdopen(fd, "rb")
+    except BaseException:
+        os.close(fd)
+        raise
+    with handle:
+        data = handle.read(METADATA_MAX_BYTES+1)
+    require(len(data) <= METADATA_MAX_BYTES, "unreadable Flatpak metadata "+str(path)+": larger than "+str(METADATA_MAX_BYTES)+" bytes")
+    try:
+        return data.decode()
+    except UnicodeDecodeError as error:
+        raise Refusal("unreadable Flatpak metadata "+str(path)+": "+str(error)) from error
+
+
 def flatpak_profiles(ctx):
     system_stores = ctx.command(["flatpak", "--installations"]).stdout.splitlines()
     require(system_stores and all(name.startswith("/") and ".." not in Path(name).parts for name in system_stores), "cannot enumerate system Flatpak installations")
@@ -438,7 +462,7 @@ def flatpak_profiles(ctx):
             meta = configparser.ConfigParser(interpolation=None)
             meta.optionxform = str
             try:
-                meta.read(path)
+                meta.read_string(read_user_metadata(path), str(path))
             except configparser.Error as error:
                 raise Refusal("unreadable Flatpak metadata "+str(path)+": "+str(error)) from error
             context = meta["Context"] if meta.has_section("Context") else {}

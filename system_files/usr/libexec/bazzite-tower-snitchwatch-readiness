@@ -1,4 +1,4 @@
-#!/usr/bin/python3
+#!/usr/bin/python3 -I
 """Privileged read-only all-UID system bridge preflight; never starts a service."""
 import importlib.util
 import json

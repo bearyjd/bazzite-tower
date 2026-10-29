@@ -1,6 +1,7 @@
-#!/usr/bin/env python3
+#!/usr/bin/python3 -I
 """Finite, reporting-only interval CPU/RSS sampler. No traffic or payload reads."""
 import argparse
+import importlib.util
 import json
 import math
 import os
@@ -9,6 +10,12 @@ import statistics
 import subprocess
 import sys
 import time
+
+# Same trusted absolute-path table and scrubbed env as the root helpers.
+_spec = importlib.util.spec_from_file_location('snitchwatch_common', Path(__file__).with_name('bazzite-tower-snitchwatch-common.py'))
+common = importlib.util.module_from_spec(_spec)
+sys.dont_write_bytecode = True
+_spec.loader.exec_module(common)
 
 UNITS = ('opensnitch.service', 'snitchwatch-system-bridge.service')
 
@@ -40,8 +47,8 @@ def interval(previous, current, ticks):
 
 
 def unit_pid(unit):
-    result = subprocess.run(['systemctl', 'show', '--property=MainPID', '--value', unit],
-                            capture_output=True, text=True, timeout=2, check=True)
+    result = subprocess.run([common.COMMANDS['systemctl'], 'show', '--property=MainPID', '--value', unit],
+                            capture_output=True, text=True, timeout=2, check=True, env=dict(common.COMMAND_ENV))
     pid = int(result.stdout.strip())
     if pid <= 0:
         raise ProcessLookupError('unit has no running MainPID')

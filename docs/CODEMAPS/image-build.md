@@ -70,6 +70,7 @@ M1 step 1 (bridge offline): the bridge build scripts can no longer download a pa
 the output is a function of the pinned inputs plus the live Fedora RPMs. Only CI proves that the bridge
 build (including `build-bridge.sh`'s own license `cargo fetch` and `repro-check.sh`'s nested rebuild)
 succeeds offline from prep's cache; the preflight fails first, with its own message, if the cache is short.
+The hand-over is allowlisted, not read-only: read-only means nothing against root in the stage (step 3).
 Still open (M1): the bridge evidence is self-attesting. The tarball sha, `build.log`, `repro.log` and the
 `repro-check.sh` comparison are all made inside the bridge stage, as root, by the same crates;
 `stage.py` still writes `reproducible: True` as a literal and assembly's `--expect-sha256` is computed from

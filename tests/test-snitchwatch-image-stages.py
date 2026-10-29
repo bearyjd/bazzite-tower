@@ -173,6 +173,8 @@ class ContainerfileStages(unittest.TestCase):
                                 if script != 'snitchwatch-system-assemble.sh' else 'python3 "$guard" probe-network offline')
             for line in lines[:probe]:
                 self.assertRegex(line, r'\A' + preamble.pattern + r'\Z', script)
+                if not line.startswith('factory=$(cd -- '):
+                    self.assertNotIn('$(', line, script)  # no command substitution in a guard before the probe
             for later in ('rpm -qa', 'cargo', 'build-bridge.sh', 'repro-check.sh', 'readarray', 'scanner-build.py'):
                 if later in '\n'.join(lines):
                     self.assertGreater('\n'.join(lines).index(later), '\n'.join(lines).index('probe-network offline'), (script, later))

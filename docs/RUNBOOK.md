@@ -231,13 +231,16 @@ file), `RPM set differs from the snitchwatch-prep inventory`, `merge overlap`,
 `bridge stage: prep cargo cache failed the Cargo.lock checksum allowlist` (a cached
 `.crate` is altered or not in the lock), `bridge stage: offline cargo fetch preflight failed`
 (prep's fetch is incomplete, or `cargo fetch` refuses offline: fix the fetch in prep, do
-not give the bridge stage network). A `failed to download` or `--offline` error *after*
-the preflight passed means a build script wanted network. If a
+not give the bridge stage network). After the preflight passed, `failed to run custom
+build command for <crate>` (connect/DNS error under `--- stderr`) means a build script
+wanted network; `failed to download` / `--offline was specified` means `cargo build` needs
+a crate outside prep's fetch set (fix prep's fetch). If a
 builder rejects `RUN --network=none` itself, every leg fails before step 1:
 revert the H1 commit (single-RUN layout) rather than removing the probes.
 The bridge stage is offline (M1 step 1), so its crates cannot download or exfiltrate.
-To revert only that step, drop `--network=none` from the bridge `RUN` and the probe
-from `snitchwatch-system-bridge-build.sh` (git revert of the M1 step 1 commit).
+To revert only that step, revert the #154 merge commit (`git revert -m 1 <merge>`):
+it takes the stricter tests, the code and the docs together (reverting only the fix
+commit leaves tests that require an offline bridge and fails source safety).
 Still open: the bridge tarball is built by its own crates as root, and its sha,
 logs and repro-check are produced in that same stage (`reproducible: True` is a
 literal), so the evidence is self-attesting (M1); the split contains it, it does not verify it.

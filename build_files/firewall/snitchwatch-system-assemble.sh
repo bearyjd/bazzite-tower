@@ -32,9 +32,11 @@ for name,expected in p['sourceFiles'].items():
 PY
 # Every COPY --from result must be exactly its allowlist (no links, set-id, caps, extra files).
 # The parent too: a writable /handoff would let anything rename the checked trees.
-[[ "$(stat -c '%u:%g:%a' "$handoff")" =~ ^0:0:7[0-5][0-5]$ ]] || {
-    echo "assembly: $handoff must be root-owned and not group/other writable: $(stat -c '%u:%g:%a' "$handoff")" >&2; exit 1;
-}
+handoff_meta=$(stat -c '%u:%g:%a' "$handoff" || true)
+IFS=: read -r h_uid h_gid h_mode <<< "$handoff_meta" || true
+if ! [[ "$h_uid" == 0 && "$h_gid" == 0 && "$h_mode" =~ ^[0-7]{3}$ ]] || (( (8#$h_mode & 8#022) != 0 )); then
+    echo "assembly: $handoff must be root-owned and not group/other writable (no special bits): ${handoff_meta:-unreadable}" >&2; exit 1
+fi
 python3 "$guard" check scanner "$handoff/scanner"
 python3 "$guard" check bridge --pins "$pins" "$handoff/bridge"
 python3 "$guard" check daemon --daemon-verifier "$daemon_verifier" "$handoff/daemon"

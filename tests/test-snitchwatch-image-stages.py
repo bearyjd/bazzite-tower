@@ -202,6 +202,30 @@ class ContainerfileStages(unittest.TestCase):
         self.assertIn('stat -c \'%u:%g:%a\' "$handoff"', body)
         self.assertLess(body.index('stat -c \'%u:%g:%a\' "$handoff"'), body.index('"$guard" check scanner'))
 
+    def handoff_parent_check(self, stat_output):
+        """Run the real /handoff owner/mode fragment of assemble.sh against a stubbed stat."""
+        lines = (FACTORY / 'snitchwatch-system-assemble.sh').read_text().splitlines()
+        start = next(i for i, line in enumerate(lines) if 'stat -c \'%u:%g:%a\' "$handoff"' in line)
+        end = next(i for i in range(start, len(lines)) if lines[i].startswith(('}', 'fi')))
+        fragment = '\n'.join(lines[start:end + 1])
+        script = 'set -euo pipefail\nhandoff=/handoff\nstat() { [[ "$*" == "-c %u:%g:%a /handoff" ]] && echo "$STAT_OUT"; }\n' + fragment + '\necho accepted\n'
+        return subprocess.run(['bash', '-c', script], env={'PATH': '/usr/bin:/bin', 'STAT_OUT': stat_output},
+                              capture_output=True, text=True)
+
+    def test_handoff_parent_must_be_root_owned_without_group_or_other_write(self):
+        for mode in ('755', '750', '700', '711', '551', '500'):
+            with self.subTest(accepted=mode):
+                result = self.handoff_parent_check('0:0:' + mode)
+                self.assertEqual((result.returncode, result.stdout.strip()), (0, 'accepted'), result.stderr)
+        for owner_mode in ('0:0:722', '0:0:733', '0:0:752', '0:0:753', '0:0:777', '0:0:775', '0:0:757',
+                           '0:0:720', '0:0:702', '0:0:1755', '0:0:2755', '0:0:4755',
+                           '1000:0:755', '0:1000:755', '65534:65534:755', ''):
+            with self.subTest(refused=owner_mode):
+                result = self.handoff_parent_check(owner_mode)
+                self.assertNotEqual(result.returncode, 0, owner_mode)
+                self.assertNotIn('accepted', result.stdout)
+                self.assertIn('must be root-owned and not group/other writable', result.stderr)
+
     def test_every_consuming_stage_recomputes_the_shared_rpm_inventory(self):
         for script in ('snitchwatch-system-scanner-stage.sh', 'snitchwatch-system-bridge-build.sh', 'snitchwatch-system-assemble.sh'):
             text = (FACTORY / script).read_text()

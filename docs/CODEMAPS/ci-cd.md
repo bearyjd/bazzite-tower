@@ -107,6 +107,8 @@ offline Podman/Skopeo fixtures, including removal after collection failures.
 
 - `test-r13-publication.py` — hash/ref/target/source/profile/receipt and OCI tamper refusals, privilege boundaries, automatic system hold, and promoter invariants (dispatch-only, main+repo guard, fixed digest, `release` environment, no checkout, no staging-tag delete, SHA-pinned actions, preserve-digests, tag moves last and only `:snitchwatch-system`; trust-fetch/SPDX steps run against fake `gh`/`cosign`); actual PR-head proof rejects synthetic-merge/missing identities and boot PR tokens cannot write issues. Offline fixtures only.
 
+- `test-snitchwatch-image-stages.py` — H1 stage split: Containerfile stage names/FROM chain, no bridge build in the ancestry of scanner/daemon/assembly, `--network=none` only and always on the scanner/assembly RUNs, exact `COPY --from` handoffs, assembly tooling only from `ctx`/the re-hashed prep checkout, no CI layer/remote cache; behavioural handoff allowlist/merge/network-probe and unprivileged bridge-execution tests. Both Validate source safety contracts blocks run it.
+
 - `test-snitchwatch-gate.py` — offline wrapper reporting, failure propagation,
   prerequisites, network isolation and timeout contracts; both image
   validation jobs run it. `just snitchwatch-gate` snapshots exact inputs and

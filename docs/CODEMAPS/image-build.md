@@ -44,6 +44,31 @@ compatibility. Both profiles retain allow/proc defaults.
 5. `RUN --mount=bind,from=ctx … /ctx/build.sh` — modifications (caches: /var/cache, /var/log; tmpfs /tmp)
 6. `RUN bootc container lint`
 
+Before the final image: `snitchwatch-legacy` (`FROM scratch`, marker only) or the
+opt-in system bridge, selected by `FROM snitchwatch-${SNITCHWATCH_BRIDGE} AS snitchwatch-selected`
+(the final image copies only its `/out/`). The system bridge is split so that the
+bridge's third-party build scripts cannot reach anything trusted later (H1):
+
+| Stage | FROM | Network | Runs | Hands over |
+|---|---|---|---|---|
+| `snitchwatch-prep` | pinned `fedora:44@sha256` (= `builderImage`) | yes | `snitchwatch-system-prep.sh`: install-deps, Koji toolchain, `--record-toolchain`, dbus-daemon, online probe (positive control), clone + `sourceFiles` hash check, `bridge_artifact.py version`, `cargo fetch --locked --target x86_64-unknown-linux-gnu`, `rpm -qa` inventory | `/work/native` (to its descendants) |
+| `snitchwatch-scanner` | prep | `--network=none` | offline probe, inventory `cmp`, `snitchwatch-system-scanner-build.py` | `/handoff/scanner`: 2 binaries + 10 evidence files, flat |
+| `snitchwatch-bridge` | prep | yes | `snitchwatch-system-bridge-build.sh`: `build-bridge.sh` (~660 crates, root), `repro-check.sh`, executing `verify --check-ldd --run-flags`, inventory `cmp` | `/handoff/bridge`: tarball, `.sha256` sidecar, `build.log`, `repro.log` |
+| `snitchwatch-daemon` | prep | yes | `snitchwatch-system-daemon-build.sh` (unchanged) | `/handoff/daemon`: the daemon verifier's `REQUIRED` + manifest |
+| `snitchwatch-system` | prep | `--network=none` | `/tools/snitchwatch-system-assemble.sh` (tools re-copied from scratch `ctx`): offline probe, inventory `cmp`, prep checkout re-hashed, `handoff.py check` ×3, daemon verify, non-executing `bridge_artifact.py verify --extract-to`, `stage.py` (bridge `--version` and upstream `stage.sh`/`--help` as uid 65534, empty env; root adopts only the 9 `stage.sh` paths), `merge` (refuses overlap), daemon + system verifiers | `/out` |
+
+Trust argument: the FROM chain of scanner, daemon and assembly is prep only; the bridge stage is the base
+of nothing and is read only through the allowlist. `snitchwatch-system-handoff.py check` refuses extra,
+missing, symlinked, special, hard-linked, set-id, capability/ACL-carrying, wrongly owned or wrongly moded
+entries; assembly never runs code from a handoff and never sees the scanner's source export.
+`pins.json`, the staged file set, modes and provenance formats are unchanged, so `EXPECTED_PINS_SHA256`
+and base-refresh `validate-system` do not move. Static contracts: `tests/test-snitchwatch-image-stages.py`.
+Only a CI build proves: buildah 1.33.7 accepts and enforces `RUN --network=none` (the in-build probe
+fails loudly if not), unused-stage skipping still keeps `fedora:44` out of the legacy legs, 65534
+can be entered in the build user namespace, and disk fits the extra stage commits.
+Still open: the bridge tarball and its logs are produced by its own crates as root with network and its
+sha is self-computed (M1); PR2 candidate: bridge stage offline after prep's fetch.
+
 ## build.d scripts (executed in filename order)
 
 `build.sh` is a thin runner: it `bash`-executes each `build_files/build.d/*.sh` in
@@ -126,20 +151,20 @@ performs two locked offline release builds with separate target directories.
 It requires byte-identical scanner/broker binaries, resolved ELF dependencies,
 Rust tests plus fake-authorization private-D-Bus tests, and records source input,
 Cargo, actual Rust/RPM toolchain, normal/build dependency closure, license text,
-test/build/repro log and executable hashes. Scanner-build input hardening (defence in depth; **H1 stays OPEN**, this is not isolation):
-the scanner build uses a fresh `CARGO_HOME` (`out/cargo-home`) rebuilt only from the bridge's
+test/build/repro log and executable hashes. Isolation is the stage split above (H1 closed for the
+scanner, the daemon and assembly). Scanner-build input hardening on top of it (defence in depth):
+the scanner build uses a fresh `CARGO_HOME` (`out/cargo-home`) rebuilt only from prep's
 cached `.crate` files after checking each sha256 against the pin-checked export `Cargo.lock`
 (extracted `registry/src`, config and `bin` are not carried over; cargo re-extracts); refuses any
 `.cargo/config[.toml]` in the export, every ancestor to `/` and the fresh `CARGO_HOME`; and compares a
 partial toolchain fingerprint (only the files of the `rust`, `cargo` and `rust-std-static` RPMs, recorded by
-`--record-toolchain` after install in `snitchwatch-system-build.sh`) before building.
+`--record-toolchain` after install in `snitchwatch-system-prep.sh`) before building.
 The child environment is an allowlist; build-steering variables (`CC*`, `*FLAGS`, `LD_*`, `RUST*`,
 `CARGO_*` beyond home/target/jobs, `PYTHON*`) are refused. `bridge_artifact.py` is pin-checked and, with
-`LICENSE`, taken from the export. It does NOT close H1: the bridge build scripts run as root with network
-in the same `RUN`, before these checks, and could tamper with the checker, the fingerprint, PATH tools
-(`cc`, `ld`, `rustc`, `cargo`) or `/etc/ld.so.preload`. The real fix is a `--network=none` stage
-(`COPY --from`) or building the scanner before those scripts run (follow-up, see
-`.omc/results/F-h1-structural-fix-options.md`). Evidence is still written by the same builder.
+`LICENSE`, taken from the export inside the scanner stage; assembly uses the prep checkout's copy after
+re-hashing it. Before the split, the bridge build scripts ran as root with network in the same `RUN`
+and could tamper with the checker, the fingerprint, PATH tools or `/etc/ld.so.preload`; now they run
+only in `snitchwatch-bridge`, which no other stage descends from.
 The pristine bridge release/repro
 path and unchanged upstream dependency-list cmp remain independent.
 
@@ -178,7 +203,7 @@ NEVRA, then installs them in one dnf transaction. The version-string gate in
 Phase 2 adds three signed Koji RPMs (rust, cargo, rust-std-static
 1.99.0-1.fc44) to `snitchwatch-system-pins.json` for the bridge. The same helper
 runs after the byte-identical upstream installer and before the Rust version
-gate in `snitchwatch-system-build.sh`; the daemon retains its seven pins.
+gate in `snitchwatch-system-prep.sh`; the daemon retains its seven pins.
 Remaining live toolchain and transitive dependencies, including LLVM, are not
 fully hermetic. Re-pinning either manifest requires updating
 `EXPECTED_PINS_SHA256` in its corresponding bridge `snitchwatch-system-verify.py`

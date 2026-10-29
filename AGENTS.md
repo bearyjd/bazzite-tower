@@ -15,7 +15,7 @@ Full detail lives in `CLAUDE.md` (same rules, longer), `README.md`, `docs/RUNBOO
 - `just token-report [--since YYYY-MM-DD] [--project substring] [--json]` (read-only Claude/Codex local usage aggregates; last seven days by default, text <=40 lines, no message content)
 - `just smoke` (asserts a BUILT image; the CI gate) — needs `just build` first
 - `just test-snitchwatch-daemon-patch` (patch + Go/C tests in throwaway containers, minutes, needs network)
-- Offline tests: `bash tests/test-snitchwatch-toolchain.sh`, `python3 tests/test-snitchwatch-image-build-daemon.py`, `python3 tests/test-snitchwatch-image-build.py`, `tests/test-snitchwatch-system.sh`, `tests/check-supply-chain.sh`
+- Offline tests: `bash tests/test-snitchwatch-toolchain.sh`, `python3 tests/test-snitchwatch-image-build-daemon.py`, `python3 tests/test-snitchwatch-image-stages.py`, `python3 tests/test-snitchwatch-image-build.py`, `tests/test-snitchwatch-system.sh`, `tests/check-supply-chain.sh`
 - Do NOT run `just build*`, `podman build`, or VM/ISO builds unless the task truly requires them. Prefer static checks, then CI.
 
 ## Hard rules
@@ -24,7 +24,7 @@ Full detail lives in `CLAUDE.md` (same rules, longer), `README.md`, `docs/RUNBOO
 - Never change the `Containerfile` base-image pin without re-reading `docs/research/i915-mtl-resume-2026-06-20.md`.
 - Never weaken or delete an assertion in `tests/smoke.sh` or `tests/boot-check.sh`; update it to the new intent and say so.
 - Hardware tuning (`kargs.d/*.toml`, RAS/thermal/audio in `build_files/build.d/`, RUNBOOK "verified" facts) changes only with an owner instruction or evidence from THIS machine (journalctl/smartctl/ras-mc-ctl). Otherwise ask for it.
-- `build_files/firewall/snitchwatch-system-install-deps.sh` must stay byte-identical to the upstream Snitchwatch copy (`cmp` in `snitchwatch-system-build.sh`).
+- `build_files/firewall/snitchwatch-system-install-deps.sh` must stay byte-identical to the upstream Snitchwatch copy (`cmp` in `snitchwatch-system-prep.sh` and again in `snitchwatch-system-assemble.sh`).
 - The pinned toolchain RPMs live in `build_files/firewall/snitchwatch-system-daemon-pins.json`; if you change that file, update `EXPECTED_PINS_SHA256` in `snitchwatch-system-daemon-verify.py` and rerun the tests. Use only the signed Koji copies (`.../data/signed/6d9f90a6/...`).
 - Update the relevant `docs/CODEMAPS/*` in the same change as the code. Conventional-commit subjects (`feat:`, `fix:`, `ci:`, `chore:`, `docs:`).
 

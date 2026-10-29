@@ -104,9 +104,11 @@ root:root 0644, in no unit path and enabled nowhere; packages come from
 `build.d/64-endpoint-events-packages.sh` with all their units disabled. No listener
 on 514/6514 and no daemon `Loggers` entry by default; see `docs/RUNBOOK.md`.
 
+Readiness (and migrate/deny) run helpers only by the absolute paths in `COMMANDS` in `bazzite-tower-snitchwatch-common.py` (`/usr/bin/{flatpak,systemctl,ss,busctl,getent,python3,systemd-run}`) with a fixed env (`PATH=/usr/sbin:/usr/bin`, `LC_ALL=C`); the caller's PATH/`LD_*`/`PYTHON*` are never used, and a missing helper refuses with `NOT READY: required command missing`. Unparseable Flatpak metadata (e.g. duplicate `sockets=`) also refuses cleanly.
+
 Readiness retains the historical exact `wayland;fallback-x11` socket profile.
 The serialized `x11;wayland;fallback-x11` form is accepted only when the host
-`flatpak --version` reports exactly Flatpak 1.18.1 through 1.18.4, whose
+`flatpak --version` reports one of Flatpak 1.18.1 to 1.18.4, whose
 upstream socket evaluator (diffed across those tags; unchanged in behaviour)
 makes X11 conditional on `!has-wayland` with fallback-X11. Later versions need
 a fresh review before the range is widened.

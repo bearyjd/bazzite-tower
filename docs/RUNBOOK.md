@@ -212,6 +212,27 @@ This does not install a GUI or grant any user the GUI group. Install the reviewe
 system-profile Flatpak per user and inspect existing same-ID installations and
 overrides before selecting it.
 
+How the candidate is built (H1 stage split, see `docs/CODEMAPS/image-build.md`):
+five Containerfile stages, `snitchwatch-prep` (network, RPM scriptlets, git and
+`cargo fetch` only) → `snitchwatch-scanner` (`RUN --network=none`) and
+`snitchwatch-bridge` (the ~660-crate bridge build, network, root) and
+`snitchwatch-daemon` → `snitchwatch-system` assembly (`RUN --network=none`). The
+bridge stage is an ancestor of nothing; only allowlisted `/handoff/*` files reach
+assembly. When a system build fails, grep the log for these distinct lines:
+`handoff: probe-network: network probe` (offline stage reached the network, or
+the flag was ignored), `network probe positive control failed` (prep could not
+reach the network, so the offline result proves nothing), `handoff: check:`
+(a stage handed over an unexpected, missing, linked, set-id or wrongly owned
+file), `RPM set differs from the snitchwatch-prep inventory`, `merge overlap`,
+`cannot drop to uid/gid 65534` (the builder refused the unprivileged bridge
+`--version`/`--help`), `cannot set no_new_privs`, `stage.sh timed out after 300 s`, `cannot become child subreaper`,
+`bridge binary descendants survived SIGKILL`, `must be root-owned and not group/other writable`, `cannot list extended attributes`,
+`unexpected path in unprivileged stage.sh output`. If a
+builder rejects `RUN --network=none` itself, every leg fails before step 1:
+revert the H1 commit (single-RUN layout) rather than removing the probes.
+Still open: the bridge tarball is built by its own crates as root with network,
+and its sha is self-computed (M1); the split contains it, it does not verify it.
+
 The daemon build toolchain (Go, protoc, libnetfilter_queue) is installed from
 pinned, Fedora-signed Koji RPMs (`toolchainRpms` in
 `build_files/firewall/snitchwatch-system-daemon-pins.json`), not live repos, so

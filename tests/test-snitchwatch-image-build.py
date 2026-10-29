@@ -19,6 +19,9 @@ ROOT = Path(__file__).resolve().parents[1]
 FACTORY = ROOT / 'build_files/firewall'
 FIXTURES = Path(__file__).with_name('test-snitchwatch-image-build-fixtures')
 MANIFEST = 'usr/share/snitchwatch/system-bridge-manifest.json'
+# The stage scripts that replaced snitchwatch-system-build.sh (H1).
+STAGE_SCRIPTS = ('snitchwatch-system-prep.sh', 'snitchwatch-system-scanner-stage.sh',
+                 'snitchwatch-system-bridge-build.sh', 'snitchwatch-system-assemble.sh')
 FETCH_RULE = 'etc/opensnitchd/rules/000-snitchwatch-bridge-fetch.json'
 OS_UPDATE_RULE = 'etc/opensnitchd/rules/000-snitchwatch-tower-os-update.json'
 OS_UPDATE_SOURCE = FACTORY / 'snitchwatch-system-os-update-rule.json'
@@ -420,7 +423,9 @@ class ImageBuildContracts(unittest.TestCase):
         builder = (FACTORY / 'snitchwatch-system-scanner-build.py').read_text()
         for needle in ('apply', 'scannerPatch', '--patch', '.patch', 'patchedFiles'):
             self.assertNotIn(needle, builder)
-        self.assertNotIn('patch', (FACTORY / 'snitchwatch-system-build.sh').read_text().lower())
+        # H1 split: snitchwatch-system-build.sh became four stage scripts; none may apply a patch.
+        for script in STAGE_SCRIPTS:
+            self.assertNotIn('patch', (FACTORY / script).read_text().lower().replace('dispatch', ''), script)
 
     def test_scanner_provenance_and_inputs_refuse_drift(self):
         for src in ('command', 'facts', 'lib', 'main'):
@@ -788,13 +793,16 @@ class ImageBuildContracts(unittest.TestCase):
         self.assertEqual(sha(installer), '247a396c0f3d504023f001c33bb1211f5f0f9bfd2c6685077d4bd312ac95f8cb')
 
     def test_rust_install_precedes_version_gate(self):
-        # Execute the actual setup fragment with transaction/tool stubs. The gate
-        # succeeds only after the helper, and a helper failure must stop it.
-        script = (FACTORY / 'snitchwatch-system-build.sh').read_text()
+        # Execute the actual prep-stage setup fragment (snitchwatch-system-prep.sh,
+        # formerly snitchwatch-system-build.sh) with transaction/tool stubs. The
+        # gate succeeds only after the helper, the fingerprint is recorded right
+        # after it, and the networked positive-control probe runs in prep.
+        script = (FACTORY / 'snitchwatch-system-prep.sh').read_text()
         fragment = script[script.index('bash "$factory/snitchwatch-system-install-deps.sh"'):
                           script.index('git init "$work/source"')]
-        fragment = fragment.replace('/work', str(self.root / 'build-work'))
+        self.assertIn('work=$1', fragment)
         stubs = r'''set -euo pipefail
+set -- "$workdir"
 bash() {
     case "$1" in
         */snitchwatch-system-install-deps.sh) echo upstream >> "$events" ;;
@@ -808,13 +816,13 @@ bash() {
     esac
 }
 command() {
-    [[ "$*" != '-v curl' ]] || return 1
+    [[ "$*" != '-v curl' && "$*" != '-v dbus-run-session' ]] || return 1
     builtin command "$@"
 }
 timeout() { [[ "$1" == 240 ]]; shift; "$@"; }
 dnf() {
-    [[ "$*" == '-y --setopt=install_weak_deps=False install curl' ]]
-    echo curl >> "$events"
+    [[ "$*" == '-y --setopt=install_weak_deps=False install curl' || "$*" == '-y --setopt=install_weak_deps=False install dbus-daemon' ]]
+    echo "${@: -1}" >> "$events"
 }
 rustc() {
     echo rustc >> "$events"
@@ -823,22 +831,24 @@ rustc() {
 }
 protoc() { echo 'libprotoc 3.19.6'; }
 python3() {
-    # The toolchain fingerprint reads the host RPM db; this test must not depend on it.
-    if [[ "$*" == *--record-toolchain* ]]; then echo record >> "$recorded"; else command python3 "$@"; fi
+    # The toolchain fingerprint reads the host RPM db and the probe needs a network;
+    # this test must depend on neither.
+    if [[ "$*" == *--record-toolchain* ]]; then echo record >> "$events"
+    elif [[ "$*" == *'snitchwatch-system-handoff.py probe-network online' ]]; then echo probe-online >> "$events"
+    else command python3 "$@"; fi
 }
 '''
         for failure in (0, 1):
             with self.subTest(helper_failure=failure):
                 events = self.root / f'events-{failure}'
-                env = {**os.environ, 'factory': str(FACTORY), 'events': str(events),
-                       'installed': str(self.root / f'installed-{failure}'), 'recorded': str(self.root / f'recorded-{failure}'), 'fail_helper': str(failure)}
+                env = {**os.environ, 'factory': str(FACTORY), 'events': str(events), 'workdir': str(self.root / f'work-{failure}'),
+                       'installed': str(self.root / f'installed-{failure}'), 'fail_helper': str(failure)}
                 result = subprocess.run(['bash', '-c', stubs + fragment], env=env,
                                         capture_output=True, text=True)
                 self.assertEqual(result.returncode, 19 if failure else 0, result.stderr)
+                # The fingerprint is taken only after a successful install, before anything else runs.
                 self.assertEqual(events.read_text().splitlines(),
-                                 ['upstream', 'curl', 'helper'] + ([] if failure else ['rustc']))
-                # The fingerprint is taken only after a successful install.
-                self.assertEqual((self.root / f'recorded-{failure}').exists(), not failure)
+                                 ['upstream', 'curl', 'helper'] + ([] if failure else ['record', 'dbus-daemon', 'probe-online', 'rustc']))
 
     def test_self_consistent_dropin_requiring_its_directory(self):
         # Without the '-' a missing /run/snitchwatch would keep the
@@ -903,6 +913,8 @@ class StageOutputContracts(unittest.TestCase):
         self.work = tempfile.TemporaryDirectory(prefix='sw-stage-contract.')
         self.addCleanup(self.work.cleanup)
         self.tmp = Path(self.work.name)
+        # stage.py refuses a bridge executable path writable by group/other.
+        self.addCleanup(os.umask, os.umask(0o022))
 
     def write(self, path, data, mode=0o644):
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -915,7 +927,9 @@ class StageOutputContracts(unittest.TestCase):
         upstream_config = b'{"DefaultAction": "deny", "ProcMonitorMethod": "ebpf"}\n'
         self.write(source / 'packaging/system/opensnitchd-default-config.json', upstream_config)
         # Like upstream stage.sh: stages its own (ebpf) daemon config into the root.
-        self.write(source / 'packaging/system/stage.sh', 'set -eu\n' + stage_script, 0o755)
+        # Like upstream stage.sh: runs the binary (--help) and installs it, then the test's own body.
+        self.write(source / 'packaging/system/stage.sh', 'set -eu\n"$2" --help > /dev/null\n'
+                   'install -Dm755 "$2" "$1/usr/bin/snitchwatch-bridge-cli"\n' + stage_script, 0o755)
         self.write(source / 'packaging/flatpak/org.snitchwatch.Snitchwatch.system.yml', 'app-id: org.snitchwatch.Snitchwatch\n')
         (source / 'vendor/opensnitch').mkdir(parents=True)
         pins = {'sourceCommit': 'a' * 40, 'sourceTree': 'b' * 40, 'submoduleCommit': 'c' * 40, 'bridgeVersion': '0.1.1',
@@ -1013,7 +1027,7 @@ esac
 
 
 class ScannerBuildHardening(unittest.TestCase):
-    """Defence-in-depth contracts for scanner build inputs (these do not isolate it from the bridge build; H1 stays open)."""
+    """Defence-in-depth contracts for scanner build inputs, on top of the H1 stage split (tests/test-snitchwatch-image-stages.py)."""
 
     def setUp(self):
         self.h = runpy.run_path(str(FACTORY / 'snitchwatch-system-scanner-build.py'))
@@ -1202,14 +1216,24 @@ class ScannerBuildHardening(unittest.TestCase):
         self.assertNotIn("source / 'LICENSE'", text)
         self.assertIn("exported / 'LICENSE'", text)
 
-    def test_build_script_verifies_the_checked_helper_not_the_mutable_checkout(self):
-        build = (FACTORY / 'snitchwatch-system-build.sh').read_text()
-        self.assertNotIn('"$SRC_DIR/packaging/release/bridge_artifact.py" verify', build)
-        self.assertIn('"$work/scanner/source/packaging/release/bridge_artifact.py" verify', build)
-        self.assertRegex(build, r'--record-toolchain')
-        self.assertRegex(build, r'--toolchain-digest')
-        self.assertLess(build.index('--record-toolchain'), build.index('build-bridge.sh'))
-        self.assertLess(build.index('snitchwatch-system-scanner-build.py" --source'), build.index('scanner/source/packaging/release/bridge_artifact.py" verify'))
+    def test_assembly_verifies_the_rechecked_prep_helper_never_a_stage_output(self):
+        # Replaces the #149 check on snitchwatch-system-build.sh, which ran the
+        # helper from the scanner build's export copy. The scanner stage is now
+        # untrusted for code: assembly runs the helper from the prep checkout only
+        # after re-hashing every pinned input, and no handoff carries a source tree.
+        assemble = (FACTORY / 'snitchwatch-system-assemble.sh').read_text()
+        verify = '"$work/source/packaging/release/bridge_artifact.py" verify'
+        self.assertEqual(assemble.count(verify), 1)
+        self.assertLess(assemble.index("p['sourceFiles'].items()"), assemble.index(verify))
+        for needle in ('/handoff/scanner/source', 'scanner/source', '--check-ldd', '--run-flags', 'cargo', 'build-bridge', 'repro-check', 'rustc'):
+            self.assertNotIn(needle, assemble)
+        prep = (FACTORY / 'snitchwatch-system-prep.sh').read_text()
+        scanner = (FACTORY / 'snitchwatch-system-scanner-stage.sh').read_text()
+        self.assertRegex(prep, r'--record-toolchain')
+        self.assertRegex(scanner, r'--toolchain-digest "\$work/toolchain.sha256"')
+        self.assertNotIn('build-bridge', prep + scanner)
+        # Prep hash-checks every pinned input before it runs the version helper.
+        self.assertLess(prep.index("p['sourceFiles'].items()"), prep.index('bridge_artifact.py" version'))
 
 
 class FlatpakFinishArgsContract(unittest.TestCase):

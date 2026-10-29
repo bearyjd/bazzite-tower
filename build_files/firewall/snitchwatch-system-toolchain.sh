@@ -21,8 +21,9 @@ work=$3
 shift 3
 extras=("$@")
 [[ -r "$pins" ]] || die "cannot read pins file: $pins"
-# The pins are parsed with python3. snitchwatch-system-build.sh runs install-deps.sh
-# (which installs python3) earlier in the same RUN, so it is present in the build;
+# The pins are parsed with python3. snitchwatch-system-prep.sh runs install-deps.sh
+# (which installs python3) earlier in the same RUN, and the daemon stage descends
+# from that prep stage, so it is present in the build;
 # fail with a clear message if this helper is ever run on its own without it.
 command -v python3 > /dev/null || die 'python3 is required to read the pins (install it first)'
 

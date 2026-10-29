@@ -3,10 +3,15 @@
 import argparse
 import hashlib
 import json
+import os
 from pathlib import Path
 import runpy
 import shutil
+import signal
+import stat
 import subprocess
+import tempfile
+import time
 
 
 # Opt-in Vigie endpoint-event feed: pristine pinned upstream copies, shipped
@@ -14,10 +19,183 @@ import subprocess
 # pins the same names; the operator installs them by hand (docs/RUNBOOK.md).
 ENDPOINT_EVENTS = ('snitchwatch-endpoint-events.conf', 'snitchwatch-endpoint-events.nft',
                    'snitchwatch-endpoint-events.service', 'snitchwatch-endpoint-events-nft.service')
+# The bridge binary is built by ~660 third-party crates, so it never runs as
+# root here: its --version check and upstream stage.sh (which runs its --help)
+# run as this uid/gid with an empty environment, then root adopts only these
+# paths (H1).  Contents are pinned by the verifier (SOURCE_FILES, binary hash).
+UNPRIVILEGED = 65534
+UNPRIVILEGED_ENV = {'PATH': '/usr/bin:/bin', 'LANG': 'C'}
+SYSTEM_STAGE_FILES = {
+    'usr/bin/snitchwatch-bridge-cli': 0o755,
+    'usr/lib/systemd/system/snitchwatch-system-bridge.service': 0o644,
+    'usr/lib/systemd/system/snitchwatch-system-bridge-grpc.socket': 0o644,
+    'usr/lib/systemd/system/snitchwatch-system-bridge-gui.socket': 0o644,
+    'usr/lib/systemd/system/opensnitch.service.d/snitchwatch-system-bridge.conf': 0o644,
+    'etc/opensnitchd/default-config.json': 0o644,
+    'usr/lib/tmpfiles.d/snitchwatch.conf': 0o644,
+    'usr/lib/sysusers.d/snitchwatch.conf': 0o644,
+    'etc/opensnitchd/rules/000-snitchwatch-bridge-fetch.json': 0o644,
+}
 
 
 def sha(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+PR_SET_CHILD_SUBREAPER = 36
+PR_SET_NO_NEW_PRIVS = 38
+# upstream stage.sh only hashes, runs --help and installs nine files.
+STAGE_SH_TIMEOUT = 300
+_LIBC = []
+
+
+def libc():
+    if not _LIBC:
+        import ctypes
+        _LIBC.append(ctypes.CDLL(None, use_errno=True))
+    return _LIBC[0]
+
+
+def prctl(option, value):
+    """libc prctl(2); unprivileged_options() loads libc in the parent so the forked child only calls it."""
+    return libc().prctl(option, value, 0, 0, 0)
+
+
+def set_no_new_privs():
+    """preexec_fn: runs in the child after the uid/gid drop and before exec; a failure aborts the exec."""
+    if prctl(PR_SET_NO_NEW_PRIVS, 1) != 0:
+        raise OSError('prctl(PR_SET_NO_NEW_PRIVS, 1) failed')
+
+
+def unprivileged_options():
+    """subprocess options that drop root to UNPRIVILEGED with no_new_privs (no setuid/file-cap gain on exec)."""
+    libc()
+    options = {'env': dict(UNPRIVILEGED_ENV), 'cwd': '/', 'stdin': subprocess.DEVNULL, 'umask': 0o022,
+               'preexec_fn': set_no_new_privs}
+    if os.geteuid() == 0:
+        options.update(user=UNPRIVILEGED, group=UNPRIVILEGED, extra_groups=[])
+    return options
+
+
+def become_subreaper():
+    """Orphans of the bridge binary (double fork, setsid) reparent to this process, not to init."""
+    import ctypes
+    if prctl(PR_SET_CHILD_SUBREAPER, 1) != 0:
+        raise ValueError('cannot become child subreaper to contain the bridge binary: errno %d' % ctypes.get_errno())
+
+
+def children(parent, proc=Path('/proc')):
+    """PIDs whose parent is PARENT (/proc/PID/stat field 4, after the parenthesised comm)."""
+    found = []
+    for entry in proc.iterdir():
+        if entry.name.isdigit():
+            try:
+                fields = (entry / 'stat').read_text().rsplit(')', 1)[1].split()
+            except (FileNotFoundError, ProcessLookupError, IndexError):
+                continue
+            if int(fields[1]) == parent:
+                found.append(int(entry.name))
+    return found
+
+
+def kill_leftover_children(proc=Path('/proc'), rounds=50):
+    """SIGKILL and reap every remaining descendant (all reparented here); refuse if any survive.
+
+    Only this process's own children are touched, never unrelated processes that a
+    user namespace may also show as uid 65534."""
+    me = os.getpid()
+    for _ in range(rounds):
+        left = children(me, proc)
+        if not left:
+            return
+        for pid in left:
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+        for pid in left:
+            try:
+                os.waitpid(pid, 0)
+            except ChildProcessError:
+                pass
+        time.sleep(0.05)
+    raise ValueError('bridge binary descendants survived SIGKILL; refusing')
+
+
+def run_unprivileged(command, **extra):
+    privileged = os.geteuid() == 0
+    if privileged:
+        become_subreaper()
+    try:
+        return subprocess.run(command, check=True, **unprivileged_options(), **extra)
+    except PermissionError as error:
+        raise ValueError('cannot drop to uid/gid %d to run the bridge binary: %s' % (UNPRIVILEGED, error)) from error
+    except subprocess.TimeoutExpired as error:
+        name = Path(command[1] if command[0] == 'bash' else command[0]).name
+        # The configured limit, never subprocess's measured remaining time (a float).
+        raise ValueError('%s timed out after %d s running the bridge binary' % (name, extra['timeout'])) from error
+    except subprocess.CalledProcessError:
+        raise
+    except subprocess.SubprocessError as error:
+        # The only preexec_fn is set_no_new_privs: fail closed, never exec without it.
+        raise ValueError('cannot set no_new_privs for the bridge binary (preexec failed): %s' % error) from error
+    finally:
+        if privileged:
+            kill_leftover_children()
+
+
+def require_not_writable_by(path, uid):
+    """The executable and every parent must be unwritable by uid (sticky world-writable dirs excepted).
+
+    uid None (a non-root caller, which runs the binary as itself) checks modes only."""
+    for current in (path, *path.parents):
+        info = os.lstat(current)
+        if stat.S_ISLNK(info.st_mode):
+            raise ValueError('bridge executable path contains a symlink: ' + str(current))
+        sticky_dir = stat.S_ISDIR(info.st_mode) and info.st_mode & stat.S_ISVTX and current != path
+        if (uid is not None and info.st_uid == uid) or (info.st_mode & 0o022 and not sticky_dir):
+            raise ValueError('bridge executable or a parent is writable by uid %s or by group/other: %s' % (uid, current))
+
+
+def adopt_unprivileged_stage(staged, out):
+    """Copy the unprivileged stage.sh output into the new OUT as the caller (root in the build).
+
+    Only SYSTEM_STAGE_FILES may appear, as regular single-link files with their
+    exact mode; directories only as their parents.  Presence and content are the
+    verifier's job (REQUIRED, SOURCE_FILES, binary hash), as before."""
+    parents = {str(parent) for name in SYSTEM_STAGE_FILES for parent in Path(name).parents if str(parent) != '.'}
+    if os.path.lexists(staged) and not stat.S_ISDIR(os.lstat(staged).st_mode):
+        raise ValueError('unexpected path in unprivileged stage.sh output: the staging root is not a real directory')
+    out.mkdir()
+    for base, subdirs, files in os.walk(staged):
+        subdirs.sort()
+        for name in sorted(subdirs) + sorted(files):
+            origin = Path(base) / name
+            rel = str(origin.relative_to(staged))
+            info = os.lstat(origin)
+            if stat.S_ISDIR(info.st_mode) and rel in parents:
+                (out / rel).mkdir(exist_ok=True)
+                (out / rel).chmod(0o755)
+            elif stat.S_ISREG(info.st_mode) and SYSTEM_STAGE_FILES.get(rel) == stat.S_IMODE(info.st_mode) and info.st_nlink == 1:
+                (out / rel).parent.mkdir(parents=True, exist_ok=True)
+                with origin.open('rb') as reader, (out / rel).open('xb') as writer:
+                    writer.write(reader.read())
+                (out / rel).chmod(SYSTEM_STAGE_FILES[rel])
+            else:
+                raise ValueError('unexpected path in unprivileged stage.sh output: %s (mode %o)' % (rel, info.st_mode))
+
+
+def stage_system_unprivileged(source, out, binary, binary_sha):
+    """Run pinned upstream stage.sh (it executes BINARY --help) unprivileged into a scratch root."""
+    scratch = Path(tempfile.mkdtemp(prefix='snitchwatch-bridge-stage.'))
+    try:
+        if os.geteuid() == 0:
+            os.chown(scratch, UNPRIVILEGED, UNPRIVILEGED)
+        run_unprivileged(['bash', str(source / 'packaging/system/stage.sh'), str(scratch / 'root'), str(binary), binary_sha],
+                         timeout=STAGE_SH_TIMEOUT)
+        adopt_unprivileged_stage(scratch / 'root', out)
+    finally:
+        shutil.rmtree(scratch)
 
 
 def copy(source, dest, mode=0o644):
@@ -62,13 +240,18 @@ def main():
     expected_config['DefaultAction'] = 'allow'
     if candidate != expected_config or candidate['DefaultAction'] != 'allow' or candidate['ProcMonitorMethod'] != 'proc':
         raise ValueError('candidate config must retain the allow/proc defaults and change only the daemon address')
-    binary = args.artifact / 'usr/bin/snitchwatch-bridge-cli'
+    binary = args.artifact.resolve() / 'usr/bin/snitchwatch-bridge-cli'
+    require_not_writable_by(binary, UNPRIVILEGED if os.geteuid() == 0 else None)
     binary_sha = sha(binary)
-    actual_version = subprocess.check_output([str(binary), '--version'], text=True, timeout=5).strip()
+    actual_version = run_unprivileged([str(binary), '--version'], text=True, timeout=5, capture_output=True).stdout.strip()
     if actual_version != 'snitchwatch-bridge-cli ' + pins['bridgeVersion']:
         raise ValueError('actual binary --version differs from required bridge version')
+    if sha(binary) != binary_sha:
+        raise ValueError('bridge executable changed while it ran')
     # Stage from this exact source checkout, never install the schema1 user unit.
-    subprocess.run(['bash', str(source / 'packaging/system/stage.sh'), str(out), str(binary), binary_sha], check=True)
+    stage_system_unprivileged(source, out, binary, binary_sha)
+    if sha(out / 'usr/bin/snitchwatch-bridge-cli') != binary_sha:
+        raise ValueError('staged bridge executable differs from the verified artifact')
     # stage.sh also stages upstream's deny/ebpf daemon config. The tower keeps
     # its reviewed allow/proc baseline; eBPF requires owner testing. Drop it: a file
     # pre-placed at that path would meet the RPM's cpio extraction (mtime-

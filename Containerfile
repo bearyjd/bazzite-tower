@@ -37,10 +37,12 @@ COPY build_files/firewall/snitchwatch-system-legacy-marker /out/usr/share/bazzit
 # System bridge (opt-in), split so that third-party build code cannot reach what
 # is trusted later (H1). The FROM chain of the scanner, daemon and assembly
 # stages is prep only; the bridge stage, where ~660 crates' build scripts run
-# as root with network, is an ancestor of nothing. Stage outputs cross only as
-# allowlisted /handoff/* data that the assembly stage re-checks. `--network`
-# appears only in the scanner and assembly stages: if a builder rejects it,
-# revert this block to the previous single RUN (git revert of the H1 commit).
+# as root (offline), is an ancestor of nothing. Stage outputs cross only as
+# allowlisted /handoff/* data that the assembly stage re-checks. The network is off
+# for the scanner, bridge and assembly RUNs (only prep and daemon keep network, to fetch): if a
+# builder rejects it, revert this block to the previous single RUN (git revert
+# of the H1 commit). The bridge build is offline (M1 step 1) but its evidence
+# is still produced by that stage itself (M1 open).
 FROM registry.fedoraproject.org/fedora:44@sha256:e1656bc110fc33e855f7a02e4420c21066428bc7a0277160d40ee125ef8a1c65 AS snitchwatch-prep
 ARG FIREWALL_DAEMON
 COPY --from=ctx /firewall/snitchwatch-system* /factory/
@@ -54,7 +56,7 @@ RUN --network=none SNITCHWATCH_BRIDGE=system FIREWALL_DAEMON="${FIREWALL_DAEMON}
 
 FROM snitchwatch-prep AS snitchwatch-bridge
 ARG FIREWALL_DAEMON
-RUN SNITCHWATCH_BRIDGE=system FIREWALL_DAEMON="${FIREWALL_DAEMON}" bash /factory/snitchwatch-system-bridge-build.sh /work/native /handoff/bridge
+RUN --network=none SNITCHWATCH_BRIDGE=system FIREWALL_DAEMON="${FIREWALL_DAEMON}" bash /factory/snitchwatch-system-bridge-build.sh /work/native /handoff/bridge
 
 FROM snitchwatch-prep AS snitchwatch-daemon
 ARG FIREWALL_DAEMON

@@ -215,7 +215,7 @@ overrides before selecting it.
 How the candidate is built (H1 stage split, see `docs/CODEMAPS/image-build.md`):
 five Containerfile stages, `snitchwatch-prep` (network, RPM scriptlets, git and
 `cargo fetch` only) → `snitchwatch-scanner` (`RUN --network=none`) and
-`snitchwatch-bridge` (the ~660-crate bridge build, network, root) and
+`snitchwatch-bridge` (the ~660-crate bridge build, root, `RUN --network=none`) and
 `snitchwatch-daemon` → `snitchwatch-system` assembly (`RUN --network=none`). The
 bridge stage is an ancestor of nothing; only allowlisted `/handoff/*` files reach
 assembly. When a system build fails, grep the log for these distinct lines:
@@ -227,11 +227,26 @@ file), `RPM set differs from the snitchwatch-prep inventory`, `merge overlap`,
 `cannot drop to uid/gid 65534` (the builder refused the unprivileged bridge
 `--version`/`--help`), `cannot set no_new_privs`, `stage.sh timed out after 300 s`, `cannot become child subreaper`,
 `bridge binary descendants survived SIGKILL`, `must be root-owned and not group/other writable`, `cannot list extended attributes`,
-`unexpected path in unprivileged stage.sh output`. If a
+`unexpected path in unprivileged stage.sh output`,
+`bridge stage: prep cargo cache failed the Cargo.lock checksum allowlist` (a cached
+`.crate` is altered or not in the lock), `bridge stage: offline cargo fetch preflight failed`
+(prep's fetch is incomplete, or `cargo fetch` refuses offline: fix the fetch in prep, do
+not give the bridge stage network). After the preflight passed, `failed to run custom
+build command for <crate>` (connect/DNS error under `--- stderr`) means a build script
+wanted network; `failed to download` / `--offline was specified` means `cargo build` needs
+a crate outside prep's fetch set (fix prep's fetch). If a
 builder rejects `RUN --network=none` itself, every leg fails before step 1:
 revert the H1 commit (single-RUN layout) rather than removing the probes.
-Still open: the bridge tarball is built by its own crates as root with network,
-and its sha is self-computed (M1); the split contains it, it does not verify it.
+The bridge stage is offline (M1 step 1): its crates cannot reach the network (no
+second-stage download, no exfiltration over the network; the tarball and the CI log
+still leave the stage). To revert only that step, revert the whole of #154 so the
+stricter tests, the code and the docs go together: `git revert -m 1 <merge>` if it
+landed as a merge commit (this repo's usual style), or `git revert <commit>` if it
+was squash-merged. Reverting only the fix commit leaves tests that require an
+offline bridge and fails source safety.
+Still open: the bridge tarball is built by its own crates as root, and its sha,
+logs and repro-check are produced in that same stage (`reproducible: True` is a
+literal), so the evidence is self-attesting (M1); the split contains it, it does not verify it.
 
 The daemon build toolchain (Go, protoc, libnetfilter_queue) is installed from
 pinned, Fedora-signed Koji RPMs (`toolchainRpms` in

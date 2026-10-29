@@ -7,11 +7,13 @@ guards (snitchwatch-system-handoff.py) and of stage.py's unprivileged bridge
 execution. Runs offline with python3 only (no rpm, cargo, dnf or containers).
 What only a real CI build can prove is listed in docs/CODEMAPS/image-build.md.
 """
+import hashlib
 import json
 import os
 from pathlib import Path
 import re
 import runpy
+import shutil
 import stat
 import subprocess
 import tempfile
@@ -23,10 +25,27 @@ FACTORY = ROOT / 'build_files/firewall'
 CONTAINERFILE = ROOT / 'Containerfile'
 PINS = json.loads((FACTORY / 'snitchwatch-system-pins.json').read_text())
 BUILD_STAGES = ('snitchwatch-prep', 'snitchwatch-scanner', 'snitchwatch-bridge', 'snitchwatch-daemon', 'snitchwatch-system')
-OFFLINE_STAGES = ('snitchwatch-scanner', 'snitchwatch-system')
+OFFLINE_STAGES = ('snitchwatch-scanner', 'snitchwatch-bridge', 'snitchwatch-system')
+ONLINE_STAGES = ('snitchwatch-prep', 'snitchwatch-daemon')
+OFFLINE_SCRIPTS = ('snitchwatch-system-scanner-stage.sh', 'snitchwatch-system-bridge-build.sh', 'snitchwatch-system-assemble.sh')
+BRIDGE_SCRIPT = FACTORY / 'snitchwatch-system-bridge-build.sh'
 # Scripts and fragments that execute third-party build code or the bridge binary.
 BRIDGE_ONLY = ('snitchwatch-system-bridge-build.sh', 'build-bridge.sh', 'repro-check.sh', '--run-flags', '--check-ldd')
 HANDOFF = FACTORY / 'snitchwatch-system-handoff.py'
+# Lines allowed before an offline stage's network probe: our own mode check,
+# argument/container guards and plain assignments. A guard is `[[ ]]` tests
+# joined by `&&` and ending in a refusal; nothing can be chained after it.
+TEST = r'\[\[ (?:(?!\]\]|\$\(|`).)+ \]\]'
+GUARD = TEST + r'(?: && ' + TEST + r")* \|\| \{(?: echo '[^']*' >&2; exit 1; \})?"
+PRE_PROBE = re.compile(r'(set -euo pipefail|factory=\$\(cd -- "\$\(dirname -- "\$\{BASH_SOURCE\[0\]\}"\)" && pwd\)'
+                       r'|bash "\$factory/snitchwatch-system-mode\.sh"|' + GUARD + r"|echo '[^']*' >&2; exit 1;|\}"
+                       r'|(?:[a-z_]+=(?:\$\d|"\$factory/[\w.-]+")\s*)+)')
+
+
+def pre_probe_line_ok(line):
+    if not PRE_PROBE.fullmatch(line):
+        return False
+    return line.startswith('factory=$(cd -- ') or '$(' not in line
 
 
 def instructions(text):
@@ -137,24 +156,39 @@ class ContainerfileStages(unittest.TestCase):
         self.assertEqual(run.count('&&'), 2)
 
     def test_network_none_is_on_every_offline_run_and_confined_to_those_stages(self):
+        # M1 step 1 replaced `count('--network=') == 2` with exact stage sets.
+        self.assertEqual(set(OFFLINE_STAGES) | set(ONLINE_STAGES), set(BUILD_STAGES))
+        self.assertFalse(set(OFFLINE_STAGES) & set(ONLINE_STAGES))
+        offline = set()
         for name, stage in self.stages.items():
             for run in runs(stage):
                 if name in OFFLINE_STAGES:
                     self.assertTrue(run.startswith('--network=none '), name)
+                    self.assertEqual(run.count('--network'), 1, name)
+                    offline.add(name)
                 else:
                     # Confinement: a builder that rejects the flag breaks only these legs' stages.
                     self.assertNotIn('--network', run, name)
             if name in OFFLINE_STAGES:
                 self.assertEqual(len(runs(stage)), 1, name)
-        self.assertEqual(CONTAINERFILE.read_text().count('--network='), 2)
+        self.assertEqual(offline, set(OFFLINE_STAGES))
+        for name in ONLINE_STAGES:
+            self.assertTrue(runs(self.stages[name]), name)
+        self.assertEqual(CONTAINERFILE.read_text().count('--network='), len(OFFLINE_STAGES))
 
     def test_offline_stage_scripts_probe_the_network_first(self):
-        for script in ('snitchwatch-system-scanner-stage.sh', 'snitchwatch-system-assemble.sh'):
-            text = (FACTORY / script).read_text()
-            probe = text.index('probe-network offline')
-            for later in ('rpm -qa', 'python3 "$factory/snitchwatch-system-scanner-build.py"', '"$guard" check'):
-                if later in text:
-                    self.assertLess(probe, text.index(later), script)
+        # Stricter than the old index check: before the probe only our own mode
+        # check, the argument/container guards and plain assignments may run.
+        for script in OFFLINE_SCRIPTS:
+            lines = [line.strip() for line in (FACTORY / script).read_text().splitlines()[1:]
+                     if line.strip() and not line.lstrip().startswith('#')]
+            probe = lines.index('python3 "$factory/snitchwatch-system-handoff.py" probe-network offline'
+                                if script != 'snitchwatch-system-assemble.sh' else 'python3 "$guard" probe-network offline')
+            for line in lines[:probe]:
+                self.assertTrue(pre_probe_line_ok(line), (script, line))
+            for later in ('rpm -qa', 'cargo', 'build-bridge.sh', 'repro-check.sh', 'readarray', 'scanner-build.py'):
+                if later in '\n'.join(lines):
+                    self.assertGreater('\n'.join(lines).index(later), '\n'.join(lines).index('probe-network offline'), (script, later))
         prep = (FACTORY / 'snitchwatch-system-prep.sh').read_text()
         self.assertIn('snitchwatch-system-handoff.py" probe-network online', prep)
 
@@ -239,6 +273,133 @@ class ContainerfileStages(unittest.TestCase):
                       '--manifest-path "$work/source/Cargo.toml"', prep)
         for needle in ('cargo build', 'cargo test', 'cargo run', 'cargo install'):
             self.assertNotIn(needle, prep)
+
+    def bridge_body(self):
+        return '\n'.join(line for line in BRIDGE_SCRIPT.read_text().splitlines() if not line.lstrip().startswith('#'))
+
+    def test_pre_probe_guards_cannot_chain_or_substitute_commands(self):
+        for line in ('[[ "${SNITCHWATCH_BRIDGE:-legacy}" == system ]] || { echo \'native factory requires system mode\' >&2; exit 1; }',
+                     '[[ $# -eq 2 && -d "$1/source" && "$2" == /?* && ! -e "$2" ]] || { echo \'bridge stage: usage WORK NEW-HANDOFF\' >&2; exit 1; }',
+                     '[[ -e /run/.containerenv || -e /.dockerenv ]] && [[ ! -e /run/.toolboxenv && ! -e /run/host ]] || {',
+                     'echo \'native factory requires a fresh builder container\' >&2; exit 1;', '}', 'work=$1',
+                     'work=$1 handoff=$2 out=$3', 'pins="$factory/snitchwatch-system-pins.json"'):
+            with self.subTest(accepted=line):
+                self.assertTrue(pre_probe_line_ok(line))
+        for line in ('[[ -e /x ]] || curl https://evil', '[[ -e /x ]] && python3 /tmp/y', '[[ -e /x ]]; cargo build',
+                     '[[ -e /x ]] || { cargo fetch; }', '[[ -e /x ]] || { echo \'m\' >&2; exit 1; }; wget x',
+                     '[[ -n "$(python3 -c 1)" ]] || exit 1', '[[ -n "`python3 -c 1`" ]]', '[[ -e /x ]] | sh',
+                     '[[ -e /x ]] || exit 1', 'work=$(curl x)', 'cargo fetch'):
+            with self.subTest(refused=line):
+                self.assertFalse(pre_probe_line_ok(line))
+
+    def test_bridge_stage_runs_no_network_needing_command(self):
+        body = self.bridge_body()
+        for needle in ('dnf', 'curl', 'wget', 'git fetch', 'git clone', 'git pull', 'git submodule', 'rustup', 'pip ', 'pip3',
+                       'npm', 'go get', 'go mod download', 'cargo vendor', 'SW_INSTALL_DEPS=1', 'install-deps',
+                       'probe-network online', 'cargo install', 'cargo update'):
+            self.assertNotIn(needle, body)
+        # Every cargo fetch here must be the offline form.
+        fetches = re.findall(r'cargo fetch[^\n]*', re.sub(r"'[^'\n]*'", "''", body))
+        self.assertTrue(fetches)
+        for fetch in fetches:
+            self.assertIn('--offline', fetch.split('||')[0], fetch)
+        self.assertIn('unset ALLOW_DIRTY SW_RELEASE_TAG SW_INSTALL_DEPS', body)
+        # No snitchwatch build stage mounts anything (a cache or bind would bypass the netns argument).
+        for name in BUILD_STAGES:
+            for run in runs(self.stages[name]):
+                self.assertNotIn('--mount', run, name)
+        self.assertNotIn('--mount', body)
+
+    def test_bridge_build_uses_an_offline_allowlisted_cargo_home(self):
+        body = self.bridge_body()
+        # Prep's cache is never the build's CARGO_HOME; the build gets a fresh one
+        # holding only Cargo.lock-checksummed .crate files and the index.
+        self.assertNotIn('CARGO_HOME="$work/cargo" ', body.replace('"$work/cargo" "$work/bridge-cargo"', ''))
+        self.assertIn('python3 -B - "$factory/snitchwatch-system-scanner-build.py" "$work/cargo" "$work/bridge-cargo" '
+                      '"$work/source/Cargo.lock" <<\'PY\'', body)
+        export = next(line for line in body.splitlines() if line.startswith('export SRC_DIR='))
+        self.assertIn('CARGO_HOME="$work/bridge-cargo"', export)
+        self.assertIn('CARGO_NET_OFFLINE=true', export)
+        order = ['probe-network offline', 'snitchwatch-system-scanner-build.py" "$work/cargo" "$work/bridge-cargo"',
+                 'export SRC_DIR=', 'cargo fetch --locked --offline --target x86_64-unknown-linux-gnu --manifest-path "$SRC_DIR/Cargo.toml"',
+                 '"$SRC_DIR/packaging/release/build-bridge.sh"', '"$SRC_DIR/packaging/release/repro-check.sh"',
+                 '--check-ldd --run-flags', 'cmp - "$work/rpm-inventory.txt"', 'snitchwatch-system-handoff.py" export bridge']
+        position = 0
+        for needle in order:
+            self.assertIn(needle, body[position:], needle)
+            position = body.index(needle, position) + len(needle)
+        self.assertIn('rm -rf -- "$CARGO_TARGET_DIR" "$work/bridge-cargo"', body)
+
+    def bridge_fragment(self, first, last, trailing=0):
+        lines = BRIDGE_SCRIPT.read_text().splitlines()
+        start = next(i for i, line in enumerate(lines) if line.startswith(first))
+        end = next(i for i in range(start, len(lines)) if last in lines[i]) + trailing
+        return '\n'.join(lines[start:end + 1])
+
+    def test_fresh_cargo_home_fragment_refuses_unpinned_or_altered_crates(self):
+        fragment = self.bridge_fragment('python3 -B - "$factory/snitchwatch-system-scanner-build.py"', 'bridge stage: prep cargo cache', trailing=1)
+        self.assertTrue(fragment.endswith('\n}'), fragment)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            good = b'crate bytes'
+            lock = '[[package]]\nname = "a"\nversion = "1.0.0"\nsource = "registry+https://github.com/rust-lang/crates.io-index"\nchecksum = "%s"\n' % hashlib.sha256(good).hexdigest()
+
+            def attempt(label, cache_files, extra=()):
+                work = root / label
+                (work / 'source').mkdir(parents=True)
+                (work / 'source/Cargo.lock').write_text(lock)
+                for rel, data in {**cache_files, **dict(extra)}.items():
+                    (work / 'cargo' / rel).parent.mkdir(parents=True, exist_ok=True)
+                    (work / 'cargo' / rel).write_bytes(data)
+                script = 'set -euo pipefail\nfactory=%s\nwork=%s\n%s\necho fresh-ok\n' % (FACTORY, work, fragment)
+                return work, subprocess.run(['bash', '-c', script], env={'PATH': '/usr/bin:/bin', 'HOME': str(root)},
+                                            capture_output=True, text=True)
+
+            crate = {'registry/cache/index.crates.io-x/a-1.0.0.crate': good, 'registry/index/index.crates.io-x/.cache/a': b'idx'}
+            work, result = attempt('ok', crate, {'config.toml': b'[build]\nrustc-wrapper="x"\n', 'bin/cargo-x': b'x',
+                                                 'registry/src/index.crates.io-x/a-1.0.0/build.rs': b'evil'})
+            self.assertEqual((result.returncode, result.stdout.strip()), (0, 'fresh-ok'), result.stderr)
+            fresh = work / 'bridge-cargo'
+            self.assertEqual(sorted(str(p.relative_to(fresh)) for p in fresh.rglob('*') if p.is_file()),
+                             ['registry/cache/index.crates.io-x/a-1.0.0.crate', 'registry/index/index.crates.io-x/.cache/a'])
+            for label, files in (('altered', {**crate, 'registry/cache/index.crates.io-x/a-1.0.0.crate': b'tampered'}),
+                                 ('unpinned', {**crate, 'registry/cache/index.crates.io-x/b-2.0.0.crate': b'b'})):
+                with self.subTest(refused=label):
+                    work, result = attempt(label, files)
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertNotIn('fresh-ok', result.stdout)
+                    self.assertIn('bridge stage: prep cargo cache failed the Cargo.lock checksum allowlist', result.stderr)
+
+    def run_bridge_build_fragment(self, cargo_status):
+        fragment = self.bridge_fragment('export SRC_DIR=', '"$SRC_DIR/packaging/release/build-bridge.sh"')
+        tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, tmp)
+        release = tmp / 'work/source/packaging/release'
+        release.mkdir(parents=True)
+        # The fake build runs a nested child the way repro-check.sh re-runs build-bridge.sh.
+        (release / 'build-bridge.sh').write_text('#!/bin/bash\nbash -c \'echo "nested $CARGO_NET_OFFLINE $CARGO_HOME"\' >> "$EVENTS"\n')
+        (release / 'build-bridge.sh').chmod(0o755)
+        script = ('set -euo pipefail\nwork=%s\npin=(%s 1.2.3)\n'
+                  'cargo() { echo "cargo $* offline=${CARGO_NET_OFFLINE:-unset} home=$CARGO_HOME" >> "$EVENTS"; return %d; }\n%s\n'
+                  % (tmp / 'work', '0' * 40, cargo_status, fragment))
+        events = tmp / 'events'
+        result = subprocess.run(['bash', '-c', script], env={'PATH': '/usr/bin:/bin', 'HOME': str(tmp), 'EVENTS': str(events)},
+                                capture_output=True, text=True)
+        return tmp / 'work', result, events.read_text().splitlines() if events.exists() else []
+
+    def test_offline_env_reaches_nested_builds_after_a_passing_fetch_preflight(self):
+        work, result, events = self.run_bridge_build_fragment(0)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        home = '%s/bridge-cargo' % work
+        self.assertEqual(events, ['cargo fetch --locked --offline --target x86_64-unknown-linux-gnu --manifest-path %s/source/Cargo.toml '
+                                  'offline=true home=%s' % (work, home), 'nested true %s' % home])
+
+    def test_failed_offline_fetch_preflight_stops_before_the_build_with_a_distinct_message(self):
+        _, result, events = self.run_bridge_build_fragment(101)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(len(events), 1, events)
+        self.assertTrue(events[0].startswith('cargo fetch --locked --offline'))
+        self.assertIn('bridge stage: offline cargo fetch preflight failed', result.stderr)
 
     def test_scanner_and_bridge_handoffs_are_exported_through_the_allowlist(self):
         scanner = (FACTORY / 'snitchwatch-system-scanner-stage.sh').read_text()

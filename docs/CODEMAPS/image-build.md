@@ -53,7 +53,7 @@ bridge's third-party build scripts cannot reach anything trusted later (H1):
 |---|---|---|---|---|
 | `snitchwatch-prep` | pinned `fedora:44@sha256` (= `builderImage`) | yes | `snitchwatch-system-prep.sh`: install-deps, Koji toolchain, `--record-toolchain`, dbus-daemon, online probe (positive control), clone + `sourceFiles` hash check, `bridge_artifact.py version`, `cargo fetch --locked --target x86_64-unknown-linux-gnu`, `rpm -qa` inventory | `/work/native` (to its descendants) |
 | `snitchwatch-scanner` | prep | `--network=none` | offline probe, inventory `cmp`, `snitchwatch-system-scanner-build.py` | `/handoff/scanner`: 2 binaries + 10 evidence files, flat |
-| `snitchwatch-bridge` | prep | yes | `snitchwatch-system-bridge-build.sh`: `build-bridge.sh` (~660 crates, root), `repro-check.sh`, executing `verify --check-ldd --run-flags`, inventory `cmp` | `/handoff/bridge`: tarball, `.sha256` sidecar, `build.log`, `repro.log` |
+| `snitchwatch-bridge` | prep | `--network=none` | `snitchwatch-system-bridge-build.sh`: offline probe, fresh `CARGO_HOME` from prep's cache (only `.crate` files matching the `Cargo.lock` sha256, plus the index; no config/bin/src), exported `CARGO_NET_OFFLINE=true`, offline `cargo fetch` preflight, `build-bridge.sh` (~660 crates, root), `repro-check.sh`, executing `verify --check-ldd --run-flags`, inventory `cmp` | `/handoff/bridge`: tarball, `.sha256` sidecar, `build.log`, `repro.log` |
 | `snitchwatch-daemon` | prep | yes | `snitchwatch-system-daemon-build.sh` (unchanged) into `/work/daemon-out`, then `handoff.py check daemon` (an extra file fails here) and `export daemon` | `/handoff/daemon`: the daemon verifier's `REQUIRED` + manifest |
 | `snitchwatch-system` | prep | `--network=none` | `/tools/snitchwatch-system-assemble.sh` (tools re-copied from scratch `ctx`): offline probe, inventory `cmp`, prep checkout re-hashed, `/handoff` root-owned and not g/o-writable, `handoff.py check` ×3, daemon verify, non-executing `bridge_artifact.py verify --extract-to`, `stage.py` (bridge `--version` and upstream `stage.sh`/`--help` as uid 65534 with `no_new_privs` (fails closed), empty env, `stage.sh` timeout 300 s; root adopts only the 9 `stage.sh` paths), daemon handoff re-checked, `merge` (refuses overlap), daemon + system verifiers | `/out` |
 
@@ -66,8 +66,17 @@ and base-refresh `validate-system` do not move. Static contracts: `tests/test-sn
 Only a CI build proves: buildah 1.33.7 accepts and enforces `RUN --network=none` (the in-build probe
 fails loudly if not), unused-stage skipping still keeps `fedora:44` out of the legacy legs, 65534
 can be entered in the build user namespace, and disk fits the extra stage commits.
-Still open: the bridge tarball and its logs are produced by its own crates as root with network and its
-sha is self-computed (M1); PR2 candidate: bridge stage offline after prep's fetch.
+M1 step 1 (bridge offline): the bridge build scripts cannot reach the network (no second-stage download,
+no exfiltration over the network; the tarball and the public CI log still leave the stage). The build uses
+only pinned inputs plus the live Fedora RPMs; byte-reproducibility is not verified by this step. Only CI proves that the bridge
+build (including `build-bridge.sh`'s own license `cargo fetch` and `repro-check.sh`'s nested rebuild)
+succeeds offline from prep's cache; the preflight fails first, with its own message, if the cache is short.
+The hand-over is allowlisted, not read-only: read-only means nothing against root in the stage (step 3).
+Still open (M1): the bridge evidence is self-attesting. The tarball sha, `build.log`, `repro.log` and the
+`repro-check.sh` comparison are all made inside the bridge stage, as root, by the same crates;
+`stage.py` still writes `reproducible: True` as a literal and assembly's `--expect-sha256` is computed from
+the handed-over tarball. Next: an independent sibling rebuild compared in assembly (M1 step 2), then an
+unprivileged read-only build (step 3).
 
 ## build.d scripts (executed in filename order)
 
@@ -164,7 +173,7 @@ The child environment is an allowlist; build-steering variables (`CC*`, `*FLAGS`
 `LICENSE`, taken from the export inside the scanner stage; assembly uses the prep checkout's copy after
 re-hashing it. Before the split, the bridge build scripts ran as root with network in the same `RUN`
 and could tamper with the checker, the fingerprint, PATH tools or `/etc/ld.so.preload`; now they run
-only in `snitchwatch-bridge`, which no other stage descends from.
+only in `snitchwatch-bridge`, which no other stage descends from and which has no network.
 The pristine bridge release/repro
 path and unchanged upstream dependency-list cmp remain independent.
 

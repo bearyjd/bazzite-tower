@@ -419,8 +419,14 @@ def read_user_metadata(path):
         fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
     except OSError as error:
         raise Refusal("unreadable Flatpak metadata "+str(path)+": "+str(error)) from error
-    with os.fdopen(fd, "rb") as handle:
-        require(stat.S_ISREG(os.fstat(handle.fileno()).st_mode), "unreadable Flatpak metadata "+str(path)+": not a regular file")
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise Refusal("unreadable Flatpak metadata "+str(path)+": not a regular file")
+        handle = os.fdopen(fd, "rb")
+    except BaseException:
+        os.close(fd)
+        raise
+    with handle:
         data = handle.read(METADATA_MAX_BYTES+1)
     require(len(data) <= METADATA_MAX_BYTES, "unreadable Flatpak metadata "+str(path)+": larger than "+str(METADATA_MAX_BYTES)+" bytes")
     try:

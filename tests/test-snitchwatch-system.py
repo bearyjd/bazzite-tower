@@ -724,6 +724,34 @@ class SystemBehavior(unittest.TestCase):
         path.symlink_to("/dev/zero")
         self.refuse_metadata_without_hanging()
 
+    def test_flatpak_directory_metadata_refuses(self):
+        self.ctx.system_config()
+        path = self.ctx.flatpak()
+        path.unlink()
+        path.mkdir()
+        self.refuse_metadata_without_hanging()
+
+    def test_flatpak_metadata_read_is_bounded_to_cap_plus_one(self):
+        self.ctx.system_config()
+        path = self.ctx.flatpak()
+        sizes = []
+        real_fdopen = os.fdopen
+        class Spy:
+            def __init__(self, handle):
+                self.handle = handle
+            def __enter__(self):
+                return self
+            def __exit__(self, *exc):
+                return self.handle.__exit__(*exc)
+            def fileno(self):
+                return self.handle.fileno()
+            def read(self, *size):
+                sizes.append(size)
+                return self.handle.read(*size)
+        with mock.patch.object(common.os, "fdopen", side_effect=lambda *a, **k: Spy(real_fdopen(*a, **k))):
+            common.read_user_metadata(path)
+        self.assertEqual(sizes, [(common.METADATA_MAX_BYTES+1,)])
+
     def test_flatpak_oversized_metadata_refuses(self):
         self.ctx.system_config()
         path = self.ctx.flatpak()
@@ -1222,17 +1250,22 @@ class CommandResolution(unittest.TestCase):
                 fake = Path(temp)/name
                 fake.write_text("#!/bin/sh\ntouch "+str(marker)+"\necho Flatpak 1.18.1\n");fake.chmod(0o755)
             with mock.patch.dict(common.os.environ, dict(PATH=temp+":"+common.os.environ.get("PATH", ""))):
+                checked = 0
                 for name, argv in (("flatpak", ["flatpak", "--version"]), ("ss", ["ss", "-H", "-ltn"])):
-                    if not common.os.access(common.COMMANDS[name], common.os.X_OK):
-                        self.skipTest(common.COMMANDS[name]+" is not installed on this host")
-                    try:
-                        common.Context().command(argv, okay=(0, 1, 2))
-                    except (common.Refusal, OSError):
-                        pass
-            self.assertFalse(marker.exists(), "a PATH-planted command was executed")
+                    with self.subTest(command=name):
+                        if not common.os.access(common.COMMANDS[name], common.os.X_OK):
+                            self.skipTest(common.COMMANDS[name]+" is not installed on this host")
+                        checked += 1
+                        try:
+                            common.Context().command(argv, okay=(0, 1, 2))
+                        except (common.Refusal, OSError):
+                            pass
+                        self.assertFalse(marker.exists(), "a PATH-planted command was executed: "+name)
+                if not checked:
+                    self.skipTest("no trusted helper is installed on this host")
 
     def test_root_entry_scripts_run_isolated_from_caller_python_environment(self):
-        for name in ("readiness", "migrate", "deny"):
+        for name in ("readiness", "migrate", "deny", "resources"):
             with self.subTest(name=name):
                 first = (LIBEXEC/("bazzite-tower-snitchwatch-"+name)).read_text().splitlines()[0]
                 self.assertEqual(first, "#!/usr/bin/python3 -I")
@@ -1248,8 +1281,13 @@ class CommandResolution(unittest.TestCase):
             script = bindir/"bazzite-tower-snitchwatch-readiness"
             script.write_text((LIBEXEC/"bazzite-tower-snitchwatch-readiness").read_text())
             script.chmod(0o755)
-            subprocess.run([str(script)], env=dict(PATH="/usr/bin:/bin", PYTHONPATH=str(plant), PYTHONDONTWRITEBYTECODE="1"),
-                           capture_output=True, text=True, timeout=30, cwd=temp)
+            (bindir/"bazzite-tower-snitchwatch-common.py").write_text((LIBEXEC/"bazzite-tower-snitchwatch-common.py").read_text())
+            result = subprocess.run([str(script)], env=dict(PATH="/usr/bin:/bin", PYTHONPATH=str(plant), PYTHONDONTWRITEBYTECODE="1"),
+                                    capture_output=True, text=True, timeout=30, cwd=temp)
+            # Isolated imports succeed; the non-root run then stops at the root check.
+            self.assertEqual(result.returncode, 1, result.stderr)
+            self.assertIn("NOT READY: all-UID inspection requires explicit root", result.stderr)
+            self.assertNotIn("Traceback", result.stderr)
             self.assertFalse(marker.exists(), "PYTHONPATH module was imported by a root entry script")
 
 

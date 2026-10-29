@@ -225,7 +225,8 @@ reach the network, so the offline result proves nothing), `handoff: check:`
 (a stage handed over an unexpected, missing, linked, set-id or wrongly owned
 file), `RPM set differs from the snitchwatch-prep inventory`, `merge overlap`,
 `cannot drop to uid/gid 65534` (the builder refused the unprivileged bridge
-`--version`/`--help`), `unexpected path in unprivileged stage.sh output`. If a
+`--version`/`--help`), `cannot become child subreaper`, `bridge binary descendants survived SIGKILL`,
+`unexpected path in unprivileged stage.sh output`. If a
 builder rejects `RUN --network=none` itself, every leg fails before step 1:
 revert the H1 commit (single-RUN layout) rather than removing the probes.
 Still open: the bridge tarball is built by its own crates as root with network,

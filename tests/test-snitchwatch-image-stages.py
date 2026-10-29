@@ -407,15 +407,20 @@ class NetworkProbe(unittest.TestCase):
         with self.assertRaises(self.h['Refusal']) as caught:
             self.h['probe_network']('offline', self.dev('lo'), connect, self.refuse)
         self.assertIn('outbound connection succeeded', str(caught.exception))
+        # A name that resolves locally is not reachability; connecting to it is.
+        result = self.h['probe_network']('offline', self.dev('lo'), self.refuse, self.resolve_ok)
+        self.assertIn('resolved', result['results']['dns registry.fedoraproject.org'])
+        calls = iter([self.refuse, self.refuse, self.accept])
         with self.assertRaises(self.h['Refusal']) as caught:
-            self.h['probe_network']('offline', self.dev('lo'), self.refuse, self.resolve_ok)
-        self.assertIn('dns registry.fedoraproject.org', str(caught.exception))
+            self.h['probe_network']('offline', self.dev('lo'), lambda *a, **k: next(calls)(*a, **k), self.resolve_ok)
+        self.assertIn('registry.fedoraproject.org:443 (192.0.2.1)', str(caught.exception))
 
     def test_online_positive_control(self):
         self.h['probe_network']('online', self.dev('lo', 'eth0'), self.accept, self.resolve_ok)
-        with self.assertRaises(self.h['Refusal']) as caught:
-            self.h['probe_network']('online', self.dev('lo', 'eth0'), self.refuse, self.refuse)
-        self.assertIn('positive control failed', str(caught.exception))
+        for resolve in (self.refuse, self.resolve_ok):  # resolving alone is not a pass
+            with self.subTest(resolve=resolve), self.assertRaises(self.h['Refusal']) as caught:
+                self.h['probe_network']('online', self.dev('lo', 'eth0'), self.refuse, resolve)
+            self.assertIn('positive control failed', str(caught.exception))
 
     def test_probe_targets_are_a_literal_address_and_a_name(self):
         self.assertTrue(all(re.fullmatch(r'[0-9.]+|[0-9a-f:]+', host) for host, _ in self.h['PROBE_ADDRESSES']))
@@ -546,6 +551,10 @@ print(before, len(g['children'](os.getpid())))
                 mutate(staged)
                 with self.assertRaisesRegex(ValueError, 'unexpected path in unprivileged stage.sh output'):
                     self.g['adopt_unprivileged_stage'](staged, self.root / ('o-' + label.replace(' ', '-')))
+        real = self.stage_tree(self.root / 'real-root', files)
+        (self.root / 'linked-root').symlink_to(real)
+        with self.assertRaisesRegex(ValueError, 'staging root is not a real directory'):
+            self.g['adopt_unprivileged_stage'](self.root / 'linked-root', self.root / 'o-linked')
 
 
 if __name__ == '__main__':

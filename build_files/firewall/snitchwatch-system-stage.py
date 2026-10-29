@@ -131,6 +131,8 @@ def adopt_unprivileged_stage(staged, out):
     exact mode; directories only as their parents.  Presence and content are the
     verifier's job (REQUIRED, SOURCE_FILES, binary hash), as before."""
     parents = {str(parent) for name in SYSTEM_STAGE_FILES for parent in Path(name).parents if str(parent) != '.'}
+    if os.path.lexists(staged) and not stat.S_ISDIR(os.lstat(staged).st_mode):
+        raise ValueError('unexpected path in unprivileged stage.sh output: the staging root is not a real directory')
     out.mkdir()
     for base, subdirs, files in os.walk(staged):
         subdirs.sort()

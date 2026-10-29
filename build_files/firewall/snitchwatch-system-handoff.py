@@ -26,8 +26,10 @@ SCANNER_FILES = ('provenance.json', 'source-inputs.json', 'dependency-closure.js
                  'LICENSE', 'build.log', 'repro.log', 'test.log', *(name + '.ldd' for name in SCANNER_BINARIES))
 BRIDGE_ARCH = 'x86_64'
 REFUSED_XATTRS = ('security.capability', 'system.posix_acl_access', 'system.posix_acl_default')
-# Literal addresses need no resolver; the name needs DNS.  Any success while
-# offline, or total failure while online, is a refusal.
+# Literal addresses need no resolver; the name needs DNS.  Only a completed TCP
+# connect counts as reaching the network: a name can resolve locally (nss,
+# /etc/hosts, a host resolver socket) without any route.  Any connect while
+# offline, or none while online, is a refusal.
 PROBE_ADDRESSES = (('1.1.1.1', 443), ('2606:4700:4700::1111', 443))
 PROBE_NAME = ('registry.fedoraproject.org', 443)
 PROBE_TIMEOUT = 5
@@ -178,7 +180,7 @@ def attempts(connect=socket.create_connection, resolve=socket.getaddrinfo):
     except OSError as error:
         results.append(('dns ' + host, 'resolution failed: %s' % error))
     else:
-        results.append(('dns ' + host, None))
+        results.append(('dns ' + host, 'resolved (not a reachability signal)'))
         family_host = resolved[0][4][0]
         results.append(('%s:%d (%s)' % (host, port, family_host), try_connect(connect, family_host, port)))
     return results

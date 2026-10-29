@@ -220,13 +220,13 @@ def main():
     write_json(out / 'source-inputs.json', {str(path.relative_to(exported)): sha(path)
                for path in sorted(exported.rglob('*')) if path.is_file()})
     # Each build gets an empty target and identical remapped source/cargo/target
-    # paths. Network is disabled after the bridge factory's locked cargo fetch.
+    # paths. This runs in the snitchwatch-scanner stage (RUN --network=none,
+    # FROM snitchwatch-prep), whose ancestry never ran the bridge build scripts;
+    # CARGO_HOME is prep's `cargo fetch --locked` cache (downloads only).
     env = clean_environment(os.environ)
-    # Defence in depth only, NOT isolation (H1 stays open): the bridge build's
-    # third-party build scripts ran as root with network before this code and
-    # could have tampered with this checker, PATH tools or the toolchain.
-    # Reuse only the checksum-verified .crate files (Cargo.lock is pin-checked
-    # above); cargo re-extracts them; no cargo config may exist where it looks.
+    # Defence in depth on top of that stage isolation: reuse only the
+    # checksum-verified .crate files (Cargo.lock is pin-checked above); cargo
+    # re-extracts them; no cargo config may exist where it looks.
     env['CARGO_HOME'] = str(make_fresh_cargo_home(bridge_cargo_home, out / 'cargo-home', (exported / 'Cargo.lock').read_text()))
     require_no_cargo_config(exported, out / 'cargo-home')
     require_toolchain_digest(args.toolchain_digest, installed_toolchain_digest(pins))

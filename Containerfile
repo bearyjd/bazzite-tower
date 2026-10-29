@@ -34,13 +34,39 @@ COPY build_files /
 FROM scratch AS snitchwatch-legacy
 COPY build_files/firewall/snitchwatch-system-legacy-marker /out/usr/share/bazzite-tower/snitchwatch-bridge-profile
 
-FROM registry.fedoraproject.org/fedora:44@sha256:e1656bc110fc33e855f7a02e4420c21066428bc7a0277160d40ee125ef8a1c65 AS snitchwatch-system
+# System bridge (opt-in), split so that third-party build code cannot reach what
+# is trusted later (H1). The FROM chain of the scanner, daemon and assembly
+# stages is prep only; the bridge stage, where ~660 crates' build scripts run
+# as root with network, is an ancestor of nothing. Stage outputs cross only as
+# allowlisted /handoff/* data that the assembly stage re-checks. `--network`
+# appears only in the scanner and assembly stages: if a builder rejects it,
+# revert this block to the previous single RUN (git revert of the H1 commit).
+FROM registry.fedoraproject.org/fedora:44@sha256:e1656bc110fc33e855f7a02e4420c21066428bc7a0277160d40ee125ef8a1c65 AS snitchwatch-prep
 ARG FIREWALL_DAEMON
 COPY --from=ctx /firewall/snitchwatch-system* /factory/
 COPY system_files/usr/share/bazzite-tower/opensnitchd-default-config.json /candidate/legacy-config.json
 COPY system_files/usr/share/bazzite-tower/opensnitchd-system-bridge-config.json /candidate/system-config.json
-RUN SNITCHWATCH_BRIDGE=system FIREWALL_DAEMON="${FIREWALL_DAEMON}" bash /factory/snitchwatch-system-build.sh /out && \
-    SNITCHWATCH_BRIDGE=system FIREWALL_DAEMON="${FIREWALL_DAEMON}" bash /factory/snitchwatch-system-daemon-build.sh /out
+RUN SNITCHWATCH_BRIDGE=system FIREWALL_DAEMON="${FIREWALL_DAEMON}" bash /factory/snitchwatch-system-prep.sh /work/native
+
+FROM snitchwatch-prep AS snitchwatch-scanner
+ARG FIREWALL_DAEMON
+RUN --network=none SNITCHWATCH_BRIDGE=system FIREWALL_DAEMON="${FIREWALL_DAEMON}" bash /factory/snitchwatch-system-scanner-stage.sh /work/native /handoff/scanner
+
+FROM snitchwatch-prep AS snitchwatch-bridge
+ARG FIREWALL_DAEMON
+RUN SNITCHWATCH_BRIDGE=system FIREWALL_DAEMON="${FIREWALL_DAEMON}" bash /factory/snitchwatch-system-bridge-build.sh /work/native /handoff/bridge
+
+FROM snitchwatch-prep AS snitchwatch-daemon
+ARG FIREWALL_DAEMON
+RUN SNITCHWATCH_BRIDGE=system FIREWALL_DAEMON="${FIREWALL_DAEMON}" bash /factory/snitchwatch-system-daemon-build.sh /handoff/daemon
+
+FROM snitchwatch-prep AS snitchwatch-system
+ARG FIREWALL_DAEMON
+COPY --from=ctx /firewall/snitchwatch-system* /tools/
+COPY --from=snitchwatch-scanner /handoff/scanner/ /handoff/scanner/
+COPY --from=snitchwatch-bridge /handoff/bridge/ /handoff/bridge/
+COPY --from=snitchwatch-daemon /handoff/daemon/ /handoff/daemon/
+RUN --network=none SNITCHWATCH_BRIDGE=system FIREWALL_DAEMON="${FIREWALL_DAEMON}" bash /tools/snitchwatch-system-assemble.sh /work/native /handoff /out
 
 FROM snitchwatch-${SNITCHWATCH_BRIDGE} AS snitchwatch-selected
 

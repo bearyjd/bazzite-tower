@@ -1,4 +1,4 @@
-#!/usr/bin/python3
+#!/usr/bin/python3 -I
 """Explicit operator migration; no user enrollment or automatic legacy shutdown.
 Policy writers must hold /run/lock/bazzite-tower-snitchwatch-migration.lock for
 serialization. An uncoordinated writer is detected at atomic exchange; displaced

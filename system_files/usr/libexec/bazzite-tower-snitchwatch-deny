@@ -1,4 +1,4 @@
-#!/usr/bin/python3
+#!/usr/bin/python3 -I
 """Explicit, reversible opt-in to OpenSnitch DefaultAction=deny (system profile only).
 
 The image always ships allow. `on` starts a time-boxed trial: only the

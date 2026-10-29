@@ -7,6 +7,7 @@ import importlib.util
 import importlib.machinery
 import json
 import os
+import signal
 import stat
 import subprocess
 import sys
@@ -689,6 +690,46 @@ class SystemBehavior(unittest.TestCase):
                 with self.assertRaisesRegex(common.Refusal, "unreadable Flatpak metadata"):
                     common.flatpak_profiles(self.ctx)
 
+    def refuse_metadata_without_hanging(self):
+        def expired(_signal, _frame):
+            raise AssertionError("Flatpak metadata read blocked or was unbounded")
+        previous = signal.signal(signal.SIGALRM, expired)
+        signal.alarm(10)
+        try:
+            with self.assertRaisesRegex(common.Refusal, "unreadable Flatpak metadata"):
+                common.flatpak_profiles(self.ctx)
+        finally:
+            signal.alarm(0)
+            signal.signal(signal.SIGALRM, previous)
+
+    def test_flatpak_fifo_metadata_refuses_without_hanging(self):
+        self.ctx.system_config()
+        path = self.ctx.flatpak()
+        path.unlink()
+        os.mkfifo(path)
+        self.refuse_metadata_without_hanging()
+
+    def test_flatpak_symlinked_metadata_refuses(self):
+        self.ctx.system_config()
+        path = self.ctx.flatpak()
+        real = path.with_name("real-metadata")
+        path.rename(real)
+        path.symlink_to(real)
+        self.refuse_metadata_without_hanging()
+
+    def test_flatpak_symlink_to_dev_zero_refuses(self):
+        self.ctx.system_config()
+        path = self.ctx.flatpak()
+        path.unlink()
+        path.symlink_to("/dev/zero")
+        self.refuse_metadata_without_hanging()
+
+    def test_flatpak_oversized_metadata_refuses(self):
+        self.ctx.system_config()
+        path = self.ctx.flatpak()
+        path.write_text(path.read_text()+"# "+"x"*(64*1024)+"\n")
+        self.refuse_metadata_without_hanging()
+
     def test_scanner_bus_grant_requires_verified_image_profile(self):
         self.ctx.system_config(); path = self.ctx.flatpak()
         text = path.read_text() + "org.snitchwatch.Scanner=talk\n"
@@ -1183,12 +1224,33 @@ class CommandResolution(unittest.TestCase):
             with mock.patch.dict(common.os.environ, dict(PATH=temp+":"+common.os.environ.get("PATH", ""))):
                 for name, argv in (("flatpak", ["flatpak", "--version"]), ("ss", ["ss", "-H", "-ltn"])):
                     if not common.os.access(common.COMMANDS[name], common.os.X_OK):
-                        continue
+                        self.skipTest(common.COMMANDS[name]+" is not installed on this host")
                     try:
                         common.Context().command(argv, okay=(0, 1, 2))
                     except (common.Refusal, OSError):
                         pass
             self.assertFalse(marker.exists(), "a PATH-planted command was executed")
+
+    def test_root_entry_scripts_run_isolated_from_caller_python_environment(self):
+        for name in ("readiness", "migrate", "deny"):
+            with self.subTest(name=name):
+                first = (LIBEXEC/("bazzite-tower-snitchwatch-"+name)).read_text().splitlines()[0]
+                self.assertEqual(first, "#!/usr/bin/python3 -I")
+
+    def test_planted_pythonpath_module_is_not_imported_by_readiness(self):
+        if not os.access("/usr/bin/python3", os.X_OK):
+            self.skipTest("/usr/bin/python3 is not installed on this host")
+        with tempfile.TemporaryDirectory(prefix="sw-pythonpath-") as temp:
+            plant, bindir = Path(temp)/"plant", Path(temp)/"bin"
+            plant.mkdir();bindir.mkdir()
+            marker = Path(temp)/"imported"
+            (plant/"json.py").write_text("open("+repr(str(marker))+", 'w').close()\n")
+            script = bindir/"bazzite-tower-snitchwatch-readiness"
+            script.write_text((LIBEXEC/"bazzite-tower-snitchwatch-readiness").read_text())
+            script.chmod(0o755)
+            subprocess.run([str(script)], env=dict(PATH="/usr/bin:/bin", PYTHONPATH=str(plant), PYTHONDONTWRITEBYTECODE="1"),
+                           capture_output=True, text=True, timeout=30, cwd=temp)
+            self.assertFalse(marker.exists(), "PYTHONPATH module was imported by a root entry script")
 
 
 if __name__ == "__main__":

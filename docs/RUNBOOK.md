@@ -256,7 +256,7 @@ It verifies immutable provenance, service/socket ownership,
 permissions, token access, resolved service hardening and the shipped
 `allow`/`proc` policy. An explicit local deny override fails this readiness
 contract as policy drift; readiness does not enable enforcement.
-Readiness runs its helpers (`flatpak`, `systemctl`, `ss`, `busctl`, `getent`) by fixed `/usr/bin` path with a minimal environment, ignoring the caller's `PATH`; a missing helper or unparseable Flatpak metadata prints `NOT READY: ...` and exits 1.
+Readiness runs its helpers (`flatpak`, `systemctl`, `ss`, `busctl`, `getent`, `python3`, `systemd-run`) by fixed `/usr/bin` path with a minimal environment, ignoring the caller's `PATH`; the root entry scripts run `python3 -I` so `PYTHONPATH`/user site are ignored. A missing helper, or unparseable, non-regular, symlinked, FIFO or over-64-KiB user-store Flatpak metadata prints `NOT READY: ...` and exits 1.
 It is read-only and cannot prove a GUI answers prompts. Migration and rollback
 must preserve the recorded legacy baseline and reject unexpected live `/etc`
 policy/address drift or user-unit/Flatpak overrides. Do not activate the system

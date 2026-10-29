@@ -37,7 +37,7 @@ COPY build_files/firewall/snitchwatch-system-legacy-marker /out/usr/share/bazzit
 # System bridge (opt-in), split so that third-party build code cannot reach what
 # is trusted later (H1). The FROM chain of the scanner, daemon and assembly
 # stages is prep only; the bridge stage, where ~660 crates' build scripts run
-# as root with network, is an ancestor of nothing. Stage outputs cross only as
+# as root (offline), is an ancestor of nothing. Stage outputs cross only as
 # allowlisted /handoff/* data that the assembly stage re-checks. The network is off
 # for the scanner, bridge and assembly RUNs (prep and daemon fetch): if a
 # builder rejects it, revert this block to the previous single RUN (git revert

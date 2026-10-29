@@ -58,7 +58,9 @@ RUN SNITCHWATCH_BRIDGE=system FIREWALL_DAEMON="${FIREWALL_DAEMON}" bash /factory
 
 FROM snitchwatch-prep AS snitchwatch-daemon
 ARG FIREWALL_DAEMON
-RUN SNITCHWATCH_BRIDGE=system FIREWALL_DAEMON="${FIREWALL_DAEMON}" bash /factory/snitchwatch-system-daemon-build.sh /handoff/daemon
+RUN SNITCHWATCH_BRIDGE=system FIREWALL_DAEMON="${FIREWALL_DAEMON}" bash /factory/snitchwatch-system-daemon-build.sh /work/daemon-out && \
+    python3 /factory/snitchwatch-system-handoff.py check daemon --daemon-verifier /factory/snitchwatch-system-daemon-verify.py /work/daemon-out && \
+    python3 /factory/snitchwatch-system-handoff.py export daemon --daemon-verifier /factory/snitchwatch-system-daemon-verify.py /work/daemon-out /handoff/daemon
 
 FROM snitchwatch-prep AS snitchwatch-system
 ARG FIREWALL_DAEMON

@@ -225,7 +225,8 @@ reach the network, so the offline result proves nothing), `handoff: check:`
 (a stage handed over an unexpected, missing, linked, set-id or wrongly owned
 file), `RPM set differs from the snitchwatch-prep inventory`, `merge overlap`,
 `cannot drop to uid/gid 65534` (the builder refused the unprivileged bridge
-`--version`/`--help`), `cannot become child subreaper`, `bridge binary descendants survived SIGKILL`,
+`--version`/`--help`), `cannot set no_new_privs`, `stage.sh timed out after 300 s`, `cannot become child subreaper`,
+`bridge binary descendants survived SIGKILL`, `must be root-owned and not group/other writable`, `cannot list extended attributes`,
 `unexpected path in unprivileged stage.sh output`. If a
 builder rejects `RUN --network=none` itself, every leg fails before step 1:
 revert the H1 commit (single-RUN layout) rather than removing the probes.

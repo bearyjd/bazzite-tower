@@ -54,13 +54,13 @@ bridge's third-party build scripts cannot reach anything trusted later (H1):
 | `snitchwatch-prep` | pinned `fedora:44@sha256` (= `builderImage`) | yes | `snitchwatch-system-prep.sh`: install-deps, Koji toolchain, `--record-toolchain`, dbus-daemon, online probe (positive control), clone + `sourceFiles` hash check, `bridge_artifact.py version`, `cargo fetch --locked --target x86_64-unknown-linux-gnu`, `rpm -qa` inventory | `/work/native` (to its descendants) |
 | `snitchwatch-scanner` | prep | `--network=none` | offline probe, inventory `cmp`, `snitchwatch-system-scanner-build.py` | `/handoff/scanner`: 2 binaries + 10 evidence files, flat |
 | `snitchwatch-bridge` | prep | yes | `snitchwatch-system-bridge-build.sh`: `build-bridge.sh` (~660 crates, root), `repro-check.sh`, executing `verify --check-ldd --run-flags`, inventory `cmp` | `/handoff/bridge`: tarball, `.sha256` sidecar, `build.log`, `repro.log` |
-| `snitchwatch-daemon` | prep | yes | `snitchwatch-system-daemon-build.sh` (unchanged) | `/handoff/daemon`: the daemon verifier's `REQUIRED` + manifest |
-| `snitchwatch-system` | prep | `--network=none` | `/tools/snitchwatch-system-assemble.sh` (tools re-copied from scratch `ctx`): offline probe, inventory `cmp`, prep checkout re-hashed, `handoff.py check` ×3, daemon verify, non-executing `bridge_artifact.py verify --extract-to`, `stage.py` (bridge `--version` and upstream `stage.sh`/`--help` as uid 65534, empty env; root adopts only the 9 `stage.sh` paths), `merge` (refuses overlap), daemon + system verifiers | `/out` |
+| `snitchwatch-daemon` | prep | yes | `snitchwatch-system-daemon-build.sh` (unchanged) into `/work/daemon-out`, then `handoff.py check daemon` (an extra file fails here) and `export daemon` | `/handoff/daemon`: the daemon verifier's `REQUIRED` + manifest |
+| `snitchwatch-system` | prep | `--network=none` | `/tools/snitchwatch-system-assemble.sh` (tools re-copied from scratch `ctx`): offline probe, inventory `cmp`, prep checkout re-hashed, `/handoff` root-owned and not g/o-writable, `handoff.py check` ×3, daemon verify, non-executing `bridge_artifact.py verify --extract-to`, `stage.py` (bridge `--version` and upstream `stage.sh`/`--help` as uid 65534 with `no_new_privs` (fails closed), empty env, `stage.sh` timeout 300 s; root adopts only the 9 `stage.sh` paths), daemon handoff re-checked, `merge` (refuses overlap), daemon + system verifiers | `/out` |
 
 Trust argument: the FROM chain of scanner, daemon and assembly is prep only; the bridge stage is the base
 of nothing and is read only through the allowlist. `snitchwatch-system-handoff.py check` refuses extra,
 missing, symlinked, special, hard-linked, set-id, capability/ACL-carrying, wrongly owned or wrongly moded
-entries; assembly never runs code from a handoff and never sees the scanner's source export.
+entries (an xattr listing error other than "not supported" is a refusal); assembly never runs code from a handoff and never sees the scanner's source export.
 `pins.json`, the staged file set, modes and provenance formats are unchanged, so `EXPECTED_PINS_SHA256`
 and base-refresh `validate-system` do not move. Static contracts: `tests/test-snitchwatch-image-stages.py`.
 Only a CI build proves: buildah 1.33.7 accepts and enforces `RUN --network=none` (the in-build probe

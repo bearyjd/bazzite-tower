@@ -31,6 +31,10 @@ for name,expected in p['sourceFiles'].items():
  if hashlib.sha256((root/name).read_bytes()).hexdigest()!=expected:raise SystemExit('assembly: prep checkout differs from pin: '+name)
 PY
 # Every COPY --from result must be exactly its allowlist (no links, set-id, caps, extra files).
+# The parent too: a writable /handoff would let anything rename the checked trees.
+[[ "$(stat -c '%u:%g:%a' "$handoff")" =~ ^0:0:7[0-5][0-5]$ ]] || {
+    echo "assembly: $handoff must be root-owned and not group/other writable: $(stat -c '%u:%g:%a' "$handoff")" >&2; exit 1;
+}
 python3 "$guard" check scanner "$handoff/scanner"
 python3 "$guard" check bridge --pins "$pins" "$handoff/bridge"
 python3 "$guard" check daemon --daemon-verifier "$daemon_verifier" "$handoff/daemon"
@@ -57,6 +61,8 @@ python3 -B "$factory/snitchwatch-system-stage.py" \
     --build-log "$handoff/bridge/build.log" --os-update-rule "$factory/snitchwatch-system-os-update-rule.json" \
     --resolved-dns-rule "$factory/snitchwatch-system-resolved-dns-rule.json" \
     --repro-log "$handoff/bridge/repro.log" --rpm-inventory "$work/rpm-inventory.txt" --tarball "$tarball"
+# Re-check after the uid 65534 runs inside stage.py, immediately before the merge reads it.
+python3 "$guard" check daemon --daemon-verifier "$daemon_verifier" "$handoff/daemon"
 python3 "$guard" merge "$handoff/daemon" "$out"
 python3 -B "$daemon_verifier" --stage-only --root "$out"
 python3 -B "$factory/snitchwatch-system-verify.py" --root "$out" --image-tree

@@ -425,7 +425,7 @@ class ImageBuildContracts(unittest.TestCase):
             self.assertNotIn(needle, builder)
         # H1 split: snitchwatch-system-build.sh became four stage scripts; none may apply a patch.
         for script in STAGE_SCRIPTS:
-            self.assertIsNone(re.search(r'(?<![a-z])patch', (FACTORY / script).read_text().lower()), script)
+            self.assertNotIn('patch', (FACTORY / script).read_text().lower().replace('dispatch', ''), script)
 
     def test_scanner_provenance_and_inputs_refuse_drift(self):
         for src in ('command', 'facts', 'lib', 'main'):

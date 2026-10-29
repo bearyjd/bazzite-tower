@@ -13,6 +13,7 @@ COPY --from is not a trust boundary by itself; `check` is.  KINDs: scanner,
 bridge, daemon (the daemon allowlist is the trusted verifier's REQUIRED set).
 """
 import argparse
+import errno
 import json
 import os
 from pathlib import Path
@@ -67,8 +68,11 @@ def ancestors(names):
 def require_no_refused_xattrs(path, rel):
     try:
         present = os.listxattr(path, follow_symlinks=False)
-    except OSError:
-        return
+    except OSError as error:
+        # Only "this filesystem has no xattrs" is an answer; any other error fails closed.
+        if error.errno in (errno.ENOTSUP, errno.EOPNOTSUPP):
+            return
+        raise Refusal('cannot list extended attributes of %s: %s' % (rel, error)) from error
     for name in present:
         if name in REFUSED_XATTRS:
             raise Refusal('%s carries refused extended attribute %s' % (rel, name))

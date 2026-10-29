@@ -125,6 +125,17 @@ class ContainerfileStages(unittest.TestCase):
                 if 'daemon-build.sh' in script_text(run):
                     self.assertEqual(name, 'snitchwatch-daemon')
 
+    def test_daemon_stage_checks_and_exports_its_handoff_through_the_allowlist(self):
+        run = runs(self.stages['snitchwatch-daemon'])[0]
+        build = 'bash /factory/snitchwatch-system-daemon-build.sh /work/daemon-out'
+        check = 'python3 /factory/snitchwatch-system-handoff.py check daemon --daemon-verifier /factory/snitchwatch-system-daemon-verify.py /work/daemon-out'
+        export = 'python3 /factory/snitchwatch-system-handoff.py export daemon --daemon-verifier /factory/snitchwatch-system-daemon-verify.py /work/daemon-out /handoff/daemon'
+        for needle in (build, check, export):
+            self.assertIn(needle, run)
+        self.assertLess(run.index(build), run.index(check))
+        self.assertLess(run.index(check), run.index(export))
+        self.assertEqual(run.count('&&'), 2)
+
     def test_network_none_is_on_every_offline_run_and_confined_to_those_stages(self):
         for name, stage in self.stages.items():
             for run in runs(stage):
@@ -178,10 +189,18 @@ class ContainerfileStages(unittest.TestCase):
         # The handoffs are checked before anything reads them, and merged last.
         order = ['probe-network offline', 'cmp - "$work/rpm-inventory.txt"', "p['sourceFiles'].items()",
                  '"$guard" check scanner', '"$guard" check bridge', '"$guard" check daemon',
-                 'bridge_artifact.py" verify', 'snitchwatch-system-stage.py"', '"$guard" merge',
+                 'bridge_artifact.py" verify', 'snitchwatch-system-stage.py"', '"$guard" check daemon', '"$guard" merge',
                  '"$daemon_verifier" --stage-only --root "$out"', 'snitchwatch-system-verify.py" --root "$out" --image-tree']
-        positions = [body.index(needle) for needle in order]
-        self.assertEqual(positions, sorted(positions))
+        position = 0
+        for needle in order:  # each must appear after the previous one (check daemon twice)
+            position = body.index(needle, position) + len(needle)
+        # The daemon handoff is re-checked immediately before the merge (after 65534 ran).
+        lines = [line for line in body.splitlines() if line.strip()]
+        merge = next(i for i, line in enumerate(lines) if '"$guard" merge' in line)
+        self.assertIn('"$guard" check daemon', lines[merge - 1])
+        # /handoff itself must be root-owned and not group/other writable (renames inside it).
+        self.assertIn('stat -c \'%u:%g:%a\' "$handoff"', body)
+        self.assertLess(body.index('stat -c \'%u:%g:%a\' "$handoff"'), body.index('"$guard" check scanner'))
 
     def test_every_consuming_stage_recomputes_the_shared_rpm_inventory(self):
         for script in ('snitchwatch-system-scanner-stage.sh', 'snitchwatch-system-bridge-build.sh', 'snitchwatch-system-assemble.sh'):
@@ -297,6 +316,22 @@ class Handoff(unittest.TestCase):
         with self.assertRaises(self.h['Refusal']):
             self.h['export']('scanner', source, dest)
 
+    def test_daemon_export_is_byte_and_mode_identical_and_extras_fail_the_check(self):
+        verifier = FACTORY / 'snitchwatch-system-daemon-verify.py'
+        allowed = self.h['allowlist']('daemon', daemon_verifier=verifier)
+        source = self.root / 'daemon-out'
+        for name, mode in allowed.items():
+            self.write(source / name, name.encode(), mode)
+        self.assertEqual(len(self.h['check']('daemon', source, daemon_verifier=verifier, owner=self.owner)), len(allowed))
+        dest = self.root / 'handoff/daemon'
+        self.h['export']('daemon', source, dest, daemon_verifier=verifier)
+        listing = lambda root: sorted((str(p.relative_to(root)), stat.S_IMODE(p.stat().st_mode), p.read_bytes() if p.is_file() else b'')
+                                      for p in root.rglob('*'))
+        self.assertEqual(listing(source), listing(dest))
+        self.write(source / 'usr/share/snitchwatch/daemon/extra.so')
+        with self.assertRaisesRegex(self.h['Refusal'], 'unexpected file in daemon handoff'):
+            self.h['check']('daemon', source, daemon_verifier=verifier, owner=self.owner)
+
     def test_export_refuses_a_symlinked_source_file(self):
         source = self.scanner(self.root / 'out')
         (source / 'build.log').unlink()
@@ -336,6 +371,15 @@ class Handoff(unittest.TestCase):
             self.assertEqual(len(self.check('scanner', root)), 12)
         with self.assertRaises(OSError):
             self.check('scanner', self.root / 'absent')
+
+    def test_xattr_listing_errors_fail_closed(self):
+        import errno
+        root = self.scanner(self.root / 'xattr')
+        with mock.patch('os.listxattr', side_effect=PermissionError(errno.EACCES, 'denied')):
+            self.refused('scanner', root, 'cannot list extended attributes')
+        # A filesystem without xattr support cannot carry capabilities or ACLs.
+        with mock.patch('os.listxattr', side_effect=OSError(errno.ENOTSUP, 'not supported')):
+            self.assertEqual(len(self.check('scanner', root)), 12)
 
     def test_merge_adds_the_overlay_and_refuses_any_overlap(self):
         overlay = self.root / 'daemon'
@@ -449,6 +493,25 @@ class UnprivilegedBridgeExecution(unittest.TestCase):
         self.assertEqual((options['cwd'], options['umask']), ('/', 0o022))
         with mock.patch('os.geteuid', return_value=1000):
             self.assertNotIn('user', self.g['unprivileged_options']())
+
+    def test_unprivileged_child_has_no_new_privs(self):
+        # Real child: the kernel must report NoNewPrivs 1 for the process that runs the binary.
+        result = self.g['run_unprivileged'](['cat', '/proc/self/status'], capture_output=True, text=True, timeout=10)
+        self.assertIn('NoNewPrivs:\t1', result.stdout)
+        self.assertIn('preexec_fn', self.g['unprivileged_options']())
+
+    def test_no_new_privs_failure_fails_closed(self):
+        self.assertEqual(self.real['PR_SET_NO_NEW_PRIVS'], 38)
+        with mock.patch.dict(self.real, {'prctl': lambda *a: -1}):
+            with self.assertRaisesRegex(ValueError, 'no_new_privs'):
+                self.g['run_unprivileged'](['true'], timeout=10)
+
+    def test_stage_sh_run_has_a_distinct_timeout(self):
+        self.assertEqual(self.real['STAGE_SH_TIMEOUT'], 300)
+        text = (FACTORY / 'snitchwatch-system-stage.py').read_text()
+        self.assertIn('timeout=STAGE_SH_TIMEOUT', text)
+        with self.assertRaisesRegex(ValueError, 'timed out after 1 s running the bridge binary'):
+            self.g['run_unprivileged'](['sleep', '5'], timeout=1)
 
     def test_both_bridge_executions_go_through_run_unprivileged(self):
         text = (FACTORY / 'snitchwatch-system-stage.py').read_text()

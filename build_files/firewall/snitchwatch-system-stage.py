@@ -42,21 +42,45 @@ def sha(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+PR_SET_CHILD_SUBREAPER = 36
+PR_SET_NO_NEW_PRIVS = 38
+# upstream stage.sh only hashes, runs --help and installs nine files.
+STAGE_SH_TIMEOUT = 300
+_LIBC = []
+
+
+def libc():
+    if not _LIBC:
+        import ctypes
+        _LIBC.append(ctypes.CDLL(None, use_errno=True))
+    return _LIBC[0]
+
+
+def prctl(option, value):
+    """libc prctl(2); unprivileged_options() loads libc in the parent so the forked child only calls it."""
+    return libc().prctl(option, value, 0, 0, 0)
+
+
+def set_no_new_privs():
+    """preexec_fn: runs in the child after the uid/gid drop and before exec; a failure aborts the exec."""
+    if prctl(PR_SET_NO_NEW_PRIVS, 1) != 0:
+        raise OSError('prctl(PR_SET_NO_NEW_PRIVS, 1) failed')
+
+
 def unprivileged_options():
-    """subprocess options that drop root to UNPRIVILEGED; a non-root caller already cannot escalate."""
-    options = {'env': dict(UNPRIVILEGED_ENV), 'cwd': '/', 'stdin': subprocess.DEVNULL, 'umask': 0o022}
+    """subprocess options that drop root to UNPRIVILEGED with no_new_privs (no setuid/file-cap gain on exec)."""
+    libc()
+    options = {'env': dict(UNPRIVILEGED_ENV), 'cwd': '/', 'stdin': subprocess.DEVNULL, 'umask': 0o022,
+               'preexec_fn': set_no_new_privs}
     if os.geteuid() == 0:
         options.update(user=UNPRIVILEGED, group=UNPRIVILEGED, extra_groups=[])
     return options
 
 
-PR_SET_CHILD_SUBREAPER = 36
-
-
 def become_subreaper():
     """Orphans of the bridge binary (double fork, setsid) reparent to this process, not to init."""
     import ctypes
-    if ctypes.CDLL(None, use_errno=True).prctl(PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0) != 0:
+    if prctl(PR_SET_CHILD_SUBREAPER, 1) != 0:
         raise ValueError('cannot become child subreaper to contain the bridge binary: errno %d' % ctypes.get_errno())
 
 
@@ -106,6 +130,14 @@ def run_unprivileged(command, **extra):
         return subprocess.run(command, check=True, **unprivileged_options(), **extra)
     except PermissionError as error:
         raise ValueError('cannot drop to uid/gid %d to run the bridge binary: %s' % (UNPRIVILEGED, error)) from error
+    except subprocess.TimeoutExpired as error:
+        name = Path(command[1] if command[0] == 'bash' else command[0]).name
+        raise ValueError('%s timed out after %s s running the bridge binary' % (name, error.timeout)) from error
+    except subprocess.CalledProcessError:
+        raise
+    except subprocess.SubprocessError as error:
+        # The only preexec_fn is set_no_new_privs: fail closed, never exec without it.
+        raise ValueError('cannot set no_new_privs for the bridge binary (preexec failed): %s' % error) from error
     finally:
         if privileged:
             kill_leftover_children()
@@ -158,7 +190,8 @@ def stage_system_unprivileged(source, out, binary, binary_sha):
     try:
         if os.geteuid() == 0:
             os.chown(scratch, UNPRIVILEGED, UNPRIVILEGED)
-        run_unprivileged(['bash', str(source / 'packaging/system/stage.sh'), str(scratch / 'root'), str(binary), binary_sha])
+        run_unprivileged(['bash', str(source / 'packaging/system/stage.sh'), str(scratch / 'root'), str(binary), binary_sha],
+                         timeout=STAGE_SH_TIMEOUT)
         adopt_unprivileged_stage(scratch / 'root', out)
     finally:
         shutil.rmtree(scratch)

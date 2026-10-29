@@ -126,7 +126,21 @@ performs two locked offline release builds with separate target directories.
 It requires byte-identical scanner/broker binaries, resolved ELF dependencies,
 Rust tests plus fake-authorization private-D-Bus tests, and records source input,
 Cargo, actual Rust/RPM toolchain, normal/build dependency closure, license text,
-test/build/repro log and executable hashes. The pristine bridge release/repro
+test/build/repro log and executable hashes. Scanner-build input hardening (defence in depth; **H1 stays OPEN**, this is not isolation):
+the scanner build uses a fresh `CARGO_HOME` (`out/cargo-home`) rebuilt only from the bridge's
+cached `.crate` files after checking each sha256 against the pin-checked export `Cargo.lock`
+(extracted `registry/src`, config and `bin` are not carried over; cargo re-extracts); refuses any
+`.cargo/config[.toml]` in the export, every ancestor to `/` and the fresh `CARGO_HOME`; and compares a
+partial toolchain fingerprint (only the files of the `rust`, `cargo` and `rust-std-static` RPMs, recorded by
+`--record-toolchain` after install in `snitchwatch-system-build.sh`) before building.
+The child environment is an allowlist; build-steering variables (`CC*`, `*FLAGS`, `LD_*`, `RUST*`,
+`CARGO_*` beyond home/target/jobs, `PYTHON*`) are refused. `bridge_artifact.py` is pin-checked and, with
+`LICENSE`, taken from the export. It does NOT close H1: the bridge build scripts run as root with network
+in the same `RUN`, before these checks, and could tamper with the checker, the fingerprint, PATH tools
+(`cc`, `ld`, `rustc`, `cargo`) or `/etc/ld.so.preload`. The real fix is a `--network=none` stage
+(`COPY --from`) or building the scanner before those scripts run (follow-up, see
+`.omc/results/F-h1-structural-fix-options.md`). Evidence is still written by the same builder.
+The pristine bridge release/repro
 path and unchanged upstream dependency-list cmp remain independent.
 
 `snitchwatch-system-stage.py` invokes the pinned upstream scanner stage script

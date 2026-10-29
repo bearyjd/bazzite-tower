@@ -15,22 +15,110 @@ import shutil
 import subprocess
 import sys
 import tarfile
+import tomllib
 
 BINARIES = ('snitchwatch-scanner-privileged', 'snitchwatch-scanner-broker')
 PACKAGES = ('scanner-privileged', 'scanner-broker')
 BUILD = ['cargo', 'build', '--release', '--locked', '--offline', '-p', PACKAGES[0], '-p', PACKAGES[1]]
-TOOLCHAIN_OVERRIDES = (
-    'RUSTC_WRAPPER', 'RUSTC_WORKSPACE_WRAPPER', 'CARGO_BUILD_RUSTC_WRAPPER',
-    'CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER', 'RUSTC', 'RUSTDOC', 'CARGO_BUILD_RUSTC',
-    'CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER',
-    'CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS', 'CARGO_BUILD_RUSTFLAGS',
-    'CARGO_ENCODED_RUSTFLAGS', 'RUSTFLAGS',
-)
+HELPER = 'packaging/release/bridge_artifact.py'
+# Only these variables reach cargo/rustc. Everything else is dropped, and any
+# variable that could steer the compiler, linker, C toolchain or cargo config is
+# refused outright so a polluted builder fails instead of building quietly.
+ENV_KEEP = ('PATH', 'HOME', 'CARGO_HOME', 'CARGO_TARGET_DIR', 'CARGO_BUILD_JOBS', 'RUSTUP_HOME', 'TMPDIR', 'SOURCE_DATE_EPOCH')
+ENV_REFUSE = re.compile(
+    r'^(CC|CXX|CPP|AR|LD|NM|RANLIB|STRIP|OBJCOPY|PKG_CONFIG\w*|(CC|CXX|CFLAGS|CXXFLAGS|CPPFLAGS|LDFLAGS|AR)_\w+'
+    r'|C(XX|PP)?FLAGS|LDFLAGS|LD_\w+|RUST\w*|CARGO_\w+|SSL_CERT\w*|PYTHON\w*)$')
+# Set by the builder itself below, so an inherited value is overwritten rather than refused.
+ENV_SET_BY_BUILDER = ('PYTHONDONTWRITEBYTECODE',)
 
 
 def clean_environment(environment):
+    """Allowlisted child environment; refuse unexpected toolchain-steering variables."""
+    for key in sorted(environment):
+        if key not in ENV_KEEP and key not in ENV_SET_BY_BUILDER and key != 'LANG' and ENV_REFUSE.match(key):
+            raise ValueError('refusing build-steering environment variable: ' + key)
     # Children must never write bytecode caches into the pinned checkouts.
-    return {**{key: value for key, value in environment.items() if key not in TOOLCHAIN_OVERRIDES}, 'PYTHONDONTWRITEBYTECODE': '1'}
+    return {**{key: environment[key] for key in ENV_KEEP if key in environment}, 'LANG': 'C', 'PYTHONDONTWRITEBYTECODE': '1'}
+
+
+def toolchain_digest(paths):
+    """Order-independent digest of file contents (symlinks: their target text) at the given paths."""
+    digest = hashlib.sha256()
+    for path in sorted(str(p) for p in paths):
+        if os.path.islink(path):
+            entry = 'link:' + os.readlink(path)
+        elif os.path.isfile(path):
+            entry = 'file:' + hashlib.sha256(Path(path).read_bytes()).hexdigest()
+        elif os.path.lexists(path):
+            continue  # directories and special files carry no content
+        else:
+            entry = 'missing'
+        digest.update(('%s\0%s\n' % (path, entry)).encode())
+    return digest.hexdigest()
+
+
+def installed_toolchain_digest(pins):
+    """Digest of the files installed by the pinned rust, cargo and rust-std-static RPMs only (rpm -ql).
+
+    A partial fingerprint: it does not cover cc, ld, the linker/libc, PATH or /etc/ld.so.preload."""
+    paths = []
+    for rpm in pins['toolchainRpms']:
+        try:
+            listing = subprocess.check_output(['rpm', '-ql', rpm['name']], text=True)
+        except (subprocess.CalledProcessError, OSError) as error:
+            raise ValueError('cannot list files of pinned toolchain package %s (rpm -ql): %s' % (rpm['name'], error)) from error
+        paths += [line for line in listing.splitlines() if line.startswith('/')]
+    if not paths:
+        raise ValueError('pinned toolchain lists no files')
+    return toolchain_digest(paths)
+
+
+def require_toolchain_digest(record, actual):
+    if not record.is_file():
+        raise ValueError('toolchain digest was not recorded after install: ' + str(record))
+    if record.read_text().strip() != actual:
+        raise ValueError('toolchain changed since install (digest mismatch); refusing')
+
+
+def require_no_cargo_config(exported, cargo_home):
+    """Cargo merges config from the build dir, every ancestor and CARGO_HOME; none may exist."""
+    found = [str(base / name) for base in (*(d / '.cargo' for d in (exported, *exported.parents)), cargo_home)
+             for name in ('config', 'config.toml') if os.path.lexists(base / name)]
+    if found:
+        raise ValueError('cargo config would influence the scanner build: ' + ', '.join(found))
+
+
+def make_fresh_cargo_home(bridge_home, fresh, lock_text):
+    """Rebuild CARGO_HOME from checksum-verified .crate files; registry/src, config and bin are not carried over (hardening, not isolation)."""
+    wanted = {'%s-%s.crate' % (p['name'], p['version']): p['checksum']
+              for p in tomllib.loads(lock_text).get('package', ()) if 'checksum' in p}
+    cache = bridge_home / 'registry' / 'cache'
+    if not cache.is_dir():
+        raise ValueError('bridge cargo cache missing: ' + str(cache))
+    copies = []
+    for path in sorted(cache.rglob('*')):
+        if path.is_symlink() or not (path.is_file() or path.is_dir()):
+            raise ValueError('non-regular cargo cache entry: ' + str(path))
+        if path.is_file():
+            if wanted.get(path.name) is None:
+                raise ValueError('cached file not in Cargo.lock: ' + str(path.relative_to(cache)))
+            if sha(path) != wanted[path.name]:
+                raise ValueError('cached crate differs from Cargo.lock checksum: ' + path.name)
+            copies.append(path)
+    if not copies:
+        raise ValueError('bridge cargo cache holds no crates')
+    index = bridge_home / 'registry' / 'index'
+    for path in sorted(index.rglob('*')) if index.is_dir() else ():
+        if path.is_symlink() or not (path.is_file() or path.is_dir()):
+            raise ValueError('non-regular cargo index entry: ' + str(path))
+    fresh.mkdir(parents=True)
+    for path in copies:
+        destination = fresh / 'registry' / 'cache' / path.relative_to(cache)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(path, destination)
+    if index.is_dir():
+        shutil.copytree(index, fresh / 'registry' / 'index', symlinks=False)
+    return fresh
 
 
 def load_bridge_artifact(source):
@@ -66,6 +154,20 @@ def require_pinned_scanner_sources(exported, pins):
         raise ValueError('no scanner crate files are pinned')
 
 
+def require_pinned_file(exported, pins, name):
+    """A file of the export that the builder trusts (Cargo.lock, the bridge helper) must match its pin."""
+    expected = pins['sourceFiles'].get(name)
+    if expected is None or not (exported / name).is_file() or sha(exported / name) != expected:
+        raise ValueError('file differs from pinned upstream: ' + name)
+
+
+def require_bridge_cargo_home(value):
+    """CARGO_HOME of the bridge build must be set and an existing directory (never Path('') == '.')."""
+    if not value or not Path(value).is_dir():
+        raise ValueError('CARGO_HOME of the bridge build is unset or missing')
+    return Path(value)
+
+
 def write_json(path, value):
     path.write_text(json.dumps(value, indent=2, sort_keys=True) + '\n')
 
@@ -84,15 +186,25 @@ def run(command, cwd, env, log):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    for name in ('source', 'out', 'pins', 'rpm-inventory'):
-        parser.add_argument('--' + name, required=True, type=Path)
+    for name in ('source', 'out', 'pins', 'rpm-inventory', 'toolchain-digest', 'record-toolchain'):
+        parser.add_argument('--' + name, type=Path)
     args = parser.parse_args()
+    if args.record_toolchain:
+        # Right after the toolchain install, before any third-party build script has run.
+        if not args.pins:
+            parser.error('--record-toolchain needs --pins')
+        args.record_toolchain.write_text(installed_toolchain_digest(json.loads(args.pins.read_text())) + '\n')
+        return
+    for name in ('source', 'out', 'pins', 'rpm-inventory', 'toolchain-digest'):
+        if getattr(args, name.replace('-', '_')) is None:
+            parser.error('--%s is required' % name)
     if not (Path('/run/.containerenv').exists() or Path('/.dockerenv').exists()) or Path('/run/host').exists():
         raise ValueError('scanner build requires the fresh native builder')
     source, out = args.source.resolve(), args.out.resolve()
     if out.exists() or out == Path('/'):
         raise ValueError('output must be a new isolated directory')
     pins = json.loads(args.pins.read_text())
+    bridge_cargo_home = require_bridge_cargo_home(os.environ.get('CARGO_HOME'))
     out.mkdir()
     exported = out / 'source'
     exported.mkdir()
@@ -103,11 +215,21 @@ def main():
         stream.extractall(exported, filter='data')
     archive.unlink()
     require_pinned_scanner_sources(exported, pins)
+    require_pinned_file(exported, pins, HELPER)
+    require_pinned_file(exported, pins, 'Cargo.lock')
     write_json(out / 'source-inputs.json', {str(path.relative_to(exported)): sha(path)
                for path in sorted(exported.rglob('*')) if path.is_file()})
     # Each build gets an empty target and identical remapped source/cargo/target
     # paths. Network is disabled after the bridge factory's locked cargo fetch.
     env = clean_environment(os.environ)
+    # Defence in depth only, NOT isolation (H1 stays open): the bridge build's
+    # third-party build scripts ran as root with network before this code and
+    # could have tampered with this checker, PATH tools or the toolchain.
+    # Reuse only the checksum-verified .crate files (Cargo.lock is pin-checked
+    # above); cargo re-extracts them; no cargo config may exist where it looks.
+    env['CARGO_HOME'] = str(make_fresh_cargo_home(bridge_cargo_home, out / 'cargo-home', (exported / 'Cargo.lock').read_text()))
+    require_no_cargo_config(exported, out / 'cargo-home')
+    require_toolchain_digest(args.toolchain_digest, installed_toolchain_digest(pins))
     env['SOURCE_DATE_EPOCH'] = subprocess.check_output(['git', '-C', str(source), 'log', '-1', '--format=%ct'], text=True).strip()
     env['CARGO_INCREMENTAL'] = '0'
     env['CARGO_NET_OFFLINE'] = 'true'
@@ -137,7 +259,7 @@ def main():
     bus_log.unlink()
     # Resolve each executable's own normal+build graph, rather than borrowing
     # the bridge's license closure. Include the actual license/notice texts.
-    artifact = load_bridge_artifact(source)
+    artifact = load_bridge_artifact(exported)
     metadata = json.loads(subprocess.check_output(['cargo', 'metadata', '--locked', '--offline', '--format-version', '1', '--filter-platform', 'x86_64-unknown-linux-gnu'], cwd=exported, env=env, text=True))
     members = set(metadata['workspace_members'])
     closure = {}
@@ -155,7 +277,7 @@ def main():
     for package in sorted(selected.values(), key=artifact.crate_key):
         lines += artifact.render_crate(package, artifact.license_texts(package))
     (out / 'THIRD-PARTY-LICENSES.md').write_text('\n'.join(lines) + '\n')
-    shutil.copyfile(source / 'LICENSE', out / 'LICENSE')
+    shutil.copyfile(exported / 'LICENSE', out / 'LICENSE')
     evidence = ['source-inputs.json', 'dependency-closure.json', 'THIRD-PARTY-LICENSES.md', 'LICENSE', 'build.log', 'repro.log', 'test.log']
     evidence += [binary + '.ldd' for binary in BINARIES]
     write_json(out / 'provenance.json', {

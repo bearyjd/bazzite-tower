@@ -519,16 +519,19 @@ class ImageBuildContracts(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'differs from pinned upstream'):
             helper['require_pinned_scanner_sources'](tree, pins)
 
-    def test_scanner_builder_discards_toolchain_override_environment(self):
+    def test_scanner_builder_refuses_toolchain_override_environment(self):
         helper = runpy.run_path(str(FACTORY / 'snitchwatch-system-scanner-build.py'))
         keys = ('RUSTC_WRAPPER', 'RUSTC_WORKSPACE_WRAPPER', 'CARGO_BUILD_RUSTC_WRAPPER',
                 'CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER', 'RUSTC', 'RUSTDOC', 'CARGO_BUILD_RUSTC',
                 'CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER',
                 'CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS', 'CARGO_BUILD_RUSTFLAGS',
                 'CARGO_ENCODED_RUSTFLAGS', 'RUSTFLAGS')
-        environment = {key: 'untrusted fixture executable' for key in keys}
-        environment.update(CARGO_HOME='/isolated/cargo', PATH='/usr/bin')
-        self.assertEqual(helper['clean_environment'](environment), {'CARGO_HOME': '/isolated/cargo', 'PATH': '/usr/bin', 'PYTHONDONTWRITEBYTECODE': '1'})
+        # Stricter than discarding: an allowlist drops the unknown, and these now fail closed.
+        for key in keys:
+            with self.assertRaisesRegex(ValueError, key):
+                helper['clean_environment']({key: 'untrusted fixture executable', 'CARGO_HOME': '/isolated/cargo', 'PATH': '/usr/bin'})
+        self.assertEqual(helper['clean_environment']({'CARGO_HOME': '/isolated/cargo', 'PATH': '/usr/bin'}),
+                         {'CARGO_HOME': '/isolated/cargo', 'PATH': '/usr/bin', 'LANG': 'C', 'PYTHONDONTWRITEBYTECODE': '1'})
 
     def test_incomplete_inventory(self):
         del self.manifest['files']['/usr/lib/tmpfiles.d/snitchwatch.conf']
@@ -819,17 +822,23 @@ rustc() {
     echo 'rustc 1.99.0 (fixture)'
 }
 protoc() { echo 'libprotoc 3.19.6'; }
+python3() {
+    # The toolchain fingerprint reads the host RPM db; this test must not depend on it.
+    if [[ "$*" == *--record-toolchain* ]]; then echo record >> "$recorded"; else command python3 "$@"; fi
+}
 '''
         for failure in (0, 1):
             with self.subTest(helper_failure=failure):
                 events = self.root / f'events-{failure}'
                 env = {**os.environ, 'factory': str(FACTORY), 'events': str(events),
-                       'installed': str(self.root / f'installed-{failure}'), 'fail_helper': str(failure)}
+                       'installed': str(self.root / f'installed-{failure}'), 'recorded': str(self.root / f'recorded-{failure}'), 'fail_helper': str(failure)}
                 result = subprocess.run(['bash', '-c', stubs + fragment], env=env,
                                         capture_output=True, text=True)
                 self.assertEqual(result.returncode, 19 if failure else 0, result.stderr)
                 self.assertEqual(events.read_text().splitlines(),
                                  ['upstream', 'curl', 'helper'] + ([] if failure else ['rustc']))
+                # The fingerprint is taken only after a successful install.
+                self.assertEqual((self.root / f'recorded-{failure}').exists(), not failure)
 
     def test_self_consistent_dropin_requiring_its_directory(self):
         # Without the '-' a missing /run/snitchwatch would keep the
@@ -1001,6 +1010,206 @@ esac
         result, _ = self.run_stage('mkdir -p "$1/etc/opensnitchd"\nprintf "{}" > "$1/etc/opensnitchd/default-config.json"\n')
         self.assertNotEqual(result.returncode, 0)
         self.assertIn('did not stage the pinned upstream daemon config', result.stderr)
+
+
+class ScannerBuildHardening(unittest.TestCase):
+    """Defence-in-depth contracts for scanner build inputs (these do not isolate it from the bridge build; H1 stays open)."""
+
+    def setUp(self):
+        self.h = runpy.run_path(str(FACTORY / 'snitchwatch-system-scanner-build.py'))
+        self._temp = tempfile.TemporaryDirectory(prefix='sw-harden.')
+        self.addCleanup(self._temp.cleanup)
+        self.root = Path(self._temp.name).resolve()
+
+    def lock(self, crates):
+        return ''.join('[[package]]\nname = "%s"\nversion = "%s"\nsource = "registry+https://github.com/rust-lang/crates.io-index"\nchecksum = "%s"\n\n' % (n, v, sha(d))
+                       for n, v, d in crates)
+
+    def home(self, files):
+        """A bridge-style CARGO_HOME: cache and index (trusted inputs) plus a mutable src tree."""
+        home = self.root / 'cargo'
+        for name, data in files.items():
+            (home / name).parent.mkdir(parents=True, exist_ok=True)
+            (home / name).write_bytes(data)
+        return home
+
+    def fresh(self, home, lock):
+        fresh = self.root / 'fresh'
+        self.h['make_fresh_cargo_home'](home, fresh, lock)
+        return fresh
+
+    def test_fresh_cargo_home_drops_extracted_registry_src_and_config(self):
+        crate = b'crate-bytes'
+        home = self.home({'registry/cache/idx/a-1.0.0.crate': crate, 'registry/index/idx/.cache/a': b'i',
+                          'registry/src/idx/a-1.0.0/build.rs': b'EVIL', 'registry/src/idx/a-1.0.0/.cargo-ok': b'',
+                          'config.toml': b'[build]\nrustflags=["-Cevil"]\n', 'bin/cargo-evil': b'x'})
+        fresh = self.fresh(home, self.lock([('a', '1.0.0', crate)]))
+        self.assertEqual((fresh / 'registry/cache/idx/a-1.0.0.crate').read_bytes(), crate)
+        self.assertFalse((fresh / 'registry/src').exists())
+        self.assertFalse((fresh / 'config.toml').exists())
+        self.assertFalse((fresh / 'bin').exists())
+        self.assertNotEqual(fresh, home)
+
+    def test_fresh_cargo_home_refuses_tampered_unknown_and_unchecksummed_crates(self):
+        lock = self.lock([('a', '1.0.0', b'good')])
+        for name, files in (('tampered', {'registry/cache/idx/a-1.0.0.crate': b'bad'}),
+                            ('unknown', {'registry/cache/idx/a-1.0.0.crate': b'good', 'registry/cache/idx/b-2.0.0.crate': b'x'}),
+                            ('stray', {'registry/cache/idx/a-1.0.0.crate': b'good', 'registry/cache/idx/notes.txt': b'x'})):
+            with self.subTest(name):
+                shutil.rmtree(self.root / 'fresh', ignore_errors=True)
+                shutil.rmtree(self.root / 'cargo', ignore_errors=True)
+                with self.assertRaises(ValueError):
+                    self.fresh(self.home(files), lock)
+
+    def test_cargo_config_refused_in_export_ancestors_and_cargo_home(self):
+        refuse = self.h['require_no_cargo_config']
+        export = self.root / 'a/b/source'
+        export.mkdir(parents=True)
+        cargo_home = self.root / 'fresh'
+        cargo_home.mkdir()
+        refuse(export, cargo_home)
+        for where in (export / '.cargo/config.toml', export / '.cargo/config', self.root / 'a/.cargo/config.toml',
+                      self.root / '.cargo/config', cargo_home / 'config.toml', cargo_home / 'config'):
+            with self.subTest(str(where.relative_to(self.root))):
+                where.parent.mkdir(exist_ok=True)
+                where.write_text('[build]\n')
+                with self.assertRaises(ValueError):
+                    refuse(export, cargo_home)
+                where.unlink()
+        (export / '.cargo').mkdir(exist_ok=True)
+        (export / '.cargo/config.toml').symlink_to('/nonexistent')
+        with self.assertRaises(ValueError):
+            refuse(export, cargo_home)
+
+    def test_toolchain_digest_detects_changed_added_removed_files_and_link_retargets(self):
+        digest = self.h['toolchain_digest']
+        files = []
+        for name in ('rustc', 'cargo'):
+            (self.root / name).write_bytes(name.encode())
+            files.append(self.root / name)
+        (self.root / 'link').symlink_to('rustc')
+        files.append(self.root / 'link')
+        base = digest(files)
+        self.assertEqual(base, digest(list(reversed(files))))
+        (self.root / 'cargo').write_bytes(b'tampered')
+        self.assertNotEqual(base, digest(files))
+        (self.root / 'cargo').write_bytes(b'cargo')
+        self.assertEqual(base, digest(files))
+        (self.root / 'link').unlink()
+        (self.root / 'link').symlink_to('cargo')
+        self.assertNotEqual(base, digest(files))
+        self.assertNotEqual(base, digest(files[:2]))
+
+    def test_toolchain_digest_mismatch_refused(self):
+        record = self.root / 'toolchain.sha256'
+        record.write_text('a' * 64 + '\n')
+        self.h['require_toolchain_digest'](record, 'a' * 64)
+        with self.assertRaises(ValueError):
+            self.h['require_toolchain_digest'](record, 'b' * 64)
+        with self.assertRaises(ValueError):
+            self.h['require_toolchain_digest'](self.root / 'missing', 'a' * 64)
+
+    def test_environment_is_an_allowlist_that_fails_closed(self):
+        clean = self.h['clean_environment']
+        got = clean({'PATH': '/usr/bin', 'HOME': '/root', 'CARGO_HOME': '/c', 'LANG': 'en_US.UTF-8', 'SECRET': 'x', 'CARGO_BUILD_JOBS': '4', 'SRC_DIR': '/s'})
+        self.assertEqual(got, {'PATH': '/usr/bin', 'HOME': '/root', 'CARGO_HOME': '/c', 'LANG': 'C', 'CARGO_BUILD_JOBS': '4', 'PYTHONDONTWRITEBYTECODE': '1'})
+        for bad in ('CC', 'CXX', 'CFLAGS', 'LDFLAGS', 'AR', 'LD_PRELOAD', 'LD_LIBRARY_PATH', 'RUSTFLAGS', 'RUSTC_WRAPPER',
+                    'CARGO_PROFILE_RELEASE_LTO', 'CARGO_BUILD_TARGET', 'CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER', 'CARGO_ENCODED_RUSTFLAGS',
+                    'CARGO_HTTP_PROXY', 'RUSTUP_TOOLCHAIN'):
+            with self.subTest(bad):
+                with self.assertRaises(ValueError):
+                    clean({'PATH': '/usr/bin', bad: 'x'})
+
+    def fake_rpm(self, script):
+        """Put a fake `rpm` first on PATH (no host RPM database is ever consulted)."""
+        bin_dir = self.root / 'bin'
+        bin_dir.mkdir(exist_ok=True)
+        if script is not None:
+            (bin_dir / 'rpm').write_text(script)
+            (bin_dir / 'rpm').chmod(0o755)
+        saved = os.environ['PATH']
+        os.environ['PATH'] = str(bin_dir)
+        self.addCleanup(os.environ.__setitem__, 'PATH', saved)
+
+    def test_toolchain_digest_from_rpm_listing_and_clean_refusals(self):
+        pins = {'toolchainRpms': [{'name': 'rust'}, {'name': 'cargo'}]}
+        files = [self.root / 'rustc', self.root / 'cargo']
+        for f in files:
+            f.write_bytes(f.name.encode())
+        listing = '\n'.join(map(str, files)) + '\n(contains no files)\n'
+        self.fake_rpm('#!/bin/sh\n[ "$1" = -ql ] || exit 2\nprintf "%%s" "%s"\n' % listing)
+        self.assertEqual(self.h['installed_toolchain_digest'](pins), self.h['toolchain_digest'](files * 2))
+        for name, script in (('rpm -ql fails', '#!/bin/sh\nexit 1\n'), ('rpm absent', None), ('no files', '#!/bin/sh\nexit 0\n')):
+            with self.subTest(name):
+                self.fake_rpm(script)
+                if script is None:
+                    (self.root / 'bin' / 'rpm').unlink()
+                with self.assertRaisesRegex(ValueError, 'toolchain'):
+                    self.h['installed_toolchain_digest'](pins)
+
+    def test_python_bytecode_variable_is_allowed_but_other_python_steering_refused(self):
+        clean = self.h['clean_environment']
+        self.assertEqual(clean({'PYTHONDONTWRITEBYTECODE': '0'})['PYTHONDONTWRITEBYTECODE'], '1')
+        for bad in ('PYTHONPATH', 'PYTHONSTARTUP', 'PYTHONHOME'):
+            with self.assertRaises(ValueError):
+                clean({bad: 'x'})
+
+    def test_pinned_file_check_gates_cargo_lock_and_helper(self):
+        check = self.h['require_pinned_file']
+        (self.root / 'Cargo.lock').write_text('lock')
+        pins = {'sourceFiles': {'Cargo.lock': sha(b'lock')}}
+        check(self.root, pins, 'Cargo.lock')
+        (self.root / 'Cargo.lock').write_text('tampered')
+        for name, tree in (('changed', pins), ('unpinned', {'sourceFiles': {}})):
+            with self.subTest(name), self.assertRaises(ValueError):
+                check(self.root, tree, 'Cargo.lock')
+        with self.assertRaises(ValueError):
+            check(self.root, {'sourceFiles': {'x': sha(b'')}}, 'x')
+
+    def test_cargo_home_must_be_set_and_existing(self):
+        require = self.h['require_bridge_cargo_home']
+        for bad in (None, '', str(self.root / 'nope')):
+            with self.subTest(bad), self.assertRaises(ValueError):
+                require(bad)
+        self.assertEqual(require(str(self.root)), self.root)
+
+    def main_calls(self):
+        """Ordered (name, first-arg-name) of every call in main(), from the AST."""
+        import ast
+        tree = ast.parse((FACTORY / 'snitchwatch-system-scanner-build.py').read_text())
+        main = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == 'main')
+        calls = sorted((n for n in ast.walk(main) if isinstance(n, ast.Call)), key=lambda n: (n.lineno, n.col_offset))
+        name = lambda f: f.id if isinstance(f, ast.Name) else None
+        return [(name(c.func), name(c.args[0]) if c.args and isinstance(c.args[0], ast.Name) else None) for c in calls]
+
+    def test_main_wires_checks_in_order_before_the_first_cargo_run(self):
+        names = [n for n, _ in self.main_calls()]
+        order = ['require_pinned_scanner_sources', 'require_pinned_file', 'make_fresh_cargo_home',
+                 'require_no_cargo_config', 'require_toolchain_digest', 'run']
+        positions = []
+        for need in order:
+            self.assertIn(need, names, need + ' is not called from main()')
+            positions.append(names.index(need))
+        self.assertEqual(positions, sorted(positions))
+        # The Cargo.lock pin check must precede its use as the checksum source.
+        self.assertLess(names.index('require_pinned_file'), names.index('make_fresh_cargo_home'))
+        self.assertGreaterEqual(names.count('require_pinned_file'), 2, 'both Cargo.lock and the helper must be pinned-checked')
+
+    def test_main_loads_helper_from_the_checked_export(self):
+        loads = [arg for name, arg in self.main_calls() if name == 'load_bridge_artifact']
+        self.assertEqual(loads, ['exported'])
+        text = (FACTORY / 'snitchwatch-system-scanner-build.py').read_text()
+        self.assertNotIn("source / 'LICENSE'", text)
+        self.assertIn("exported / 'LICENSE'", text)
+
+    def test_build_script_verifies_the_checked_helper_not_the_mutable_checkout(self):
+        build = (FACTORY / 'snitchwatch-system-build.sh').read_text()
+        self.assertNotIn('"$SRC_DIR/packaging/release/bridge_artifact.py" verify', build)
+        self.assertIn('"$work/scanner/source/packaging/release/bridge_artifact.py" verify', build)
+        self.assertRegex(build, r'--record-toolchain')
+        self.assertRegex(build, r'--toolchain-digest')
+        self.assertLess(build.index('--record-toolchain'), build.index('build-bridge.sh'))
+        self.assertLess(build.index('snitchwatch-system-scanner-build.py" --source'), build.index('scanner/source/packaging/release/bridge_artifact.py" verify'))
 
 
 class FlatpakFinishArgsContract(unittest.TestCase):

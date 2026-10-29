@@ -822,17 +822,23 @@ rustc() {
     echo 'rustc 1.99.0 (fixture)'
 }
 protoc() { echo 'libprotoc 3.19.6'; }
+python3() {
+    # The toolchain fingerprint reads the host RPM db; this test must not depend on it.
+    if [[ "$*" == *--record-toolchain* ]]; then echo record >> "$recorded"; else command python3 "$@"; fi
+}
 '''
         for failure in (0, 1):
             with self.subTest(helper_failure=failure):
                 events = self.root / f'events-{failure}'
                 env = {**os.environ, 'factory': str(FACTORY), 'events': str(events),
-                       'installed': str(self.root / f'installed-{failure}'), 'fail_helper': str(failure)}
+                       'installed': str(self.root / f'installed-{failure}'), 'recorded': str(self.root / f'recorded-{failure}'), 'fail_helper': str(failure)}
                 result = subprocess.run(['bash', '-c', stubs + fragment], env=env,
                                         capture_output=True, text=True)
                 self.assertEqual(result.returncode, 19 if failure else 0, result.stderr)
                 self.assertEqual(events.read_text().splitlines(),
                                  ['upstream', 'curl', 'helper'] + ([] if failure else ['rustc']))
+                # The fingerprint is taken only after a successful install.
+                self.assertEqual((self.root / f'recorded-{failure}').exists(), not failure)
 
     def test_self_consistent_dropin_requiring_its_directory(self):
         # Without the '-' a missing /run/snitchwatch would keep the
@@ -1113,6 +1119,33 @@ class ScannerBuildHardening(unittest.TestCase):
             with self.subTest(bad):
                 with self.assertRaises(ValueError):
                     clean({'PATH': '/usr/bin', bad: 'x'})
+
+    def fake_rpm(self, script):
+        """Put a fake `rpm` first on PATH (no host RPM database is ever consulted)."""
+        bin_dir = self.root / 'bin'
+        bin_dir.mkdir(exist_ok=True)
+        if script is not None:
+            (bin_dir / 'rpm').write_text(script)
+            (bin_dir / 'rpm').chmod(0o755)
+        saved = os.environ['PATH']
+        os.environ['PATH'] = str(bin_dir)
+        self.addCleanup(os.environ.__setitem__, 'PATH', saved)
+
+    def test_toolchain_digest_from_rpm_listing_and_clean_refusals(self):
+        pins = {'toolchainRpms': [{'name': 'rust'}, {'name': 'cargo'}]}
+        files = [self.root / 'rustc', self.root / 'cargo']
+        for f in files:
+            f.write_bytes(f.name.encode())
+        listing = '\n'.join(map(str, files)) + '\n(contains no files)\n'
+        self.fake_rpm('#!/bin/sh\n[ "$1" = -ql ] || exit 2\nprintf "%%s" "%s"\n' % listing)
+        self.assertEqual(self.h['installed_toolchain_digest'](pins), self.h['toolchain_digest'](files * 2))
+        for name, script in (('rpm -ql fails', '#!/bin/sh\nexit 1\n'), ('rpm absent', None), ('no files', '#!/bin/sh\nexit 0\n')):
+            with self.subTest(name):
+                self.fake_rpm(script)
+                if script is None:
+                    (self.root / 'bin' / 'rpm').unlink()
+                with self.assertRaisesRegex(ValueError, 'toolchain'):
+                    self.h['installed_toolchain_digest'](pins)
 
     def test_python_bytecode_variable_is_allowed_but_other_python_steering_refused(self):
         clean = self.h['clean_environment']

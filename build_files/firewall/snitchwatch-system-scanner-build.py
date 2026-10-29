@@ -63,7 +63,10 @@ def installed_toolchain_digest(pins):
     A partial fingerprint: it does not cover cc, ld, the linker/libc, PATH or /etc/ld.so.preload."""
     paths = []
     for rpm in pins['toolchainRpms']:
-        listing = subprocess.check_output(['rpm', '-ql', rpm['name']], text=True)
+        try:
+            listing = subprocess.check_output(['rpm', '-ql', rpm['name']], text=True)
+        except (subprocess.CalledProcessError, OSError) as error:
+            raise ValueError('cannot list files of pinned toolchain package %s (rpm -ql): %s' % (rpm['name'], error)) from error
         paths += [line for line in listing.splitlines() if line.startswith('/')]
     if not paths:
         raise ValueError('pinned toolchain lists no files')

@@ -372,7 +372,7 @@ jobs:
           [[ "$resolved" == "$VALIDATED_DIGEST" ]]
           confirmed+=("$tag")
         done
-        echo "REFRESH_PASS profile=$PROFILE digest=$VALIDATED_DIGEST base=$BASE accepted_source=f5a18d28bfc2069efab4bbc04f1e105d11c203cb" >> "$GITHUB_STEP_SUMMARY"
+        echo "REFRESH_PASS profile=$PROFILE digest=$VALIDATED_DIGEST base=$BASE accepted_source=6d67c130962e0d2692a385d2d6645a2f903f4bda" >> "$GITHUB_STEP_SUMMARY"
     - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
       with:
         name: refresh-receipt-legacy
@@ -510,7 +510,7 @@ jobs:
           [[ "$resolved" == "$VALIDATED_DIGEST" ]]
           confirmed+=("$tag")
         done
-        echo "REFRESH_PASS profile=$PROFILE digest=$VALIDATED_DIGEST base=$BASE accepted_source=f5a18d28bfc2069efab4bbc04f1e105d11c203cb" >> "$GITHUB_STEP_SUMMARY"
+        echo "REFRESH_PASS profile=$PROFILE digest=$VALIDATED_DIGEST base=$BASE accepted_source=6d67c130962e0d2692a385d2d6645a2f903f4bda" >> "$GITHUB_STEP_SUMMARY"
     - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
       with:
         name: refresh-receipt-system

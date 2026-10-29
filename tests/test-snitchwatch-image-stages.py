@@ -534,8 +534,28 @@ class UnprivilegedBridgeExecution(unittest.TestCase):
         self.assertEqual(self.real['STAGE_SH_TIMEOUT'], 300)
         text = (FACTORY / 'snitchwatch-system-stage.py').read_text()
         self.assertIn('timeout=STAGE_SH_TIMEOUT', text)
-        with self.assertRaisesRegex(ValueError, 'timed out after 1 s running the bridge binary'):
-            self.g['run_unprivileged'](['sleep', '5'], timeout=1)
+        # subprocess reports a measured, remaining-time float (0.99996 on a slow runner,
+        # CI run 40810566230); the message must carry the configured value, exactly.
+        for measured in (0.9999658950000025, 1.0000001, 299.99):
+            for configured, command, name in ((1, ['sleep', '5'], 'sleep'), (300, ['bash', '/src/packaging/system/stage.sh', 'x'], 'stage.sh')):
+                with self.subTest(measured=measured, configured=configured), \
+                        mock.patch('subprocess.run', side_effect=subprocess.TimeoutExpired(command, measured, output=b'partial')):
+                    with self.assertRaises(ValueError) as caught:
+                        self.g['run_unprivileged'](command, timeout=configured)
+                    self.assertEqual(str(caught.exception), '%s timed out after %d s running the bridge binary' % (name, configured))
+                    self.assertNotIn('partial', str(caught.exception))
+
+    def test_timed_out_child_is_killed_and_its_output_discarded(self):
+        # Real process, no timing assertion: 'exec sleep' keeps one process holding the pipe,
+        # which subprocess must kill; the call raises, so no partial output is ever returned.
+        marker = self.root / 'child.pid'
+        command = ['sh', '-c', 'echo partial; echo $$ > %s; exec sleep 60' % marker]
+        with self.assertRaisesRegex(ValueError, '^sh timed out after 1 s running the bridge binary$'):
+            self.g['run_unprivileged'](command, timeout=1, capture_output=True, text=True)
+        pid = int(marker.read_text())
+        with self.assertRaises(ChildProcessError):
+            os.waitpid(pid, os.WNOHANG)  # already reaped by subprocess: it was killed, not left running
+        self.assertFalse(Path('/proc/%d' % pid).exists() and 'sleep' in Path('/proc/%d/cmdline' % pid).read_text(errors='replace'))
 
     def test_both_bridge_executions_go_through_run_unprivileged(self):
         text = (FACTORY / 'snitchwatch-system-stage.py').read_text()
@@ -565,15 +585,20 @@ class UnprivilegedBridgeExecution(unittest.TestCase):
 import os, runpy, subprocess, sys, time
 g = runpy.run_path(sys.argv[1])
 g['become_subreaper']()
-subprocess.run(['sh', '-c', 'setsid sh -c "sleep 300 & exit 0" & exit 0'], check=True)
-deadline = time.time() + 5
-while not g['children'](os.getpid()) and time.time() < deadline:
-    time.sleep(0.05)
+# The inner shell prints the orphan's pid only after forking it; wait on that
+# condition (reparenting completes during the shell's exit), not on a fixed delay.
+out = subprocess.run(['sh', '-c', 'setsid sh -c "sleep 300 >/dev/null 2>&1 & echo \\$!"'], check=True, capture_output=True, text=True).stdout
+orphan = int(out.split()[0])
+deadline = time.monotonic() + 60
+while orphan not in g['children'](os.getpid()):
+    if time.monotonic() > deadline:
+        raise SystemExit('orphan %d was never reparented to the subreaper' % orphan)
+    time.sleep(0.01)
 before = len(g['children'](os.getpid()))
 g['kill_leftover_children']()
 print(before, len(g['children'](os.getpid())))
 """
-        result = subprocess.run(['python3', '-c', code, str(FACTORY / 'snitchwatch-system-stage.py')], capture_output=True, text=True, timeout=60)
+        result = subprocess.run(['python3', '-c', code, str(FACTORY / 'snitchwatch-system-stage.py')], capture_output=True, text=True, timeout=300)
         self.assertEqual(result.returncode, 0, result.stderr)
         before, after = map(int, result.stdout.split())
         self.assertGreaterEqual(before, 1)

@@ -132,7 +132,8 @@ def run_unprivileged(command, **extra):
         raise ValueError('cannot drop to uid/gid %d to run the bridge binary: %s' % (UNPRIVILEGED, error)) from error
     except subprocess.TimeoutExpired as error:
         name = Path(command[1] if command[0] == 'bash' else command[0]).name
-        raise ValueError('%s timed out after %s s running the bridge binary' % (name, error.timeout)) from error
+        # The configured limit, never subprocess's measured remaining time (a float).
+        raise ValueError('%s timed out after %d s running the bridge binary' % (name, extra['timeout'])) from error
     except subprocess.CalledProcessError:
         raise
     except subprocess.SubprocessError as error:

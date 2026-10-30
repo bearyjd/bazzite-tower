@@ -37,14 +37,15 @@ COPY build_files/firewall/snitchwatch-system-legacy-marker /out/usr/share/bazzit
 # System bridge (opt-in), split so that third-party build code cannot reach what
 # is trusted later (H1). The FROM chain of the scanner, daemon and assembly
 # stages is prep only; the bridge stage, where ~660 crates' build scripts run
-# as root (offline), is an ancestor of nothing. Stage outputs cross only as
+# (offline, as uid 65534 since M1 step 3), is an ancestor of nothing. Stage outputs cross only as
 # allowlisted /handoff/* data that the assembly stage re-checks. The network is off
 # for the scanner, both bridge and the assembly RUNs (only prep and daemon keep network, to fetch): if a
 # builder rejects it, revert this block to the previous single RUN (git revert
 # of the H1 commit). The bridge build is offline (M1 step 1) and is repeated in
 # a sibling stage that is also an ancestor of nothing; assembly refuses unless
-# the two tarballs are byte-identical (M1 step 2). A deterministic hostile crate
-# in Cargo.lock still builds the same bytes in both (M1 not closed).
+# the two tarballs are byte-identical (M1 step 2). Both bridge builds run their
+# third-party code unprivileged (M1 step 3). A deterministic hostile crate in
+# Cargo.lock still builds the same bytes in both (M1 not closed).
 FROM registry.fedoraproject.org/fedora:44@sha256:e1656bc110fc33e855f7a02e4420c21066428bc7a0277160d40ee125ef8a1c65 AS snitchwatch-prep
 ARG FIREWALL_DAEMON
 COPY --from=ctx /firewall/snitchwatch-system* /factory/

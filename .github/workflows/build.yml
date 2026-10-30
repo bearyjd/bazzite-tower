@@ -134,6 +134,7 @@ jobs:
           tests/test-snitchwatch-toolchain.sh
           python3 tests/test-r13-publication.py
           python3 tests/test-base-refresh.py
+          python3 tests/test-workflow-signing-secret.py
           python3 tests/test-snitchwatch-gate.py
           python3 tests/test-snitchwatch-image-build.py
           python3 tests/test-snitchwatch-image-build-daemon.py
@@ -207,11 +208,6 @@ jobs:
       packages: write
       id-token: write
 
-    # Exposed as env so step `if:` guards can test for its presence — the
-    # `secrets` context is not available directly inside `if:` expressions.
-    env:
-      SIGNING_SECRET: ${{ secrets.SIGNING_SECRET }}
-
     strategy:
       fail-fast: false
       matrix:
@@ -259,6 +255,7 @@ jobs:
           tests/test-snitchwatch-toolchain.sh
           python3 tests/test-r13-publication.py
           python3 tests/test-base-refresh.py
+          python3 tests/test-workflow-signing-secret.py
           python3 tests/test-snitchwatch-gate.py
           python3 tests/test-snitchwatch-image-build.py
           python3 tests/test-snitchwatch-image-build-daemon.py
@@ -419,8 +416,12 @@ jobs:
       # They also check if the runner is on the default branch so that things like the merge queue (if you enable it), are going to work
       - name: Require release signing key
         if: github.event_name != 'pull_request' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+        # Only a boolean reaches this step; the key itself is exposed solely to
+        # the cosign steps below, never to the image build.
+        env:
+          HAS_SIGNING_KEY: ${{ secrets.SIGNING_SECRET != '' }}
         run: |
-          if [[ -z "${SIGNING_SECRET}" ]]; then
+          if [[ "${HAS_SIGNING_KEY}" != "true" ]]; then
             echo "::error::SIGNING_SECRET is required to publish a release image."
             exit 1
           fi

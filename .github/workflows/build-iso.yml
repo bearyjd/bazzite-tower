@@ -48,10 +48,6 @@ jobs:
       contents: read
       packages: read
       issues: write   # open/close the iso-failure tracking issue on scheduled runs
-    # Exposed as env so step `if:` guards can test for its presence — the `secrets`
-    # context is not available directly inside `if:` expressions.
-    env:
-      SIGNING_SECRET: ${{ secrets.SIGNING_SECRET }}
 
     steps:
       - name: Prepare environment
@@ -172,14 +168,22 @@ jobs:
 
       # Signing mirrors build.yml: runs only once a SIGNING_SECRET exists. Unlike
       # the image (signed by digest), an ISO is a blob, so sign-blob.
+      # Only a boolean is exposed to this step (the `secrets` context is not
+      # usable in `if:`); the key itself reaches only the Sign ISO step.
+      - name: Detect signing key
+        id: signkey
+        env:
+          HAS_SIGNING_KEY: ${{ secrets.SIGNING_SECRET != '' }}
+        run: echo "present=${HAS_SIGNING_KEY}" >> "${GITHUB_OUTPUT}"
+
       - name: Install Cosign
-        if: env.SIGNING_SECRET != ''
+        if: steps.signkey.outputs.present == 'true'
         uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
         with:
           cosign-release: 'v2.6.3'
 
       - name: Sign ISO
-        if: env.SIGNING_SECRET != ''
+        if: steps.signkey.outputs.present == 'true'
         env:
           COSIGN_PRIVATE_KEY: ${{ secrets.SIGNING_SECRET }}
           COSIGN_PASSWORD: ""

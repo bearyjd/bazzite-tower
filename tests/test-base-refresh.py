@@ -143,7 +143,7 @@ class RefreshTests(unittest.TestCase):
     def test_valid_artifact_and_stable_alias_identity(self):
         proof, hashes = self.valid()
         self.assertEqual(proof['channels'], ['stable', 'latest'])
-        self.assertEqual(proof['sourceCommit'], '2559fa69aaf8918b5e729cfde08ca5f5c3ba4fcc')
+        self.assertEqual(proof['sourceCommit'], 'acd26cef83a4df9884c00f7b834a5d6e60a3206f')
         self.assertEqual(set(hashes), r.FILES)
 
     def test_policy_schema_dest_ref_profile_fail_closed(self):

@@ -598,7 +598,7 @@ class ContainerfileStages(unittest.TestCase):
                                                             '--check-ldd --run-flags' % (tarball, digest)]))
         result, events, _, _ = self.run_step('fetch', cargo_status=101)
         self.assertEqual(result.returncode, 101)
-        for args in ((), ('shell',), ('repro',), ('verify', 'TARBALL'), ('build; id',)):
+        for args in ((), ('shell',), ('repro',), ('verify', 'TARBALL'), ('build; id',), ('build', '--release'), ('fetch', '--online')):
             with self.subTest(refused=args):
                 result, events, _, _ = self.run_step(*args)
                 self.assertNotEqual(result.returncode, 0)

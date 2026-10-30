@@ -13,10 +13,12 @@ set -euo pipefail
 (( EUID != 0 )) || { echo 'bridge unprivileged step: refusing to run as root' >&2; exit 1; }
 case "${1:-}" in
     fetch)
+        [[ $# -eq 1 ]] || { echo 'bridge unprivileged step: usage fetch (no arguments)' >&2; exit 1; }
         # The same fetch build-bridge.sh repeats for its license file, offline.
         cargo fetch --locked --offline --target x86_64-unknown-linux-gnu --manifest-path "$SRC_DIR/Cargo.toml"
         ;;
     build)
+        [[ $# -eq 1 ]] || { echo 'bridge unprivileged step: usage build (no arguments)' >&2; exit 1; }
         "$SRC_DIR/packaging/release/build-bridge.sh"
         ;;
     repro)

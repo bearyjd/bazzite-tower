@@ -214,7 +214,7 @@ def require_exact_clean_source(source, pins):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    for arg in ('source', 'artifact', 'out', 'pins', 'verifier', 'legacy-config', 'candidate-config', 'build-log', 'repro-log', 'rpm-inventory', 'tarball', 'os-update-rule', 'resolved-dns-rule', 'scanner-artifact'):
+    for arg in ('source', 'artifact', 'out', 'pins', 'verifier', 'legacy-config', 'candidate-config', 'build-log', 'repro-log', 'rpm-inventory', 'tarball', 'rebuild-tarball', 'os-update-rule', 'resolved-dns-rule', 'scanner-artifact'):
         parser.add_argument('--' + arg, required=True, type=Path)
     args = parser.parse_args()
     source, out = args.source.resolve(), args.out.resolve()
@@ -308,11 +308,17 @@ def main():
     legacy_mask = out / 'usr/lib/systemd/user/snitchwatch-bridge.service'
     legacy_mask.parent.mkdir(parents=True, exist_ok=True)
     legacy_mask.symlink_to('/dev/null')
+    # M1 step 2: evidence from this stage's own comparison with the sibling
+    # build, not a literal (assemble.sh already refused a mismatch; this repeats it).
+    reproducible = (not os.path.samefile(args.tarball, args.rebuild_tarball)
+                    and args.tarball.read_bytes() == args.rebuild_tarball.read_bytes())
+    if not reproducible:
+        raise ValueError('bridge rebuild is not a separate byte-identical tarball')
     provenance = {
         'sourceCommit': pins['sourceCommit'], 'submoduleCommit': pins['submoduleCommit'],
         'sourceTree': pins['sourceTree'],
         'builderImage': pins['builderImage'], 'artifactSha256': sha(args.tarball),
-        'rpmInventorySha256': sha(args.rpm_inventory), 'reproducible': True,
+        'rpmInventorySha256': sha(args.rpm_inventory), 'reproducible': reproducible,
         'buildLogSha256': sha(args.build_log), 'reproLogSha256': sha(args.repro_log),
         'reproCommand': 'packaging/release/repro-check.sh <first-tarball>',
         'artifactInstallScope': 'Verified binary/licenses only; original schema1 user unit and check-install excluded',

@@ -1004,7 +1004,8 @@ esac
         self.assertEqual((out / DNS_RULE).stat().st_mode & 0o7777, 0o644)
 
     def test_native_provenance_reproducible_is_derived_from_the_sibling_comparison(self):
-        result, out = self.run_stage('')
+        stage_script = 'mkdir -p "$1/etc/opensnitchd"\ncp "$(dirname "$0")/opensnitchd-default-config.json" "$1/etc/opensnitchd/default-config.json"\n'
+        result, out = self.run_stage(stage_script)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         provenance = json.loads((out / 'usr/share/snitchwatch/native-build-provenance.json').read_text())
         self.assertIs(provenance['reproducible'], True)
@@ -1017,7 +1018,7 @@ esac
             with self.subTest(label):
                 shutil.rmtree(self.tmp)
                 self.tmp.mkdir()
-                result, out = self.run_stage('', rebuild=rebuild)
+                result, out = self.run_stage(stage_script, rebuild=rebuild)
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn('bridge rebuild is not a separate byte-identical tarball', result.stderr)
                 self.assertFalse((out / 'usr/share/snitchwatch/native-build-provenance.json').exists())

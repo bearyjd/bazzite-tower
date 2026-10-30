@@ -185,7 +185,7 @@ The child environment is an allowlist; build-steering variables (`CC*`, `*FLAGS`
 `LICENSE`, taken from the export inside the scanner stage; assembly uses the prep checkout's copy after
 re-hashing it. Before the split, the bridge build scripts ran as root with network in the same `RUN`
 and could tamper with the checker, the fingerprint, PATH tools or `/etc/ld.so.preload`; now they run
-only in `snitchwatch-bridge`, which no other stage descends from and which has no network.
+only in `snitchwatch-bridge` and its sibling `snitchwatch-bridge-rebuild`, which no other stage descends from and which have no network.
 The pristine bridge release/repro
 path and unchanged upstream dependency-list cmp remain independent.
 

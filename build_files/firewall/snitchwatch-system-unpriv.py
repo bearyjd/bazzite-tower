@@ -225,7 +225,11 @@ def walk(top):
 
 
 def owned_by_build_ids(top='/', uid=BUILD_UID, gid=BUILD_GID):
-    return [path for path, info in walk(top)[0] if info.st_uid == uid or info.st_gid == gid]
+    """Entries of TOP's own filesystem owned by uid or gid. Mount points of other filesystems
+    (/proc, /sys, /dev, bind mounts) are left out: in a user namespace their unmapped owner
+    shows as 65534 without being it (the selfcheck's access test still covers them)."""
+    device = os.lstat(top).st_dev
+    return [path for path, info in walk(top)[0] if info.st_dev == device and (info.st_uid == uid or info.st_gid == gid)]
 
 
 def source_problems(source, owner=(0, 0)):
@@ -295,12 +299,14 @@ def probe(kind, path):
 def writable_outside(top, allowed, uid):
     """Paths under TOP this uid could write (or owns) other than ALLOWED trees and sticky dirs."""
     entries, unlistable = walk(top)
+    device = os.lstat(top).st_dev
     found = []
     for path, info in entries:
         if any(path == root or path.startswith(root + '/') for root in allowed) or stat.S_ISLNK(info.st_mode):
             continue
         sticky = stat.S_ISDIR(info.st_mode) and info.st_mode & stat.S_ISVTX
-        if info.st_uid == uid or (not sticky and os.access(path, os.W_OK, follow_symlinks=False)):
+        owned = info.st_dev == device and info.st_uid == uid  # see owned_by_build_ids
+        if owned or (not sticky and os.access(path, os.W_OK, follow_symlinks=False)):
             found.append(path)
     return found, unlistable
 

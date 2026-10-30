@@ -93,7 +93,8 @@ stages (same runner, same buildah, no host isolation); `build.log`/`repro.log` a
 M1 step 3 (unprivileged build, both stages): root runs the probe, the allowlisted cargo home, the rpm `cmp`,
 the logs (`tee` into root-owned `$work`) and the export. `snitchwatch-system-unpriv.py prepare` refuses unless
 `/work`, `$work` and the source checkout (`.git` included) are root-owned with no group/other write and
-other-readable and nothing on the filesystem is owned by 65534, then hands 65534 only `bridge-cargo` and
+other-readable and nothing on the image filesystem is owned by 65534 (other mounts such as `/proc` show an
+unmapped owner as 65534 and get the selfcheck's access test instead), then hands 65534 only `bridge-cargo` and
 new empty `dist`, `target`, `home`. `run` forks; the child drops the bounding, ambient and inheritable caps,
 all groups, gid and uid, sets `no_new_privs` and refuses to exec unless `/proc/self/status` shows exactly
 that (fails closed; no `setpriv`, since adding a package to prep would change the `rpm -qa` set embedded

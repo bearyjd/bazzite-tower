@@ -398,7 +398,11 @@ class ContainerfileStages(unittest.TestCase):
         body = '\n'.join(line for line in (FACTORY / 'snitchwatch-system-assemble.sh').read_text().splitlines()
                          if not line.lstrip().startswith('#'))
         compare = 'python3 "$guard" compare-bridge --pins "$pins" "$handoff/bridge" "$handoff/bridge-rebuild" || {'
-        self.assertIn(compare, body)
+        lines = [line.strip() for line in body.splitlines()]
+        # Whole lines: nothing may prefix (`true ...`) or chain onto the comparison or the rebuild check.
+        self.assertEqual(lines.count(compare), 1)
+        self.assertEqual(lines.count('python3 "$guard" check bridge-rebuild --pins "$pins" "$handoff/bridge-rebuild"'), 1)
+        self.assertEqual(sum('compare-bridge' in line for line in lines), 1)
         refusal = "echo 'assembly: the sibling bridge rebuild is not byte-identical to the first bridge build; refusing.' >&2; exit 1;"
         self.assertIn(refusal, body.split(compare, 1)[1].splitlines()[1])
         self.assertIn('python3 "$guard" check bridge-rebuild --pins "$pins" "$handoff/bridge-rebuild"', body)

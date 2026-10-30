@@ -2,7 +2,7 @@
 
 Automatic base refresh and feature acceptance are separate paths.
 `base-refresh.yml` refreshes accepted product source pinned by
-`.github/base-refresh-policy.json` (`6d67c130962e0d2692a385d2d6645a2f903f4bda`)
+`.github/base-refresh-policy.json` (`2559fa69aaf8918b5e729cfde08ca5f5c3ba4fcc`)
 against a newly resolved immutable Bazzite base. Daily and manual runs on `main`
 publish legacy `:stable` plus compatibility `:latest`, and the reviewed r16.1
 system product as `:snitchwatch-system`, after all publication gates. They need

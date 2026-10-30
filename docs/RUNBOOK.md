@@ -213,11 +213,12 @@ system-profile Flatpak per user and inspect existing same-ID installations and
 overrides before selecting it.
 
 How the candidate is built (H1 stage split, see `docs/CODEMAPS/image-build.md`):
-five Containerfile stages, `snitchwatch-prep` (network, RPM scriptlets, git and
+six Containerfile stages, `snitchwatch-prep` (network, RPM scriptlets, git and
 `cargo fetch` only) → `snitchwatch-scanner` (`RUN --network=none`) and
 `snitchwatch-bridge` (the ~660-crate bridge build, root, `RUN --network=none`) and
-`snitchwatch-daemon` → `snitchwatch-system` assembly (`RUN --network=none`). The
-bridge stage is an ancestor of nothing; only allowlisted `/handoff/*` files reach
+its sibling `snitchwatch-bridge-rebuild` (the same build again, tarball only) and
+`snitchwatch-daemon` → `snitchwatch-system` assembly (`RUN --network=none`). Both
+bridge stages are ancestors of nothing; only allowlisted `/handoff/*` files reach
 assembly. When a system build fails, grep the log for these distinct lines:
 `handoff: probe-network: network probe` (offline stage reached the network, or
 the flag was ignored), `network probe positive control failed` (prep could not
@@ -228,6 +229,15 @@ file), `RPM set differs from the snitchwatch-prep inventory`, `merge overlap`,
 `--version`/`--help`), `cannot set no_new_privs`, `stage.sh timed out after 300 s`, `cannot become child subreaper`,
 `bridge binary descendants survived SIGKILL`, `must be root-owned and not group/other writable`, `cannot list extended attributes`,
 `unexpected path in unprivileged stage.sh output`,
+`handoff: compare-bridge: bridge rebuild differs from the first bridge build` followed by
+`assembly: the sibling bridge rebuild is not byte-identical to the first bridge build`
+(M1 step 2: the two bridge builds disagree; the line gives both sha256s, the first
+differing byte offset and the differing tar members. Compare each stage's
+`build-bridge: toolchain` / `SOURCE_DATE_EPOCH` lines; a member list naming only
+`usr/bin/snitchwatch-bridge-cli` means the binary is not deterministic, which is a
+finding to investigate, not a reason to drop the comparison),
+`bridge rebuild is not a separate byte-identical tarball` (stage.py's own repeat of that check),
+`bridge rebuild stage: RPM set differs`,
 `bridge stage: prep cargo cache failed the Cargo.lock checksum allowlist` (a cached
 `.crate` is altered or not in the lock), `bridge stage: offline cargo fetch preflight failed`
 (prep's fetch is incomplete, or `cargo fetch` refuses offline: fix the fetch in prep, do
@@ -244,9 +254,14 @@ stricter tests, the code and the docs go together: `git revert -m 1 <merge>` if 
 landed as a merge commit (this repo's usual style), or `git revert <commit>` if it
 was squash-merged. Reverting only the fix commit leaves tests that require an
 offline bridge and fails source safety.
-Still open: the bridge tarball is built by its own crates as root, and its sha,
-logs and repro-check are produced in that same stage (`reproducible: True` is a
-literal), so the evidence is self-attesting (M1); the split contains it, it does not verify it.
+M1 step 2: assembly compares the bridge tarball byte for byte with a sibling
+stage's independent rebuild and derives `reproducible` from that (no longer a
+literal); the staged provenance bytes are unchanged. The bridge stages also emit
+the tarball sha256 as `SHA256=` in the log, so two runs can be compared by eye.
+Still open (M1): a deterministic hostile crate already in `Cargo.lock` produces
+the same bytes in both stages (lock-bump review is the only control), both
+stages could be poisoned alike (same runner), `build.log`/`repro.log` are still
+the first stage's own, and both builds run as root (step 3).
 
 The daemon build toolchain (Go, protoc, libnetfilter_queue) is installed from
 pinned, Fedora-signed Koji RPMs (`toolchainRpms` in

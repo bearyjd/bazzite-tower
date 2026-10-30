@@ -182,9 +182,15 @@ def merge(source, dest):
     return added
 
 
-def read_tarball(path):
+def read_tarball(path, label='first'):
     """The bytes of a regular, single-link file of bounded size (never through a link)."""
-    if not stat.S_ISREG(os.lstat(path).st_mode):
+    try:
+        info = os.lstat(path)
+    except FileNotFoundError:
+        raise Refusal('compare: the %s tarball is missing: %s' % (label, path)) from None
+    except OSError as error:
+        raise Refusal('compare: cannot read the %s tarball %s: %s' % (label, path, error.strerror)) from None
+    if not stat.S_ISREG(info.st_mode):
         raise Refusal('compare: %s is a symlink or special file' % path)
     fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     with os.fdopen(fd, 'rb') as reader:
@@ -200,17 +206,31 @@ def read_tarball(path):
 
 
 def tar_members(blob):
-    """{member name: type/mode/size/sha256} parsed in memory (diagnosis only), or None."""
+    """{member name: type/mode/size/sha256} parsed in memory (diagnosis only), or None.
+
+    None too when any member, or all of them together, would exceed MAX_TAR: a
+    sparse member's size is not bounded by the archive size, and its holes would
+    otherwise be read into memory."""
     try:
         inflater = zlib.decompressobj(16 + zlib.MAX_WBITS)
         raw = inflater.decompress(blob, MAX_TAR)
         if inflater.unconsumed_tail or not inflater.eof:
             return None
-        members = {}
+        members, left = {}, MAX_TAR
         with tarfile.open(fileobj=io.BytesIO(raw), mode='r:') as tar:
             for member in tar:
-                data = tar.extractfile(member).read() if member.isreg() else b''
-                members[member.name] = '%s %o %d %s' % (member.type, member.mode, member.size, hashlib.sha256(data).hexdigest())
+                digest = hashlib.sha256()
+                if member.isreg():
+                    left -= member.size
+                    if left < 0:
+                        return None
+                    reader, read = tar.extractfile(member), 0
+                    while chunk := reader.read(min(1 << 20, member.size - read + 1)):
+                        read += len(chunk)
+                        if read > member.size:
+                            return None
+                        digest.update(chunk)
+                members[member.name] = '%s %o %d %s' % (member.type, member.mode, member.size, digest.hexdigest())
         return members
     except (tarfile.TarError, zlib.error, EOFError, OSError, ValueError):
         return None
@@ -219,8 +239,8 @@ def tar_members(blob):
 def compare_bridge(first_root, rebuild_root, pins):
     """Refuse unless the sibling rebuild's tarball is byte-identical to the first build's."""
     name = bridge_tarball(pins)
-    first, first_id = read_tarball(Path(first_root) / name)
-    second, second_id = read_tarball(Path(rebuild_root) / name)
+    first, first_id = read_tarball(Path(first_root) / name, 'first')
+    second, second_id = read_tarball(Path(rebuild_root) / name, 'rebuild')
     if first_id == second_id:
         raise Refusal('compare: both tarballs are the same file; that is not a second build')
     if first == second:
@@ -230,7 +250,7 @@ def compare_bridge(first_root, rebuild_root, pins):
         hashlib.sha256(first).hexdigest(), len(first), hashlib.sha256(second).hexdigest(), len(second), offset)
     a, b = tar_members(first), tar_members(second)
     if a is None or b is None:
-        detail += '; members not listable (not a bounded gzip tar)'
+        detail += '; members not listable (not a gzip tar within %d bytes, members included)' % MAX_TAR
     else:
         differing = sorted(member for member in set(a) | set(b) if a.get(member) != b.get(member))
         shown = ', '.join(repr(member) for member in differing[:MAX_LISTED])

@@ -24,13 +24,19 @@ ROOT = Path(__file__).resolve().parents[1]
 FACTORY = ROOT / 'build_files/firewall'
 CONTAINERFILE = ROOT / 'Containerfile'
 PINS = json.loads((FACTORY / 'snitchwatch-system-pins.json').read_text())
-BUILD_STAGES = ('snitchwatch-prep', 'snitchwatch-scanner', 'snitchwatch-bridge', 'snitchwatch-daemon', 'snitchwatch-system')
-OFFLINE_STAGES = ('snitchwatch-scanner', 'snitchwatch-bridge', 'snitchwatch-system')
+BUILD_STAGES = ('snitchwatch-prep', 'snitchwatch-scanner', 'snitchwatch-bridge', 'snitchwatch-bridge-rebuild', 'snitchwatch-daemon',
+                'snitchwatch-system')
+# The two sibling bridge builds (M1 step 2): each runs ~660 crates' build code, neither is an ancestor of anything.
+BRIDGE_STAGES = ('snitchwatch-bridge', 'snitchwatch-bridge-rebuild')
+OFFLINE_STAGES = ('snitchwatch-scanner', 'snitchwatch-bridge', 'snitchwatch-bridge-rebuild', 'snitchwatch-system')
 ONLINE_STAGES = ('snitchwatch-prep', 'snitchwatch-daemon')
-OFFLINE_SCRIPTS = ('snitchwatch-system-scanner-stage.sh', 'snitchwatch-system-bridge-build.sh', 'snitchwatch-system-assemble.sh')
+OFFLINE_SCRIPTS = ('snitchwatch-system-scanner-stage.sh', 'snitchwatch-system-bridge-build.sh', 'snitchwatch-system-bridge-rebuild.sh',
+                   'snitchwatch-system-assemble.sh')
 BRIDGE_SCRIPT = FACTORY / 'snitchwatch-system-bridge-build.sh'
+REBUILD_SCRIPT = FACTORY / 'snitchwatch-system-bridge-rebuild.sh'
+BRIDGE_SCRIPTS = (BRIDGE_SCRIPT, REBUILD_SCRIPT)
 # Scripts and fragments that execute third-party build code or the bridge binary.
-BRIDGE_ONLY = ('snitchwatch-system-bridge-build.sh', 'build-bridge.sh', 'repro-check.sh', '--run-flags', '--check-ldd')
+BRIDGE_ONLY = ('snitchwatch-system-bridge-build.sh', 'snitchwatch-system-bridge-rebuild.sh', 'build-bridge.sh', 'repro-check.sh', '--run-flags', '--check-ldd')
 HANDOFF = FACTORY / 'snitchwatch-system-handoff.py'
 # Lines allowed before an offline stage's network probe: our own mode check,
 # argument/container guards and plain assignments. A guard is `[[ ]]` tests
@@ -125,17 +131,22 @@ class ContainerfileStages(unittest.TestCase):
     def test_no_bridge_build_in_the_ancestry_of_scanner_daemon_or_assembly(self):
         for name in ('snitchwatch-scanner', 'snitchwatch-daemon', 'snitchwatch-system'):
             chain = from_chain(self.stages, name)
-            self.assertNotIn('snitchwatch-bridge', chain, name)
+            for bridge in BRIDGE_STAGES:
+                self.assertNotIn(bridge, chain, name)
             for ancestor in chain:
                 for run in runs(self.stages[ancestor]):
                     text = script_text(run)
                     for needle in BRIDGE_ONLY:
                         self.assertNotIn(needle, text, '%s (ancestor of %s) reaches %s' % (ancestor, name, needle))
-        # The bridge stage is the base of nothing and is read only by the assembly COPY.
-        self.assertEqual([n for n, s in self.stages.items() if s['from'] == 'snitchwatch-bridge'], [])
-        readers = [n for n, s in self.stages.items() if 'snitchwatch-bridge' in copy_sources(s)]
-        self.assertEqual(readers, ['snitchwatch-system'])
+        # Both bridge stages are the base of nothing and are read only by the assembly COPY;
+        # neither reads the other (the rebuild must not see the first build's outputs).
+        for bridge in BRIDGE_STAGES:
+            self.assertEqual([n for n, s in self.stages.items() if s['from'] == bridge], [], bridge)
+            readers = [n for n, s in self.stages.items() if bridge in copy_sources(s)]
+            self.assertEqual(readers, ['snitchwatch-system'], bridge)
+            self.assertEqual(copy_sources(self.stages[bridge]), [], bridge)
         self.assertTrue(any('snitchwatch-system-bridge-build.sh' in run for run in runs(self.stages['snitchwatch-bridge'])))
+        self.assertTrue(any('snitchwatch-system-bridge-rebuild.sh' in run for run in runs(self.stages['snitchwatch-bridge-rebuild'])))
         self.assertTrue(any('snitchwatch-system-daemon-build.sh' in run for run in runs(self.stages['snitchwatch-daemon'])))
 
     def test_daemon_build_runs_only_in_the_daemon_stage(self):
@@ -198,6 +209,7 @@ class ContainerfileStages(unittest.TestCase):
             'snitchwatch-system': ['--from=ctx /firewall/snitchwatch-system* /tools/',
                                    '--from=snitchwatch-scanner /handoff/scanner/ /handoff/scanner/',
                                    '--from=snitchwatch-bridge /handoff/bridge/ /handoff/bridge/',
+                                   '--from=snitchwatch-bridge-rebuild /handoff/bridge-rebuild/ /handoff/bridge-rebuild/',
                                    '--from=snitchwatch-daemon /handoff/daemon/ /handoff/daemon/'],
         }
         for name in BUILD_STAGES:
@@ -222,8 +234,8 @@ class ContainerfileStages(unittest.TestCase):
             self.assertNotIn(needle, body)
         # The handoffs are checked before anything reads them, and merged last.
         order = ['probe-network offline', 'cmp - "$work/rpm-inventory.txt"', "p['sourceFiles'].items()",
-                 '"$guard" check scanner', '"$guard" check bridge', '"$guard" check daemon',
-                 'bridge_artifact.py" verify', 'snitchwatch-system-stage.py"', '"$guard" check daemon', '"$guard" merge',
+                 '"$guard" check scanner', '"$guard" check bridge ', '"$guard" check bridge-rebuild', '"$guard" check daemon',
+                 '"$guard" compare-bridge', 'bridge_artifact.py" verify', 'snitchwatch-system-stage.py"', '"$guard" check daemon', '"$guard" merge',
                  '"$daemon_verifier" --stage-only --root "$out"', 'snitchwatch-system-verify.py" --root "$out" --image-tree']
         position = 0
         for needle in order:  # each must appear after the previous one (check daemon twice)
@@ -261,7 +273,8 @@ class ContainerfileStages(unittest.TestCase):
                 self.assertIn('must be root-owned and not group/other writable', result.stderr)
 
     def test_every_consuming_stage_recomputes_the_shared_rpm_inventory(self):
-        for script in ('snitchwatch-system-scanner-stage.sh', 'snitchwatch-system-bridge-build.sh', 'snitchwatch-system-assemble.sh'):
+        for script in ('snitchwatch-system-scanner-stage.sh', 'snitchwatch-system-bridge-build.sh', 'snitchwatch-system-bridge-rebuild.sh',
+                       'snitchwatch-system-assemble.sh'):
             text = (FACTORY / script).read_text()
             self.assertIn("rpm -qa --qf '%{NAME}-%{EPOCHNUM}:%{VERSION}-%{RELEASE}.%{ARCH}\\n' | LC_ALL=C sort | cmp - \"$work/rpm-inventory.txt\"", text, script)
         prep = (FACTORY / 'snitchwatch-system-prep.sh').read_text()
@@ -274,8 +287,8 @@ class ContainerfileStages(unittest.TestCase):
         for needle in ('cargo build', 'cargo test', 'cargo run', 'cargo install'):
             self.assertNotIn(needle, prep)
 
-    def bridge_body(self):
-        return '\n'.join(line for line in BRIDGE_SCRIPT.read_text().splitlines() if not line.lstrip().startswith('#'))
+    def bridge_body(self, script=BRIDGE_SCRIPT):
+        return '\n'.join(line for line in script.read_text().splitlines() if not line.lstrip().startswith('#'))
 
     def test_pre_probe_guards_cannot_chain_or_substitute_commands(self):
         for line in ('[[ "${SNITCHWATCH_BRIDGE:-legacy}" == system ]] || { echo \'native factory requires system mode\' >&2; exit 1; }',
@@ -293,7 +306,11 @@ class ContainerfileStages(unittest.TestCase):
                 self.assertFalse(pre_probe_line_ok(line))
 
     def test_bridge_stage_runs_no_network_needing_command(self):
-        body = self.bridge_body()
+        for script in BRIDGE_SCRIPTS:
+            with self.subTest(script.name):
+                self.bridge_script_runs_no_network_needing_command(self.bridge_body(script))
+
+    def bridge_script_runs_no_network_needing_command(self, body):
         for needle in ('dnf', 'curl', 'wget', 'git fetch', 'git clone', 'git pull', 'git submodule', 'rustup', 'pip ', 'pip3',
                        'npm', 'go get', 'go mod download', 'cargo vendor', 'SW_INSTALL_DEPS=1', 'install-deps',
                        'probe-network online', 'cargo install', 'cargo update'):
@@ -329,6 +346,80 @@ class ContainerfileStages(unittest.TestCase):
             self.assertIn(needle, body[position:], needle)
             position = body.index(needle, position) + len(needle)
         self.assertIn('rm -rf -- "$CARGO_TARGET_DIR" "$work/bridge-cargo"', body)
+
+    # M1 step 2: a sibling rebuild that assembly compares byte for byte.
+    def test_bridge_rebuild_stage_is_a_prep_sibling_running_the_same_command(self):
+        first, rebuild = (self.stages[name] for name in BRIDGE_STAGES)
+        self.assertEqual(rebuild['from'], 'snitchwatch-prep')
+        self.assertEqual(from_chain(self.stages, 'snitchwatch-bridge-rebuild'), ['snitchwatch-bridge-rebuild', 'snitchwatch-prep'])
+        self.assertEqual([keyword for keyword, _ in rebuild['body']], [keyword for keyword, _ in first['body']])
+        # Same RUN, same work path and env; only the script and the (new) handoff path differ.
+        expected = runs(first)[0].replace('snitchwatch-system-bridge-build.sh', 'snitchwatch-system-bridge-rebuild.sh') \
+                                 .replace(' /handoff/bridge', ' /handoff/bridge-rebuild')
+        self.assertEqual(runs(rebuild), [expected])
+        self.assertTrue(expected.startswith('--network=none '))
+        self.assertTrue(expected.endswith(' /work/native /handoff/bridge-rebuild'))
+
+    def build_lines(self, script):
+        """Non-comment lines from the network probe through the one-tarball check."""
+        lines = [line for line in script.read_text().splitlines() if line.strip() and not line.lstrip().startswith('#')]
+        start = lines.index('python3 "$factory/snitchwatch-system-handoff.py" probe-network offline')
+        end = next(i for i, line in enumerate(lines) if line.startswith('[[ ${#tarballs[@]} == 1 ]]'))
+        return lines[start:end + 1]
+
+    def test_bridge_rebuild_runs_the_same_build_lines_at_the_same_paths(self):
+        # Byte equality needs identical inputs: same prep layer, same paths, same env,
+        # same fresh cargo home and the same upstream build command. Any drift
+        # between the two scripts fails here instead of as a red CI mismatch.
+        first, rebuild = (self.build_lines(script) for script in BRIDGE_SCRIPTS)
+        self.assertEqual(rebuild, first)
+        for needle in ('make_fresh_cargo_home', 'export SRC_DIR="$work/source" OUT_DIR="$work/dist" CARGO_HOME="$work/bridge-cargo" '
+                       'CARGO_TARGET_DIR="$work/target" CARGO_NET_OFFLINE=true', 'export SW_GIT_SHA="${pin[0]}" CARGO_BUILD_JOBS=4',
+                       'unset ALLOW_DIRTY SW_RELEASE_TAG SW_INSTALL_DEPS', '"$SRC_DIR/packaging/release/build-bridge.sh"'):
+            self.assertTrue(any(needle in line for line in rebuild), needle)
+        # The pre-probe preamble differs only in the usage text.
+        heads = [[line for line in script.read_text().splitlines() if 'probe-network offline' not in line][:20] for script in BRIDGE_SCRIPTS]
+        strip = lambda lines: [re.sub(r"echo '[^']*'", "echo ''", line) for line in lines if not line.lstrip().startswith('#')]
+        self.assertEqual(strip(heads[1])[:strip(heads[1]).index('work=$1') + 1], strip(heads[0])[:strip(heads[0]).index('work=$1') + 1])
+
+    def test_bridge_rebuild_executes_nothing_and_hands_over_only_the_tarball(self):
+        body = self.bridge_body(REBUILD_SCRIPT)
+        for needle in ('repro-check', '--run-flags', '--check-ldd', 'bridge_artifact.py', '/handoff/bridge/', 'COPY'):
+            self.assertNotIn(needle, body)
+        order = ['probe-network offline', '"$SRC_DIR/packaging/release/build-bridge.sh"', 'cmp - "$work/rpm-inventory.txt"',
+                 'snitchwatch-system-handoff.py" export bridge-rebuild --pins "$pins" "$OUT_DIR" "$2"',
+                 'rm -rf -- "$CARGO_TARGET_DIR" "$work/bridge-cargo"']
+        position = 0
+        for needle in order:
+            self.assertIn(needle, body[position:], needle)
+            position = body.index(needle, position) + len(needle)
+
+    def test_assembly_compares_the_two_bridge_builds_before_using_either(self):
+        body = '\n'.join(line for line in (FACTORY / 'snitchwatch-system-assemble.sh').read_text().splitlines()
+                         if not line.lstrip().startswith('#'))
+        compare = 'python3 "$guard" compare-bridge --pins "$pins" "$handoff/bridge" "$handoff/bridge-rebuild" || {'
+        lines = [line.strip() for line in body.splitlines()]
+        # Whole lines: nothing may prefix (`true ...`) or chain onto the comparison or the rebuild check.
+        self.assertEqual(lines.count(compare), 1)
+        self.assertEqual(lines.count('python3 "$guard" check bridge-rebuild --pins "$pins" "$handoff/bridge-rebuild"'), 1)
+        self.assertEqual(sum('compare-bridge' in line for line in lines), 1)
+        refusal = "echo 'assembly: the sibling bridge rebuild is not byte-identical to the first bridge build; refusing.' >&2; exit 1;"
+        self.assertIn(refusal, body.split(compare, 1)[1].splitlines()[1])
+        self.assertIn('python3 "$guard" check bridge-rebuild --pins "$pins" "$handoff/bridge-rebuild"', body)
+        for later in ('bridge_artifact.py" verify', 'snitchwatch-system-stage.py"'):
+            self.assertLess(body.index(compare), body.index(later), later)
+        # The verify digest and stage.py's comparison come from the sibling's tarball,
+        # not from the tarball being checked (the old --expect-sha256 was circular).
+        self.assertIn('rebuild="$handoff/bridge-rebuild/$(basename "$tarball")"', body)
+        self.assertIn('--expect-sha256 "$(sha256sum "$rebuild" | awk \'{print $1}\')"', body)
+        self.assertNotIn('sha256sum "$tarball"', body)
+        self.assertIn('--tarball "$tarball" --rebuild-tarball "$rebuild"', body)
+
+    def test_stage_py_derives_reproducible_from_its_own_comparison(self):
+        text = (FACTORY / 'snitchwatch-system-stage.py').read_text()
+        self.assertNotRegex(text, r"'reproducible':\s*True")
+        self.assertIn("'reproducible': reproducible,", text)
+        self.assertIn("'rebuild-tarball'", text)
 
     def bridge_fragment(self, first, last, trailing=0):
         lines = BRIDGE_SCRIPT.read_text().splitlines()
@@ -406,6 +497,7 @@ class ContainerfileStages(unittest.TestCase):
         self.assertIn('snitchwatch-system-handoff.py" export scanner "$work/scanner" "$2"', scanner)
         bridge = (FACTORY / 'snitchwatch-system-bridge-build.sh').read_text()
         self.assertIn('snitchwatch-system-handoff.py" export bridge --pins "$pins" "$OUT_DIR" "$2"', bridge)
+        self.assertIn('snitchwatch-system-handoff.py" export bridge-rebuild --pins "$pins" "$OUT_DIR" "$2"', REBUILD_SCRIPT.read_text())
         # All bridge execution (ldd, --version, --help) happens in the bridge stage.
         self.assertIn('--check-ldd --run-flags', bridge)
 
@@ -479,6 +571,106 @@ class Handoff(unittest.TestCase):
     def test_bridge_allowlist_is_tarball_sidecar_and_logs(self):
         tarball = 'snitchwatch-bridge-%s-x86_64.tar.gz' % PINS['bridgeVersion']
         self.assertEqual(set(self.h['allowlist']('bridge', PINS)), {tarball, tarball + '.sha256', 'build.log', 'repro.log'})
+
+    def test_bridge_rebuild_allowlist_is_the_tarball_only(self):
+        tarball = 'snitchwatch-bridge-%s-x86_64.tar.gz' % PINS['bridgeVersion']
+        self.assertEqual(self.h['allowlist']('bridge-rebuild', PINS), {tarball: 0o644})
+        source = self.root / 'dist'
+        for name in (tarball, tarball + '.sha256', 'build.log', 'repro.log'):
+            self.write(source / name, name.encode())
+        dest = self.root / 'handoff/bridge-rebuild'
+        self.h['export']('bridge-rebuild', source, dest, PINS)
+        self.assertEqual(sorted(p.name for p in dest.iterdir()), [tarball])
+        self.assertEqual(self.check('bridge-rebuild', dest), [tarball])
+        self.write(dest / 'repro.log', b'repro-check: OK')
+        self.refused('bridge-rebuild', dest, 'unexpected file in bridge-rebuild handoff: repro.log')
+
+    def tarball(self, members):
+        """A gzip'd tar of {name: bytes} (deterministic: fixed mtime/owner)."""
+        import gzip, io, tarfile
+        raw = io.BytesIO()
+        with tarfile.open(fileobj=raw, mode='w', format=tarfile.USTAR_FORMAT) as tar:
+            for name, data in members.items():
+                info = tarfile.TarInfo(name)
+                info.size, info.mtime, info.mode = len(data), 1, 0o644
+                tar.addfile(info, io.BytesIO(data))
+        return gzip.compress(raw.getvalue(), mtime=0)
+
+    def pair(self, label, first, second):
+        name = 'snitchwatch-bridge-%s-x86_64.tar.gz' % PINS['bridgeVersion']
+        roots = (self.root / label / 'bridge', self.root / label / 'bridge-rebuild')
+        for root, blob in zip(roots, (first, second)):
+            if blob is not None:
+                self.write(root / name, blob)
+        return roots, name
+
+    def test_compare_bridge_accepts_only_byte_identical_tarballs(self):
+        members = {'top/usr/bin/snitchwatch-bridge-cli': b'\x7fELF' + b'a' * 64, 'top/MANIFEST.json': b'{}'}
+        blob = self.tarball(members)
+        roots, _ = self.pair('same', blob, bytes(blob))
+        result = self.h['compare_bridge'](*roots, PINS)
+        self.assertEqual(result, {'identical': True, 'sha256': hashlib.sha256(blob).hexdigest(), 'size': len(blob)})
+
+    def test_compare_bridge_refuses_any_difference_and_names_the_members(self):
+        base = {'top/usr/bin/snitchwatch-bridge-cli': b'\x7fELF' + b'a' * 64, 'top/MANIFEST.json': b'{}'}
+        one_byte = {**base, 'top/usr/bin/snitchwatch-bridge-cli': b'\x7fELF' + b'a' * 63 + b'b'}
+        cases = {
+            'one byte': (base, one_byte, ['top/usr/bin/snitchwatch-bridge-cli']),
+            'extra member': (base, {**base, 'top/evil.so': b'x'}, ['top/evil.so']),
+            'missing member': (base, {'top/MANIFEST.json': b'{}'}, ['top/usr/bin/snitchwatch-bridge-cli']),
+        }
+        for label, (first, second, differing) in cases.items():
+            with self.subTest(label):
+                a, b = self.tarball(first), self.tarball(second)
+                roots, _ = self.pair(label.replace(' ', '-'), a, b)
+                with self.assertRaises(self.h['Refusal']) as caught:
+                    self.h['compare_bridge'](*roots, PINS)
+                message = str(caught.exception)
+                self.assertIn('bridge rebuild differs from the first bridge build', message)
+                self.assertIn(hashlib.sha256(a).hexdigest(), message)
+                self.assertIn(hashlib.sha256(b).hexdigest(), message)
+                self.assertIn('differing members: %s' % ', '.join(repr(name) for name in differing), message)
+        # Not even a parseable tarball: still refused, with both digests and no member list.
+        a = self.tarball(base)
+        roots, _ = self.pair('garbage', a, a[:-1] + bytes([a[-1] ^ 1]))
+        with self.assertRaisesRegex(self.h['Refusal'], 'bridge rebuild differs.*first differing byte at offset %d' % (len(a) - 1)):
+            self.h['compare_bridge'](*roots, PINS)
+        roots, _ = self.pair('not-gzip', a, b'not a tarball')
+        with self.assertRaisesRegex(self.h['Refusal'], 'members not listable'):
+            self.h['compare_bridge'](*roots, PINS)
+
+    def test_compare_bridge_refuses_links_special_files_and_missing_tarballs(self):
+        blob = self.tarball({'top/MANIFEST.json': b'{}'})
+        cases = {
+            'symlink': (lambda path: (path.unlink(), path.symlink_to(path.parent.parent / 'bridge' / path.name)), 'symlink or special file'),
+            'fifo': (lambda path: (path.unlink(), os.mkfifo(path)), 'symlink or special file'),
+            'hard link': (lambda path: os.link(path, path.parent / 'link'), 'hard-linked'),
+            'missing': (lambda path: path.unlink(), 'No such file'),
+        }
+        for label, (mutate, message) in cases.items():
+            with self.subTest(label):
+                roots, name = self.pair(label.replace(' ', '-'), blob, bytes(blob))
+                mutate(roots[1] / name)
+                with self.assertRaises((self.h['Refusal'], OSError)) as caught:
+                    self.h['compare_bridge'](*roots, PINS)
+                self.assertIn(message, str(caught.exception))
+        # The same directory twice is not a second build.
+        roots, _ = self.pair('self', blob, None)
+        with self.assertRaisesRegex(self.h['Refusal'], 'the same file'):
+            self.h['compare_bridge'](roots[0], roots[0], PINS)
+
+    def test_compare_bridge_cli_prints_a_distinct_refusal_and_exits_1(self):
+        pins = self.write(self.root / 'pins.json', json.dumps(PINS).encode())
+        roots, _ = self.pair('cli', self.tarball({'a': b'1'}), self.tarball({'a': b'2'}))
+        result = subprocess.run(['python3', '-B', str(HANDOFF), 'compare-bridge', '--pins', str(pins), *map(str, roots)],
+                                capture_output=True, text=True)
+        self.assertEqual(result.returncode, 1)
+        self.assertRegex(result.stderr, r"^handoff: compare-bridge: bridge rebuild differs from the first bridge build: .*differing members: 'a'")
+        roots, _ = self.pair('cli-ok', self.tarball({'a': b'1'}), self.tarball({'a': b'1'}))
+        result = subprocess.run(['python3', '-B', str(HANDOFF), 'compare-bridge', '--pins', str(pins), *map(str, roots)],
+                                capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(json.loads(result.stdout)['identical'])
 
     def test_daemon_allowlist_is_the_trusted_verifier_inventory(self):
         verifier = runpy.run_path(str(FACTORY / 'snitchwatch-system-daemon-verify.py'))

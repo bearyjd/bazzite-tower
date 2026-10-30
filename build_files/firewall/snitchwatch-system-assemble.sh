@@ -2,9 +2,10 @@
 # Containerfile stage snitchwatch-system (assembly): FROM snitchwatch-prep,
 # RUN --network=none, root. Runs no third-party code as root: its tools are
 # this script's directory (COPY --from=ctx, a scratch stage) and the prep
-# checkout (re-hashed against the pins first). The scanner, bridge and daemon
-# stage outputs are DATA: allowlist-checked, hash-checked, never executed as
-# root (the bridge binary runs only as uid 65534 inside stage.py).
+# checkout (re-hashed against the pins first). The scanner, bridge, bridge
+# rebuild and daemon stage outputs are DATA: allowlist-checked, hash-checked,
+# never executed as root (the bridge binary runs only as uid 65534 inside
+# stage.py). The two sibling bridge tarballs must be byte-identical (M1 step 2).
 # Usage: WORK HANDOFF NEW-OUT
 set -euo pipefail
 factory=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
@@ -39,6 +40,7 @@ if ! [[ "$h_uid" == 0 && "$h_gid" == 0 && "$h_mode" =~ ^[0-7]{3}$ ]] || (( (8#$h
 fi
 python3 "$guard" check scanner "$handoff/scanner"
 python3 "$guard" check bridge --pins "$pins" "$handoff/bridge"
+python3 "$guard" check bridge-rebuild --pins "$pins" "$handoff/bridge-rebuild"
 python3 "$guard" check daemon --daemon-verifier "$daemon_verifier" "$handoff/daemon"
 cmp "$daemon_verifier" "$handoff/daemon/usr/libexec/snitchwatch/verify-system-daemon.py" || {
     echo 'assembly: daemon handoff verifier differs from the tower copy; refusing.' >&2; exit 1;
@@ -49,12 +51,20 @@ import json,sys
 print('snitchwatch-bridge-%s-x86_64.tar.gz' % json.load(open(sys.argv[1]))['bridgeVersion'])
 PY
 )"
+rebuild="$handoff/bridge-rebuild/$(basename "$tarball")"
 version=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["bridgeVersion"])' "$pins")
+# M1 step 2: the sibling stage built the same pinned inputs in a separate
+# container; any byte difference (non-determinism, or tampering in one stage
+# only) stops here, before either tarball is read. Both digests and the
+# differing members are printed above the refusal.
+python3 "$guard" compare-bridge --pins "$pins" "$handoff/bridge" "$handoff/bridge-rebuild" || {
+    echo 'assembly: the sibling bridge rebuild is not byte-identical to the first bridge build; refusing.' >&2; exit 1;
+}
 # Without the ldd/run options this verify executes nothing (those ran in the
-# bridge stage). The sha is self-computed from untrusted data: bridge integrity is M1.
+# bridge stage). The expected digest is the sibling build's, not the checked file's own.
 mkdir -p "$work/assembly"
 python3 -B "$work/source/packaging/release/bridge_artifact.py" verify --tarball "$tarball" \
-    --expect-sha256 "$(sha256sum "$tarball" | awk '{print $1}')" --expect-version "$version" --extract-to "$work/assembly/verified"
+    --expect-sha256 "$(sha256sum "$rebuild" | awk '{print $1}')" --expect-version "$version" --extract-to "$work/assembly/verified"
 python3 -B "$factory/snitchwatch-system-stage.py" \
     --source "$work/source" --artifact "$work/assembly/verified/$(basename "$tarball" .tar.gz)" --out "$out" \
     --scanner-artifact "$handoff/scanner" \
@@ -62,7 +72,7 @@ python3 -B "$factory/snitchwatch-system-stage.py" \
     --legacy-config /candidate/legacy-config.json --candidate-config /candidate/system-config.json \
     --build-log "$handoff/bridge/build.log" --os-update-rule "$factory/snitchwatch-system-os-update-rule.json" \
     --resolved-dns-rule "$factory/snitchwatch-system-resolved-dns-rule.json" \
-    --repro-log "$handoff/bridge/repro.log" --rpm-inventory "$work/rpm-inventory.txt" --tarball "$tarball"
+    --repro-log "$handoff/bridge/repro.log" --rpm-inventory "$work/rpm-inventory.txt" --tarball "$tarball" --rebuild-tarball "$rebuild"
 # Re-check after the uid 65534 runs inside stage.py, immediately before the merge reads it.
 python3 "$guard" check daemon --daemon-verifier "$daemon_verifier" "$handoff/daemon"
 python3 "$guard" merge "$handoff/daemon" "$out"

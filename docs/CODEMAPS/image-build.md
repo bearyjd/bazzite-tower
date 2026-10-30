@@ -54,14 +54,15 @@ bridge's third-party build scripts cannot reach anything trusted later (H1):
 | `snitchwatch-prep` | pinned `fedora:44@sha256` (= `builderImage`) | yes | `snitchwatch-system-prep.sh`: install-deps, Koji toolchain, `--record-toolchain`, dbus-daemon, online probe (positive control), clone + `sourceFiles` hash check, `bridge_artifact.py version`, `cargo fetch --locked --target x86_64-unknown-linux-gnu`, `rpm -qa` inventory | `/work/native` (to its descendants) |
 | `snitchwatch-scanner` | prep | `--network=none` | offline probe, inventory `cmp`, `snitchwatch-system-scanner-build.py` | `/handoff/scanner`: 2 binaries + 10 evidence files, flat |
 | `snitchwatch-bridge` | prep | `--network=none` | `snitchwatch-system-bridge-build.sh`: offline probe, fresh `CARGO_HOME` from prep's cache (only `.crate` files matching the `Cargo.lock` sha256, plus the index; no config/bin/src), exported `CARGO_NET_OFFLINE=true`, offline `cargo fetch` preflight, `build-bridge.sh` (~660 crates, root), `repro-check.sh`, executing `verify --check-ldd --run-flags`, inventory `cmp` | `/handoff/bridge`: tarball, `.sha256` sidecar, `build.log`, `repro.log` |
+| `snitchwatch-bridge-rebuild` | prep | `--network=none` | `snitchwatch-system-bridge-rebuild.sh` (M1 step 2): the same lines as the bridge stage from the probe to the one-tarball check (a test compares them), at the same `/work/native` paths, in a separate container; no repro-check, no `verify`, never runs the binary; inventory `cmp` | `/handoff/bridge-rebuild`: the tarball only |
 | `snitchwatch-daemon` | prep | yes | `snitchwatch-system-daemon-build.sh` (unchanged) into `/work/daemon-out`, then `handoff.py check daemon` (an extra file fails here) and `export daemon` | `/handoff/daemon`: the daemon verifier's `REQUIRED` + manifest |
-| `snitchwatch-system` | prep | `--network=none` | `/tools/snitchwatch-system-assemble.sh` (tools re-copied from scratch `ctx`): offline probe, inventory `cmp`, prep checkout re-hashed, `/handoff` root-owned and not g/o-writable, `handoff.py check` ×3, daemon verify, non-executing `bridge_artifact.py verify --extract-to`, `stage.py` (bridge `--version` and upstream `stage.sh`/`--help` as uid 65534 with `no_new_privs` (fails closed), empty env, `stage.sh` timeout 300 s; root adopts only the 9 `stage.sh` paths), daemon handoff re-checked, `merge` (refuses overlap), daemon + system verifiers | `/out` |
+| `snitchwatch-system` | prep | `--network=none` | `/tools/snitchwatch-system-assemble.sh` (tools re-copied from scratch `ctx`): offline probe, inventory `cmp`, prep checkout re-hashed, `/handoff` root-owned and not g/o-writable, `handoff.py check` ×4, daemon verify, `handoff.py compare-bridge` (the two bridge tarballs must be byte-identical), non-executing `bridge_artifact.py verify --extract-to` against the sibling's sha256, `stage.py` (bridge `--version` and upstream `stage.sh`/`--help` as uid 65534 with `no_new_privs` (fails closed), empty env, `stage.sh` timeout 300 s; root adopts only the 9 `stage.sh` paths), daemon handoff re-checked, `merge` (refuses overlap), daemon + system verifiers | `/out` |
 
-Trust argument: the FROM chain of scanner, daemon and assembly is prep only; the bridge stage is the base
-of nothing and is read only through the allowlist. `snitchwatch-system-handoff.py check` refuses extra,
+Trust argument: the FROM chain of scanner, daemon and assembly is prep only; both bridge stages are the base
+of nothing, neither reads the other, and each is read only through its allowlist. `snitchwatch-system-handoff.py check` refuses extra,
 missing, symlinked, special, hard-linked, set-id, capability/ACL-carrying, wrongly owned or wrongly moded
 entries (an xattr listing error other than "not supported" is a refusal); assembly never runs code from a handoff and never sees the scanner's source export.
-`pins.json`, the staged file set, modes and provenance formats are unchanged, so `EXPECTED_PINS_SHA256`
+`pins.json`, the staged file set, modes and provenance formats (bytes included) are unchanged, so `EXPECTED_PINS_SHA256`
 and base-refresh `validate-system` do not move. Static contracts: `tests/test-snitchwatch-image-stages.py`.
 Only a CI build proves: buildah 1.33.7 accepts and enforces `RUN --network=none` (the in-build probe
 fails loudly if not), unused-stage skipping still keeps `fedora:44` out of the legacy legs, 65534
@@ -72,11 +73,22 @@ only pinned inputs plus the live Fedora RPMs; byte-reproducibility is not verifi
 build (including `build-bridge.sh`'s own license `cargo fetch` and `repro-check.sh`'s nested rebuild)
 succeeds offline from prep's cache; the preflight fails first, with its own message, if the cache is short.
 The hand-over is allowlisted, not read-only: read-only means nothing against root in the stage (step 3).
-Still open (M1): the bridge evidence is self-attesting. The tarball sha, `build.log`, `repro.log` and the
-`repro-check.sh` comparison are all made inside the bridge stage, as root, by the same crates;
-`stage.py` still writes `reproducible: True` as a literal and assembly's `--expect-sha256` is computed from
-the handed-over tarball. Next: an independent sibling rebuild compared in assembly (M1 step 2), then an
-unprivileged read-only build (step 3).
+M1 step 2 (sibling rebuild): assembly runs `handoff.py compare-bridge` before reading either tarball and
+refuses any byte difference, printing both sha256s, the first differing offset and the differing tar
+members (parsed in memory, diagnosis only). `stage.py` derives `reproducible` from its own comparison
+(refusing a mismatch or the same file twice) instead of a literal, and `verify --expect-sha256` takes the
+sibling's digest. The staged provenance is byte-identical when the builds agree (`reproducible` is still
+`true`, `reproLogSha256`/`buildLogSha256` still hash the first stage's logs, `reproCommand` is unchanged),
+so `verify.py`, `EXPECTED_PINS_SHA256` and `validate-system` do not move. Basis: the tarball is canonical
+(fixed mtime/owner/order, gzip mtime 0, `--remap-path-prefix`), and CI runs on different runners gave the
+same sha256 (`eb2120…`, source 5860dcdb) online and offline. Cost: one more bridge build, ~3 min of the
+~17.5 min system leg. A tampered toolchain/packer/registry or a time-, random-, uid- or host-conditional
+build script in one stage alone is now caught; a non-deterministic build fails the leg closed.
+Still open (M1): a deterministic hostile crate already in `Cargo.lock` builds the same bytes in both stages
+(only lock-bump review covers it; this does not make the lock trustworthy); identical poisoning of both
+stages (same runner, same buildah, no host isolation); `build.log`/`repro.log` and the in-stage
+`repro-check.sh` are still produced by the first stage; both builds run as root. Next: an unprivileged
+read-only build (step 3).
 
 ## build.d scripts (executed in filename order)
 
@@ -173,7 +185,7 @@ The child environment is an allowlist; build-steering variables (`CC*`, `*FLAGS`
 `LICENSE`, taken from the export inside the scanner stage; assembly uses the prep checkout's copy after
 re-hashing it. Before the split, the bridge build scripts ran as root with network in the same `RUN`
 and could tamper with the checker, the fingerprint, PATH tools or `/etc/ld.so.preload`; now they run
-only in `snitchwatch-bridge`, which no other stage descends from and which has no network.
+only in `snitchwatch-bridge` and its sibling `snitchwatch-bridge-rebuild`, which no other stage descends from and which have no network.
 The pristine bridge release/repro
 path and unchanged upstream dependency-list cmp remain independent.
 

@@ -39,10 +39,12 @@ COPY build_files/firewall/snitchwatch-system-legacy-marker /out/usr/share/bazzit
 # stages is prep only; the bridge stage, where ~660 crates' build scripts run
 # as root (offline), is an ancestor of nothing. Stage outputs cross only as
 # allowlisted /handoff/* data that the assembly stage re-checks. The network is off
-# for the scanner, bridge and assembly RUNs (only prep and daemon keep network, to fetch): if a
+# for the scanner, both bridge and the assembly RUNs (only prep and daemon keep network, to fetch): if a
 # builder rejects it, revert this block to the previous single RUN (git revert
-# of the H1 commit). The bridge build is offline (M1 step 1) but its evidence
-# is still produced by that stage itself (M1 open).
+# of the H1 commit). The bridge build is offline (M1 step 1) and is repeated in
+# a sibling stage that is also an ancestor of nothing; assembly refuses unless
+# the two tarballs are byte-identical (M1 step 2). A deterministic hostile crate
+# in Cargo.lock still builds the same bytes in both (M1 not closed).
 FROM registry.fedoraproject.org/fedora:44@sha256:e1656bc110fc33e855f7a02e4420c21066428bc7a0277160d40ee125ef8a1c65 AS snitchwatch-prep
 ARG FIREWALL_DAEMON
 COPY --from=ctx /firewall/snitchwatch-system* /factory/
@@ -58,6 +60,10 @@ FROM snitchwatch-prep AS snitchwatch-bridge
 ARG FIREWALL_DAEMON
 RUN --network=none SNITCHWATCH_BRIDGE=system FIREWALL_DAEMON="${FIREWALL_DAEMON}" bash /factory/snitchwatch-system-bridge-build.sh /work/native /handoff/bridge
 
+FROM snitchwatch-prep AS snitchwatch-bridge-rebuild
+ARG FIREWALL_DAEMON
+RUN --network=none SNITCHWATCH_BRIDGE=system FIREWALL_DAEMON="${FIREWALL_DAEMON}" bash /factory/snitchwatch-system-bridge-rebuild.sh /work/native /handoff/bridge-rebuild
+
 FROM snitchwatch-prep AS snitchwatch-daemon
 ARG FIREWALL_DAEMON
 RUN SNITCHWATCH_BRIDGE=system FIREWALL_DAEMON="${FIREWALL_DAEMON}" bash /factory/snitchwatch-system-daemon-build.sh /work/daemon-out && \
@@ -69,6 +75,7 @@ ARG FIREWALL_DAEMON
 COPY --from=ctx /firewall/snitchwatch-system* /tools/
 COPY --from=snitchwatch-scanner /handoff/scanner/ /handoff/scanner/
 COPY --from=snitchwatch-bridge /handoff/bridge/ /handoff/bridge/
+COPY --from=snitchwatch-bridge-rebuild /handoff/bridge-rebuild/ /handoff/bridge-rebuild/
 COPY --from=snitchwatch-daemon /handoff/daemon/ /handoff/daemon/
 RUN --network=none SNITCHWATCH_BRIDGE=system FIREWALL_DAEMON="${FIREWALL_DAEMON}" bash /tools/snitchwatch-system-assemble.sh /work/native /handoff /out
 

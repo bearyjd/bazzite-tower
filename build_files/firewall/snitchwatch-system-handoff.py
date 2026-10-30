@@ -8,12 +8,19 @@ Subcommands (each failure prints one distinct `handoff:` line and exits 1):
   check KIND --pins P ROOT      the receiving side: exact allowlist, regular files,
                                 fixed modes, owner, no links/special files/set-id/caps
   merge SRC DEST                add a checked overlay to DEST, refusing any overlap
+  compare-bridge --pins P FIRST REBUILD
+                                the two sibling bridge builds' tarballs must be
+                                byte-identical (M1 step 2); a mismatch names both
+                                digests and the differing tar members, then refuses
 
 COPY --from is not a trust boundary by itself; `check` is.  KINDs: scanner,
-bridge, daemon (the daemon allowlist is the trusted verifier's REQUIRED set).
+bridge, bridge-rebuild (the tarball only), daemon (the daemon allowlist is the
+trusted verifier's REQUIRED set).
 """
 import argparse
 import errno
+import hashlib
+import io
 import json
 import os
 from pathlib import Path
@@ -21,6 +28,8 @@ import runpy
 import socket
 import stat
 import sys
+import tarfile
+import zlib
 
 SCANNER_BINARIES = ('snitchwatch-scanner-privileged', 'snitchwatch-scanner-broker')
 SCANNER_FILES = ('provenance.json', 'source-inputs.json', 'dependency-closure.json', 'THIRD-PARTY-LICENSES.md',
@@ -34,6 +43,10 @@ REFUSED_XATTRS = ('security.capability', 'system.posix_acl_access', 'system.posi
 PROBE_ADDRESSES = (('1.1.1.1', 443), ('2606:4700:4700::1111', 443))
 PROBE_NAME = ('registry.fedoraproject.org', 443)
 PROBE_TIMEOUT = 5
+# Same bounds as the upstream verifier's (bridge_artifact.py MAX_COMPRESSED/MAX_UNCOMPRESSED).
+MAX_TARBALL = 64 * 1024 * 1024
+MAX_TAR = 256 * 1024 * 1024
+MAX_LISTED = 20
 
 
 class Refusal(Exception):
@@ -51,6 +64,8 @@ def allowlist(kind, pins=None, daemon_verifier=None):
     if kind == 'bridge':
         tarball = bridge_tarball(pins)
         return {tarball: 0o644, tarball + '.sha256': 0o644, 'build.log': 0o644, 'repro.log': 0o644}
+    if kind == 'bridge-rebuild':
+        return {bridge_tarball(pins): 0o644}
     if kind == 'daemon':
         if daemon_verifier is None:
             raise Refusal('daemon allowlist needs the trusted daemon verifier')
@@ -167,6 +182,63 @@ def merge(source, dest):
     return added
 
 
+def read_tarball(path):
+    """The bytes of a regular, single-link file of bounded size (never through a link)."""
+    if not stat.S_ISREG(os.lstat(path).st_mode):
+        raise Refusal('compare: %s is a symlink or special file' % path)
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    with os.fdopen(fd, 'rb') as reader:
+        info = os.fstat(reader.fileno())
+        if not stat.S_ISREG(info.st_mode):
+            raise Refusal('compare: %s is a symlink or special file' % path)
+        if info.st_nlink != 1:
+            raise Refusal('compare: %s is hard-linked (%d links)' % (path, info.st_nlink))
+        data = reader.read(MAX_TARBALL + 1)
+    if len(data) > MAX_TARBALL:
+        raise Refusal('compare: %s is larger than %d bytes' % (path, MAX_TARBALL))
+    return data, (info.st_dev, info.st_ino)
+
+
+def tar_members(blob):
+    """{member name: type/mode/size/sha256} parsed in memory (diagnosis only), or None."""
+    try:
+        inflater = zlib.decompressobj(16 + zlib.MAX_WBITS)
+        raw = inflater.decompress(blob, MAX_TAR)
+        if inflater.unconsumed_tail or not inflater.eof:
+            return None
+        members = {}
+        with tarfile.open(fileobj=io.BytesIO(raw), mode='r:') as tar:
+            for member in tar:
+                data = tar.extractfile(member).read() if member.isreg() else b''
+                members[member.name] = '%s %o %d %s' % (member.type, member.mode, member.size, hashlib.sha256(data).hexdigest())
+        return members
+    except (tarfile.TarError, zlib.error, EOFError, OSError, ValueError):
+        return None
+
+
+def compare_bridge(first_root, rebuild_root, pins):
+    """Refuse unless the sibling rebuild's tarball is byte-identical to the first build's."""
+    name = bridge_tarball(pins)
+    first, first_id = read_tarball(Path(first_root) / name)
+    second, second_id = read_tarball(Path(rebuild_root) / name)
+    if first_id == second_id:
+        raise Refusal('compare: both tarballs are the same file; that is not a second build')
+    if first == second:
+        return {'identical': True, 'sha256': hashlib.sha256(first).hexdigest(), 'size': len(first)}
+    offset = next((i for i, (a, b) in enumerate(zip(first, second)) if a != b), min(len(first), len(second)))
+    detail = 'first sha256 %s (%d bytes), rebuild sha256 %s (%d bytes), first differing byte at offset %d' % (
+        hashlib.sha256(first).hexdigest(), len(first), hashlib.sha256(second).hexdigest(), len(second), offset)
+    a, b = tar_members(first), tar_members(second)
+    if a is None or b is None:
+        detail += '; members not listable (not a bounded gzip tar)'
+    else:
+        differing = sorted(member for member in set(a) | set(b) if a.get(member) != b.get(member))
+        shown = ', '.join(repr(member) for member in differing[:MAX_LISTED])
+        detail += '; differing members: %s%s' % (shown or '(none: tar/gzip metadata only)',
+                                                 ' (+%d more)' % (len(differing) - MAX_LISTED) if len(differing) > MAX_LISTED else '')
+    raise Refusal('bridge rebuild differs from the first bridge build: ' + detail)
+
+
 def interfaces(dev='/proc/net/dev'):
     """Interfaces of this process's network namespace (/proc/net follows the netns; /sys may not)."""
     lines = Path(dev).read_text().splitlines()[2:]
@@ -224,21 +296,26 @@ def main(argv=None):
     probe.add_argument('expect', choices=('online', 'offline'))
     for name in ('export', 'check'):
         command = sub.add_parser(name)
-        command.add_argument('kind', choices=('scanner', 'bridge', 'daemon'))
+        command.add_argument('kind', choices=('scanner', 'bridge', 'bridge-rebuild', 'daemon'))
         command.add_argument('--pins', type=Path)
         command.add_argument('--daemon-verifier', type=Path)
         command.add_argument('paths', nargs=2 if name == 'export' else 1, type=Path)
     merging = sub.add_parser('merge')
     merging.add_argument('paths', nargs=2, type=Path)
+    comparing = sub.add_parser('compare-bridge')
+    comparing.add_argument('--pins', type=Path, required=True)
+    comparing.add_argument('paths', nargs=2, type=Path)
     args = parser.parse_args(argv)
     try:
         if args.command == 'probe-network':
             result = probe_network(args.expect)
         elif args.command == 'merge':
             result = {'merged': len(merge(*args.paths))}
+        elif args.command == 'compare-bridge':
+            result = compare_bridge(*args.paths, json.loads(args.pins.read_text()))
         else:
             pins = json.loads(args.pins.read_text()) if args.pins else None
-            if args.kind == 'bridge' and pins is None:
+            if args.kind in ('bridge', 'bridge-rebuild') and pins is None:
                 raise Refusal('bridge handoff needs --pins')
             if args.command == 'export':
                 result = {'exported': export(args.kind, args.paths[0], args.paths[1], pins, args.daemon_verifier)}

@@ -922,7 +922,7 @@ class StageOutputContracts(unittest.TestCase):
         path.chmod(mode)
         return path
 
-    def run_stage(self, stage_script, tamper=None):
+    def run_stage(self, stage_script, tamper=None, rebuild=b'artifact.tar.gz'):
         source, artifact = self.tmp / 'source', self.tmp / 'artifact'
         upstream_config = b'{"DefaultAction": "deny", "ProcMonitorMethod": "ebpf"}\n'
         self.write(source / 'packaging/system/opensnitchd-default-config.json', upstream_config)
@@ -973,6 +973,8 @@ esac
             self.write(artifact / 'usr/share/licenses/snitchwatch-bridge' / name, 'license fixture\n')
         verifier = self.write(self.tmp / 'verifier.py', 'REQUIRED = set()\ndef verify(root, image_tree=False):\n    assert image_tree\n    pass\n')
         logs = [self.write(self.tmp / name, name) for name in ('build.log', 'repro.log', 'rpm-inventory.txt', 'artifact.tar.gz')]
+        # The sibling stage's tarball (M1 step 2): a separate file, byte-identical unless a test says otherwise.
+        rebuild_tarball = logs[3] if rebuild is None else self.write(self.tmp / 'rebuild/artifact.tar.gz', rebuild)
         scanner = self.tmp / 'scanner'
         scanner_fixture(scanner, pins, sha(logs[2].read_bytes()))
         out = self.tmp / 'out'
@@ -982,7 +984,7 @@ esac
                 '--legacy-config', str(ROOT / 'system_files/usr/share/bazzite-tower/opensnitchd-default-config.json'),
                 '--candidate-config', str(ROOT / 'system_files/usr/share/bazzite-tower/opensnitchd-system-bridge-config.json'),
                 '--build-log', str(logs[0]), '--repro-log', str(logs[1]), '--rpm-inventory', str(logs[2]),
-                '--tarball', str(logs[3]), '--os-update-rule', str(OS_UPDATE_SOURCE), '--resolved-dns-rule', str(DNS_SOURCE)]
+                '--tarball', str(logs[3]), '--rebuild-tarball', str(rebuild_tarball), '--os-update-rule', str(OS_UPDATE_SOURCE), '--resolved-dns-rule', str(DNS_SOURCE)]
         env = {**os.environ, 'PATH': str(self.tmp / 'bin') + os.pathsep + os.environ['PATH']}
         return subprocess.run(argv, env=env, capture_output=True, text=True), out
 
@@ -1000,6 +1002,25 @@ esac
         self.assertEqual(staged_rule.stat().st_mode & 0o7777, 0o644)
         self.assertEqual((out / DNS_RULE).read_bytes(), DNS_SOURCE.read_bytes())
         self.assertEqual((out / DNS_RULE).stat().st_mode & 0o7777, 0o644)
+
+    def test_native_provenance_reproducible_is_derived_from_the_sibling_comparison(self):
+        result, out = self.run_stage('')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        provenance = json.loads((out / 'usr/share/snitchwatch/native-build-provenance.json').read_text())
+        self.assertIs(provenance['reproducible'], True)
+        # Unchanged staged format: same keys and the same reproCommand as before M1 step 2.
+        self.assertEqual(sorted(provenance), ['artifactInstallScope', 'artifactSha256', 'buildLogSha256', 'builderImage',
+                                              'reproCommand', 'reproLogSha256', 'reproducible', 'rpmInventorySha256',
+                                              'sourceCommit', 'sourceTree', 'submoduleCommit'])
+        self.assertEqual(provenance['reproCommand'], 'packaging/release/repro-check.sh <first-tarball>')
+        for label, rebuild in (('one byte differs', b'artifact.tar.gZ'), ('extra byte', b'artifact.tar.gz\n'), ('same file', None)):
+            with self.subTest(label):
+                shutil.rmtree(self.tmp)
+                self.tmp.mkdir()
+                result, out = self.run_stage('', rebuild=rebuild)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn('bridge rebuild is not a separate byte-identical tarball', result.stderr)
+                self.assertFalse((out / 'usr/share/snitchwatch/native-build-provenance.json').exists())
 
     def test_endpoint_events_files_are_staged_inert_from_pinned_source(self):
         result, out = self.run_stage('mkdir -p "$1/etc/opensnitchd"\ncp "$(dirname "$0")/opensnitchd-default-config.json" "$1/etc/opensnitchd/default-config.json"\n')

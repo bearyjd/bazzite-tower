@@ -1176,6 +1176,17 @@ class UnprivilegedBridgeBuild(unittest.TestCase):
         self.assertEqual(json.loads(out.getvalue())['unpriv'], 'selfcheck')
         return report
 
+    def test_foreign_mount_owners_are_not_taken_for_the_build_uid(self):
+        # In a rootless user namespace /proc and /sys show their unmapped owner as 65534
+        # (seen in a fedora:44 podman run). Only entries on the walked filesystem count as owned.
+        top = os.lstat(self.root).st_dev
+        entry = lambda dev, uid: mock.Mock(st_dev=dev, st_uid=uid, st_gid=0, st_mode=stat.S_IFDIR | 0o555)
+        gone = lambda name: str(self.root / 'absent' / name)  # never exists, so never writable, even for root
+        fake = ([(gone('proc'), entry(top + 1, 65534)), (gone('usr'), entry(top, 0)), (gone('stray'), entry(top, 65534))], [])
+        with mock.patch.dict(self.u['owned_by_build_ids'].__globals__, {'walk': lambda _top: fake}):
+            self.assertEqual(self.u['owned_by_build_ids'](str(self.root)), [gone('stray')])
+            self.assertEqual(self.u['writable_outside'](str(self.root), [], 65534), ([gone('stray')], []))
+
     def test_selfcheck_probes_cover_the_root_owned_tooling_named_by_m1(self):
         probes = dict((path, kind) for kind, path in self.u['PROBES'])
         for path in ('/usr/bin', '/usr/local/bin', 'FACTORY', 'WORK', 'WORK/source', 'WORK/cargo', 'WORK/toolchain'):

@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
-# Containerfile stage snitchwatch-bridge-rebuild: FROM snitchwatch-prep, RUN --network=none, root.
+# Containerfile stage snitchwatch-bridge-rebuild: FROM snitchwatch-prep, RUN --network=none, root;
+# every third-party step runs as uid 65534 via snitchwatch-system-unpriv.py (M1 step 3).
 # M1 step 2: a sibling of snitchwatch-bridge that repeats the same offline
 # build (the same lines as snitchwatch-system-bridge-build.sh from the probe to
 # the one-tarball check, at the same paths, from the same prep layer) in a
 # separate container that never sees the first stage. Only its tarball crosses
 # to the assembly stage, which compares it byte for byte with the first one.
-# The same third-party crates run here as root, so this stage is as untrusted
+# The same third-party crates run here (as uid 65534), so this stage is as untrusted
 # as the first; it is an ancestor of nothing, executes nothing it built and
 # writes no evidence. A deterministic hostile crate builds the same bytes here.
 set -euo pipefail
@@ -34,13 +35,20 @@ m.make_fresh_cargo_home(pathlib.Path(sys.argv[2]),pathlib.Path(sys.argv[3]),path
 PY
     echo 'bridge stage: prep cargo cache failed the Cargo.lock checksum allowlist; refusing.' >&2; exit 1;
 }
+# M1 step 3: everything that runs third-party code runs as uid 65534 through the
+# drop helper (no caps, no groups, no_new_privs, verified before exec). Root first
+# checks that the source is root-owned and not writable by it, that it owns nothing,
+# and hands it only the scratch dirs; the selfcheck then proves the drop and that
+# deliberate writes to root-owned tooling fail (printed as one JSON line).
+python3 -B "$factory/snitchwatch-system-unpriv.py" prepare "$work"
+python3 -B "$factory/snitchwatch-system-unpriv.py" run "$work" -- python3 -B "$factory/snitchwatch-system-unpriv.py" selfcheck "$work"
 export SRC_DIR="$work/source" OUT_DIR="$work/dist" CARGO_HOME="$work/bridge-cargo" CARGO_TARGET_DIR="$work/target" CARGO_NET_OFFLINE=true
 export SW_GIT_SHA="${pin[0]}" CARGO_BUILD_JOBS=4
 unset ALLOW_DIRTY SW_RELEASE_TAG SW_INSTALL_DEPS
-cargo fetch --locked --offline --target x86_64-unknown-linux-gnu --manifest-path "$SRC_DIR/Cargo.toml" || {
+python3 -B "$factory/snitchwatch-system-unpriv.py" run "$work" -- bash "$factory/snitchwatch-system-bridge-unpriv.sh" fetch || {
     echo 'bridge stage: offline cargo fetch preflight failed (prep cache incomplete, or cargo fetch refuses offline); refusing.' >&2; exit 1;
 }
-"$SRC_DIR/packaging/release/build-bridge.sh" 2>&1 | tee "$work/build.log"
+python3 -B "$factory/snitchwatch-system-unpriv.py" run "$work" -- bash "$factory/snitchwatch-system-bridge-unpriv.sh" build 2>&1 | tee "$work/build.log"
 mapfile -t tarballs < <(find "$OUT_DIR" -maxdepth 1 -type f -name '*.tar.gz')
 [[ ${#tarballs[@]} == 1 ]] || { echo "bridge stage: expected one tarball in $OUT_DIR, found ${#tarballs[@]}" >&2; exit 1; }
 # End of the identical block. No repro-check, verify or run of the binary here:

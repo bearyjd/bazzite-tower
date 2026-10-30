@@ -1009,11 +1009,17 @@ esac
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         provenance = json.loads((out / 'usr/share/snitchwatch/native-build-provenance.json').read_text())
         self.assertIs(provenance['reproducible'], True)
-        # Unchanged staged format: same keys and the same reproCommand as before M1 step 2.
+        # Exact key set (one added in M1 step 3: reproducibleBasis). The record says what `reproducible` rests on:
+        # the assembly's byte compare of the two sibling builds, not the first stage's own repro-check.
         self.assertEqual(sorted(provenance), ['artifactInstallScope', 'artifactSha256', 'buildLogSha256', 'builderImage',
-                                              'reproCommand', 'reproLogSha256', 'reproducible', 'rpmInventorySha256',
-                                              'sourceCommit', 'sourceTree', 'submoduleCommit'])
-        self.assertEqual(provenance['reproCommand'], 'packaging/release/repro-check.sh <first-tarball>')
+                                              'reproCommand', 'reproLogSha256', 'reproducible', 'reproducibleBasis',
+                                              'rpmInventorySha256', 'sourceCommit', 'sourceTree', 'submoduleCommit'])
+        self.assertEqual(provenance['reproCommand'], 'snitchwatch-system-handoff.py compare-bridge '
+                                                     '<snitchwatch-bridge tarball> <snitchwatch-bridge-rebuild tarball>')
+        basis = provenance['reproducibleBasis']
+        for needle in ('byte-identical', 'snitchwatch-bridge-rebuild', 'same runner', 'same prep layer', 'uid 65534',
+                       'not an independent host', 'reproLogSha256'):
+            self.assertIn(needle, basis)
         for label, rebuild in (('one byte differs', b'artifact.tar.gZ'), ('extra byte', b'artifact.tar.gz\n'), ('same file', None)):
             with self.subTest(label):
                 shutil.rmtree(self.tmp)

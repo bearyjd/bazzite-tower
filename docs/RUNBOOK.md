@@ -215,7 +215,7 @@ overrides before selecting it.
 How the candidate is built (H1 stage split, see `docs/CODEMAPS/image-build.md`):
 six Containerfile stages, `snitchwatch-prep` (network, RPM scriptlets, git and
 `cargo fetch` only) → `snitchwatch-scanner` (`RUN --network=none`) and
-`snitchwatch-bridge` (the ~660-crate bridge build, root, `RUN --network=none`) and
+`snitchwatch-bridge` (the ~660-crate bridge build, `RUN --network=none`, third-party steps as uid 65534) and
 its sibling `snitchwatch-bridge-rebuild` (the same build again, tarball only) and
 `snitchwatch-daemon` → `snitchwatch-system` assembly (`RUN --network=none`). Both
 bridge stages are ancestors of nothing; only allowlisted `/handoff/*` files reach
@@ -256,12 +256,30 @@ was squash-merged. Reverting only the fix commit leaves tests that require an
 offline bridge and fails source safety.
 M1 step 2: assembly compares the bridge tarball byte for byte with a sibling
 stage's independent rebuild and derives `reproducible` from that (no longer a
-literal); the staged provenance bytes are unchanged. The bridge stages also emit
+literal); since step 3 the provenance also names that basis (`reproducibleBasis`). The bridge stages also emit
 the tarball sha256 as `SHA256=` in the log, so two runs can be compared by eye.
+M1 step 3: in both bridge stages every third-party step (fetch preflight,
+`build-bridge.sh`, `repro-check.sh`, the binary-running `verify`) runs as uid
+65534 with no capabilities, groups or new privileges. Failure lines:
+`unpriv: prepare:` (`source checkout is not root-owned read-only for uid 65534`,
+`paths already owned by uid/gid 65534 before the build`, `scratch directory
+already exists`), `unpriv: run: refusing to exec, the drop did not take: <field>`
+(the builder would not let the child drop; it never ran the step), `unpriv: run:
+the privilege drop failed before exec` (a drop call itself failed, e.g. no
+CAP_SETPCAP for the bounding set), `descendants of the unprivileged build survived
+SIGKILL`, `unpriv: selfcheck:` (`write to a root-owned path did not fail`,
+`writable or owned outside the scratch dirs`, `scratch dir is not writable`; the
+`{"unpriv": "selfcheck", ...}` line above it shows uid, caps and NoNewPrivs), and
+`bridge unprivileged step: refusing to run as root`. A `Permission denied` from
+the build after a passing selfcheck means upstream writes somewhere other than
+the scratch dirs (`OUT_DIR`, target, `CARGO_HOME`, `HOME`, `/tmp`): add the dir to
+the scratch set, never run the step as root. To revert only this step, revert the
+whole PR (tests, code and docs together).
 Still open (M1): a deterministic hostile crate already in `Cargo.lock` produces
 the same bytes in both stages (lock-bump review is the only control), both
-stages could be poisoned alike (same runner), `build.log`/`repro.log` are still
-the first stage's own, and both builds run as root (step 3).
+stages could be poisoned alike (same runner, nothing checks independent hosts),
+`build.log`/`repro.log` are still the first stage's own, and within a stage the
+build uid can still edit other crates' unpacked sources in its cargo home.
 
 The daemon build toolchain (Go, protoc, libnetfilter_queue) is installed from
 pinned, Fedora-signed Koji RPMs (`toolchainRpms` in

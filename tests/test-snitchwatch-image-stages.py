@@ -7,7 +7,9 @@ guards (snitchwatch-system-handoff.py) and of stage.py's unprivileged bridge
 execution. Runs offline with python3 only (no rpm, cargo, dnf or containers).
 What only a real CI build can prove is listed in docs/CODEMAPS/image-build.md.
 """
+import contextlib
 import hashlib
+import io
 import json
 import os
 from pathlib import Path
@@ -36,8 +38,21 @@ BRIDGE_SCRIPT = FACTORY / 'snitchwatch-system-bridge-build.sh'
 REBUILD_SCRIPT = FACTORY / 'snitchwatch-system-bridge-rebuild.sh'
 BRIDGE_SCRIPTS = (BRIDGE_SCRIPT, REBUILD_SCRIPT)
 # Scripts and fragments that execute third-party build code or the bridge binary.
-BRIDGE_ONLY = ('snitchwatch-system-bridge-build.sh', 'snitchwatch-system-bridge-rebuild.sh', 'build-bridge.sh', 'repro-check.sh', '--run-flags', '--check-ldd')
+BRIDGE_ONLY = ('snitchwatch-system-bridge-build.sh', 'snitchwatch-system-bridge-rebuild.sh', 'snitchwatch-system-bridge-unpriv.sh',
+               'build-bridge.sh', 'repro-check.sh', '--run-flags', '--check-ldd')
 HANDOFF = FACTORY / 'snitchwatch-system-handoff.py'
+# M1 step 3: the privilege-drop helper and the only script it runs for the bridge build.
+UNPRIV = FACTORY / 'snitchwatch-system-unpriv.py'
+UNPRIV_SCRIPT = FACTORY / 'snitchwatch-system-bridge-unpriv.sh'
+PREPARE = 'python3 -B "$factory/snitchwatch-system-unpriv.py" prepare "$work"'
+SELFCHECK = 'python3 -B "$factory/snitchwatch-system-unpriv.py" run "$work" -- python3 -B "$factory/snitchwatch-system-unpriv.py" selfcheck "$work"'
+DROP = 'python3 -B "$factory/snitchwatch-system-unpriv.py" run "$work" -- bash "$factory/snitchwatch-system-bridge-unpriv.sh"'
+# Every third-party step of each stage, as whole lines (the first stage also re-checks and runs the binary).
+DROPPED_STEPS = {
+    BRIDGE_SCRIPT: [DROP + ' fetch || {', DROP + ' build 2>&1 | tee "$work/build.log"',
+                    DROP + ' repro "$first" 2>&1 | tee "$work/repro.log"', DROP + ' verify "$first" "${pin[1]}"'],
+    REBUILD_SCRIPT: [DROP + ' fetch || {', DROP + ' build 2>&1 | tee "$work/build.log"'],
+}
 # Lines allowed before an offline stage's network probe: our own mode check,
 # argument/container guards and plain assignments. A guard is `[[ ]]` tests
 # joined by `&&` and ending in a refusal; nothing can be chained after it.
@@ -308,7 +323,7 @@ class ContainerfileStages(unittest.TestCase):
     def test_bridge_stage_runs_no_network_needing_command(self):
         for script in BRIDGE_SCRIPTS:
             with self.subTest(script.name):
-                self.bridge_script_runs_no_network_needing_command(self.bridge_body(script))
+                self.bridge_script_runs_no_network_needing_command(self.bridge_body(script) + '\n' + self.bridge_body(UNPRIV_SCRIPT))
 
     def bridge_script_runs_no_network_needing_command(self, body):
         for needle in ('dnf', 'curl', 'wget', 'git fetch', 'git clone', 'git pull', 'git submodule', 'rustup', 'pip ', 'pip3',
@@ -337,10 +352,10 @@ class ContainerfileStages(unittest.TestCase):
         export = next(line for line in body.splitlines() if line.startswith('export SRC_DIR='))
         self.assertIn('CARGO_HOME="$work/bridge-cargo"', export)
         self.assertIn('CARGO_NET_OFFLINE=true', export)
+        # M1 step 3: the fetch, build, repro-check and binary runs go through the drop (whole lines).
         order = ['probe-network offline', 'snitchwatch-system-scanner-build.py" "$work/cargo" "$work/bridge-cargo"',
-                 'export SRC_DIR=', 'cargo fetch --locked --offline --target x86_64-unknown-linux-gnu --manifest-path "$SRC_DIR/Cargo.toml"',
-                 '"$SRC_DIR/packaging/release/build-bridge.sh"', '"$SRC_DIR/packaging/release/repro-check.sh"',
-                 '--check-ldd --run-flags', 'cmp - "$work/rpm-inventory.txt"', 'snitchwatch-system-handoff.py" export bridge']
+                 PREPARE, SELFCHECK, 'export SRC_DIR=', *DROPPED_STEPS[BRIDGE_SCRIPT],
+                 'cmp - "$work/rpm-inventory.txt"', 'snitchwatch-system-handoff.py" export bridge']
         position = 0
         for needle in order:
             self.assertIn(needle, body[position:], needle)
@@ -375,8 +390,8 @@ class ContainerfileStages(unittest.TestCase):
         self.assertEqual(rebuild, first)
         for needle in ('make_fresh_cargo_home', 'export SRC_DIR="$work/source" OUT_DIR="$work/dist" CARGO_HOME="$work/bridge-cargo" '
                        'CARGO_TARGET_DIR="$work/target" CARGO_NET_OFFLINE=true', 'export SW_GIT_SHA="${pin[0]}" CARGO_BUILD_JOBS=4',
-                       'unset ALLOW_DIRTY SW_RELEASE_TAG SW_INSTALL_DEPS', '"$SRC_DIR/packaging/release/build-bridge.sh"'):
-            self.assertTrue(any(needle in line for line in rebuild), needle)
+                       'unset ALLOW_DIRTY SW_RELEASE_TAG SW_INSTALL_DEPS', PREPARE, SELFCHECK, *DROPPED_STEPS[REBUILD_SCRIPT]):
+            self.assertTrue(any(needle == line or needle in line for line in rebuild), needle)
         # The pre-probe preamble differs only in the usage text.
         heads = [[line for line in script.read_text().splitlines() if 'probe-network offline' not in line][:20] for script in BRIDGE_SCRIPTS]
         strip = lambda lines: [re.sub(r"echo '[^']*'", "echo ''", line) for line in lines if not line.lstrip().startswith('#')]
@@ -384,9 +399,10 @@ class ContainerfileStages(unittest.TestCase):
 
     def test_bridge_rebuild_executes_nothing_and_hands_over_only_the_tarball(self):
         body = self.bridge_body(REBUILD_SCRIPT)
-        for needle in ('repro-check', '--run-flags', '--check-ldd', 'bridge_artifact.py', '/handoff/bridge/', 'COPY'):
+        for needle in ('repro-check', '--run-flags', '--check-ldd', 'bridge_artifact.py', '/handoff/bridge/', 'COPY',
+                       DROP + ' repro', DROP + ' verify'):
             self.assertNotIn(needle, body)
-        order = ['probe-network offline', '"$SRC_DIR/packaging/release/build-bridge.sh"', 'cmp - "$work/rpm-inventory.txt"',
+        order = ['probe-network offline', DROP + ' build 2>&1 | tee "$work/build.log"', 'cmp - "$work/rpm-inventory.txt"',
                  'snitchwatch-system-handoff.py" export bridge-rebuild --pins "$pins" "$OUT_DIR" "$2"',
                  'rm -rf -- "$CARGO_TARGET_DIR" "$work/bridge-cargo"']
         position = 0
@@ -461,8 +477,21 @@ class ContainerfileStages(unittest.TestCase):
                     self.assertNotIn('fresh-ok', result.stdout)
                     self.assertIn('bridge stage: prep cargo cache failed the Cargo.lock checksum allowlist', result.stderr)
 
+    def fake_factory(self, tmp, cargo_status=0):
+        """A factory whose drop helper logs and execs (no root here) next to the real unprivileged-step script,
+        and a fake cargo on PATH (the step script execs it, so a bash function would not reach it)."""
+        factory, bin_dir = tmp / 'factory', tmp / 'bin'
+        factory.mkdir()
+        bin_dir.mkdir()
+        shutil.copy(UNPRIV_SCRIPT, factory / UNPRIV_SCRIPT.name)
+        (factory / UNPRIV.name).write_text('import os,sys\nopen(os.environ["EVENTS"],"a").write("drop " + " ".join(sys.argv[1:]) + "\\n")\n'
+                                           'assert sys.argv[1] == "run" and sys.argv[3] == "--"\nos.execvp(sys.argv[4], sys.argv[4:])\n')
+        (bin_dir / 'cargo').write_text('#!/bin/bash\necho "cargo $* offline=${CARGO_NET_OFFLINE:-unset} home=$CARGO_HOME" >> "$EVENTS"\nexit %d\n' % cargo_status)
+        (bin_dir / 'cargo').chmod(0o755)
+        return factory, bin_dir
+
     def run_bridge_build_fragment(self, cargo_status):
-        fragment = self.bridge_fragment('export SRC_DIR=', '"$SRC_DIR/packaging/release/build-bridge.sh"')
+        fragment = self.bridge_fragment('export SRC_DIR=', DROP + ' build')
         tmp = Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, tmp)
         release = tmp / 'work/source/packaging/release'
@@ -470,11 +499,10 @@ class ContainerfileStages(unittest.TestCase):
         # The fake build runs a nested child the way repro-check.sh re-runs build-bridge.sh.
         (release / 'build-bridge.sh').write_text('#!/bin/bash\nbash -c \'echo "nested $CARGO_NET_OFFLINE $CARGO_HOME"\' >> "$EVENTS"\n')
         (release / 'build-bridge.sh').chmod(0o755)
-        script = ('set -euo pipefail\nwork=%s\npin=(%s 1.2.3)\n'
-                  'cargo() { echo "cargo $* offline=${CARGO_NET_OFFLINE:-unset} home=$CARGO_HOME" >> "$EVENTS"; return %d; }\n%s\n'
-                  % (tmp / 'work', '0' * 40, cargo_status, fragment))
+        factory, bin_dir = self.fake_factory(tmp, cargo_status)
+        script = 'set -euo pipefail\nfactory=%s\nwork=%s\npin=(%s 1.2.3)\n%s\n' % (factory, tmp / 'work', '0' * 40, fragment)
         events = tmp / 'events'
-        result = subprocess.run(['bash', '-c', script], env={'PATH': '/usr/bin:/bin', 'HOME': str(tmp), 'EVENTS': str(events)},
+        result = subprocess.run(['bash', '-c', script], env={'PATH': '%s:/usr/bin:/bin' % bin_dir, 'HOME': str(tmp), 'EVENTS': str(events)},
                                 capture_output=True, text=True)
         return tmp / 'work', result, events.read_text().splitlines() if events.exists() else []
 
@@ -482,15 +510,100 @@ class ContainerfileStages(unittest.TestCase):
         work, result, events = self.run_bridge_build_fragment(0)
         self.assertEqual(result.returncode, 0, result.stderr)
         home = '%s/bridge-cargo' % work
-        self.assertEqual(events, ['cargo fetch --locked --offline --target x86_64-unknown-linux-gnu --manifest-path %s/source/Cargo.toml '
-                                  'offline=true home=%s' % (work, home), 'nested true %s' % home])
+        step = lambda mode: 'drop run %s -- bash %s/factory/snitchwatch-system-bridge-unpriv.sh %s' % (work, work.parent, mode)
+        # Both cargo and the (nested) build run only behind the drop helper, with the offline env.
+        self.assertEqual(events, [step('fetch'),
+                                  'cargo fetch --locked --offline --target x86_64-unknown-linux-gnu --manifest-path %s/source/Cargo.toml '
+                                  'offline=true home=%s' % (work, home), step('build'), 'nested true %s' % home])
 
     def test_failed_offline_fetch_preflight_stops_before_the_build_with_a_distinct_message(self):
         _, result, events = self.run_bridge_build_fragment(101)
         self.assertNotEqual(result.returncode, 0)
-        self.assertEqual(len(events), 1, events)
-        self.assertTrue(events[0].startswith('cargo fetch --locked --offline'))
+        self.assertEqual(len(events), 2, events)
+        self.assertTrue(events[0].startswith('drop run ') and events[0].endswith(' fetch'), events)
+        self.assertTrue(events[1].startswith('cargo fetch --locked --offline'))
         self.assertIn('bridge stage: offline cargo fetch preflight failed', result.stderr)
+
+    # M1 step 3: both bridge builds run unprivileged.
+    def test_third_party_code_in_both_bridge_stages_runs_only_through_the_privilege_drop(self):
+        for script, steps in DROPPED_STEPS.items():
+            with self.subTest(script.name):
+                lines = [line.strip() for line in self.bridge_body(script).splitlines() if line.strip()]
+                for step in steps:
+                    self.assertEqual(lines.count(step), 1, step)
+                # Nothing else names the step script, and no third-party command runs directly as root.
+                self.assertEqual([line for line in lines if UNPRIV_SCRIPT.name in line], steps)
+                for line in lines:
+                    if line in steps:
+                        continue
+                    for needle in ('cargo ', 'build-bridge.sh', 'repro-check.sh', 'bridge_artifact.py', '--run-flags', '--check-ldd',
+                                   'setpriv', 'runuser', 'su ', 'sudo'):
+                        self.assertNotIn(needle, re.sub(r"'[^']*'", "''", line), (script.name, line))
+                # The drop helper is invoked only for prepare, the selfcheck and these steps.
+                self.assertEqual([line for line in lines if UNPRIV.name in line], [PREPARE, SELFCHECK, *steps])
+        # No Containerfile USER/su trick either: the stage RUN is unchanged, the drop is inside it.
+        for name in BRIDGE_STAGES:
+            self.assertEqual([keyword for keyword, _ in self.stages[name]['body']], ['ARG', 'RUN'], name)
+
+    def test_drop_is_prepared_and_self_checked_before_any_third_party_code(self):
+        for script, steps in DROPPED_STEPS.items():
+            with self.subTest(script.name):
+                lines = [line.strip() for line in self.bridge_body(script).splitlines() if line.strip()]
+                order = ['python3 "$factory/snitchwatch-system-handoff.py" probe-network offline',
+                         'python3 -B - "$factory/snitchwatch-system-scanner-build.py" "$work/cargo" "$work/bridge-cargo" "$work/source/Cargo.lock" <<\'PY\' || {',
+                         PREPARE, SELFCHECK, *steps]
+                self.assertEqual([lines.index(line) for line in order], sorted(lines.index(line) for line in order))
+                self.assertEqual(lines.count(PREPARE), 1)
+                self.assertEqual(lines.count(SELFCHECK), 1)
+
+    def test_unprivileged_step_script_is_reachable_only_through_the_drop_helper(self):
+        # The step script itself refuses root, and only the two bridge stage scripts name it.
+        text = UNPRIV_SCRIPT.read_text()
+        self.assertIn("(( EUID != 0 )) || { echo 'bridge unprivileged step: refusing to run as root' >&2; exit 1; }", text)
+        self.assertLess(text.index('(( EUID != 0 ))'), text.index('case '))
+        users = [path.name for path in sorted(FACTORY.iterdir()) if path.is_file() and UNPRIV_SCRIPT.name in path.read_text(errors='replace')]
+        self.assertEqual(users, ['snitchwatch-system-bridge-build.sh', 'snitchwatch-system-bridge-rebuild.sh'])
+        self.assertNotIn(UNPRIV_SCRIPT.name, CONTAINERFILE.read_text())
+
+    def run_step(self, *args, cargo_status=0):
+        tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, tmp)
+        release = tmp / 'src/packaging/release'
+        release.mkdir(parents=True)
+        for name in ('build-bridge.sh', 'repro-check.sh'):
+            (release / name).write_text('#!/bin/bash\necho "%s $*" >> "$EVENTS"\n' % name)
+            (release / name).chmod(0o755)
+        (release / 'bridge_artifact.py').write_text('import os,sys\nopen(os.environ["EVENTS"],"a").write("bridge_artifact.py " + " ".join(sys.argv[1:]) + "\\n")\n')
+        _, bin_dir = self.fake_factory(tmp, cargo_status)
+        tarball = tmp / 'a.tar.gz'
+        tarball.write_bytes(b'tar')
+        events = tmp / 'events'
+        argv = [str(tarball) if arg == 'TARBALL' else arg for arg in args]
+        result = subprocess.run(['bash', str(UNPRIV_SCRIPT), *argv], capture_output=True, text=True,
+                                env={'PATH': '%s:/usr/bin:/bin' % bin_dir, 'HOME': str(tmp), 'EVENTS': str(events), 'SRC_DIR': str(tmp / 'src')})
+        return result, events.read_text().splitlines() if events.exists() else [], tmp, tarball
+
+    @unittest.skipIf(os.geteuid() == 0, 'the step script refuses root by design')
+    def test_unprivileged_steps_run_exactly_the_upstream_commands(self):
+        result, events, tmp, _ = self.run_step('fetch')
+        self.assertEqual((result.returncode, events), (0, ['cargo fetch --locked --offline --target x86_64-unknown-linux-gnu '
+                                                            '--manifest-path %s/src/Cargo.toml offline=unset home=' % tmp]))
+        result, events, _, _ = self.run_step('build')
+        self.assertEqual((result.returncode, events), (0, ['build-bridge.sh ']))
+        result, events, _, tarball = self.run_step('repro', 'TARBALL')
+        self.assertEqual((result.returncode, events), (0, ['repro-check.sh %s' % tarball]))
+        result, events, _, tarball = self.run_step('verify', 'TARBALL', '1.2.3')
+        digest = hashlib.sha256(b'tar').hexdigest()
+        self.assertEqual((result.returncode, events), (0, ['bridge_artifact.py verify --tarball %s --expect-sha256 %s --expect-version 1.2.3 '
+                                                            '--check-ldd --run-flags' % (tarball, digest)]))
+        result, events, _, _ = self.run_step('fetch', cargo_status=101)
+        self.assertEqual(result.returncode, 101)
+        for args in ((), ('shell',), ('repro',), ('verify', 'TARBALL'), ('build; id',), ('build', '--release'), ('fetch', '--online')):
+            with self.subTest(refused=args):
+                result, events, _, _ = self.run_step(*args)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual(events, [])
+                self.assertIn('bridge unprivileged step: usage', result.stderr)
 
     def test_scanner_and_bridge_handoffs_are_exported_through_the_allowlist(self):
         scanner = (FACTORY / 'snitchwatch-system-scanner-stage.sh').read_text()
@@ -498,8 +611,9 @@ class ContainerfileStages(unittest.TestCase):
         bridge = (FACTORY / 'snitchwatch-system-bridge-build.sh').read_text()
         self.assertIn('snitchwatch-system-handoff.py" export bridge --pins "$pins" "$OUT_DIR" "$2"', bridge)
         self.assertIn('snitchwatch-system-handoff.py" export bridge-rebuild --pins "$pins" "$OUT_DIR" "$2"', REBUILD_SCRIPT.read_text())
-        # All bridge execution (ldd, --version, --help) happens in the bridge stage.
-        self.assertIn('--check-ldd --run-flags', bridge)
+        # All bridge execution (ldd, --version, --help) happens in the bridge stage, as uid 65534.
+        self.assertIn(DROP + ' verify "$first" "${pin[1]}"', bridge)
+        self.assertIn('--check-ldd --run-flags', UNPRIV_SCRIPT.read_text())
 
     def test_old_single_run_factory_is_gone(self):
         self.assertFalse((FACTORY / 'snitchwatch-system-build.sh').exists())
@@ -645,19 +759,63 @@ class Handoff(unittest.TestCase):
             'symlink': (lambda path: (path.unlink(), path.symlink_to(path.parent.parent / 'bridge' / path.name)), 'symlink or special file'),
             'fifo': (lambda path: (path.unlink(), os.mkfifo(path)), 'symlink or special file'),
             'hard link': (lambda path: os.link(path, path.parent / 'link'), 'hard-linked'),
-            'missing': (lambda path: path.unlink(), 'No such file'),
+            'missing': (lambda path: path.unlink(), 'compare: the rebuild tarball is missing: '),
         }
         for label, (mutate, message) in cases.items():
             with self.subTest(label):
                 roots, name = self.pair(label.replace(' ', '-'), blob, bytes(blob))
                 mutate(roots[1] / name)
-                with self.assertRaises((self.h['Refusal'], OSError)) as caught:
+                with self.assertRaises(self.h['Refusal']) as caught:
                     self.h['compare_bridge'](*roots, PINS)
                 self.assertIn(message, str(caught.exception))
+                self.assertNotIn('[Errno', str(caught.exception))
         # The same directory twice is not a second build.
         roots, _ = self.pair('self', blob, None)
         with self.assertRaisesRegex(self.h['Refusal'], 'the same file'):
             self.h['compare_bridge'](roots[0], roots[0], PINS)
+
+    def sparse_tarball(self, name, realsize):
+        """A gzip'd PAX tar holding one GNU sparse 1.0 member claiming REALSIZE bytes in ~1 KiB of archive."""
+        import gzip, io, tarfile
+        raw = io.BytesIO()
+        with tarfile.open(fileobj=raw, mode='w', format=tarfile.PAX_FORMAT) as tar:
+            info = tarfile.TarInfo('GNUSparseFile.0/' + name.rsplit('/', 1)[-1])
+            info.pax_headers = {'GNU.sparse.major': '1', 'GNU.sparse.minor': '0', 'GNU.sparse.name': name,
+                                'GNU.sparse.realsize': str(realsize)}
+            data = b'1\n0\n1\n'.ljust(512, b'\0') + b'A'.ljust(512, b'\0')
+            info.size, info.mtime, info.mode = len(data), 1, 0o644
+            tar.addfile(info, io.BytesIO(data))
+        return gzip.compress(raw.getvalue(), mtime=0)
+
+    def test_compare_bridge_diagnosis_bounds_sparse_members(self):
+        # The bound is shrunk so a pre-fix run reads 8 MiB (not gigabytes) and fails on the assertion.
+        globals_ = self.h['tar_members'].__globals__
+        with mock.patch.dict(globals_, {'MAX_TAR': 1 << 20}):
+            a = self.sparse_tarball('top/usr/bin/snitchwatch-bridge-cli', 8 << 20)
+            b = self.tarball({'top/usr/bin/snitchwatch-bridge-cli': b'x'})
+            self.assertLess(len(a), 1 << 20)
+            self.assertIsNone(self.h['tar_members'](a))
+            roots, _ = self.pair('sparse', a, b)
+            with self.assertRaisesRegex(self.h['Refusal'], 'bridge rebuild differs.*members not listable'):
+                self.h['compare_bridge'](*roots, PINS)
+            # Many members each under the bound but together over it: refused as well.
+            many = self.tarball({'top/m%d' % i: b'z' * (300 << 10) for i in range(4)})
+            self.assertIsNone(self.h['tar_members'](many))
+            self.assertIsNotNone(self.h['tar_members'](self.tarball({'top/m': b'z' * (300 << 10)})))
+
+    def test_compare_bridge_cli_names_a_missing_tarball_without_an_errno(self):
+        pins = self.write(self.root / 'pins.json', json.dumps(PINS).encode())
+        roots, _ = self.pair('cli-missing', self.tarball({'a': b'1'}), None)
+        result = subprocess.run(['python3', '-B', str(HANDOFF), 'compare-bridge', '--pins', str(pins), *map(str, roots)],
+                                capture_output=True, text=True)
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(result.stderr.strip(), 'handoff: compare-bridge: compare: the rebuild tarball is missing: %s'
+                         % (roots[1] / ('snitchwatch-bridge-%s-x86_64.tar.gz' % PINS['bridgeVersion'])))
+        roots, _ = self.pair('cli-missing-first', None, self.tarball({'a': b'1'}))
+        result = subprocess.run(['python3', '-B', str(HANDOFF), 'compare-bridge', '--pins', str(pins), *map(str, roots)],
+                                capture_output=True, text=True)
+        self.assertRegex(result.stderr, r'^handoff: compare-bridge: compare: the first tarball is missing: ')
+        self.assertNotIn('Errno', result.stderr)
 
     def test_compare_bridge_cli_prints_a_distinct_refusal_and_exits_1(self):
         pins = self.write(self.root / 'pins.json', json.dumps(PINS).encode())
@@ -786,6 +944,266 @@ class Handoff(unittest.TestCase):
         result = subprocess.run(['python3', str(HANDOFF), 'check', 'scanner', str(root)], capture_output=True, text=True)
         self.assertEqual(result.returncode, 1)
         self.assertRegex(result.stderr, r'^handoff: check: ')
+
+
+DROPPED_STATUS = ('Name:\tx\nUid:\t65534\t65534\t65534\t65534\nGid:\t65534\t65534\t65534\t65534\nGroups:\t\n'
+                  'NoNewPrivs:\t1\nCapInh:\t0000000000000000\nCapPrm:\t0000000000000000\nCapEff:\t0000000000000000\n'
+                  'CapBnd:\t0000000000000000\nCapAmb:\t0000000000000000\n')
+ROOT_STATUS = ('Uid:\t0\t0\t0\t0\nGid:\t0\t0\t0\t0\nGroups:\t0\nNoNewPrivs:\t0\nCapInh:\t0000000000000000\n'
+               'CapPrm:\t00000000a80425fb\nCapEff:\t00000000a80425fb\nCapBnd:\t0000000000000005\nCapAmb:\t0000000000000000\n')
+
+
+class UnprivilegedBridgeBuild(unittest.TestCase):
+    """M1 step 3: snitchwatch-system-unpriv.py, the drop both bridge stages run their third-party code through.
+
+    Never calls the real setresuid/prctl drop: the system calls are recorded fakes, and /proc is a fixture."""
+
+    def setUp(self):
+        work = tempfile.TemporaryDirectory(prefix='sw-unpriv.')
+        self.addCleanup(work.cleanup)
+        self.addCleanup(self.make_writable)
+        self.addCleanup(os.umask, os.umask(0o022))
+        self.root = Path(work.name)
+        self.u = runpy.run_path(str(UNPRIV))
+        self.me = (os.getuid(), os.getgid())
+
+    def make_writable(self):
+        for base, dirs, _ in os.walk(self.root):
+            for name in dirs:
+                if not os.path.islink(os.path.join(base, name)):
+                    os.chmod(os.path.join(base, name), 0o755)
+
+    def status(self, text):
+        path = self.root / ('status-%d' % len(list(self.root.glob('status-*'))))
+        path.write_text(text)
+        return path
+
+    def test_build_uid_is_the_one_stage_py_already_drops_to(self):
+        stage = runpy.run_path(str(FACTORY / 'snitchwatch-system-stage.py'))
+        self.assertEqual((self.u['BUILD_UID'], self.u['BUILD_GID']), (stage['UNPRIVILEGED'], stage['UNPRIVILEGED']))
+        self.assertEqual(self.u['SCRATCH'], ('bridge-cargo', 'dist', 'target', 'home'))
+
+    def test_child_env_fixes_path_and_home_and_drops_injection_variables(self):
+        env = self.u['child_env']({'PATH': '/tmp/evil:/usr/bin', 'HOME': '/root', 'LD_PRELOAD': '/x.so', 'PYTHONPATH': '/x',
+                                   'BASH_ENV': '/x', 'CARGO_HOME': '/work/native/bridge-cargo', 'SW_GIT_SHA': 'a' * 40}, '/work/native')
+        self.assertEqual(env, {'PATH': '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin', 'HOME': '/work/native/home',
+                               'CARGO_HOME': '/work/native/bridge-cargo', 'SW_GIT_SHA': 'a' * 40})
+        for entry in env['PATH'].split(':'):
+            self.assertTrue(entry.startswith('/') and '..' not in entry, entry)
+
+    def test_status_check_accepts_only_the_fully_dropped_state(self):
+        fields = self.u['parse_status'](DROPPED_STATUS)
+        self.assertEqual(self.u['status_problems'](fields), [])
+        for label, old, new in (('uid', 'Uid:\t65534\t65534\t65534\t65534', 'Uid:\t65534\t0\t65534\t65534'),
+                                ('fsgid', 'Gid:\t65534\t65534\t65534\t65534', 'Gid:\t65534\t65534\t65534\t0'),
+                                ('groups', 'Groups:\t', 'Groups:\t0'), ('nnp', 'NoNewPrivs:\t1', 'NoNewPrivs:\t0'),
+                                ('bounding', 'CapBnd:\t0000000000000000', 'CapBnd:\t0000000000000400'),
+                                ('effective', 'CapEff:\t0000000000000000', 'CapEff:\t0000000000000001'),
+                                ('inheritable', 'CapInh:\t0000000000000000', 'CapInh:\t0000000000000080'),
+                                ('ambient', 'CapAmb:\t0000000000000000', 'CapAmb:\t0000000000000080'),
+                                ('missing', 'NoNewPrivs:\t1\n', '')):
+            with self.subTest(label):
+                problems = self.u['status_problems'](self.u['parse_status'](DROPPED_STATUS.replace(old, new)))
+                self.assertEqual(len(problems), 1, problems)
+
+    def drop(self, fail=None, after=DROPPED_STATUS):
+        """Run drop_privileges with recorded fakes; setresuid "takes effect" by rewriting the status fixture."""
+        events, status = [], self.status(ROOT_STATUS)
+
+        def call(option, arg=0):
+            events.append(('prctl', option, arg))
+            return -1 if fail == ('prctl', option) else 0
+
+        class System:
+            def __getattr__(self, name):
+                def record(*args):
+                    events.append((name, *args))
+                    if fail == name:
+                        raise PermissionError(name)
+                    if name == 'setresuid':
+                        status.write_text(after)
+                return record
+
+        inheritable = lambda: events.append(('capset-inheritable-0',)) or (-1 if fail == 'capset' else 0)
+        try:
+            self.u['drop_privileges'](caps=3, call=call, inheritable=inheritable, system=System(), status=str(status),
+                                      warn=lambda text: events.append(('warn', text)))
+        except OSError as error:
+            return events, error
+        return events, None
+
+    def test_drop_order_bounding_ambient_inheritable_groups_gid_uid_then_no_new_privs(self):
+        events, error = self.drop()
+        self.assertIsNone(error)
+        # CapBnd 0x5: only caps 0 and 2 are in the bounding set, so only those are dropped.
+        self.assertEqual(events, [('prctl', 24, 0), ('prctl', 24, 2), ('prctl', 47, 4), ('capset-inheritable-0',),
+                                  ('setgroups', []), ('setresgid', 65534, 65534, 65534), ('setresuid', 65534, 65534, 65534),
+                                  ('prctl', 38, 1)])
+
+    def test_every_failed_drop_step_aborts_before_exec(self):
+        for fail, last in ((('prctl', 24), ('prctl', 24, 0)), (('prctl', 47), ('prctl', 47, 4)), ('capset', ('capset-inheritable-0',)),
+                           ('setgroups', ('setgroups', [])), ('setresgid', ('setresgid', 65534, 65534, 65534)),
+                           ('setresuid', ('setresuid', 65534, 65534, 65534)), (('prctl', 38), ('prctl', 38, 1))):
+            with self.subTest(fail=fail):
+                events, error = self.drop(fail)
+                self.assertIsInstance(error, OSError)
+                self.assertEqual(events[-1], last)
+        # Every call succeeded but the kernel view is not the dropped state: refuse too.
+        events, error = self.drop(after=DROPPED_STATUS.replace('NoNewPrivs:\t1', 'NoNewPrivs:\t0'))
+        self.assertRegex(str(error), 'privilege drop not in effect')
+        self.assertEqual(events[-1], ('warn', 'unpriv: run: refusing to exec, the drop did not take: NoNewPrivs is 0, want 1\n'))
+
+    def test_run_needs_root_drops_in_the_child_and_always_reaps(self):
+        with self.assertRaisesRegex(self.u['Refusal'], 'must start as root'):
+            self.u['run']('/work/native', ['true'], euid=lambda: 1000)
+        calls = []
+
+        class Child:
+            def wait(self):
+                calls.append('wait')
+                return 7
+
+        def popen(command, **options):
+            calls.append((command, options['preexec_fn'] is self.u['drop_privileges'], options['umask'],
+                          options['env']['HOME'], options['stdin'] is subprocess.DEVNULL))
+            return Child()
+
+        code = self.u['run']('/work/native', ['bash', 'x'], popen=popen, euid=lambda: 0, subreaper=lambda: 0, reap=lambda: calls.append('reap'))
+        self.assertEqual(code, 7)
+        self.assertEqual(calls, [(['bash', 'x'], True, 0o022, '/work/native/home', True), 'wait', 'reap'])
+        with self.assertRaisesRegex(self.u['Refusal'], 'subreaper'):
+            self.u['run']('/work/native', ['true'], popen=popen, euid=lambda: 0, subreaper=lambda: -1)
+
+    @unittest.skipIf(os.geteuid() == 0, 'proves the real preexec drop fails closed for a caller that cannot drop')
+    def test_real_drop_failure_means_the_command_never_runs(self):
+        marker = self.root / 'ran'
+        with self.assertRaisesRegex(self.u['Refusal'], 'the privilege drop failed before exec; nothing ran'):
+            self.u['run'](str(self.root), ['touch', str(marker)], euid=lambda: 0, subreaper=lambda: 0, reap=lambda: None)
+        self.assertFalse(marker.exists())
+
+    def tree(self):
+        work = self.root / 'work/native'
+        for rel in ('source/.git/objects', 'source/src', 'bridge-cargo/registry/cache', 'toolchain'):
+            (work / rel).mkdir(parents=True)
+        for rel in ('source/src/main.rs', 'source/.git/HEAD', 'bridge-cargo/registry/cache/a.crate', 'rpm-inventory.txt'):
+            (work / rel).write_text(rel)
+        return work
+
+    def prepare(self, work, **extra):
+        chowned = []
+        options = {'top': str(self.root / 'work'), 'uid': 4242424, 'gid': 4242424, 'owner': self.me,
+                   'chown': lambda path, uid, gid: chowned.append(os.path.relpath(path, work)), **extra}
+        return self.u['prepare'](work, **options), chowned
+
+    def test_prepare_hands_over_only_fresh_scratch_dirs(self):
+        work = self.tree()
+        result, chowned = self.prepare(work)
+        self.assertEqual(result['scratch'], [str(work / name) for name in ('bridge-cargo', 'dist', 'target', 'home')])
+        for name in ('dist', 'target', 'home'):
+            self.assertEqual(list((work / name).iterdir()), [], name)
+        self.assertEqual(sorted(chowned), ['bridge-cargo', 'bridge-cargo/registry', 'bridge-cargo/registry/cache',
+                                           'bridge-cargo/registry/cache/a.crate', 'dist', 'home', 'target'])
+
+    def test_prepare_refuses_writable_or_unreadable_source_and_prior_ownership(self):
+        cases = {
+            'group-writable file': (lambda w: (w / 'source/src/main.rs').chmod(0o664), {}, 'group/other writable'),
+            'other-writable dir': (lambda w: (w / 'source/.git/objects').chmod(0o757), {}, 'group/other writable'),
+            'unreadable file': (lambda w: (w / 'source/.git/HEAD').chmod(0o640), {}, 'not other-readable'),
+            'untraversable dir': (lambda w: (w / 'source/src').chmod(0o754), {}, 'not other-readable'),
+            'not root-owned': (lambda w: None, {'owner': (self.me[0] + 1, self.me[1])}, 'must be a root-owned directory'),
+            'build uid owns a file': (lambda w: None, {'uid': self.me[0]}, 'already owned by uid/gid'),
+            'scratch exists': (lambda w: (w / 'target').mkdir(), {}, 'scratch directory already exists'),
+            'symlink in cargo home': (lambda w: (w / 'bridge-cargo/link').symlink_to('/etc'), {}, 'not a regular file or directory'),
+            'writable work': (lambda w: w.chmod(0o777), {}, 'must be a root-owned directory'),
+        }
+        for label, (mutate, extra, message) in cases.items():
+            with self.subTest(label):
+                self.make_writable()
+                shutil.rmtree(self.root / 'work', ignore_errors=True)
+                work = self.tree()
+                mutate(work)
+                with self.assertRaisesRegex(self.u['Refusal'], message):
+                    self.prepare(work, **extra)
+
+    @unittest.skipIf(os.geteuid() == 0, 'mode bits do not stop root')
+    def test_selfcheck_proves_denied_writes_and_writable_scratch_and_refuses_otherwise(self):
+        work = self.tree()
+        for name in ('dist', 'target', 'home'):
+            (work / name).mkdir()
+        tooling = self.root / 'work/usr-bin'
+        tooling.mkdir()
+        (tooling / 'cc').write_bytes(b'compiler')
+        (tooling / 'cc').chmod(0o555)
+        sticky = self.root / 'work/tmp'
+        sticky.mkdir()
+        sticky.chmod(0o1777)
+        for path in (work / 'source/src/main.rs', work / 'source/.git/HEAD', work / 'rpm-inventory.txt'):
+            path.chmod(0o444)
+        for path in (work / 'source/src', work / 'source/.git/objects', work / 'source/.git', work / 'source', work / 'toolchain', tooling, work):
+            path.chmod(0o555)
+        probes = [('create', str(tooling)), ('create', str(work / 'source')), ('file', str(tooling / 'ld.so.preload')),
+                  ('append', str(tooling / 'cc')), ('append', str(work / 'rpm-inventory.txt')), ('append', str(self.root / 'absent'))]
+        quiet = lambda **extra: self.selfcheck(work, probes, tooling, **extra)
+        check = lambda: quiet()
+        report = check()
+        self.assertEqual(report['absentProbes'], [str(self.root / 'absent')])
+        self.assertEqual(len(report['deniedWrites']), 5)
+        self.assertEqual((tooling / 'cc').read_bytes(), b'compiler')
+        for label, mutate, message in (
+                ('writable tool', lambda: (tooling / 'cc').chmod(0o755), 'write to a root-owned path did not fail: opened for writing'),
+                ('writable source dir', lambda: (work / 'source').chmod(0o755), 'write to a root-owned path did not fail: created'),
+                ('stray writable file', lambda: (work / 'toolchain').chmod(0o755), 'writable or owned outside the scratch dirs: %s' % (work / 'toolchain')),
+                ('scratch not writable', lambda: (work / 'dist').chmod(0o555), 'scratch dir is not writable')):
+            with self.subTest(label):
+                mutate()
+                with self.assertRaisesRegex(self.u['Refusal'], re.escape(message)):
+                    check()
+                for path in (tooling / 'cc', work / 'source', work / 'toolchain'):
+                    path.chmod(0o555)
+                (work / 'dist').chmod(0o755)
+        self.assertEqual((tooling / 'cc').read_bytes(), b'compiler')  # probes never truncate or write
+        with self.assertRaisesRegex(self.u['Refusal'], 'NoNewPrivs is 0'):
+            quiet(nnp='0')
+        (self.root / 'path-bin').mkdir()
+        with self.assertRaisesRegex(self.u['Refusal'], re.escape('PATH dir is writable: %s' % (self.root / 'path-bin'))):
+            quiet(path='%s:%s' % (tooling, self.root / 'path-bin'))
+
+    def selfcheck(self, work, probes, tooling, nnp='1', path=None):
+        status = self.status(DROPPED_STATUS.replace('65534', '4242424').replace('NoNewPrivs:\t1', 'NoNewPrivs:\t' + nnp))
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            report = self.u['selfcheck'](work, FACTORY, top=str(self.root / 'work'), uid=4242424, gid=4242424, status=str(status),
+                                         probes=probes, path=path or str(tooling))
+        self.assertEqual(json.loads(out.getvalue())['unpriv'], 'selfcheck')
+        return report
+
+    def test_foreign_mount_owners_are_not_taken_for_the_build_uid(self):
+        # In a rootless user namespace /proc and /sys show their unmapped owner as 65534
+        # (seen in a fedora:44 podman run). Only entries on the walked filesystem count as owned.
+        top = os.lstat(self.root).st_dev
+        entry = lambda dev, uid: mock.Mock(st_dev=dev, st_uid=uid, st_gid=0, st_mode=stat.S_IFDIR | 0o555)
+        gone = lambda name: str(self.root / 'absent' / name)  # never exists, so never writable, even for root
+        fake = ([(gone('proc'), entry(top + 1, 65534)), (gone('usr'), entry(top, 0)), (gone('stray'), entry(top, 65534))], [])
+        with mock.patch.dict(self.u['owned_by_build_ids'].__globals__, {'walk': lambda _top: fake}):
+            self.assertEqual(self.u['owned_by_build_ids'](str(self.root)), [gone('stray')])
+            self.assertEqual(self.u['writable_outside'](str(self.root), [], 65534), ([gone('stray')], []))
+
+    def test_selfcheck_probes_cover_the_root_owned_tooling_named_by_m1(self):
+        probes = dict((path, kind) for kind, path in self.u['PROBES'])
+        for path in ('/usr/bin', '/usr/local/bin', 'FACTORY', 'WORK', 'WORK/source', 'WORK/cargo', 'WORK/toolchain'):
+            self.assertEqual(probes.get(path), 'create', path)
+        self.assertEqual(probes.get('/etc/ld.so.preload'), 'file')
+        for path in ('/usr/bin/cc', '/usr/bin/ld', '/usr/bin/rustc', '/usr/bin/cargo'):
+            self.assertEqual(probes.get(path), 'append', path)
+
+    def test_cli_refuses_with_one_line_and_exit_1(self):
+        for argv, message in (([], 'usage'), (['run', '/work/native'], 'usage'), (['run', '/work/native', '--'], 'usage')):
+            with self.subTest(argv=argv):
+                result = subprocess.run(['python3', '-B', str(UNPRIV), *argv], capture_output=True, text=True)
+                self.assertEqual(result.returncode, 1)
+                self.assertRegex(result.stderr, r'^unpriv: [\w-]+: .*%s' % message)
+        if os.geteuid() != 0:
+            result = subprocess.run(['python3', '-B', str(UNPRIV), 'run', '/work/native', '--', 'true'], capture_output=True, text=True)
+            self.assertEqual((result.returncode, result.stderr.strip()), (1, 'unpriv: run: run must start as root (it is the privilege drop)'))
 
 
 class NetworkProbe(unittest.TestCase):

@@ -24,6 +24,11 @@ ENDPOINT_EVENTS = ('snitchwatch-endpoint-events.conf', 'snitchwatch-endpoint-eve
 # run as this uid/gid with an empty environment, then root adopts only these
 # paths (H1).  Contents are pinned by the verifier (SOURCE_FILES, binary hash).
 UNPRIVILEGED = 65534
+# What `reproducible` in native-build-provenance.json rests on (M1 steps 2-3).
+REPRODUCIBLE_BASIS = ('byte-identical sibling build: the assembly stage compared the snitchwatch-bridge and '
+                      'snitchwatch-bridge-rebuild tarballs, built from the same prep layer on the same runner, '
+                      'both offline as uid 65534; not an independent host or toolchain. reproLogSha256 is the '
+                      'first stage\'s own repro-check.sh log, which that stage could forge.')
 UNPRIVILEGED_ENV = {'PATH': '/usr/bin:/bin', 'LANG': 'C'}
 SYSTEM_STAGE_FILES = {
     'usr/bin/snitchwatch-bridge-cli': 0o755,
@@ -320,7 +325,8 @@ def main():
         'builderImage': pins['builderImage'], 'artifactSha256': sha(args.tarball),
         'rpmInventorySha256': sha(args.rpm_inventory), 'reproducible': reproducible,
         'buildLogSha256': sha(args.build_log), 'reproLogSha256': sha(args.repro_log),
-        'reproCommand': 'packaging/release/repro-check.sh <first-tarball>',
+        'reproCommand': 'snitchwatch-system-handoff.py compare-bridge <snitchwatch-bridge tarball> <snitchwatch-bridge-rebuild tarball>',
+        'reproducibleBasis': REPRODUCIBLE_BASIS,
         'artifactInstallScope': 'Verified binary/licenses only; original schema1 user unit and check-install excluded',
     }
     p = out / 'usr/share/snitchwatch/native-build-provenance.json'

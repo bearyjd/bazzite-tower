@@ -1440,5 +1440,13 @@ print(before, len(g['children'](os.getpid())))
             self.g['adopt_unprivileged_stage'](self.root / 'linked-root', self.root / 'o-linked')
 
 
+class SmokeBridgeVersion(unittest.TestCase):
+    def test_smoke_bounds_the_bridge_version_run(self):
+        """The version check pipes the built binary into grep; a hung binary must end the check, not the build."""
+        lines = [line.strip() for line in (ROOT / 'tests/smoke.sh').read_text().splitlines() if '--version' in line and 'snitchwatch-bridge-cli' in line]
+        self.assertEqual(len(lines), 1)
+        self.assertIn("bash -c 'timeout 10 /usr/bin/snitchwatch-bridge-cli --version | grep -qx ", lines[0])
+
+
 if __name__ == '__main__':
     unittest.main()

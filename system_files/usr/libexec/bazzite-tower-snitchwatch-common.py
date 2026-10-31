@@ -442,7 +442,10 @@ CONTEXT_KEYS = frozenset({"shared", "sockets", "devices", "filesystems", "persis
 METADATA_SECTIONS = frozenset({"Application", "Build", "Context", "Environment", "Session Bus Policy", "System Bus Policy", "Extension org.snitchwatch.Snitchwatch.Debug"})
 # One strict grammar so configparser and GLib's GKeyFile cannot read a line differently: no leading
 # whitespace, no control characters other than TAB inside values, no \r/\f/\v/NEL line separators.
-METADATA_LINE = re.compile(r"(?:|#[^\x00-\x1f\x7f]*|\[[^\[\]\x00-\x1f\x7f]+\]|[A-Za-z0-9._-]+(?:\[[A-Za-z0-9@_.-]+\])?=[^\x00-\x08\x0a-\x1f\x7f]*)")
+# A value is empty or starts and ends with a non-space: configparser strips Unicode whitespace from
+# both ends of a value but GLib keeps everything except leading ASCII whitespace.
+METADATA_VALUE = r"(?:[^\s\x00-\x1f\x7f](?:[^\x00-\x08\x0a-\x1f\x7f]*[^\s\x00-\x1f\x7f])?)?"
+METADATA_LINE = re.compile(r"(?:|#[^\x00-\x1f\x7f]*|\[[^\[\]\x00-\x1f\x7f]+\]|[A-Za-z0-9._-]+(?:\[[A-Za-z0-9@_.-]+\])?="+METADATA_VALUE+")")
 
 
 def flatpak_profiles(ctx):

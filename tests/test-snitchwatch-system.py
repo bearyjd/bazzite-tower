@@ -815,6 +815,18 @@ class SystemBehavior(unittest.TestCase):
         path.write_text(text)
         common.flatpak_profiles(self.ctx)
 
+    def test_flatpak_value_edge_whitespace_refuses_because_glib_keeps_it(self):
+        path = self.installed_flatpak();text = path.read_text()
+        for edge in (" ", "\t", "\u00a0", "\u3000", "\x85", "\u2028"):
+            for old, new in (("SNITCHWATCH_SYSTEM_BRIDGE=1", "SNITCHWATCH_SYSTEM_BRIDGE=1"+edge),
+                             ("SNITCHWATCH_SYSTEM_BRIDGE=1", "SNITCHWATCH_SYSTEM_BRIDGE="+edge+"1"),
+                             ("shared=ipc;", "shared=ipc;"+edge)):
+                with self.subTest(edge=repr(edge), line=new):
+                    path.write_text(text.replace(old, new))
+                    with self.assertRaisesRegex(common.Refusal, "non-canonical line"):common.flatpak_profiles(self.ctx)
+        path.write_text(text)
+        common.flatpak_profiles(self.ctx)
+
     def test_flatpak_unreviewed_metadata_sections_refuse(self):
         path = self.installed_flatpak();text = path.read_text()
         for section in ("USB Devices", "Policy Tracker3", "Extension org.example.Other", "context", "Instance"):

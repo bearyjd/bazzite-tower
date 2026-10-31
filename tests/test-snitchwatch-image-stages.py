@@ -16,6 +16,7 @@ from pathlib import Path
 import re
 import runpy
 import shutil
+import signal
 import stat
 import subprocess
 import tempfile
@@ -907,8 +908,17 @@ class Handoff(unittest.TestCase):
                         os.mkfifo(source / name)
                     else:
                         (source / name).symlink_to('/etc/hostname')
-                    with self.assertRaisesRegex(self.h['Refusal'], message):
-                        self.h['export'](kind, source, root / 'dest', pins)
+                    # A missing O_NONBLOCK makes open() on a FIFO block forever: fail fast, not hang.
+                    def hung(*_):
+                        raise AssertionError('export blocked on a %s source (missing O_NONBLOCK?)' % shape)
+                    previous = signal.signal(signal.SIGALRM, hung)
+                    signal.alarm(10)
+                    try:
+                        with self.assertRaisesRegex(self.h['Refusal'], message):
+                            self.h['export'](kind, source, root / 'dest', pins)
+                    finally:
+                        signal.alarm(0)
+                        signal.signal(signal.SIGALRM, previous)
 
     def test_check_refuses_every_unexpected_shape(self):
         cases = {
@@ -1258,6 +1268,16 @@ class UnprivilegedBridgeBuild(unittest.TestCase):
         (tooling / 'snitchwatch-system-pins.json').unlink()
         with self.assertRaisesRegex(self.u['Refusal'], r'input is not readable by uid \d+: .*snitchwatch-system-pins.json \(No such file'):
             check()
+
+    def test_unreadable_probe_reads_a_byte_not_just_opens(self):
+        directory = self.root / 'a-directory'
+        directory.mkdir()
+        # open(O_RDONLY) on a directory succeeds; only the one-byte read fails (EISDIR).
+        self.assertRegex(self.u['unreadable'](str(directory)), r'input cannot be read by uid \d+')
+        regular = self.root / 'plain'
+        regular.write_text('x')
+        self.assertIsNone(self.u['unreadable'](str(regular)))
+        self.assertRegex(self.u['unreadable'](str(self.root / 'absent')), r'input is not readable by uid \d+')
 
     def test_cli_takes_an_optional_known_profile_only(self):
         for argv in (['prepare', '/work/native', 'daemon'], ['selfcheck', '/work/native', 'bridge', 'x'], ['prepare', '/work/native', '']):

@@ -13,6 +13,11 @@ TEXT = PATH.read_text()
 DOC = yaml.safe_load(TEXT)
 STEPS = DOC['jobs']['build']['steps']
 BUILD = next(s for s in STEPS if s.get('id') == 'build')
+SOURCE = next(s for s in STEPS if s.get('id') == 'source_image')
+
+
+def code(step):
+    return '\n'.join(l for l in step['run'].splitlines() if not l.lstrip().startswith('#'))
 USES = re.compile(r'^[\w.-]+/[\w./-]+@[0-9a-f]{40}(\s|$)')
 
 
@@ -35,6 +40,29 @@ class BuildDiskWorkflow(unittest.TestCase):
                        ':/config.toml:ro', '"${SOURCE_IMAGE}"'):
             self.assertIn(needle, run)
         self.assertEqual(BUILD['env']['SOURCE_IMAGE'], '${{ steps.source_image.outputs.image }}')
+
+    def test_source_image_verified_and_digest_exported(self):
+        run = code(SOURCE)
+        self.assertIn('cosign verify --key cosign.pub "${resolved}"', run)
+        self.assertIn('echo "image=${resolved}"', run)
+        self.assertLess(STEPS.index(SOURCE), STEPS.index(BUILD))
+
+    def test_build_command_essentials(self):
+        run = code(BUILD)
+        for needle in ('sudo podman pull "${SOURCE_IMAGE}"', '-v "${output}:/output"',
+                       '-v /var/lib/containers/storage:/var/lib/containers/storage',
+                       '--privileged', 'sudo chown -R "${USER_UID}:${USER_GID}" "${output}"',
+                       'build \\\n', '--output /output',
+                       'sudo rm -rf /var/lib/containers/storage',
+                       '/etc/containers/storage.conf', 'driver = "overlay"'):
+            self.assertIn(needle, run)
+        self.assertLess(run.index('/etc/containers/storage.conf'), run.index('sudo podman pull'))
+
+    def test_pr_path_filters_and_platform_default(self):
+        on = DOC.get('on', DOC.get(True))
+        for path in on['pull_request']['paths']:
+            self.assertFalse(path.startswith('./'), path)
+        self.assertIn("inputs.platform || 'amd64'", DOC['jobs']['build']['runs-on'])
 
     def test_no_expression_interpolation_in_run(self):
         self.assertNotIn('${{', BUILD['run'])

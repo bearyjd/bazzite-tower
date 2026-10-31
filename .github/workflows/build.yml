@@ -135,6 +135,7 @@ jobs:
           python3 tests/test-r13-publication.py
           python3 tests/test-base-refresh.py
           python3 tests/test-workflow-signing-secret.py
+          python3 tests/test-build-disk-workflow.py
           python3 tests/test-snitchwatch-gate.py
           python3 tests/test-snitchwatch-image-build.py
           python3 tests/test-snitchwatch-image-build-daemon.py
@@ -256,6 +257,7 @@ jobs:
           python3 tests/test-r13-publication.py
           python3 tests/test-base-refresh.py
           python3 tests/test-workflow-signing-secret.py
+          python3 tests/test-build-disk-workflow.py
           python3 tests/test-snitchwatch-gate.py
           python3 tests/test-snitchwatch-image-build.py
           python3 tests/test-snitchwatch-image-build-daemon.py

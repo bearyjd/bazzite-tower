@@ -19,8 +19,8 @@ on:
     branches:
       - main
     paths:
-      - './disk_config/disk.toml'
-      - './.github/workflows/build-disk.yml'
+      - 'disk_config/disk.toml'
+      - '.github/workflows/build-disk.yml'
 
 env:
   IMAGE_NAME: ${{ github.event.repository.name }} # output of build.yml, keep in sync
@@ -37,7 +37,7 @@ concurrency:
 jobs:
   build:
     name: Build ${{ matrix.variant }} disk image
-    runs-on: ${{ inputs.platform == 'amd64' && 'ubuntu-24.04' || 'ubuntu-24.04-arm' }}
+    runs-on: ${{ (inputs.platform || 'amd64') == 'amd64' && 'ubuntu-24.04' || 'ubuntu-24.04-arm' }}
     strategy:
       fail-fast: false
       matrix:
@@ -126,6 +126,15 @@ jobs:
           set -euo pipefail
           output="${RUNNER_TEMP}/bib-output"
           mkdir -p "${output}"
+          # GitHub Actions podman workaround, ported from the archived action
+          # (osbuild/bootc-image-builder#446): reset rootful storage and force
+          # the overlay driver before anything is pulled into it.
+          sudo rm -rf /var/lib/containers/storage
+          sudo mkdir -p /etc/containers
+          printf '%s\n' '[storage]' 'driver = "overlay"' \
+            'runroot = "/run/containers/storage"' \
+            'graphroot = "/var/lib/containers/storage"' |
+            sudo tee /etc/containers/storage.conf >/dev/null
           # BIB reads the source image from rootful storage; the verified
           # digest ref is pulled there, never a mutable tag.
           sudo podman pull "${SOURCE_IMAGE}"
@@ -140,6 +149,8 @@ jobs:
             -v "${output}:/output" \
             -v /var/lib/containers/storage:/var/lib/containers/storage \
             "${BIB_IMAGE}" \
+            build \
+            --output /output \
             --type "${DISK_BUILD_TYPE}" \
             --rootfs btrfs \
             --use-librepo=True \

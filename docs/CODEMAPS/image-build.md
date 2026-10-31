@@ -120,7 +120,9 @@ run on the root-owned checkout), the allowlisted `$work/scanner-cargo`, the carg
 `scanner-cargo` and new empty `scanner` (the output, unchanged `export scanner "$work/scanner"`) and `home`; its
 selfcheck also probes writes to `scanner-inputs`, the export, its `Cargo.lock`, both json records and
 `/factory/snitchwatch-system-scanner-build.py`. `--phase build` refuses euid 0 first and runs everything else
-as 65534. After it root only exports the allowlist and removes the three dirs. The export path moved
+as 65534. After it root overwrites the build uid's `source-inputs.json` with its own copy from `scanner-inputs`, exports the allowlist
+(each file opened `O_NOFOLLOW|O_NONBLOCK`, fstat'd regular with one link, read from that fd; all kinds) and removes the three dirs.
+The scanner selfcheck also requires `rpm-inventory.txt` and the pins file readable by 65534. The export path moved
 (`out/source` → `scanner-inputs/source`); `--remap-path-prefix` maps it to the same `/snitchwatch`, and no pin
 or verifier holds a scanner binary hash (assembly checks them against the stage's own provenance). Consequence:
 the scanner's two-build compare, test logs and provenance are now produced by 65534 and can be forged by a

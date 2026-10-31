@@ -1236,8 +1236,26 @@ class ScannerBuildHardening(unittest.TestCase):
 
     def test_root_inputs_phase_runs_no_third_party_code_and_build_phase_no_root_work(self):
         # M1 step 3: root only exports, pin-checks, builds the allowlisted cargo home and digests the toolchain.
-        inputs = {name for name, _ in self.main_calls(('inputs_phase',))}
-        self.assertFalse(inputs & {'run', 'load_bridge_artifact', 'require_private_bus_test'}, inputs)
+        import ast
+        phase = self.phase('inputs_phase')
+        # An allowlist of every call the root phase may make (by unparsed callee): nothing else, however it is spelled.
+        allowed = {"(exported / 'Cargo.lock').read_text", 'Path', 'ValueError', 'archive.open', 'archive.unlink', 'args.cargo_home.resolve',
+                   'args.inputs.resolve', 'args.pins.read_text', 'args.source.resolve', 'epoch.isdigit', 'exported.mkdir', 'exported.rglob',
+                   'inputs.mkdir', 'installed_toolchain_digest', 'json.loads', 'make_fresh_cargo_home', 'os.environ.get', 'os.path.lexists',
+                   'os.umask', 'path.is_file', 'path.relative_to', 'print', 'require_bridge_cargo_home', 'require_builder_container',
+                   'require_no_cargo_config', 'require_pinned_file', 'require_pinned_scanner_sources', 'require_toolchain_digest', 'sha',
+                   'sorted', 'str', 'stream.extractall', 'subprocess.check_output', 'subprocess.run', 'tarfile.open', 'write_json',
+                   "subprocess.check_output(['git', '-C', str(source), 'log', '-1', '--format=%ct'], text=True).strip"}
+        calls = [n for n in ast.walk(phase) if isinstance(n, ast.Call)]
+        self.assertEqual({ast.unparse(c.func) for c in calls} - allowed, set())
+        for call in calls:
+            if isinstance(call.func, ast.Attribute) and ast.unparse(call.func.value) == 'subprocess':
+                argv = call.args[0] if call.args else None
+                self.assertIsInstance(argv, ast.List, ast.unparse(call))
+                self.assertEqual(ast.unparse(argv.elts[0]), "'git'", ast.unparse(call))
+        # Neither the build command, the binaries, the packages nor the build phase is even referenced.
+        names = {n.id for n in ast.walk(phase) if isinstance(n, ast.Name)} | {n.attr for n in ast.walk(phase) if isinstance(n, ast.Attribute)}
+        self.assertEqual(names & {'BUILD', 'BINARIES', 'PACKAGES', 'build_phase'}, set())
         for literal in ('cargo', 'rustc', 'ldd', 'dbus-run-session', 'test', 'build'):
             self.assertNotIn(literal, self.literals('inputs_phase'), literal)
         build = {name for name, _ in self.main_calls(('build_phase',))}
@@ -1249,9 +1267,11 @@ class ScannerBuildHardening(unittest.TestCase):
             self.assertIn(literal, self.literals('build_phase'), literal)
         # The build phase refuses root before anything else (it runs only behind snitchwatch-system-unpriv.py).
         import ast
-        first = self.phase('build_phase').body[1]
-        self.assertIsInstance(first, ast.If)
-        self.assertIn('os.geteuid() == 0', ast.unparse(first.test))
+        body = self.phase('build_phase').body
+        guards = [n for n in body if isinstance(n, ast.If) and 'os.geteuid() == 0' in ast.unparse(n.test)]
+        self.assertEqual(len(guards), 1)
+        self.assertTrue(any(isinstance(n, ast.Raise) for n in guards[0].body))
+        self.assertLess(body.index(guards[0]), 2)
 
     def test_build_phase_refuses_root_and_the_cli_requires_a_known_phase_with_only_its_arguments(self):
         from unittest import mock

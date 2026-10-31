@@ -69,7 +69,9 @@ PROFILES = {
                 'probes': (('create', 'WORK/scanner-inputs'), ('create', 'WORK/scanner-inputs/source'),
                            *(('append', 'WORK/scanner-inputs/' + f) for f in ('source/Cargo.lock', 'source-inputs.json',
                                                                               'build-inputs.json')),
-                           ('append', 'FACTORY/snitchwatch-system-scanner-build.py'))},
+                           ('append', 'FACTORY/snitchwatch-system-scanner-build.py')),
+                # Read by the build phase (provenance, pin arguments): fail early if the mode or a parent blocks BUILD_UID.
+                'readable': ('WORK/rpm-inventory.txt', 'FACTORY/snitchwatch-system-pins.json')},
 }
 READONLY_LABEL = {'source': 'source checkout', 'scanner-inputs': 'scanner input tree'}
 DENIED = (13, 1, 30)  # EACCES, EPERM, EROFS
@@ -321,6 +323,22 @@ def probe(kind, path):
         return None if error.errno in DENIED else '%s: %s' % (path, error)
 
 
+def unreadable(path):
+    """None if this uid can open PATH for reading and read a byte, else a clear message."""
+    try:
+        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    except OSError as error:
+        return ('input is not readable by uid %d: %s (%s); it must be other-readable in a traversable directory'
+                % (os.getuid(), path, error.strerror))
+    try:
+        os.read(descriptor, 1)
+    except OSError as error:
+        return 'input cannot be read by uid %d: %s (%s)' % (os.getuid(), path, error.strerror)
+    finally:
+        os.close(descriptor)
+    return None
+
+
 def writable_outside(top, allowed, uid):
     """Paths under TOP this uid could write (or owns) other than ALLOWED trees and sticky dirs."""
     entries, unlistable = walk(top)
@@ -350,6 +368,10 @@ def selfcheck(work, factory, top='/', uid=BUILD_UID, gid=BUILD_GID, status='/pro
         report.setdefault('absentProbes' if result == 'absent' else 'deniedWrites', []).append(target)
         if result and result != 'absent':
             problems.append('write to a root-owned path did not fail: ' + result)
+    for target in chosen.get('readable', ()):
+        problem = unreadable(sub(target))
+        if problem:
+            problems.append(problem)
     scratch = [os.path.join(work, name) for name in chosen['scratch']]
     for directory in scratch:
         if not (probe('create', directory) or '').startswith('created '):

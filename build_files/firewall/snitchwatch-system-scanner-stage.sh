@@ -25,12 +25,16 @@ CARGO_HOME="$work/cargo" python3 -B "$factory/snitchwatch-system-scanner-build.p
 # root-owned and not writable by it, that it owns nothing, and hands it only the
 # scratch dirs (scanner-cargo, scanner, home); the selfcheck proves the drop and
 # that deliberate writes to root-owned tooling and inputs fail (one JSON line).
+# The long command lines from here to the export are intentionally exact-string-matched by
+# tests/test-snitchwatch-image-stages.py; change them there in the same commit.
 python3 -B "$factory/snitchwatch-system-unpriv.py" prepare "$work" scanner
 python3 -B "$factory/snitchwatch-system-unpriv.py" run "$work" -- python3 -B "$factory/snitchwatch-system-unpriv.py" selfcheck "$work" scanner
 # Both builds and their comparison, cargo test, the private-bus test, ldd, cargo
 # metadata/tree and the license texts, all as uid 65534 (which can therefore forge them).
 CARGO_BUILD_JOBS=4 python3 -B "$factory/snitchwatch-system-unpriv.py" run "$work" -- python3 -B "$factory/snitchwatch-system-scanner-build.py" --phase build --inputs "$work/scanner-inputs" --cargo-home "$work/scanner-cargo" --out "$work/scanner" --pins "$factory/snitchwatch-system-pins.json" --rpm-inventory "$work/rpm-inventory.txt"
-# Root after the drop (every uid 65534 process is gone): copy only the allowlist out.
+# Root after the drop (every uid 65534 process is gone): replace the build uid's copy of
+# source-inputs.json with root's own from scanner-inputs, then copy only the allowlist out.
+install -m 0644 "$work/scanner-inputs/source-inputs.json" "$work/scanner/source-inputs.json"
 python3 "$factory/snitchwatch-system-handoff.py" export scanner "$work/scanner" "$2"
 # Keep the stage layer small; only $2 crosses the stage boundary.
 rm -rf -- "$work/scanner" "$work/scanner-cargo" "$work/scanner-inputs"

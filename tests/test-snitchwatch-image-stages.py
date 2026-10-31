@@ -65,6 +65,7 @@ SCANNER_DROP_BUILD = ('CARGO_BUILD_JOBS=4 python3 -B "$factory/snitchwatch-syste
                       '"$factory/snitchwatch-system-scanner-build.py" --phase build --inputs "$work/scanner-inputs" '
                       '--cargo-home "$work/scanner-cargo" --out "$work/scanner" --pins "$factory/snitchwatch-system-pins.json" '
                       '--rpm-inventory "$work/rpm-inventory.txt"')
+SCANNER_ROOT_COPY = 'install -m 0644 "$work/scanner-inputs/source-inputs.json" "$work/scanner/source-inputs.json"'
 SCANNER_EXPORT = 'python3 "$factory/snitchwatch-system-handoff.py" export scanner "$work/scanner" "$2"'
 # Lines allowed before an offline stage's network probe: our own mode check,
 # argument/container guards and plain assignments. A guard is `[[ ]]` tests
@@ -887,6 +888,28 @@ class Handoff(unittest.TestCase):
         with self.assertRaises(self.h['Refusal']):
             self.h['export']('scanner', source, self.root / 'dest')
 
+    def test_export_refuses_a_hardlinked_fifo_or_symlinked_source_file_for_every_kind(self):
+        tarball = 'snitchwatch-bridge-%s-x86_64.tar.gz' % PINS['bridgeVersion']
+        kinds = (('scanner', 'build.log', None), ('bridge', tarball, PINS), ('bridge-rebuild', tarball, PINS))
+        for kind, name, pins in kinds:
+            for shape, message in (('hardlink', 'is hard-linked'), ('fifo', 'is not a regular file'), ('symlink', 'cannot be opened without following links')):
+                with self.subTest(kind=kind, shape=shape):
+                    root = self.root / ('%s-%s' % (kind, shape))
+                    source = self.scanner(root / 'out') if kind == 'scanner' else root / 'out'
+                    if kind != 'scanner':
+                        for rel in self.h['allowlist'](kind, pins):
+                            self.write(source / rel)
+                    (source / name).unlink()
+                    if shape == 'hardlink':
+                        self.write(root / 'other')
+                        os.link(root / 'other', source / name)
+                    elif shape == 'fifo':
+                        os.mkfifo(source / name)
+                    else:
+                        (source / name).symlink_to('/etc/hostname')
+                    with self.assertRaisesRegex(self.h['Refusal'], message):
+                        self.h['export'](kind, source, root / 'dest', pins)
+
     def test_check_refuses_every_unexpected_shape(self):
         cases = {
             'extra file': (lambda r: self.write(r / 'evil.so'), 'unexpected file'),
@@ -1196,6 +1219,9 @@ class UnprivilegedBridgeBuild(unittest.TestCase):
             (work / name).mkdir()
         tooling = self.root / 'work/usr-bin'
         tooling.mkdir()
+        (tooling / 'snitchwatch-system-pins.json').write_text('{}')
+        (tooling / 'snitchwatch-system-pins.json').chmod(0o444)
+        (work / 'rpm-inventory.txt').write_text('pkg\n')
         for path in work.rglob('*'):
             if path.is_file() and 'scanner-cargo' not in path.parts:
                 path.chmod(0o444)
@@ -1219,6 +1245,18 @@ class UnprivilegedBridgeBuild(unittest.TestCase):
         (work / 'scanner-inputs/source-inputs.json').chmod(0o444)
         (work / 'scanner').chmod(0o555)
         with self.assertRaisesRegex(self.u['Refusal'], re.escape('scratch dir is not writable: %s' % (work / 'scanner'))):
+            check()
+        (work / 'scanner').chmod(0o755)
+        if os.geteuid() != 0:  # mode bits do not stop root
+            for path, name in ((work / 'rpm-inventory.txt', 'rpm-inventory.txt'), (tooling / 'snitchwatch-system-pins.json', 'snitchwatch-system-pins.json')):
+                with self.subTest(unreadable=name):
+                    path.chmod(0)
+                    with self.assertRaisesRegex(self.u['Refusal'], r'input is not readable by uid \d+: .*%s' % re.escape(name)):
+                        check()
+                    path.chmod(0o444)
+        tooling.chmod(0o755)
+        (tooling / 'snitchwatch-system-pins.json').unlink()
+        with self.assertRaisesRegex(self.u['Refusal'], r'input is not readable by uid \d+: .*snitchwatch-system-pins.json \(No such file'):
             check()
 
     def test_cli_takes_an_optional_known_profile_only(self):
@@ -1338,7 +1376,7 @@ class UnprivilegedScannerStage(unittest.TestCase):
         lines = self.lines()
         order = ['python3 "$factory/snitchwatch-system-handoff.py" probe-network offline',
                  "rpm -qa --qf '%{NAME}-%{EPOCHNUM}:%{VERSION}-%{RELEASE}.%{ARCH}\\n' | LC_ALL=C sort | cmp - \"$work/rpm-inventory.txt\" || {",
-                 SCANNER_INPUTS, SCANNER_PREPARE, SCANNER_SELFCHECK, SCANNER_DROP_BUILD, SCANNER_EXPORT]
+                 SCANNER_INPUTS, SCANNER_PREPARE, SCANNER_SELFCHECK, SCANNER_DROP_BUILD, SCANNER_ROOT_COPY, SCANNER_EXPORT]
         self.assertEqual([lines.index(line) for line in order], sorted(lines.index(line) for line in order))
         # After the drop, root only exports through the allowlist and removes the scratch.
         self.assertEqual(lines[lines.index(SCANNER_EXPORT) + 1:], ['rm -rf -- "$work/scanner" "$work/scanner-cargo" "$work/scanner-inputs"'])
@@ -1352,13 +1390,19 @@ class UnprivilegedScannerStage(unittest.TestCase):
         factory, work, events = tmp / 'factory', tmp / 'work', tmp / 'events'
         factory.mkdir()
         work.mkdir()
+        (work / 'scanner-inputs').mkdir()
+        (work / 'scanner-inputs/source-inputs.json').write_text('root copy')
+        (work / 'scanner').mkdir()
+        (work / 'scanner/source-inputs.json').write_text('forged by the build uid')
+        self.events = events
         log = 'import os,sys\nopen(os.environ["EVENTS"],"a").write("%s " + " ".join(sys.argv[1:]) + " jobs=" + os.environ.get("CARGO_BUILD_JOBS", "-")'
         (factory / UNPRIV.name).write_text(log % 'unpriv' + ' + "\\n")\n'
                                            'if sys.argv[1] == os.environ.get("FAIL"): sys.exit(1)\n'
                                            'if sys.argv[1] == "run":\n    assert sys.argv[3] == "--"\n    os.execvp(sys.argv[4], sys.argv[4:])\n')
         (factory / 'snitchwatch-system-scanner-build.py').write_text(
             log % 'build' + ' + " home=" + os.environ.get("CARGO_HOME", "-") + "\\n")\n')
-        (factory / HANDOFF.name).write_text(log % 'handoff' + ' + "\\n")\n')
+        (factory / HANDOFF.name).write_text(log % 'handoff' + ' + "\\n")\n'
+                                            'import shutil\nshutil.copyfile(sys.argv[3] + "/source-inputs.json", os.environ["EVENTS"] + ".exported")\n')
         script = 'set -euo pipefail\nfactory=%s\nwork=%s\nset -- %s %s\n%s\n' % (factory, work, work, tmp / 'handoff', fragment)
         result = subprocess.run(['bash', '-c', script], capture_output=True, text=True,
                                 env={'PATH': '/usr/bin:/bin', 'HOME': str(tmp), 'EVENTS': str(events), 'FAIL': fail})
@@ -1380,6 +1424,9 @@ class UnprivilegedScannerStage(unittest.TestCase):
             '--rpm-inventory W/rpm-inventory.txt jobs=4 home=-' % pins,
             'handoff export scanner W/scanner T/handoff jobs=-',
         ])
+        # Root exports its own source-inputs.json, never the copy the build uid wrote.
+        exported = Path(str(self.events) + '.exported')
+        self.assertEqual(exported.read_text(), 'root copy')
 
     def test_a_failed_prepare_or_selfcheck_stops_the_stage_before_any_build(self):
         for step in ('prepare', 'selfcheck'):

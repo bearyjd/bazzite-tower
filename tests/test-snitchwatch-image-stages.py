@@ -53,6 +53,19 @@ DROPPED_STEPS = {
                     DROP + ' repro "$first" 2>&1 | tee "$work/repro.log"', DROP + ' verify "$first" "${pin[1]}"'],
     REBUILD_SCRIPT: [DROP + ' fetch || {', DROP + ' build 2>&1 | tee "$work/build.log"'],
 }
+# M1 step 3 for the scanner stage: root prepares the inputs, every cargo/rustc/ldd/test run is the build phase as uid 65534.
+SCANNER_SCRIPT = FACTORY / 'snitchwatch-system-scanner-stage.sh'
+SCANNER_INPUTS = ('CARGO_HOME="$work/cargo" python3 -B "$factory/snitchwatch-system-scanner-build.py" --phase inputs --source "$work/source" '
+                  '--inputs "$work/scanner-inputs" --cargo-home "$work/scanner-cargo" --pins "$factory/snitchwatch-system-pins.json" '
+                  '--toolchain-digest "$work/toolchain.sha256"')
+SCANNER_PREPARE = 'python3 -B "$factory/snitchwatch-system-unpriv.py" prepare "$work" scanner'
+SCANNER_SELFCHECK = ('python3 -B "$factory/snitchwatch-system-unpriv.py" run "$work" -- python3 -B "$factory/snitchwatch-system-unpriv.py" '
+                     'selfcheck "$work" scanner')
+SCANNER_DROP_BUILD = ('CARGO_BUILD_JOBS=4 python3 -B "$factory/snitchwatch-system-unpriv.py" run "$work" -- python3 -B '
+                      '"$factory/snitchwatch-system-scanner-build.py" --phase build --inputs "$work/scanner-inputs" '
+                      '--cargo-home "$work/scanner-cargo" --out "$work/scanner" --pins "$factory/snitchwatch-system-pins.json" '
+                      '--rpm-inventory "$work/rpm-inventory.txt"')
+SCANNER_EXPORT = 'python3 "$factory/snitchwatch-system-handoff.py" export scanner "$work/scanner" "$2"'
 # Lines allowed before an offline stage's network probe: our own mode check,
 # argument/container guards and plain assignments. A guard is `[[ ]]` tests
 # joined by `&&` and ending in a refusal; nothing can be chained after it.
@@ -1125,6 +1138,94 @@ class UnprivilegedBridgeBuild(unittest.TestCase):
                 with self.assertRaisesRegex(self.u['Refusal'], message):
                     self.prepare(work, **extra)
 
+    def scanner_tree(self):
+        work = self.root / 'work/native'
+        for rel in ('source/.git', 'scanner-inputs/source/crates', 'scanner-cargo/registry/cache', 'toolchain'):
+            (work / rel).mkdir(parents=True)
+        for rel in ('source/.git/HEAD', 'scanner-inputs/source/Cargo.lock', 'scanner-inputs/source-inputs.json',
+                    'scanner-inputs/build-inputs.json', 'scanner-cargo/registry/cache/a.crate', 'rpm-inventory.txt'):
+            (work / rel).write_text(rel)
+        return work
+
+    def test_scanner_profile_hands_over_only_its_own_scratch_and_keeps_the_bridge_profile(self):
+        self.assertEqual(self.u['PROFILES']['bridge'], {'scratch': self.u['SCRATCH'], 'fresh': self.u['FRESH'], 'readonly': ('source',), 'probes': ()})
+        self.assertEqual(self.u['PROFILES']['scanner']['scratch'], ('scanner-cargo', 'scanner', 'home'))
+        self.assertEqual(self.u['PROFILES']['scanner']['readonly'], ('source', 'scanner-inputs'))
+        work = self.scanner_tree()
+        result, chowned = self.prepare(work, profile='scanner')
+        self.assertEqual(result['scratch'], [str(work / name) for name in ('scanner-cargo', 'scanner', 'home')])
+        self.assertEqual(sorted(chowned), ['home', 'scanner', 'scanner-cargo', 'scanner-cargo/registry', 'scanner-cargo/registry/cache',
+                                           'scanner-cargo/registry/cache/a.crate'])
+        for name in ('scanner', 'home'):
+            self.assertEqual(list((work / name).iterdir()), [], name)
+        self.assertFalse((work / 'dist').exists())
+
+    def test_scanner_profile_refuses_a_writable_export_existing_scratch_or_no_cargo_home(self):
+        cases = {
+            'group-writable export file': (lambda w: (w / 'scanner-inputs/source/Cargo.lock').chmod(0o664), 'scanner input tree is not root-owned read-only'),
+            'other-writable inputs dir': (lambda w: (w / 'scanner-inputs').chmod(0o757), 'scanner input tree is not root-owned read-only'),
+            'unreadable build inputs': (lambda w: (w / 'scanner-inputs/build-inputs.json').chmod(0o600), 'not other-readable'),
+            'writable checkout': (lambda w: (w / 'source/.git/HEAD').chmod(0o666), 'source checkout is not root-owned read-only'),
+            'output exists': (lambda w: (w / 'scanner').mkdir(), 'scratch directory already exists'),
+            'no cargo home': (lambda w: shutil.rmtree(w / 'scanner-cargo'), 'the allowlisted cargo home is not a directory'),
+            'symlink in cargo home': (lambda w: (w / 'scanner-cargo/link').symlink_to('/etc'), 'not a regular file or directory'),
+        }
+        for label, (mutate, message) in cases.items():
+            with self.subTest(label):
+                self.make_writable()
+                shutil.rmtree(self.root / 'work', ignore_errors=True)
+                work = self.scanner_tree()
+                mutate(work)
+                with self.assertRaisesRegex(self.u['Refusal'], message):
+                    self.prepare(work, profile='scanner')
+        with self.assertRaisesRegex(self.u['Refusal'], 'unknown profile'):
+            self.prepare(self.scanner_tree(), profile='daemon')
+
+    def test_scanner_profile_probes_its_root_owned_inputs_and_builder(self):
+        probes = dict((path, kind) for kind, path in self.u['PROFILES']['scanner']['probes'])
+        self.assertEqual(probes, {'WORK/scanner-inputs': 'create', 'WORK/scanner-inputs/source': 'create',
+                                  'WORK/scanner-inputs/source/Cargo.lock': 'append', 'WORK/scanner-inputs/source-inputs.json': 'append',
+                                  'WORK/scanner-inputs/build-inputs.json': 'append', 'FACTORY/snitchwatch-system-scanner-build.py': 'append'})
+
+    @unittest.skipIf(os.geteuid() == 0, 'mode bits do not stop root')
+    def test_scanner_selfcheck_requires_its_scratch_writable_and_its_inputs_not(self):
+        work = self.scanner_tree()
+        for name in ('scanner', 'home'):
+            (work / name).mkdir()
+        tooling = self.root / 'work/usr-bin'
+        tooling.mkdir()
+        for path in work.rglob('*'):
+            if path.is_file() and 'scanner-cargo' not in path.parts:
+                path.chmod(0o444)
+        for path in (work / 'scanner-inputs/source/crates', work / 'scanner-inputs/source', work / 'scanner-inputs', work / 'source/.git',
+                     work / 'source', work / 'toolchain', tooling, work):
+            path.chmod(0o555)
+        sub = lambda target: target.replace('WORK', str(work), 1).replace('FACTORY', str(tooling), 1)
+        probes = [(kind, sub(target)) for kind, target in self.u['PROFILES']['scanner']['probes']]
+        status = self.status(DROPPED_STATUS.replace('65534', '4242424'))
+
+        def check():
+            with contextlib.redirect_stdout(io.StringIO()):
+                return self.u['selfcheck'](work, tooling, top=str(self.root / 'work'), uid=4242424, gid=4242424, status=str(status),
+                                           probes=probes, path=str(tooling), profile='scanner')
+        report = check()
+        self.assertEqual(len(report['deniedWrites']), 5)
+        self.assertEqual(report['absentProbes'], [str(tooling / 'snitchwatch-system-scanner-build.py')])
+        (work / 'scanner-inputs/source-inputs.json').chmod(0o644)
+        with self.assertRaisesRegex(self.u['Refusal'], 'write to a root-owned path did not fail: opened for writing'):
+            check()
+        (work / 'scanner-inputs/source-inputs.json').chmod(0o444)
+        (work / 'scanner').chmod(0o555)
+        with self.assertRaisesRegex(self.u['Refusal'], re.escape('scratch dir is not writable: %s' % (work / 'scanner'))):
+            check()
+
+    def test_cli_takes_an_optional_known_profile_only(self):
+        for argv in (['prepare', '/work/native', 'daemon'], ['selfcheck', '/work/native', 'bridge', 'x'], ['prepare', '/work/native', '']):
+            with self.subTest(argv=argv):
+                result = subprocess.run(['python3', '-B', str(UNPRIV), *argv], capture_output=True, text=True)
+                self.assertEqual(result.returncode, 1)
+                self.assertRegex(result.stderr, r'^unpriv: [\w-]+: usage: prepare WORK \[bridge\|scanner\]')
+
     @unittest.skipIf(os.geteuid() == 0, 'mode bits do not stop root')
     def test_selfcheck_proves_denied_writes_and_writable_scratch_and_refuses_otherwise(self):
         work = self.tree()
@@ -1204,6 +1305,86 @@ class UnprivilegedBridgeBuild(unittest.TestCase):
         if os.geteuid() != 0:
             result = subprocess.run(['python3', '-B', str(UNPRIV), 'run', '/work/native', '--', 'true'], capture_output=True, text=True)
             self.assertEqual((result.returncode, result.stderr.strip()), (1, 'unpriv: run: run must start as root (it is the privilege drop)'))
+
+
+class UnprivilegedScannerStage(unittest.TestCase):
+    """M1 step 3 for the scanner stage: the same drop helper, profile `scanner`.
+
+    Root runs only the inputs phase (git archive, pin checks, the allowlisted cargo home, the toolchain
+    digest); every cargo build/test, rustc, ldd and dbus-run-session is the build phase, behind the drop."""
+
+    def lines(self):
+        return [line.strip() for line in SCANNER_SCRIPT.read_text().splitlines() if line.strip() and not line.lstrip().startswith('#')]
+
+    def test_third_party_code_in_the_scanner_stage_runs_only_through_the_privilege_drop(self):
+        lines = self.lines()
+        for line in (SCANNER_INPUTS, SCANNER_PREPARE, SCANNER_SELFCHECK, SCANNER_DROP_BUILD, SCANNER_EXPORT):
+            self.assertEqual(lines.count(line), 1, line)
+        self.assertEqual([line for line in lines if UNPRIV.name in line], [SCANNER_PREPARE, SCANNER_SELFCHECK, SCANNER_DROP_BUILD])
+        self.assertEqual([line for line in lines if 'snitchwatch-system-scanner-build.py' in line], [SCANNER_INPUTS, SCANNER_DROP_BUILD])
+        self.assertEqual([line for line in lines if '--phase build' in line], [SCANNER_DROP_BUILD])
+        self.assertNotIn(UNPRIV.name, SCANNER_INPUTS)
+        for line in lines:
+            if line == SCANNER_DROP_BUILD:
+                continue
+            for needle in ('cargo ', 'rustc', 'ldd', 'dbus-run-session', 'setpriv', 'runuser', 'su ', 'sudo', UNPRIV_SCRIPT.name):
+                self.assertNotIn(needle, re.sub(r"'[^']*'", "''", line), line)
+        # No Containerfile USER/su trick: the scanner stage RUN is unchanged, the drop is inside it.
+        self.assertEqual([keyword for keyword, _ in stages()['snitchwatch-scanner']['body']], ['ARG', 'RUN'])
+
+    def test_scanner_drop_is_prepared_and_self_checked_after_the_root_inputs_and_before_the_build(self):
+        lines = self.lines()
+        order = ['python3 "$factory/snitchwatch-system-handoff.py" probe-network offline',
+                 "rpm -qa --qf '%{NAME}-%{EPOCHNUM}:%{VERSION}-%{RELEASE}.%{ARCH}\\n' | LC_ALL=C sort | cmp - \"$work/rpm-inventory.txt\" || {",
+                 SCANNER_INPUTS, SCANNER_PREPARE, SCANNER_SELFCHECK, SCANNER_DROP_BUILD, SCANNER_EXPORT]
+        self.assertEqual([lines.index(line) for line in order], sorted(lines.index(line) for line in order))
+        # After the drop, root only exports through the allowlist and removes the scratch.
+        self.assertEqual(lines[lines.index(SCANNER_EXPORT) + 1:], ['rm -rf -- "$work/scanner" "$work/scanner-cargo" "$work/scanner-inputs"'])
+
+    def run_fragment(self, fail=''):
+        """The scanner stage from the inputs phase to the end, with logging fakes for the drop, the builder and the handoff."""
+        lines = SCANNER_SCRIPT.read_text().splitlines()
+        fragment = '\n'.join(lines[lines.index(SCANNER_INPUTS):])
+        tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, tmp)
+        factory, work, events = tmp / 'factory', tmp / 'work', tmp / 'events'
+        factory.mkdir()
+        work.mkdir()
+        log = 'import os,sys\nopen(os.environ["EVENTS"],"a").write("%s " + " ".join(sys.argv[1:]) + " jobs=" + os.environ.get("CARGO_BUILD_JOBS", "-")'
+        (factory / UNPRIV.name).write_text(log % 'unpriv' + ' + "\\n")\n'
+                                           'if sys.argv[1] == os.environ.get("FAIL"): sys.exit(1)\n'
+                                           'if sys.argv[1] == "run":\n    assert sys.argv[3] == "--"\n    os.execvp(sys.argv[4], sys.argv[4:])\n')
+        (factory / 'snitchwatch-system-scanner-build.py').write_text(
+            log % 'build' + ' + " home=" + os.environ.get("CARGO_HOME", "-") + "\\n")\n')
+        (factory / HANDOFF.name).write_text(log % 'handoff' + ' + "\\n")\n')
+        script = 'set -euo pipefail\nfactory=%s\nwork=%s\nset -- %s %s\n%s\n' % (factory, work, work, tmp / 'handoff', fragment)
+        result = subprocess.run(['bash', '-c', script], capture_output=True, text=True,
+                                env={'PATH': '/usr/bin:/bin', 'HOME': str(tmp), 'EVENTS': str(events), 'FAIL': fail})
+        return result, [line.replace(str(factory), 'F').replace(str(work), 'W').replace(str(tmp), 'T') for line in events.read_text().splitlines()]
+
+    def test_root_runs_only_the_inputs_phase_and_the_build_phase_runs_behind_the_drop(self):
+        result, events = self.run_fragment()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        pins = '--pins F/snitchwatch-system-pins.json'
+        self.assertEqual(events, [
+            'build --phase inputs --source W/source --inputs W/scanner-inputs --cargo-home W/scanner-cargo %s '
+            '--toolchain-digest W/toolchain.sha256 jobs=- home=W/cargo' % pins,
+            'unpriv prepare W scanner jobs=-',
+            'unpriv run W -- python3 -B F/snitchwatch-system-unpriv.py selfcheck W scanner jobs=-',
+            'unpriv selfcheck W scanner jobs=-',
+            'unpriv run W -- python3 -B F/snitchwatch-system-scanner-build.py --phase build --inputs W/scanner-inputs '
+            '--cargo-home W/scanner-cargo --out W/scanner %s --rpm-inventory W/rpm-inventory.txt jobs=4' % pins,
+            'build --phase build --inputs W/scanner-inputs --cargo-home W/scanner-cargo --out W/scanner %s '
+            '--rpm-inventory W/rpm-inventory.txt jobs=4 home=-' % pins,
+            'handoff export scanner W/scanner T/handoff jobs=-',
+        ])
+
+    def test_a_failed_prepare_or_selfcheck_stops_the_stage_before_any_build(self):
+        for step in ('prepare', 'selfcheck'):
+            with self.subTest(step):
+                result, events = self.run_fragment(fail=step)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertFalse([event for event in events if event.startswith(('build --phase build', 'handoff '))], events)
 
 
 class NetworkProbe(unittest.TestCase):

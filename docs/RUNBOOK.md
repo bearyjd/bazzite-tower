@@ -305,6 +305,7 @@ permissions, token access, resolved service hardening and the shipped
 `allow`/`proc` policy. An explicit local deny override fails this readiness
 contract as policy drift; readiness does not enable enforcement.
 Readiness runs its helpers (`flatpak`, `systemctl`, `ss`, `busctl`, `getent`, `python3`, `systemd-run`) by fixed `/usr/bin` path with a minimal environment, ignoring the caller's `PATH`; the root entry scripts run `python3 -I` so `PYTHONPATH`/user site are ignored. A missing helper, or unparseable, non-regular, symlinked, FIFO or over-64-KiB user-store Flatpak metadata prints `NOT READY: ...` and exits 1.
+The installed GUI's `filesystems=` must hold `/run/snitchwatch:ro`, `/run/snitchwatch-auth:ro` and `xdg-config/snitchwatch:create` and may add only `xdg-config/kdeglobals:ro` plus exact `--filesystem=` entries of the image's pinned `flatpakFinishArgs` (the four read-only icon exports); anything else, including a `:rw`/`:create` variant or `home`/`host-os`, prints `NOT READY: same-ID Flatpak filesystem profile mismatch`. Compare with `grep ^filesystems= ~/.local/share/flatpak/app/org.snitchwatch.Snitchwatch/x86_64/*/active/metadata` (every installed branch is checked).
 It is read-only and cannot prove a GUI answers prompts. Migration and rollback
 must preserve the recorded legacy baseline and reject unexpected live `/etc`
 policy/address drift or user-unit/Flatpak overrides. Do not activate the system

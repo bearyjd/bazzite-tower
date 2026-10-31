@@ -26,6 +26,7 @@ INPUTS = (
     'scripts/install-signature-policy.sh', 'scripts/snitchwatch-gate.py',
     'tests/test-snitchwatch-image-build-fixtures',
     'tests/fixtures/r13-installed-branch-metadata.json',
+    'tests/fixtures/flatpak-installed-metadata',
     'tests/test-snitchwatch-system.py', 'tests/test-snitchwatch-gate.py',
     *(command[1] for _, command, _ in CHECKS),
 )

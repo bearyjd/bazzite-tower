@@ -777,6 +777,74 @@ class SystemBehavior(unittest.TestCase):
         common.runtime_readiness(self.ctx)
         self.assertIn(["flatpak", "--version"], self.ctx.commands)
 
+    def installed_flatpak(self, finish_args=None):
+        # Verbatim [Context] etc. of the r15.1-candidate GUI as installed on the host.
+        pins = json.loads((REPO/"build_files/firewall/snitchwatch-system-pins.json").read_text())
+        self.ctx.manifest["flatpak"]["runtimeRef"] = "org.kde.Platform/x86_64/6.11"  # the fixture's own runtime, independent of later repins
+        self.ctx.manifest["flatpak"]["finishArgs"] = pins["flatpakFinishArgs"] if finish_args is None else finish_args
+        self.ctx.write(common.MANIFEST, json.dumps(self.ctx.manifest))
+        original = self.ctx.runner
+        def version(argv, **kwargs):
+            if argv == ["flatpak", "--version"]:
+                return SimpleNamespace(stdout="Flatpak 1.18.4\n", stderr="", returncode=0)
+            return original(argv, **kwargs)
+        self.ctx.runner = version
+        return self.ctx.flatpak((REPO/"tests/fixtures/flatpak-installed-metadata").read_text())
+
+    def test_flatpak_installed_metadata_with_pinned_icon_exports_passes(self):
+        self.ctx.system_config();self.installed_flatpak()
+        common.flatpak_profiles(self.ctx)
+        common.runtime_readiness(self.ctx)
+
+    def test_flatpak_filesystems_outside_pinned_finish_args_refuse(self):
+        path = self.installed_flatpak();text = path.read_text()
+        line = next(item for item in text.splitlines() if item.startswith("filesystems="))
+        extras = ("host-os", "host-os:ro", "host", "home", "home:ro", "/tmp", "xdg-data/icons:create", "xdg-data/icons",
+                  "xdg-data:ro", "xdg-data/icons/hicolor:ro", "/var/lib/flatpak:ro", "/var/lib/flatpak/exports/share/x:ro",
+                  "xdg-config/kdeglobals", "xdg-config/snitchwatch:ro", "/run/snitchwatch")
+        for extra in extras:
+            with self.subTest(extra=extra):
+                path.write_text(text.replace(line, line+extra+";"))
+                with self.assertRaisesRegex(common.Refusal, "filesystem profile mismatch"):common.flatpak_profiles(self.ctx)
+        for entry, variant in (("/var/lib/flatpak/exports/share:ro", "/var/lib/flatpak/exports/share:rw"),
+                               ("/var/lib/flatpak/exports/share:ro", "/var/lib/flatpak/exports/share"),
+                               ("xdg-data/icons:ro", "xdg-data/icons:create"), ("xdg-data/applications:ro", "xdg-data/applications"),
+                               ("xdg-config/snitchwatch:create", "xdg-config/snitchwatch")):
+            with self.subTest(variant=variant):
+                path.write_text(text.replace(entry+";", variant+";"))
+                with self.assertRaisesRegex(common.Refusal, "filesystem profile mismatch"):common.flatpak_profiles(self.ctx)
+        for required in ("/run/snitchwatch:ro", "/run/snitchwatch-auth:ro", "xdg-config/snitchwatch:create"):
+            with self.subTest(missing=required):
+                path.write_text(text.replace(required+";", "", 1))
+                with self.assertRaisesRegex(common.Refusal, "filesystem profile mismatch"):common.flatpak_profiles(self.ctx)
+        path.write_text(text)
+        common.flatpak_profiles(self.ctx)
+
+    def test_pinned_filesystem_grants_stay_within_reviewed_ceiling(self):
+        pins = json.loads((REPO/"build_files/firewall/snitchwatch-system-pins.json").read_text())["flatpakFinishArgs"]
+        granted = {arg.split("=", 1)[1] for arg in pins if arg.startswith("--filesystem=")}
+        self.assertEqual(granted, {"/run/snitchwatch:ro", "/run/snitchwatch-auth:ro", "xdg-config/snitchwatch:create",
+                                   "/var/lib/flatpak/exports/share:ro", "xdg-data/flatpak/exports/share:ro",
+                                   "xdg-data/applications:ro", "xdg-data/icons:ro"})
+
+    def test_flatpak_icon_exports_require_pinned_finish_args(self):
+        pins = json.loads((REPO/"build_files/firewall/snitchwatch-system-pins.json").read_text())["flatpakFinishArgs"]
+        icons = ["--filesystem=/var/lib/flatpak/exports/share:ro", "--filesystem=xdg-data/flatpak/exports/share:ro",
+                 "--filesystem=xdg-data/applications:ro", "--filesystem=xdg-data/icons:ro"]
+        self.assertTrue(set(icons) <= set(pins))
+        variants = [[arg for arg in pins if arg not in icons]]
+        variants += [[arg for arg in pins if arg != icon] for icon in icons]
+        variants += [[arg.replace(":ro", ":rw") if arg in icons else arg for arg in pins]]
+        variants += [[arg.replace("--filesystem=", "--filesystem=/") if arg in icons else arg for arg in pins]]
+        for finish_args in variants:
+            with self.subTest(finish_args=finish_args):
+                self.installed_flatpak(finish_args)
+                with self.assertRaisesRegex(common.Refusal, "filesystem profile mismatch"):common.flatpak_profiles(self.ctx)
+        for malformed in ("--filesystem=xdg-data/icons:ro", {"--filesystem=xdg-data/icons:ro": 1}, [None], [["--filesystem=host"]]):
+            with self.subTest(malformed=malformed):
+                self.installed_flatpak(malformed)
+                with self.assertRaises(common.Refusal):common.flatpak_profiles(self.ctx)
+
     def test_flatpak_canonical_sockets_accept_every_reviewed_version(self):
         self.canonical_flatpak()
         original = self.ctx.runner

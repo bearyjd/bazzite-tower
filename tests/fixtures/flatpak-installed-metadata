@@ -1,0 +1,31 @@
+[Application]
+name=org.snitchwatch.Snitchwatch
+runtime=org.kde.Platform/x86_64/6.11
+sdk=org.kde.Sdk/x86_64/6.11
+command=snitchwatch-kirigami
+
+[Context]
+shared=ipc;
+sockets=x11;wayland;fallback-x11;
+devices=dri;
+filesystems=xdg-data/flatpak/exports/share:ro;xdg-data/icons:ro;/run/snitchwatch:ro;xdg-data/applications:ro;xdg-config/snitchwatch:create;xdg-config/kdeglobals:ro;/var/lib/flatpak/exports/share:ro;/run/snitchwatch-auth:ro;
+persistent=.local/share/snitchwatch;.local/state/snitchwatch;
+
+[Session Bus Policy]
+com.canonical.AppMenu.Registrar=talk
+org.kde.kconfig.notify=talk
+org.kde.KGlobalSettings=talk
+org.kde.StatusNotifierWatcher=talk
+org.freedesktop.Notifications=talk
+org.snitchwatch.Scanner=talk
+
+[Environment]
+SNITCHWATCH_SYSTEM_BRIDGE=1
+
+[Extension org.snitchwatch.Snitchwatch.Debug]
+directory=lib/debug
+autodelete=true
+no-autodownload=true
+
+[Build]
+built-extensions=org.snitchwatch.Snitchwatch.Debug;

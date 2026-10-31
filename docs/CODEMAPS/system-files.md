@@ -95,6 +95,14 @@ activation, polkit action and private-state tmpfiles definition from the native
 factory. No scanner service or timer is installed. Readiness permits exactly
 `org.snitchwatch.Scanner=talk` only when the verified image's expected Flatpak
 finishArgs grant that name; owning the name, suffixes and wildcards still refuse.
+Installed `[Context] filesystems=` must contain `/run/snitchwatch:ro`,
+`/run/snitchwatch-auth:ro` and `xdg-config/snitchwatch:create`, and may add only
+`xdg-config/kdeglobals:ro` or an exact `--filesystem=X` entry of those finishArgs
+(pins `flatpakFinishArgs`, today the four read-only icon exports
+`/var/lib/flatpak/exports/share:ro`, `xdg-data/flatpak/exports/share:ro`,
+`xdg-data/applications:ro`, `xdg-data/icons:ro`). Exact string match: other
+suffixes, parent/child paths, `home`, `host`, `host-os` refuse. Fixture:
+`tests/fixtures/flatpak-installed-metadata` (verbatim r15.1-candidate install).
 The immutable scanner source/build/license inventory is described in
 `image-build.md`; runtime scanner acceptance remains owner-operated.
 

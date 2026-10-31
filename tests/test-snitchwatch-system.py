@@ -796,14 +796,32 @@ class SystemBehavior(unittest.TestCase):
         common.flatpak_profiles(self.ctx)
         common.runtime_readiness(self.ctx)
 
-    def test_flatpak_indented_lines_refuse_because_glib_parses_them_as_keys(self):
+    def test_flatpak_noncanonical_lines_refuse_because_parsers_disagree(self):
         # configparser folds an indented line into the previous value; GKeyFile reads a new key.
+        # A leading \r/\f is indentation to configparser but stripped (a new key) by GLib, and
+        # str.splitlines() would hide it, so every such line must refuse.
         path = self.installed_flatpak();text = path.read_text()
-        for indent in (" ", "  ", "\t"):
+        for indent in (" ", "  ", "\t", "\r", "\f", "\v", "\x85", "\u2028", "\x1c"):
             with self.subTest(indent=repr(indent)):
                 path.write_text(text.replace("shared=ipc;\n", "shared=ipc;\n"+indent+"features=devel;\n"))
-                with self.assertRaisesRegex(common.Refusal, "indented line"):common.flatpak_profiles(self.ctx)
-        path.write_text(text.replace("\n[Environment]", "\n  \t\n[Environment]"))
+                with self.assertRaisesRegex(common.Refusal, "non-canonical line"):common.flatpak_profiles(self.ctx)
+        payload = "FOO=x\n\r[Context]\n\rshared=network;ipc;\n\rfilesystems=host;\n\rdevices=all;\n"
+        path.write_text(text.replace("SNITCHWATCH_SYSTEM_BRIDGE=1\n", "SNITCHWATCH_SYSTEM_BRIDGE=1\n"+payload))
+        with self.assertRaisesRegex(common.Refusal, "non-canonical line"):common.flatpak_profiles(self.ctx)
+        for line in ("  \t", "key = value", "a:b", "\ufeff[Context]"):
+            with self.subTest(line=repr(line)):
+                path.write_text(text.replace("\n[Environment]", "\n"+line+"\n[Environment]"))
+                with self.assertRaisesRegex(common.Refusal, "non-canonical line"):common.flatpak_profiles(self.ctx)
+        path.write_text(text)
+        common.flatpak_profiles(self.ctx)
+
+    def test_flatpak_unreviewed_metadata_sections_refuse(self):
+        path = self.installed_flatpak();text = path.read_text()
+        for section in ("USB Devices", "Policy Tracker3", "Extension org.example.Other", "context", "Instance"):
+            with self.subTest(section=section):
+                path.write_text(text+"\n["+section+"]\nenumerable-devices=all;\n")
+                with self.assertRaisesRegex(common.Refusal, "unreviewed metadata section"):common.flatpak_profiles(self.ctx)
+        path.write_text(text)
         common.flatpak_profiles(self.ctx)
 
     def test_flatpak_unreviewed_context_keys_refuse(self):

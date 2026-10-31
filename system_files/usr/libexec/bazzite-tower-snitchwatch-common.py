@@ -436,7 +436,13 @@ def read_user_metadata(path):
 
 
 # Only the [Context] keys readiness reviews below; features=, unset-environment= etc. must not pass unchecked.
+# Reviewed [Context] keys and metadata sections. Adding a Flatpak permission (e.g. --allow=, --unset-env=,
+# a new section) to the image's finishArgs must extend these in the same change, or readiness refuses.
 CONTEXT_KEYS = frozenset({"shared", "sockets", "devices", "filesystems", "persistent"})
+METADATA_SECTIONS = frozenset({"Application", "Build", "Context", "Environment", "Session Bus Policy", "System Bus Policy", "Extension org.snitchwatch.Snitchwatch.Debug"})
+# One strict grammar so configparser and GLib's GKeyFile cannot read a line differently: no leading
+# whitespace, no control characters other than TAB inside values, no \r/\f/\v/NEL line separators.
+METADATA_LINE = re.compile(r"(?:|#[^\x00-\x1f\x7f]*|\[[^\[\]\x00-\x1f\x7f]+\]|[A-Za-z0-9._-]+(?:\[[A-Za-z0-9@_.-]+\])?=[^\x00-\x08\x0a-\x1f\x7f]*)")
 
 
 def flatpak_profiles(ctx):
@@ -472,13 +478,16 @@ def flatpak_profiles(ctx):
             meta = configparser.ConfigParser(interpolation=None)
             meta.optionxform = str
             text = read_user_metadata(path)
-            # configparser folds an indented line into the previous value but GLib's
-            # GKeyFile (what Flatpak uses) reads it as a new key, so refuse the ambiguity.
-            require(not any(line.strip() and line[0].isspace() for line in text.splitlines()), "unreadable Flatpak metadata "+str(path)+": indented line")
+            # configparser and GLib's GKeyFile (what Flatpak uses) disagree on indented lines and on
+            # \r/\f separators, so accept only a canonical grammar split on \n alone.
+            body = text[:-1] if text.endswith("\n") else text
+            bad_line = next((number for number, line in enumerate(body.split("\n"), 1) if not METADATA_LINE.fullmatch(line)), None)
+            require(bad_line is None, "unreadable Flatpak metadata "+str(path)+": non-canonical line "+str(bad_line))
             try:
                 meta.read_string(text, str(path))
             except configparser.Error as error:
                 raise Refusal("unreadable Flatpak metadata "+str(path)+": "+str(error)) from error
+            require(set(meta.sections()) <= METADATA_SECTIONS, "same-ID Flatpak has unreviewed metadata section: "+", ".join(sorted(set(meta.sections())-METADATA_SECTIONS)))
             context = meta["Context"] if meta.has_section("Context") else {}
             require(set(context) <= CONTEXT_KEYS, "same-ID Flatpak has unreviewed [Context] key: "+", ".join(sorted(set(context)-CONTEXT_KEYS)))
             def values(key):

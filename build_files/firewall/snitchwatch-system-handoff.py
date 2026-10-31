@@ -134,6 +134,22 @@ def check(kind, root, pins=None, daemon_verifier=None, owner=(0, 0)):
     return sorted(found)
 
 
+def read_regular(kind, origin, rel):
+    """Bytes of ORIGIN read from one fd opened without following a symlink or blocking on a FIFO,
+    and only if that fd is a regular file with a single link (no swap between check and read)."""
+    try:
+        descriptor = os.open(origin, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except OSError as error:
+        raise Refusal('%s export source %s cannot be opened without following links: %s' % (kind, rel, error.strerror))
+    with os.fdopen(descriptor, 'rb') as reader:
+        info = os.fstat(reader.fileno())
+        if not stat.S_ISREG(info.st_mode):
+            raise Refusal('%s export source %s is not a regular file' % (kind, rel))
+        if info.st_nlink != 1:
+            raise Refusal('%s export source %s is hard-linked (%d links)' % (kind, rel, info.st_nlink))
+        return reader.read()
+
+
 def export(kind, source, dest, pins=None, daemon_verifier=None):
     """Copy only the allowlisted regular files from SOURCE into the new DEST."""
     expected = allowlist(kind, pins, daemon_verifier)
@@ -143,14 +159,13 @@ def export(kind, source, dest, pins=None, daemon_verifier=None):
     dest.chmod(0o755)
     for rel, mode in sorted(expected.items()):
         origin = source / rel
-        if not stat.S_ISREG(os.lstat(origin).st_mode):
-            raise Refusal('%s export source %s is not a regular file' % (kind, rel))
+        data = read_regular(kind, origin, rel)
         target = dest / rel
         for parent in reversed(Path(rel).parents[:-1]):
             (dest / parent).mkdir(exist_ok=True)
             (dest / parent).chmod(0o755)
-        with origin.open('rb') as reader, target.open('xb') as writer:
-            writer.write(reader.read())
+        with target.open('xb') as writer:
+            writer.write(data)
         target.chmod(mode)
     return sorted(expected)
 

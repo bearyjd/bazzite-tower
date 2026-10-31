@@ -2,11 +2,15 @@
 """M1 step 3: run the bridge build's third-party code as an unprivileged uid.
 
 Used by both sibling bridge stages (snitchwatch-system-bridge-build.sh and
--bridge-rebuild.sh). Each failure prints one distinct `unpriv:` line and exits 1.
+-bridge-rebuild.sh, profile `bridge`) and by the scanner stage
+(snitchwatch-system-scanner-stage.sh, profile `scanner`). PROFILE is optional and
+defaults to bridge. Each failure prints one distinct `unpriv:` line and exits 1.
 
-  prepare WORK         root, before any third-party code: refuse unless the
-                       source checkout is root-owned with no group/other write
-                       and other-readable, nothing on the filesystem is owned by
+  prepare WORK [PROFILE]
+                       root, before any third-party code: refuse unless the
+                       profile's read-only trees (the source checkout; for the
+                       scanner also its export) are root-owned with no group/other
+                       write and other-readable, nothing on the filesystem is owned by
                        BUILD_UID/BUILD_GID, then create the empty scratch dirs
                        and hand them (and the allowlisted cargo home) to BUILD_UID
   run WORK -- CMD...   root: fork; in the child drop the bounding set, ambient and
@@ -16,7 +20,8 @@ Used by both sibling bridge stages (snitchwatch-system-bridge-build.sh and
                        descendant (this process is their subreaper) and refuse
                        if any survives. Only descendants: in a user namespace,
                        unrelated processes can also show as uid 65534
-  selfcheck WORK       as BUILD_UID (through `run`): print uid/caps/no_new_privs,
+  selfcheck WORK [PROFILE]
+                       as BUILD_UID (through `run`): print uid/caps/no_new_privs,
                        prove deliberate writes to root-owned tooling fail, the
                        scratch dirs are writable, and nothing else on the
                        filesystem is writable or owned by BUILD_UID
@@ -55,6 +60,20 @@ PROBES = (*(('create', d) for d in ('/usr/bin', '/usr/local/bin', '/usr/lib/sysi
           *(('append', f) for f in ('/usr/bin/cc', '/usr/bin/gcc', '/usr/bin/ld', '/usr/bin/rustc', '/usr/bin/cargo',
                                     '/usr/bin/python3', 'WORK/source/Cargo.lock', 'WORK/rpm-inventory.txt',
                                     'FACTORY/snitchwatch-system-unpriv.py')))
+# Per stage: scratch (writable by BUILD_UID, directly under WORK; those not in fresh are
+# the cargo home root made just before), read-only trees prepare checks, and extra probes.
+PROFILES = {
+    'bridge': {'scratch': SCRATCH, 'fresh': FRESH, 'readonly': ('source',), 'probes': ()},
+    'scanner': {'scratch': ('scanner-cargo', 'scanner', 'home'), 'fresh': ('scanner', 'home'),
+                'readonly': ('source', 'scanner-inputs'),
+                'probes': (('create', 'WORK/scanner-inputs'), ('create', 'WORK/scanner-inputs/source'),
+                           *(('append', 'WORK/scanner-inputs/' + f) for f in ('source/Cargo.lock', 'source-inputs.json',
+                                                                              'build-inputs.json')),
+                           ('append', 'FACTORY/snitchwatch-system-scanner-build.py')),
+                # Read by the build phase (provenance, pin arguments): fail early if the mode or a parent blocks BUILD_UID.
+                'readable': ('WORK/rpm-inventory.txt', 'FACTORY/snitchwatch-system-pins.json')},
+}
+READONLY_LABEL = {'source': 'source checkout', 'scanner-inputs': 'scanner input tree'}
 DENIED = (13, 1, 30)  # EACCES, EPERM, EROFS
 PR_CAPBSET_DROP = 24
 PR_SET_CHILD_SUBREAPER = 36
@@ -247,31 +266,39 @@ def source_problems(source, owner=(0, 0)):
     return problems
 
 
-def prepare(work, top='/', uid=BUILD_UID, gid=BUILD_GID, owner=(0, 0), chown=os.lchown):
-    work = Path(work)
+def profile_of(name):
+    if name not in PROFILES:
+        raise Refusal('unknown profile: %r' % name)
+    return PROFILES[name]
+
+
+def prepare(work, top='/', uid=BUILD_UID, gid=BUILD_GID, owner=(0, 0), chown=os.lchown, profile='bridge'):
+    work, chosen = Path(work), profile_of(profile)
     for path in (work.parent, work):
         info = os.lstat(path)
         if (info.st_uid, info.st_gid) != tuple(owner) or stat.S_IMODE(info.st_mode) & 0o022 or not stat.S_ISDIR(info.st_mode):
             raise Refusal('%s must be a root-owned directory without group/other write' % path)
-    problems = source_problems(work / 'source', owner)
-    if problems:
-        raise Refusal('source checkout is not root-owned read-only for uid %d: %s' % (uid, '; '.join(problems[:20])))
+    for tree in chosen['readonly']:
+        problems = source_problems(work / tree, owner)
+        if problems:
+            raise Refusal('%s is not root-owned read-only for uid %d: %s' % (READONLY_LABEL[tree], uid, '; '.join(problems[:20])))
     owned = owned_by_build_ids(top, uid, gid)
     if owned:
         raise Refusal('paths already owned by uid/gid %d before the build: %s' % (uid, ', '.join(owned[:20])))
-    cargo = work / 'bridge-cargo'
-    if not stat.S_ISDIR(os.lstat(cargo).st_mode):
-        raise Refusal('the allowlisted cargo home is not a directory: %s' % cargo)
-    for name in FRESH:
+    for name in chosen['scratch']:
+        cargo = work / name
+        if name not in chosen['fresh'] and not (os.path.lexists(cargo) and stat.S_ISDIR(os.lstat(cargo).st_mode)):
+            raise Refusal('the allowlisted cargo home is not a directory: %s' % cargo)
+    for name in chosen['fresh']:
         if os.path.lexists(work / name):
             raise Refusal('scratch directory already exists: %s' % (work / name))
         (work / name).mkdir(mode=0o755)
-    for name in SCRATCH:
+    for name in chosen['scratch']:
         for path, info in [(str(work / name), os.lstat(work / name)), *walk(str(work / name))[0]]:
             if not (stat.S_ISDIR(info.st_mode) or stat.S_ISREG(info.st_mode)):
                 raise Refusal('scratch entry is not a regular file or directory: %s' % path)
             chown(path, uid, gid)
-    return {'buildUid': uid, 'scratch': [str(work / name) for name in SCRATCH]}
+    return {'buildUid': uid, 'profile': profile, 'scratch': [str(work / name) for name in chosen['scratch']]}
 
 
 def probe(kind, path):
@@ -296,6 +323,22 @@ def probe(kind, path):
         return None if error.errno in DENIED else '%s: %s' % (path, error)
 
 
+def unreadable(path):
+    """None if this uid can open PATH for reading and read a byte, else a clear message."""
+    try:
+        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    except OSError as error:
+        return ('input is not readable by uid %d: %s (%s); it must be other-readable in a traversable directory'
+                % (os.getuid(), path, error.strerror))
+    try:
+        os.read(descriptor, 1)
+    except OSError as error:
+        return 'input cannot be read by uid %d: %s (%s)' % (os.getuid(), path, error.strerror)
+    finally:
+        os.close(descriptor)
+    return None
+
+
 def writable_outside(top, allowed, uid):
     """Paths under TOP this uid could write (or owns) other than ALLOWED trees and sticky dirs."""
     entries, unlistable = walk(top)
@@ -311,20 +354,25 @@ def writable_outside(top, allowed, uid):
     return found, unlistable
 
 
-def selfcheck(work, factory, top='/', uid=BUILD_UID, gid=BUILD_GID, status='/proc/self/status', probes=None, path=PATH):
-    work, factory = str(work), str(factory)
+def selfcheck(work, factory, top='/', uid=BUILD_UID, gid=BUILD_GID, status='/proc/self/status', probes=None, path=PATH,
+              profile='bridge'):
+    work, factory, chosen = str(work), str(factory), profile_of(profile)
     fields = parse_status(Path(status).read_text())
     report = {'uid': os.getuid(), 'euid': os.geteuid(), 'status': {k: ' '.join(v) for k, v in fields.items()},
-              'path': os.environ.get('PATH'), 'home': os.environ.get('HOME')}
+              'path': os.environ.get('PATH'), 'home': os.environ.get('HOME'), 'profile': profile}
     problems = status_problems(fields, uid, gid)
     sub = lambda p: p.replace('WORK', work, 1).replace('FACTORY', factory, 1)
-    probes = probes or [(kind, sub(target)) for kind, target in PROBES]
+    probes = probes or [(kind, sub(target)) for kind, target in (*PROBES, *chosen['probes'])]
     for kind, target in probes:
         result = probe(kind, target)
         report.setdefault('absentProbes' if result == 'absent' else 'deniedWrites', []).append(target)
         if result and result != 'absent':
             problems.append('write to a root-owned path did not fail: ' + result)
-    scratch = [os.path.join(work, name) for name in SCRATCH]
+    for target in chosen.get('readable', ()):
+        problem = unreadable(sub(target))
+        if problem:
+            problems.append(problem)
+    scratch = [os.path.join(work, name) for name in chosen['scratch']]
     for directory in scratch:
         if not (probe('create', directory) or '').startswith('created '):
             problems.append('scratch dir is not writable: ' + directory)
@@ -346,15 +394,16 @@ def main(argv=None):
     factory = Path(__file__).resolve().parent
     command = argv[0] if argv else ''
     try:
-        if command == 'prepare' and len(argv) == 2:
-            print(json.dumps({'unpriv': 'prepare', **prepare(argv[1])}, sort_keys=True))
+        profile = argv[2] if len(argv) == 3 else 'bridge'
+        if command == 'prepare' and len(argv) in (2, 3) and profile in PROFILES:
+            print(json.dumps({'unpriv': 'prepare', **prepare(argv[1], profile=profile)}, sort_keys=True))
             return 0
         if command == 'run' and len(argv) >= 4 and argv[2] == '--':
             return run(argv[1], argv[3:])
-        if command == 'selfcheck' and len(argv) == 2:
-            selfcheck(argv[1], factory)
+        if command == 'selfcheck' and len(argv) in (2, 3) and profile in PROFILES:
+            selfcheck(argv[1], factory, profile=profile)
             return 0
-        raise Refusal('usage: prepare WORK | run WORK -- CMD... | selfcheck WORK')
+        raise Refusal('usage: prepare WORK [bridge|scanner] | run WORK -- CMD... | selfcheck WORK [bridge|scanner]')
     except (Refusal, OSError, ValueError) as error:
         print('unpriv: %s: %s' % (command or '-', error), file=sys.stderr)
         return 1

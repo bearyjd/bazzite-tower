@@ -361,9 +361,9 @@ class ImageBuildContracts(unittest.TestCase):
     def test_scanner_build_only_reads_the_source_checkout(self):
         text = (FACTORY / 'snitchwatch-system-scanner-build.py').read_text()
         uses = [re.sub(r'\s+', ' ', line.split('#')[0]).strip() for line in text.splitlines() if re.search(r'(?<![\w\'".-])source\b(?![\'".])', line.split('#')[0])]
-        allowed = ("source, out = args.source.resolve(), args.out.resolve()",
+        allowed = ("source = args.source.resolve()",
                    "subprocess.run(['git', '-C', str(source), 'archive', pins['sourceCommit']], stdout=output, check=True)",
-                   "env['SOURCE_DATE_EPOCH'] = subprocess.check_output(['git', '-C', str(source), 'log', '-1', '--format=%ct'], text=True).strip()",
+                   "epoch = subprocess.check_output(['git', '-C', str(source), 'log', '-1', '--format=%ct'], text=True).strip()",
                    "shutil.copyfile(source / 'LICENSE', out / 'LICENSE')",
                    "artifact = load_bridge_artifact(source)", "def load_bridge_artifact(source):",
                    "spec = importlib.util.spec_from_file_location('artifact', source / 'packaging/release/bridge_artifact.py')",
@@ -1215,14 +1215,79 @@ class ScannerBuildHardening(unittest.TestCase):
                 require(bad)
         self.assertEqual(require(str(self.root)), self.root)
 
-    def main_calls(self):
-        """Ordered (name, first-arg-name) of every call in main(), from the AST."""
+    def phase(self, function):
         import ast
         tree = ast.parse((FACTORY / 'snitchwatch-system-scanner-build.py').read_text())
-        main = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == 'main')
-        calls = sorted((n for n in ast.walk(main) if isinstance(n, ast.Call)), key=lambda n: (n.lineno, n.col_offset))
-        name = lambda f: f.id if isinstance(f, ast.Name) else None
-        return [(name(c.func), name(c.args[0]) if c.args and isinstance(c.args[0], ast.Name) else None) for c in calls]
+        return next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == function)
+
+    def main_calls(self, functions=('inputs_phase', 'build_phase')):
+        """Ordered (name, first-arg-name) of every call in the two phases, root inputs first (M1 step 3 split main()), from the AST."""
+        import ast
+        result = []
+        for function in functions:
+            calls = sorted((n for n in ast.walk(self.phase(function)) if isinstance(n, ast.Call)), key=lambda n: (n.lineno, n.col_offset))
+            name = lambda f: f.id if isinstance(f, ast.Name) else None
+            result += [(name(c.func), name(c.args[0]) if c.args and isinstance(c.args[0], ast.Name) else None) for c in calls]
+        return result
+
+    def literals(self, function):
+        import ast
+        return {n.value for n in ast.walk(self.phase(function)) if isinstance(n, ast.Constant) and isinstance(n.value, str)}
+
+    def test_root_inputs_phase_runs_no_third_party_code_and_build_phase_no_root_work(self):
+        # M1 step 3: root only exports, pin-checks, builds the allowlisted cargo home and digests the toolchain.
+        import ast
+        phase = self.phase('inputs_phase')
+        # An allowlist of every call the root phase may make (by unparsed callee): nothing else, however it is spelled.
+        allowed = {"(exported / 'Cargo.lock').read_text", 'Path', 'ValueError', 'archive.open', 'archive.unlink', 'args.cargo_home.resolve',
+                   'args.inputs.resolve', 'args.pins.read_text', 'args.source.resolve', 'epoch.isdigit', 'exported.mkdir', 'exported.rglob',
+                   'inputs.mkdir', 'installed_toolchain_digest', 'json.loads', 'make_fresh_cargo_home', 'os.environ.get', 'os.path.lexists',
+                   'os.umask', 'path.is_file', 'path.relative_to', 'print', 'require_bridge_cargo_home', 'require_builder_container',
+                   'require_no_cargo_config', 'require_pinned_file', 'require_pinned_scanner_sources', 'require_toolchain_digest', 'sha',
+                   'sorted', 'str', 'stream.extractall', 'subprocess.check_output', 'subprocess.run', 'tarfile.open', 'write_json',
+                   "subprocess.check_output(['git', '-C', str(source), 'log', '-1', '--format=%ct'], text=True).strip"}
+        calls = [n for n in ast.walk(phase) if isinstance(n, ast.Call)]
+        self.assertEqual({ast.unparse(c.func) for c in calls} - allowed, set())
+        for call in calls:
+            if isinstance(call.func, ast.Attribute) and ast.unparse(call.func.value) == 'subprocess':
+                argv = call.args[0] if call.args else None
+                self.assertIsInstance(argv, ast.List, ast.unparse(call))
+                self.assertEqual(ast.unparse(argv.elts[0]), "'git'", ast.unparse(call))
+        # Neither the build command, the binaries, the packages nor the build phase is even referenced.
+        names = {n.id for n in ast.walk(phase) if isinstance(n, ast.Name)} | {n.attr for n in ast.walk(phase) if isinstance(n, ast.Attribute)}
+        self.assertEqual(names & {'BUILD', 'BINARIES', 'PACKAGES', 'build_phase'}, set())
+        for literal in ('cargo', 'rustc', 'ldd', 'dbus-run-session', 'test', 'build'):
+            self.assertNotIn(literal, self.literals('inputs_phase'), literal)
+        build = {name for name, _ in self.main_calls(('build_phase',))}
+        self.assertFalse(build & {'make_fresh_cargo_home', 'installed_toolchain_digest', 'require_bridge_cargo_home', 'require_pinned_file',
+                                  'require_pinned_scanner_sources'}, build)
+        self.assertNotIn('git', self.literals('build_phase'))
+        # Every cargo, rustc, ldd and test run is in the build phase.
+        for literal in ('cargo', 'ldd', 'dbus-run-session'):
+            self.assertIn(literal, self.literals('build_phase'), literal)
+        # The build phase refuses root before anything else (it runs only behind snitchwatch-system-unpriv.py).
+        import ast
+        body = self.phase('build_phase').body
+        guards = [n for n in body if isinstance(n, ast.If) and 'os.geteuid() == 0' in ast.unparse(n.test)]
+        self.assertEqual(len(guards), 1)
+        self.assertTrue(any(isinstance(n, ast.Raise) for n in guards[0].body))
+        self.assertLess(body.index(guards[0]), 2)
+
+    def test_build_phase_refuses_root_and_the_cli_requires_a_known_phase_with_only_its_arguments(self):
+        from unittest import mock
+        argv = ['scanner-build', '--phase', 'build', '--inputs', '/x', '--cargo-home', '/y', '--out', '/z', '--pins', '/p', '--rpm-inventory', '/r']
+        with mock.patch('sys.argv', argv), mock.patch('os.geteuid', return_value=0):
+            with self.assertRaisesRegex(ValueError, 'scanner build phase: refusing to run as root'):
+                self.h['main']()
+        for args, message in ((['--source', '/s'], 'one of --phase inputs|build is required'),
+                              (['--phase', 'test'], 'invalid choice'),
+                              (['--phase', 'inputs', '--source', '/s', '--inputs', '/i', '--cargo-home', '/c', '--pins', '/p'], '--toolchain-digest is required'),
+                              ([*argv[1:], '--source', '/s'], '--source is not used by the build phase'),
+                              ([*argv[1:], '--toolchain-digest', '/t'], '--toolchain-digest is not used by the build phase')):
+            with self.subTest(args=args):
+                result = subprocess.run(['python3', '-B', str(FACTORY / 'snitchwatch-system-scanner-build.py'), *args], capture_output=True, text=True)
+                self.assertEqual(result.returncode, 2)
+                self.assertIn(message, result.stderr)
 
     def test_main_wires_checks_in_order_before_the_first_cargo_run(self):
         names = [n for n, _ in self.main_calls()]

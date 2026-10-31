@@ -6,6 +6,7 @@ import importlib.util
 import io
 import json
 import os
+import re
 from pathlib import Path
 import shutil
 import subprocess
@@ -415,6 +416,22 @@ class RefreshTests(unittest.TestCase):
         self.assertIn('REFRESH_POINTER_FAILURE', text); self.assertIn('attempted=stable latest confirmed=stable', text)
         self.assertIn('expected_digest=' + env['VALIDATED_DIGEST'], text); self.assertIn('Rerun', text)
         self.assertNotIn('REFRESH_PASS', text)
+
+    def test_refresh_pass_source_comes_from_the_resolved_policy_not_a_literal(self):
+        workflow = yaml.safe_load((ROOT / '.github/workflows/base-refresh.yml').read_text())
+        for name in ('publish-legacy', 'publish-system'):
+            with self.subTest(job=name):
+                job = workflow['jobs'][name]
+                self.assertEqual(job['env']['SOURCE'], '${{ needs.resolve.outputs.source }}')
+                passes = [line for step in job['steps'] for line in step.get('run', '').splitlines() if 'REFRESH_PASS' in line]
+                self.assertEqual(len(passes), 1)
+                self.assertIn('accepted_source=$SOURCE"', passes[0])
+                self.assertIsNone(re.search(r'[0-9a-f]{40}', passes[0]))
+
+    def test_refresh_prebuild_contracts_include_the_snitchwatch_stage_tests(self):
+        workflow = yaml.safe_load((ROOT / '.github/workflows/base-refresh.yml').read_text())
+        step = next(s for s in workflow['jobs']['build']['steps'] if s.get('name') == 'Validate accepted source safety contracts')
+        self.assertIn('python3 tests/test-snitchwatch-image-stages.py', step['run'].splitlines())
 
     def test_all_refresh_consumers_require_completed_strict_artifact_download(self):
         workflow = yaml.safe_load((ROOT / '.github/workflows/base-refresh.yml').read_text())

@@ -463,7 +463,7 @@ system)
     check "native bridge dynamic dependencies resolve" \
         bash -c 'ldd /usr/bin/snitchwatch-bridge-cli >/dev/null 2>&1 && ! ldd /usr/bin/snitchwatch-bridge-cli 2>&1 | grep -q "not found"'
     check "native bridge loader executes pinned version 0.1.1" \
-        bash -c '/usr/bin/snitchwatch-bridge-cli --version | grep -qx "snitchwatch-bridge-cli 0.1.1"'
+        bash -c 'timeout 10 /usr/bin/snitchwatch-bridge-cli --version | grep -qx "snitchwatch-bridge-cli 0.1.1"'
     for scanner_binary in /usr/libexec/snitchwatch-scanner-privileged /usr/libexec/snitchwatch-scanner-broker; do
         # shellcheck disable=SC2016 # The inner shell expands its positional argument.
         check "scanner executable has resolved dynamic dependencies: ${scanner_binary}" \

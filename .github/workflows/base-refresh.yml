@@ -88,6 +88,7 @@ jobs:
         python3 tests/test-snitchwatch-gate.py
         python3 tests/test-snitchwatch-image-build.py
         python3 tests/test-snitchwatch-image-build-daemon.py
+        python3 tests/test-snitchwatch-image-stages.py
         tests/test-container-templates.sh
         tests/test-docker-libvirt-forwarding.sh
         tests/test-docker-libvirt-forwarding-hooks.sh
@@ -262,6 +263,7 @@ jobs:
       PROFILE: legacy
       BASE: ${{ needs.resolve.outputs.base }}
       VERSION: ${{ needs.resolve.outputs.version }}
+      SOURCE: ${{ needs.resolve.outputs.source }}
       VALIDATED_DIGEST: ${{ needs.validate-legacy.outputs.digest }}
       VALIDATED_HASHES: ${{ needs.validate-legacy.outputs.hashes }}
       DEST: ghcr.io/bearyjd/bazzite-tower
@@ -372,7 +374,7 @@ jobs:
           [[ "$resolved" == "$VALIDATED_DIGEST" ]]
           confirmed+=("$tag")
         done
-        echo "REFRESH_PASS profile=$PROFILE digest=$VALIDATED_DIGEST base=$BASE accepted_source=439b8d5b208ebfdd24f558454d071df53024fc3b" >> "$GITHUB_STEP_SUMMARY"
+        echo "REFRESH_PASS profile=$PROFILE digest=$VALIDATED_DIGEST base=$BASE accepted_source=$SOURCE" >> "$GITHUB_STEP_SUMMARY"
     - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
       with:
         name: refresh-receipt-legacy
@@ -400,6 +402,7 @@ jobs:
       PROFILE: system
       BASE: ${{ needs.resolve.outputs.base }}
       VERSION: ${{ needs.resolve.outputs.version }}
+      SOURCE: ${{ needs.resolve.outputs.source }}
       VALIDATED_DIGEST: ${{ needs.validate-system.outputs.digest }}
       VALIDATED_HASHES: ${{ needs.validate-system.outputs.hashes }}
       DEST: ghcr.io/bearyjd/bazzite-tower
@@ -510,7 +513,7 @@ jobs:
           [[ "$resolved" == "$VALIDATED_DIGEST" ]]
           confirmed+=("$tag")
         done
-        echo "REFRESH_PASS profile=$PROFILE digest=$VALIDATED_DIGEST base=$BASE accepted_source=439b8d5b208ebfdd24f558454d071df53024fc3b" >> "$GITHUB_STEP_SUMMARY"
+        echo "REFRESH_PASS profile=$PROFILE digest=$VALIDATED_DIGEST base=$BASE accepted_source=$SOURCE" >> "$GITHUB_STEP_SUMMARY"
     - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
       with:
         name: refresh-receipt-system

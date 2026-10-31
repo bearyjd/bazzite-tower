@@ -442,6 +442,12 @@ def flatpak_profiles(ctx):
     expected_flatpak = json.loads(ctx.path(MANIFEST).read_text()).get("flatpak", {})
     expected_runtime = expected_flatpak.get("runtimeRef", "")
     require(re.fullmatch(r"org\.kde\.Platform/x86_64/[0-9]+\.[0-9]+", expected_runtime), "missing verified Flatpak runtime reference")
+    finish_args = expected_flatpak.get("finishArgs", [])
+    require(isinstance(finish_args, list) and all(isinstance(arg, str) for arg in finish_args), "malformed verified Flatpak finish args")
+    # flatpak build-finish serializes --filesystem=X verbatim as X in [Context]
+    # filesystems=; exact members only, so a :rw/:create variant or a parent path
+    # is not covered by a pinned :ro grant.
+    pinned_filesystems = {arg[len("--filesystem="):] for arg in finish_args if arg.startswith("--filesystem=")}
     for store in stores:
         for override in ("global", APP):
             path = ctx.path(store+"/overrides/"+override)
@@ -474,7 +480,7 @@ def flatpak_profiles(ctx):
             require(meta.get("Application", "name", fallback="") == APP and meta.get("Application", "runtime", fallback="") == expected_runtime, "same-ID Flatpak runtime/application drift")
             require(values("shared") == {"ipc"} and flatpak_sockets_match(ctx, values("sockets")) and values("devices") == {"dri"}, "same-ID Flatpak grants unexpected network/socket/device authority")
             required = {"/run/snitchwatch:ro", "/run/snitchwatch-auth:ro", "xdg-config/snitchwatch:create"}
-            require(required <= values("filesystems") <= required|{"xdg-config/kdeglobals:ro"}, "same-ID Flatpak filesystem profile mismatch")
+            require(required <= values("filesystems") <= required|{"xdg-config/kdeglobals:ro"}|pinned_filesystems, "same-ID Flatpak filesystem profile mismatch")
             require(values("persistent") == {".local/share/snitchwatch", ".local/state/snitchwatch"}, "same-ID Flatpak app-state persistence mismatch")
             require(not meta.has_section("System Bus Policy") or not dict(meta["System Bus Policy"]), "same-ID Flatpak has system bus authority")
             policies = dict(meta["Session Bus Policy"]) if meta.has_section("Session Bus Policy") else {}

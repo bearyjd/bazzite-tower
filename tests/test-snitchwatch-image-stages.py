@@ -1178,6 +1178,8 @@ class UnprivilegedBridgeBuild(unittest.TestCase):
                 mutate(work)
                 with self.assertRaisesRegex(self.u['Refusal'], message):
                     self.prepare(work, profile='scanner')
+        self.make_writable()
+        shutil.rmtree(self.root / 'work')
         with self.assertRaisesRegex(self.u['Refusal'], 'unknown profile'):
             self.prepare(self.scanner_tree(), profile='daemon')
 

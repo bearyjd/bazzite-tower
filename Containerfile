@@ -43,8 +43,8 @@ COPY build_files/firewall/snitchwatch-system-legacy-marker /out/usr/share/bazzit
 # builder rejects it, revert this block to the previous single RUN (git revert
 # of the H1 commit). The bridge build is offline (M1 step 1) and is repeated in
 # a sibling stage that is also an ancestor of nothing; assembly refuses unless
-# the two tarballs are byte-identical (M1 step 2). Both bridge builds run their
-# third-party code unprivileged (M1 step 3). A deterministic hostile crate in
+# the two tarballs are byte-identical (M1 step 2). Both bridge builds and the
+# scanner build run their third-party code unprivileged (M1 step 3). A deterministic hostile crate in
 # Cargo.lock still builds the same bytes in both (M1 not closed).
 FROM registry.fedoraproject.org/fedora:44@sha256:e1656bc110fc33e855f7a02e4420c21066428bc7a0277160d40ee125ef8a1c65 AS snitchwatch-prep
 ARG FIREWALL_DAEMON

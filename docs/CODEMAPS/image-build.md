@@ -52,7 +52,7 @@ bridge's third-party build scripts cannot reach anything trusted later (H1):
 | Stage | FROM | Network | Runs | Hands over |
 |---|---|---|---|---|
 | `snitchwatch-prep` | pinned `fedora:44@sha256` (= `builderImage`) | yes | `snitchwatch-system-prep.sh`: install-deps, Koji toolchain, `--record-toolchain`, dbus-daemon, online probe (positive control), clone + `sourceFiles` hash check, `bridge_artifact.py version`, `cargo fetch --locked --target x86_64-unknown-linux-gnu`, `rpm -qa` inventory | `/work/native` (to its descendants) |
-| `snitchwatch-scanner` | prep | `--network=none` | offline probe, inventory `cmp`, `snitchwatch-system-scanner-build.py` | `/handoff/scanner`: 2 binaries + 10 evidence files, flat |
+| `snitchwatch-scanner` | prep | `--network=none` | `snitchwatch-system-scanner-stage.sh`: offline probe, inventory `cmp`; root: `scanner-build.py --phase inputs` (git archive, pin checks, allowlisted cargo home, toolchain digest) into new `scanner-inputs`/`scanner-cargo`, `unpriv.py prepare … scanner` + `selfcheck`; as uid 65534 (`unpriv.py run`): `--phase build` (both builds and their compare, `cargo test`, private-bus test, `ldd`, `cargo metadata`/`tree`, licenses, provenance); root: export | `/handoff/scanner`: 2 binaries + 10 evidence files, flat |
 | `snitchwatch-bridge` | prep | `--network=none` | `snitchwatch-system-bridge-build.sh`: offline probe, fresh `CARGO_HOME` from prep's cache (only `.crate` files matching the `Cargo.lock` sha256, plus the index; no config/bin/src), exported `CARGO_NET_OFFLINE=true`, `unpriv.py prepare` + `selfcheck`, then as uid 65534 (`unpriv.py run` → `bridge-unpriv.sh`): offline `cargo fetch` preflight, `build-bridge.sh` (~660 crates), `repro-check.sh`, executing `verify --check-ldd --run-flags`; root: inventory `cmp`, export | `/handoff/bridge`: tarball, `.sha256` sidecar, `build.log`, `repro.log` |
 | `snitchwatch-bridge-rebuild` | prep | `--network=none` | `snitchwatch-system-bridge-rebuild.sh` (M1 step 2): the same lines as the bridge stage from the probe to the one-tarball check (a test compares them), at the same `/work/native` paths and also as uid 65534, in a separate container; no repro-check, no `verify`, never runs the binary; inventory `cmp` | `/handoff/bridge-rebuild`: the tarball only |
 | `snitchwatch-daemon` | prep | yes | `snitchwatch-system-daemon-build.sh` (unchanged) into `/work/daemon-out`, then `handoff.py check daemon` (an extra file fails here) and `export daemon` | `/handoff/daemon`: the daemon verifier's `REQUIRED` + manifest |
@@ -112,6 +112,21 @@ scripts. Paths, exported env and umask 022 are unchanged; PATH is the fixed cont
 build it alike); within a stage the build uid can still edit other crates' unpacked sources under
 `bridge-cargo/registry/src` (cargo must write its home) and its own outputs; nothing checks that the two
 stages run on independent hosts; kernel escape.
+M1 step 3 for the scanner stage (same helper, profile `scanner`): `scanner-build.py` is split. `--phase inputs`
+runs as root and runs no cargo, rustc, build script or built file: git archive into `$work/scanner-inputs/source`,
+the pin checks, `source-inputs.json`, `build-inputs.json` (SOURCE_DATE_EPOCH from `git log`, which 65534 could not
+run on the root-owned checkout), the allowlisted `$work/scanner-cargo`, the cargo-config and toolchain-digest checks.
+`prepare "$work" scanner` additionally requires `scanner-inputs` root-owned read-only and hands 65534 only
+`scanner-cargo` and new empty `scanner` (the output, unchanged `export scanner "$work/scanner"`) and `home`; its
+selfcheck also probes writes to `scanner-inputs`, the export, its `Cargo.lock`, both json records and
+`/factory/snitchwatch-system-scanner-build.py`. `--phase build` refuses euid 0 first and runs everything else
+as 65534. After it root only exports the allowlist and removes the three dirs. The export path moved
+(`out/source` → `scanner-inputs/source`); `--remap-path-prefix` maps it to the same `/snitchwatch`, and no pin
+or verifier holds a scanner binary hash (assembly checks them against the stage's own provenance). Consequence:
+the scanner's two-build compare, test logs and provenance are now produced by 65534 and can be forged by a
+hostile crate, as the bridge's repro-check can. Only CI proves the scanner drop and selfcheck, that `cargo test`
+and the private-bus test (dbus-daemon) pass as a uid without a passwd entry, and whether the binaries' bytes
+changed. M1 is not closed.
 
 ## build.d scripts (executed in filename order)
 
@@ -197,7 +212,7 @@ Rust tests plus fake-authorization private-D-Bus tests, and records source input
 Cargo, actual Rust/RPM toolchain, normal/build dependency closure, license text,
 test/build/repro log and executable hashes. Isolation is the stage split above (H1 closed for the
 scanner, the daemon and assembly). Scanner-build input hardening on top of it (defence in depth):
-the scanner build uses a fresh `CARGO_HOME` (`out/cargo-home`) rebuilt only from prep's
+the scanner build uses a fresh `CARGO_HOME` (`$work/scanner-cargo`, before M1 step 3 `out/cargo-home`) rebuilt only from prep's
 cached `.crate` files after checking each sha256 against the pin-checked export `Cargo.lock`
 (extracted `registry/src`, config and `bin` are not carried over; cargo re-extracts); refuses any
 `.cargo/config[.toml]` in the export, every ancestor to `/` and the fresh `CARGO_HOME`; and compares a

@@ -214,7 +214,7 @@ overrides before selecting it.
 
 How the candidate is built (H1 stage split, see `docs/CODEMAPS/image-build.md`):
 six Containerfile stages, `snitchwatch-prep` (network, RPM scriptlets, git and
-`cargo fetch` only) → `snitchwatch-scanner` (`RUN --network=none`) and
+`cargo fetch` only) → `snitchwatch-scanner` (`RUN --network=none`, cargo/tests/ldd as uid 65534) and
 `snitchwatch-bridge` (the ~660-crate bridge build, `RUN --network=none`, third-party steps as uid 65534) and
 its sibling `snitchwatch-bridge-rebuild` (the same build again, tarball only) and
 `snitchwatch-daemon` → `snitchwatch-system` assembly (`RUN --network=none`). Both
@@ -273,7 +273,10 @@ SIGKILL`, `unpriv: selfcheck:` (`write to a root-owned path did not fail`,
 `bridge unprivileged step: refusing to run as root`. A `Permission denied` from
 the build after a passing selfcheck means upstream writes somewhere other than
 the scratch dirs (`OUT_DIR`, target, `CARGO_HOME`, `HOME`, `/tmp`): add the dir to
-the scratch set, never run the step as root. To revert only this step, revert the
+the scratch set, never run the step as root. The scanner stage uses the same helper (`prepare "$work" scanner`): its
+failure lines are the same plus `scanner input tree is not root-owned read-only`
+and `scanner build phase: refusing to run as root`; its scratch set is
+`scanner-cargo`, `scanner`, `home`. To revert only this step, revert the
 whole PR (tests, code and docs together).
 Still open (M1): a deterministic hostile crate already in `Cargo.lock` produces
 the same bytes in both stages (lock-bump review is the only control), both

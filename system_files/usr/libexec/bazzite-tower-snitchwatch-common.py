@@ -435,6 +435,19 @@ def read_user_metadata(path):
         raise Refusal("unreadable Flatpak metadata "+str(path)+": "+str(error)) from error
 
 
+# Only the [Context] keys readiness reviews below; features=, unset-environment= etc. must not pass unchecked.
+# Reviewed [Context] keys and metadata sections. Adding a Flatpak permission (e.g. --allow=, --unset-env=,
+# a new section) to the image's finishArgs must extend these in the same change, or readiness refuses.
+CONTEXT_KEYS = frozenset({"shared", "sockets", "devices", "filesystems", "persistent"})
+METADATA_SECTIONS = frozenset({"Application", "Build", "Context", "Environment", "Session Bus Policy", "System Bus Policy", "Extension org.snitchwatch.Snitchwatch.Debug"})
+# One strict grammar so configparser and GLib's GKeyFile cannot read a line differently: no leading
+# whitespace, no control characters other than TAB inside values, no \r/\f/\v/NEL line separators.
+# A value is empty or starts and ends with a non-space: configparser strips Unicode whitespace from
+# both ends of a value but GLib keeps everything except leading ASCII whitespace.
+METADATA_VALUE = r"(?:[^\s\x00-\x1f\x7f](?:[^\x00-\x08\x0a-\x1f\x7f]*[^\s\x00-\x1f\x7f])?)?"
+METADATA_LINE = re.compile(r"(?:|#[^\x00-\x1f\x7f]*|\[[^\[\]\x00-\x1f\x7f]+\]|[A-Za-z0-9._-]+(?:\[[A-Za-z0-9@_.-]+\])?="+METADATA_VALUE+")")
+
+
 def flatpak_profiles(ctx):
     system_stores = ctx.command(["flatpak", "--installations"]).stdout.splitlines()
     require(system_stores and all(name.startswith("/") and ".." not in Path(name).parts for name in system_stores), "cannot enumerate system Flatpak installations")
@@ -467,11 +480,19 @@ def flatpak_profiles(ctx):
         for path in deployments:
             meta = configparser.ConfigParser(interpolation=None)
             meta.optionxform = str
+            text = read_user_metadata(path)
+            # configparser and GLib's GKeyFile (what Flatpak uses) disagree on indented lines and on
+            # \r/\f separators, so accept only a canonical grammar split on \n alone.
+            body = text[:-1] if text.endswith("\n") else text
+            bad_line = next((number for number, line in enumerate(body.split("\n"), 1) if not METADATA_LINE.fullmatch(line)), None)
+            require(bad_line is None, "unreadable Flatpak metadata "+str(path)+": non-canonical line "+str(bad_line))
             try:
-                meta.read_string(read_user_metadata(path), str(path))
+                meta.read_string(text, str(path))
             except configparser.Error as error:
                 raise Refusal("unreadable Flatpak metadata "+str(path)+": "+str(error)) from error
+            require(set(meta.sections()) <= METADATA_SECTIONS, "same-ID Flatpak has unreviewed metadata section: "+", ".join(sorted(set(meta.sections())-METADATA_SECTIONS)))
             context = meta["Context"] if meta.has_section("Context") else {}
+            require(set(context) <= CONTEXT_KEYS, "same-ID Flatpak has unreviewed [Context] key: "+", ".join(sorted(set(context)-CONTEXT_KEYS)))
             def values(key):
                 return set(context.get(key, "").strip(";").split(";"))-{ "" }
             require(meta.get("Environment", "SNITCHWATCH_SYSTEM_BRIDGE", fallback="") == "1", "same-ID Flatpak uses a legacy/unknown bridge profile")

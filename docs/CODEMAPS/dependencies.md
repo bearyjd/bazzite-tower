@@ -128,7 +128,7 @@ reviewed immutable `@sha256:…` reference rather than a mutable tag.
 `redhat-actions/buildah-build` + `push-to-registry`, `docker/metadata-action` +
 `login-action`, `sigstore/cosign-installer`,
 `actions/attest-build-provenance`, `actions/github-script`,
-`osbuild/bootc-image-builder-action`, `actions/upload-artifact`,
+`actions/upload-artifact`,
 `ublue-os/titanoboa` (live-ISO build; pinned to `main`).
 
 ## Local-dev tooling

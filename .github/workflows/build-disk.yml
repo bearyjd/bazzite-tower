@@ -19,8 +19,8 @@ on:
     branches:
       - main
     paths:
-      - './disk_config/disk.toml'
-      - './.github/workflows/build-disk.yml'
+      - 'disk_config/disk.toml'
+      - '.github/workflows/build-disk.yml'
 
 env:
   IMAGE_NAME: ${{ github.event.repository.name }} # output of build.yml, keep in sync
@@ -37,7 +37,7 @@ concurrency:
 jobs:
   build:
     name: Build ${{ matrix.variant }} disk image
-    runs-on: ${{ inputs.platform == 'amd64' && 'ubuntu-24.04' || 'ubuntu-24.04-arm' }}
+    runs-on: ${{ (inputs.platform || 'amd64') == 'amd64' && 'ubuntu-24.04' || 'ubuntu-24.04-arm' }}
     strategy:
       fail-fast: false
       matrix:
@@ -113,20 +113,50 @@ jobs:
           cosign verify --key cosign.pub "${resolved}"
           echo "image=${resolved}" >> "${GITHUB_OUTPUT}"
 
+      # Run the digest-pinned BIB container directly. The third-party
+      # osbuild/bootc-image-builder-action is archived, and its only job here
+      # was this one `podman run`.
       - name: Build disk images
         id: build
-        uses: osbuild/bootc-image-builder-action@028e4d28330efe546229eb9cb52aee78174d2347 # main
-        with:
-          builder-image: ${{ env.BIB_IMAGE }}
-          config-file: ${{ matrix.config }}
-          image: ${{ steps.source_image.outputs.image }}
-          chown: ${{ env.USER_UID }}:${{ env.USER_GID }}
-          types: ${{ matrix.type }}
-          # The bazzite-nvidia base declares no default root filesystem, so BIB
-          # aborts manifest generation ("no default root filesystem type
-          # specified in container"). Bazzite installs to btrfs.
-          rootfs: btrfs
-          additional-args: --use-librepo=True
+        env:
+          SOURCE_IMAGE: ${{ steps.source_image.outputs.image }}
+          DISK_CONFIG: ${{ matrix.config }}
+          DISK_BUILD_TYPE: ${{ matrix.type }}
+        run: |
+          set -euo pipefail
+          output="${RUNNER_TEMP}/bib-output"
+          mkdir -p "${output}"
+          # GitHub Actions podman workaround, ported from the archived action
+          # (osbuild/bootc-image-builder#446): reset rootful storage and force
+          # the overlay driver before anything is pulled into it.
+          sudo rm -rf /var/lib/containers/storage
+          sudo mkdir -p /etc/containers
+          printf '%s\n' '[storage]' 'driver = "overlay"' \
+            'runroot = "/run/containers/storage"' \
+            'graphroot = "/var/lib/containers/storage"' |
+            sudo tee /etc/containers/storage.conf >/dev/null
+          # BIB reads the source image from rootful storage; the verified
+          # digest ref is pulled there, never a mutable tag.
+          sudo podman pull "${SOURCE_IMAGE}"
+          # --rootfs btrfs: the bazzite-nvidia base declares no default root
+          # filesystem, so BIB aborts manifest generation without it.
+          sudo podman run \
+            --rm \
+            --privileged \
+            --net=host \
+            --security-opt label=type:unconfined_t \
+            -v "${GITHUB_WORKSPACE}/${DISK_CONFIG}:/config.toml:ro" \
+            -v "${output}:/output" \
+            -v /var/lib/containers/storage:/var/lib/containers/storage \
+            "${BIB_IMAGE}" \
+            build \
+            --output /output \
+            --type "${DISK_BUILD_TYPE}" \
+            --rootfs btrfs \
+            --use-librepo=True \
+            "${SOURCE_IMAGE}"
+          sudo chown -R "${USER_UID}:${USER_GID}" "${output}"
+          echo "output-directory=${output}" >> "${GITHUB_OUTPUT}"
 
       - name: Upload disk images and Checksum to Job Artifacts
         if: inputs.upload-to-s3 != true && github.event_name != 'pull_request'

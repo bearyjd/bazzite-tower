@@ -485,7 +485,7 @@ def flatpak_profiles(ctx):
             require(not meta.has_section("System Bus Policy") or not dict(meta["System Bus Policy"]), "same-ID Flatpak has system bus authority")
             policies = dict(meta["Session Bus Policy"]) if meta.has_section("Session Bus Policy") else {}
             allowed_names = {"org.freedesktop.Notifications", "org.kde.StatusNotifierWatcher", "com.canonical.AppMenu.Registrar", "org.kde.kconfig.notify", "org.kde.KGlobalSettings", "org.kde.kdeconnect"}
-            if "--talk-name=org.snitchwatch.Scanner" in expected_flatpak.get("finishArgs", []):
+            if "--talk-name=org.snitchwatch.Scanner" in finish_args:
                 allowed_names.add("org.snitchwatch.Scanner")
             require(set(policies) <= allowed_names and all(value == "talk" for value in policies.values()), "same-ID Flatpak session bus grants mismatch")
     return stores

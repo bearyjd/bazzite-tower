@@ -780,7 +780,7 @@ class SystemBehavior(unittest.TestCase):
     def installed_flatpak(self, finish_args=None):
         # Verbatim [Context] etc. of the r15.1-candidate GUI as installed on the host.
         pins = json.loads((REPO/"build_files/firewall/snitchwatch-system-pins.json").read_text())
-        self.ctx.manifest["flatpak"]["runtimeRef"] = pins["flatpakRuntimeRef"]
+        self.ctx.manifest["flatpak"]["runtimeRef"] = "org.kde.Platform/x86_64/6.11"  # the fixture's own runtime, independent of later repins
         self.ctx.manifest["flatpak"]["finishArgs"] = pins["flatpakFinishArgs"] if finish_args is None else finish_args
         self.ctx.write(common.MANIFEST, json.dumps(self.ctx.manifest))
         original = self.ctx.runner
@@ -819,6 +819,13 @@ class SystemBehavior(unittest.TestCase):
                 with self.assertRaisesRegex(common.Refusal, "filesystem profile mismatch"):common.flatpak_profiles(self.ctx)
         path.write_text(text)
         common.flatpak_profiles(self.ctx)
+
+    def test_pinned_filesystem_grants_stay_within_reviewed_ceiling(self):
+        pins = json.loads((REPO/"build_files/firewall/snitchwatch-system-pins.json").read_text())["flatpakFinishArgs"]
+        granted = {arg.split("=", 1)[1] for arg in pins if arg.startswith("--filesystem=")}
+        self.assertEqual(granted, {"/run/snitchwatch:ro", "/run/snitchwatch-auth:ro", "xdg-config/snitchwatch:create",
+                                   "/var/lib/flatpak/exports/share:ro", "xdg-data/flatpak/exports/share:ro",
+                                   "xdg-data/applications:ro", "xdg-data/icons:ro"})
 
     def test_flatpak_icon_exports_require_pinned_finish_args(self):
         pins = json.loads((REPO/"build_files/firewall/snitchwatch-system-pins.json").read_text())["flatpakFinishArgs"]

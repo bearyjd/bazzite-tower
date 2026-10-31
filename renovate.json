@@ -7,14 +7,6 @@
   "dockerfile": {
     "enabled": true
   },
-  "packageRules": [
-    {
-      "description": "Keep branch-pinned GitHub Actions immutable while following their source branch.",
-      "matchManagers": ["github-actions"],
-      "matchPackageNames": ["osbuild/bootc-image-builder-action"],
-      "pinDigests": true
-    }
-  ],
   "customManagers": [
     {
       "customType": "regex",

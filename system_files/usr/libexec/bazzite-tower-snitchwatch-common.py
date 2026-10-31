@@ -435,6 +435,10 @@ def read_user_metadata(path):
         raise Refusal("unreadable Flatpak metadata "+str(path)+": "+str(error)) from error
 
 
+# Only the [Context] keys readiness reviews below; features=, unset-environment= etc. must not pass unchecked.
+CONTEXT_KEYS = frozenset({"shared", "sockets", "devices", "filesystems", "persistent"})
+
+
 def flatpak_profiles(ctx):
     system_stores = ctx.command(["flatpak", "--installations"]).stdout.splitlines()
     require(system_stores and all(name.startswith("/") and ".." not in Path(name).parts for name in system_stores), "cannot enumerate system Flatpak installations")
@@ -467,11 +471,16 @@ def flatpak_profiles(ctx):
         for path in deployments:
             meta = configparser.ConfigParser(interpolation=None)
             meta.optionxform = str
+            text = read_user_metadata(path)
+            # configparser folds an indented line into the previous value but GLib's
+            # GKeyFile (what Flatpak uses) reads it as a new key, so refuse the ambiguity.
+            require(not any(line.strip() and line[0].isspace() for line in text.splitlines()), "unreadable Flatpak metadata "+str(path)+": indented line")
             try:
-                meta.read_string(read_user_metadata(path), str(path))
+                meta.read_string(text, str(path))
             except configparser.Error as error:
                 raise Refusal("unreadable Flatpak metadata "+str(path)+": "+str(error)) from error
             context = meta["Context"] if meta.has_section("Context") else {}
+            require(set(context) <= CONTEXT_KEYS, "same-ID Flatpak has unreviewed [Context] key: "+", ".join(sorted(set(context)-CONTEXT_KEYS)))
             def values(key):
                 return set(context.get(key, "").strip(";").split(";"))-{ "" }
             require(meta.get("Environment", "SNITCHWATCH_SYSTEM_BRIDGE", fallback="") == "1", "same-ID Flatpak uses a legacy/unknown bridge profile")

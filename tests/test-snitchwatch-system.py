@@ -796,6 +796,25 @@ class SystemBehavior(unittest.TestCase):
         common.flatpak_profiles(self.ctx)
         common.runtime_readiness(self.ctx)
 
+    def test_flatpak_indented_lines_refuse_because_glib_parses_them_as_keys(self):
+        # configparser folds an indented line into the previous value; GKeyFile reads a new key.
+        path = self.installed_flatpak();text = path.read_text()
+        for indent in (" ", "  ", "\t"):
+            with self.subTest(indent=repr(indent)):
+                path.write_text(text.replace("shared=ipc;\n", "shared=ipc;\n"+indent+"features=devel;\n"))
+                with self.assertRaisesRegex(common.Refusal, "indented line"):common.flatpak_profiles(self.ctx)
+        path.write_text(text.replace("\n[Environment]", "\n  \t\n[Environment]"))
+        common.flatpak_profiles(self.ctx)
+
+    def test_flatpak_unreviewed_context_keys_refuse(self):
+        path = self.installed_flatpak();text = path.read_text()
+        for line in ("features=devel;", "unset-environment=FOO;", "agent=x;", "x-unknown=1"):
+            with self.subTest(line=line):
+                path.write_text(text.replace("shared=ipc;\n", "shared=ipc;\n"+line+"\n"))
+                with self.assertRaisesRegex(common.Refusal, "unreviewed \\[Context\\] key"):common.flatpak_profiles(self.ctx)
+        path.write_text(text)
+        common.flatpak_profiles(self.ctx)
+
     def test_flatpak_filesystems_outside_pinned_finish_args_refuse(self):
         path = self.installed_flatpak();text = path.read_text()
         line = next(item for item in text.splitlines() if item.startswith("filesystems="))

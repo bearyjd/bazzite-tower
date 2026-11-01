@@ -173,11 +173,10 @@ separate installed-overlay manifest hashes immutable files and records their
 identity. No legacy release-install/global-user-enable script runs.
 
 The system candidate also builds the pinned OpenSnitch 1.8.0 source with its
-reviewed downstream repair. The same single patch (59 files) carries CPU fixes:
-one process build per exec, reuse of a cached parent's complete ancestry once
-its PPID is re-read, an exact sock_diag lookup for connected TCP with the dump
-as fallback, names-only `/proc/<pid>/fd` listing (the `/proc` pid order is
-upstream's), and GOMAXPROCS 4 unless `GOMAXPROCS` is set (`-workers` stays 16,
+reviewed downstream repair. The same single patch (58 files) carries CPU fixes:
+one process build per exec (ancestry is upstream's full walk), an exact
+sock_diag lookup for connected TCP with the dump as fallback, names-only
+`/proc/<pid>/fd` listing (the `/proc` pid order is upstream's), and GOMAXPROCS 4 unless `GOMAXPROCS` is set (`-workers` stays 16,
 no unit change). Separate daemon provenance binds the patch, module
 locks, generated protocol files, Go/protoc toolchain, RPM inventory, licenses
 and actual `/usr/bin/opensnitchd` hash. Both manifests are checked by smoke

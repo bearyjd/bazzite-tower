@@ -127,7 +127,7 @@ index 08c08a2e..54e7a06a 100644
  	for _, fwCfg := range n.SysConfig.SystemRules {
  		for _, chain := range fwCfg.Chains {
 diff --git a/daemon/main.go b/daemon/main.go
-index f6247623..5274f7d0 100644
+index f6247623..a1bad842 100644
 --- a/daemon/main.go
 +++ b/daemon/main.go
 @@ -23,8 +23,8 @@
@@ -148,16 +148,7 @@ index f6247623..5274f7d0 100644
  	"syscall"
  	"time"
  
-@@ -71,7 +72,7 @@ var (
- 	noLiveReload      = false
- 	queueNum          = 0
- 	repeatQueueNum    int //will be set later to queueNum + 1
--	workers           = 16
-+	workers           = 4
- 	debug             = false
- 	warning           = false
- 	important         = false
-@@ -98,8 +99,33 @@ var (
+@@ -98,9 +99,35 @@ var (
  	sigChan       = (chan os.Signal)(nil)
  	loggerMgr     *loggers.LoggerManager
  	resolvMonitor *systemd.ResolvedMonitor
@@ -189,9 +180,11 @@ index f6247623..5274f7d0 100644
 +}
 +
  func init() {
++	setDefaultMaxProcs()
  	flag.BoolVar(&showVersion, "version", debug, "Show daemon version of this executable and exit.")
  	flag.BoolVar(&checkRequirements, "check-requirements", debug, "Check system requirements for incompatibilities.")
-@@ -167,6 +193,12 @@ func overwriteFw(cfg *config.Config, qNum uint16, fwCfg string) {
+ 
+@@ -167,6 +194,12 @@ func overwriteFw(cfg *config.Config, qNum uint16, fwCfg string) {
  	//setupQueues(qNum)
  }
  
@@ -204,7 +197,7 @@ index f6247623..5274f7d0 100644
  func setupQueues(qNum uint16) {
  	// prepare the queue
  	var err error
-@@ -181,7 +213,7 @@ func setupQueues(qNum uint16) {
+@@ -181,7 +214,7 @@ func setupQueues(qNum uint16) {
  
  	repeatQueueNum = int(qNum) + 1
  
@@ -213,7 +206,7 @@ index f6247623..5274f7d0 100644
  	if err != nil {
  		msg := fmt.Sprintf("Error creating repeat queue #%d: %s", repeatQueueNum, err)
  		uiClient.SendErrorAlert(msg)
-@@ -261,8 +293,8 @@ func setupSignals() {
+@@ -261,8 +294,8 @@ func setupSignals() {
  		log.Important("Got signal: %v", sig)
  		cancel()
  		time.AfterFunc(10*time.Second, func() {
@@ -224,7 +217,7 @@ index f6247623..5274f7d0 100644
  		})
  	}()
  }
-@@ -286,6 +318,32 @@ Exit:
+@@ -286,6 +319,32 @@ Exit:
  	log.Debug("worker #%d exit", id)
  }
  
@@ -257,7 +250,7 @@ index f6247623..5274f7d0 100644
  func setupWorkers() {
  	log.Debug("Starting %d workers ...", workers)
  	// setup the workers
-@@ -368,11 +426,57 @@ func initSystemdResolvedMonitor() {
+@@ -368,11 +427,57 @@ func initSystemdResolvedMonitor() {
  	}()
  }
  
@@ -317,7 +310,7 @@ index f6247623..5274f7d0 100644
  	if resolvMonitor != nil {
  		resolvMonitor.Close()
  	}
-@@ -418,30 +522,48 @@ func onPacket(packet netfilter.Packet) {
+@@ -418,30 +523,48 @@ func onPacket(packet netfilter.Packet) {
  	}
  
  	// search a match in preloaded rules
@@ -374,7 +367,7 @@ index f6247623..5274f7d0 100644
  	if r == nil {
  		// no rule matched
  		// Note that as soon as we set a verdict on a packet, the next packet in the netfilter queue
-@@ -449,37 +571,34 @@ func acceptOrDeny(packet *netfilter.Packet, con *conman.Connection) *rule.Rule {
+@@ -449,37 +572,34 @@ func acceptOrDeny(packet *netfilter.Packet, con *conman.Connection) *rule.Rule {
  
  		// send a request to the UI client if
  		// 1) connected and running and 2) we are not already asking
@@ -432,7 +425,7 @@ index f6247623..5274f7d0 100644
  		}
  		packet = &pkt
  
-@@ -489,11 +608,13 @@ func acceptOrDeny(packet *netfilter.Packet, con *conman.Connection) *rule.Rule {
+@@ -489,11 +609,13 @@ func acceptOrDeny(packet *netfilter.Packet, con *conman.Connection) *rule.Rule {
  			con.DstHost = dns.HostOr(con.DstIP, con.DstHost)
  		}
  
@@ -450,7 +443,7 @@ index f6247623..5274f7d0 100644
  		}
  		ok := false
  		pers := ""
-@@ -530,10 +651,12 @@ func acceptOrDeny(packet *netfilter.Packet, con *conman.Connection) *rule.Rule {
+@@ -530,10 +652,12 @@ func acceptOrDeny(packet *netfilter.Packet, con *conman.Connection) *rule.Rule {
  	}
  	if packet == nil {
  		log.Debug("Packet nil after processing rules")
@@ -464,7 +457,7 @@ index f6247623..5274f7d0 100644
  		applyDefaultAction(packet, con)
  		ruleName := log.Green(r.Name)
  		log.Info("DISABLED (%s) %s %s -> %s:%d (%s)", uiClient.DefaultAction(), log.Bold(log.Green("✔")), log.Bold(con.Process.Path), log.Bold(con.To()), con.DstPort, ruleName)
-@@ -554,7 +677,24 @@ func acceptOrDeny(packet *netfilter.Packet, con *conman.Connection) *rule.Rule {
+@@ -554,7 +678,25 @@ func acceptOrDeny(packet *netfilter.Packet, con *conman.Connection) *rule.Rule {
  		log.Debug("%s %s -> %d:%s => %s:%d, mark: %x (%s)", log.Bold(log.Red("✘")), log.Bold(con.Process.Path), con.SrcPort, log.Bold(con.SrcIP.String()), log.Bold(con.To()), con.DstPort, packet.Mark, log.Red(r.Name))
  	}
  
@@ -473,15 +466,16 @@ index f6247623..5274f7d0 100644
 +}
 +
 +// defaultMaxProcs caps the Go scheduler when GOMAXPROCS is not set: the
-+// daemon runs a few packet workers and the process monitor, and on a host
-+// with many cores the extra Ps cost CPU in idle scheduler spinning.
++// daemon's goroutines mostly wait in syscalls, and on a host with many cores
++// the extra Ps cost CPU in idle scheduler spinning.
 +const defaultMaxProcs = 4
 +
 +// setDefaultMaxProcs lowers GOMAXPROCS to defaultMaxProcs unless the
-+// GOMAXPROCS environment variable is set, as rule.SetConfinedMemoryLimit does
-+// for GOMEMLIMIT. It never raises it (e.g. above a cgroup CPU limit).
++// GOMAXPROCS environment variable is set to a value (an empty one counts as
++// unset, as for the Go runtime). It never raises it (e.g. above a cgroup CPU
++// limit). It runs from init, before any goroutine of the daemon starts.
 +func setDefaultMaxProcs() {
-+	if _, set := os.LookupEnv("GOMAXPROCS"); set {
++	if os.Getenv("GOMAXPROCS") != "" {
 +		return
 +	}
 +	if runtime.GOMAXPROCS(0) > defaultMaxProcs {
@@ -490,16 +484,15 @@ index f6247623..5274f7d0 100644
  }
  
  func main() {
-@@ -574,6 +714,8 @@ func main() {
+@@ -574,6 +716,7 @@ func main() {
  	setupLogging()
  	setupProfiling()
  	setupSignals()
 +	rule.SetConfinedMemoryLimit()
-+	setDefaultMaxProcs()
  
  	log.Important("Starting %s v%s", core.Name, core.Version)
  
-@@ -611,6 +753,12 @@ func main() {
+@@ -611,6 +754,12 @@ func main() {
  
  	setupWorkers()
  	setupQueues(qNum)
@@ -512,7 +505,7 @@ index f6247623..5274f7d0 100644
  
  	// queue and firewall rules should be ready by now
  
-@@ -665,19 +813,11 @@ func main() {
+@@ -665,19 +814,11 @@ func main() {
  	initSystemdResolvedMonitor()
  
  	log.Info("Running on netfilter queue #%d ...", queueNum)
@@ -1270,107 +1263,25 @@ index 062821e0..daf3b4a8 100644
 +	EventsCache.Add(proc)
 +	return proc
 +}
-diff --git a/daemon/procmon/cache.go b/daemon/procmon/cache.go
-index 060fbec1..d2add634 100644
---- a/daemon/procmon/cache.go
-+++ b/daemon/procmon/cache.go
-@@ -196,8 +196,10 @@ func (c *CacheProcs) countItems() int {
- 	return len(c.items)
- }
- 
--// loop over the processes that have generated connections
--func (c *CacheProcs) getPid(inode int, inodeKey string, expect string) (int, int) {
-+// loop over the processes that have generated connections.
-+// Every pid whose current descriptors were all read is added to checked
-+// (if not nil).
-+func (c *CacheProcs) getPid(inode int, inodeKey string, expect string, checked map[int]bool) (int, int) {
- 	c.Lock()
- 	defer c.Unlock()
- 
-@@ -211,6 +213,7 @@ func (c *CacheProcs) getPid(inode int, inodeKey string, expect string) (int, int
- 			return procItem.Pid, n
- 		}
- 
-+		read := procItem.Descriptors
- 		descriptors := lookupPidDescriptors(procItem.FdPath, procItem.Pid)
- 		if descriptors == nil {
- 			c.deleteItem(n)
-@@ -218,15 +221,35 @@ func (c *CacheProcs) getPid(inode int, inodeKey string, expect string) (int, int
- 		}
- 
- 		procItem.updateDescriptors(descriptors)
--		if idxDesc, _ := getPidDescriptorsFromCache(procItem.FdPath, inodeKey, expect, &descriptors, procItem.Pid); idxDesc != -1 {
-+		// The cached descriptors were read just above: only the new ones are left.
-+		unread := newDescriptors(descriptors, read)
-+		if idxDesc, _ := getPidDescriptorsFromCache(procItem.FdPath, inodeKey, expect, &unread, procItem.Pid); idxDesc != -1 {
- 			procItem.updateTime()
- 			return procItem.Pid, n
- 		}
-+		if checked != nil {
-+			checked[procItem.Pid] = true
-+		}
- 	}
- 
- 	return -1, -1
- }
- 
-+// newDescriptors returns the descriptors that are not in read.
-+func newDescriptors(descriptors, read []string) []string {
-+	seen := make(map[string]bool, len(read))
-+	for _, fd := range read {
-+		seen[fd] = true
-+	}
-+	unread := make([]string, 0, len(descriptors))
-+	for _, fd := range descriptors {
-+		if !seen[fd] {
-+			unread = append(unread, fd)
-+		}
-+	}
-+	return unread
-+}
-+
- //******************************************************************************
- // cache of inodes
- 
-diff --git a/daemon/procmon/cache_test.go b/daemon/procmon/cache_test.go
-index 5a7cd17f..e9302732 100644
---- a/daemon/procmon/cache_test.go
-+++ b/daemon/procmon/cache_test.go
-@@ -38,7 +38,7 @@ func TestCacheProcs(t *testing.T) {
- 		}
- 	})
- 
--	pid, _ := pidsCache.getPid(0, "", "/dev/null")
-+	pid, _ := pidsCache.getPid(0, "", "/dev/null", nil)
- 	t.Run("Test getPidFromCache", func(t *testing.T) {
- 		if pid != myPid {
- 			t.Error("pid not found in cache", pidsCache.countItems())
-@@ -98,6 +98,6 @@ func BenchmarkGetPid(b *testing.B) {
- 	fdList := []string{"10", "9", "8", "7", "6", "5", "4", "3", "2", "1", "0"}
- 	pidsCache.add(fmt.Sprint("/proc/", myPid, "/fd/"), fdList, myPid)
- 	for i := 0; i < b.N; i++ {
--		pidsCache.getPid(0, "", "/dev/null")
-+		pidsCache.getPid(0, "", "/dev/null", nil)
- 	}
- }
 diff --git a/daemon/procmon/details.go b/daemon/procmon/details.go
-index c9f79e20..c72a63ca 100644
+index c9f79e20..903e8e3c 100644
 --- a/daemon/procmon/details.go
 +++ b/daemon/procmon/details.go
-@@ -42,7 +42,11 @@ func (p *Process) GetParent() {
+@@ -42,7 +42,12 @@ func (p *Process) GetParent() {
  	it, found := EventsCache.IsInStoreByPID(p.PPID)
  	if found {
  		p.Parent = &it.Proc
 -		p.Parent.GetParent()
-+		// A complete cached ancestry is reused instead of reading every
-+		// ancestor's /proc/<pid>/stat again up to PID 1.
-+		if !p.Parent.hasCompleteTree() {
++		// A complete cached ancestry whose first link is still current is
++		// reused instead of reading every ancestor's /proc/<pid>/stat again
++		// up to PID 1.
++		if !p.Parent.hasCurrentTree() {
 +			p.Parent.GetParent()
 +		}
  		return
  	}
  
-@@ -55,6 +59,25 @@ func (p *Process) GetParent() {
+@@ -55,6 +60,40 @@ func (p *Process) GetParent() {
  	p.Parent.GetParent()
  }
  
@@ -1393,10 +1304,25 @@ index c9f79e20..c72a63ca 100644
 +	return true
 +}
 +
++// hasCurrentTree reports whether the Tree is complete and this process's
++// parent is still the one recorded in it: its /proc/<pid>/stat is read again,
++// so a process reparented since it was cached (its parent exited) is walked
++// again instead of keeping the dead parent in its children's chains.
++func (p *Process) hasCurrentTree() bool {
++	if !p.hasCompleteTree() {
++		return false
++	}
++	if p.ID == 1 {
++		return true
++	}
++	p.ReadPPID()
++	return uint32(p.PPID) == p.Tree[1].Value
++}
++
  // BuildTree returns all the parents of this process.
  func (p *Process) BuildTree() {
  	items := len(p.Tree)
-@@ -231,11 +254,12 @@ func (p *Process) ReadExeLink() (string, error) {
+@@ -231,11 +270,12 @@ func (p *Process) ReadExeLink() (string, error) {
  
  // ReadRoot obtains the root directory of the process.
  // This symlink may point to any directory:
@@ -1414,7 +1340,7 @@ index c9f79e20..c72a63ca 100644
  // In some cases it'll point to a fs root, and others no.
  func (p *Process) ReadRoot() {
  	if p.Root != "" {
-@@ -334,10 +358,10 @@ func (p *Process) ReadCmdline() {
+@@ -334,10 +374,10 @@ func (p *Process) ReadCmdline() {
  }
  
  // CleanArgs applies fixes on the cmdline arguments.
@@ -1429,7 +1355,7 @@ index c9f79e20..c72a63ca 100644
  func (p *Process) CleanArgs() {
  	if len(p.Args) > 0 && p.Args[0] == ProcSelfExe {
  		p.Args[0] = p.Path
-@@ -430,11 +454,11 @@ func (p *Process) readStatus() {
+@@ -430,11 +470,11 @@ func (p *Process) readStatus() {
  }
  
  // CleanPath applies fixes on the path to the binary:
@@ -1447,81 +1373,17 @@ index c9f79e20..c72a63ca 100644
  
  	// Sometimes the path to the binary reported is the symbolic link of the process itself.
 diff --git a/daemon/procmon/find.go b/daemon/procmon/find.go
-index 65a0f6ff..5d9b3af7 100644
+index 65a0f6ff..4cb959ac 100644
 --- a/daemon/procmon/find.go
 +++ b/daemon/procmon/find.go
-@@ -8,15 +8,6 @@ import (
- 	"github.com/evilsocket/opensnitch/daemon/core"
- )
- 
--func sortPidsByTime(fdList []os.FileInfo) []os.FileInfo {
--	sort.Slice(fdList, func(i, j int) bool {
--		t := fdList[i].ModTime().UnixNano()
--		u := fdList[j].ModTime().UnixNano()
--		return t > u
--	})
--	return fdList
--}
--
- // inodeFound searches for the given inode in /proc/<pid>/fd/ or
- // /proc/<pid>/task/<tid>/fd/ and gets the symbolink link it points to,
- // in order to compare it against the given inode.
-@@ -41,13 +32,48 @@ func inodeFound(pidsPath, expect, inodeKey string, inode, pid int) bool {
- 	return false
- }
- 
-+// lookupPidInEvents searches for an inode in the descriptors of the processes
-+// in EventsCache, the most recently exec'd first: a new connection usually
-+// comes from a process that has just started. Every pid it reads is added to
-+// checked.
-+func lookupPidInEvents(expect, inodeKey string, inode int, checked map[int]bool) int {
-+	type candidate struct {
-+		pid   int
-+		start int64
-+	}
-+	EventsCache.mu.RLock()
-+	candidates := make([]candidate, 0, len(EventsCache.eventByPID))
-+	for pid := range EventsCache.eventByPID {
-+		candidates = append(candidates, candidate{pid, EventsCache.eventByPID[pid].Proc.Starttime})
-+	}
-+	EventsCache.mu.RUnlock()
-+	sort.Slice(candidates, func(i, j int) bool {
-+		return candidates[i].start > candidates[j].start
-+	})
-+
-+	for _, c := range candidates {
-+		if checked[c.pid] {
-+			continue
-+		}
-+		checked[c.pid] = true
-+		if inodeFound("/proc/", expect, inodeKey, inode, c.pid) {
-+			return c.pid
-+		}
-+	}
-+	return -1
-+}
-+
- // lookupPidInProc searches for an inode in /proc.
- // First it gets the running PIDs and obtains the opened sockets.
-+// PIDs in checked were already read during this lookup and are skipped.
- // TODO: If the inode is not found, search again in the task/threads
- // of every PID (costly).
--func lookupPidInProc(pidsPath, expect, inodeKey string, inode int) int {
-+func lookupPidInProc(pidsPath, expect, inodeKey string, inode int, checked map[int]bool) int {
- 	pidList := getProcPids(pidsPath)
- 	for _, pid := range pidList {
-+		if checked[pid] {
-+			continue
-+		}
- 		if inodeFound(pidsPath, expect, inodeKey, inode, pid) {
- 			return pid
- 		}
-@@ -68,19 +94,14 @@ func lookupPidDescriptors(fdPath string, pid int) []string {
+@@ -68,19 +68,16 @@ func lookupPidDescriptors(fdPath string, pid int) []string {
  	// references that points to non existent files on disk, but that remains in
  	// memory (those with " (deleted)").
  	// This causes to have to iterate over 300 to 700 items, that are not sockets.
 -	fdList, err := f.Readdir(-1)
-+	// Only the names are read: no lstat of every descriptor.
++	// Only the names are read (no lstat of every descriptor, no sort): every
++	// descriptor of the pid is checked, so the order cannot change which pid
++	// is found. The /proc pid list below keeps its newest-first order.
 +	fdList, err := f.Readdirnames(-1)
  	f.Close()
  	if err != nil {
@@ -1539,82 +1401,6 @@ index 65a0f6ff..5d9b3af7 100644
  }
  
  // getProcPids returns the list of running PIDs, /proc or /proc/<pid>/task/ .
-@@ -89,19 +110,17 @@ func getProcPids(pidsPath string) []int {
- 	if err != nil {
- 		return []int{}
- 	}
--	ls, err := f.Readdir(-1)
-+	// Only the names are read: no lstat of every entry. The numeric entries
-+	// are the PID directories.
-+	ls, err := f.Readdirnames(-1)
- 	f.Close()
- 	if err != nil {
- 		return []int{}
- 	}
--	ls = sortPidsByTime(ls)
- 
- 	pidList := make([]int, 0, len(ls))
--	for _, f := range ls {
--		if f.IsDir() == false {
--			continue
--		}
--		if pid, err := strconv.Atoi(f.Name()); err == nil {
-+	for _, name := range ls {
-+		if pid, err := strconv.Atoi(name); err == nil {
- 			pidList = append(pidList, []int{pid}...)
- 		}
- 	}
-diff --git a/daemon/procmon/find_test.go b/daemon/procmon/find_test.go
-index 9588de8f..6e4b88ac 100644
---- a/daemon/procmon/find_test.go
-+++ b/daemon/procmon/find_test.go
-@@ -23,7 +23,7 @@ func TestLookupPidDescriptors(t *testing.T) {
- func TestLookupPidInProc(t *testing.T) {
- 	// we expect that the inode 1 points to /dev/null
- 	expect := "/dev/null"
--	foundPid := lookupPidInProc("/proc/", expect, "", myPid)
-+	foundPid := lookupPidInProc("/proc/", expect, "", myPid, nil)
- 	if foundPid == -1 {
- 		t.Error("lookupPidInProc() should not return -1")
- 	}
-diff --git a/daemon/procmon/parse.go b/daemon/procmon/parse.go
-index 15446e0e..5e00d268 100644
---- a/daemon/procmon/parse.go
-+++ b/daemon/procmon/parse.go
-@@ -50,8 +50,8 @@ func GetInodeFromNetstat(netEntry *netstat.Entry, inodeList *[]int, protocol str
- // 1. Get the PID from the cache of Inodes.
- // 2. Get the PID from the cache of PIDs.
- // 3. Look for the PID using one of these methods:
--//    - audit:  listening for socket creation from auditd.
--//    - proc:   search /proc
-+//   - audit:  listening for socket creation from auditd.
-+//   - proc:   search /proc
- //
- // If the PID is not found by one of the 2 first methods, it'll try it using /proc.
- func GetPIDFromINode(inode int, inodeKey string) int {
-@@ -67,7 +67,9 @@ func GetPIDFromINode(inode int, inodeKey string) int {
- 		return cachedPidInode
- 	}
- 
--	cachedPid, pos := pidsCache.getPid(inode, inodeKey, expect)
-+	// pids already read during this lookup, so they are not read twice.
-+	checked := make(map[int]bool)
-+	cachedPid, pos := pidsCache.getPid(inode, inodeKey, expect, checked)
- 	if cachedPid != -1 {
- 		log.Debug("Socket found in known pids %v, pid: %d, inode: %d, pos: %d, pids in cache: %d", time.Since(start), cachedPid, inode, pos, pidsCache.countItems())
- 		pidsCache.sort(cachedPid)
-@@ -82,7 +84,10 @@ func GetPIDFromINode(inode int, inodeKey string) int {
- 		}
- 	}
- 	if found == -1 || MethodIsProc() {
--		found = lookupPidInProc("/proc/", expect, inodeKey, inode)
-+		found = lookupPidInEvents(expect, inodeKey, inode, checked)
-+		if found == -1 {
-+			found = lookupPidInProc("/proc/", expect, inodeKey, inode, checked)
-+		}
- 	}
- 	log.Debug("new pid lookup took (%d): %v", found, time.Since(start))
- 
 diff --git a/daemon/rule/loader.go b/daemon/rule/loader.go
 index 3d743556..2dc71fd7 100644
 --- a/daemon/rule/loader.go
@@ -4291,10 +4077,10 @@ index 00000000..31a3b43f
 +}
 diff --git a/daemon/procmon/exec_tree_test.go b/daemon/procmon/exec_tree_test.go
 new file mode 100644
-index 00000000..0c56e66a
+index 00000000..752e6fe9
 --- /dev/null
 +++ b/daemon/procmon/exec_tree_test.go
-@@ -0,0 +1,240 @@
+@@ -0,0 +1,314 @@
 +package procmon
 +
 +import (
@@ -4535,21 +4321,98 @@ index 00000000..0c56e66a
 +	}
 +	checkParentChain(t, proc)
 +}
++
++// P was cached while its parent A was alive (P -> A -> ... -> 1); A then
++// exited and P was reparented. A child C of P must not get the dead A in
++// its chain: the cached Tree of P is complete, but its PPID is no longer A.
++func TestGetParentRevalidatesReparentedParent(t *testing.T) {
++	a := exec.Command("sh", "-c", `sh -c 'echo $$; sleep 30 & echo $!; wait' & read x`)
++	stdin, err := a.StdinPipe()
++	if err != nil {
++		t.Fatal(err)
++	}
++	out, err := a.StdoutPipe()
++	if err != nil {
++		t.Fatal(err)
++	}
++	if err := a.Start(); err != nil {
++		t.Fatal(err)
++	}
++	t.Cleanup(func() {
++		a.Process.Kill()
++		a.Wait()
++	})
++	r := bufio.NewReader(out)
++	var pids [2]int
++	for i := range pids {
++		line, err := r.ReadString('\n')
++		if err != nil {
++			t.Fatal(err)
++		}
++		if pids[i], err = strconv.Atoi(strings.TrimSpace(line)); err != nil {
++			t.Fatal(err)
++		}
++		t.Cleanup(func(pid int) func() { return func() { syscallKill(pid) } }(pids[i]))
++	}
++	p, c := pids[0], pids[1]
++	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(10 * time.Millisecond) {
++		if exe, _ := os.Readlink("/proc/" + strconv.Itoa(c) + "/exe"); strings.HasSuffix(exe, "/sleep") {
++			break
++		}
++		if time.Now().After(deadline) {
++			t.Fatal("child did not exec sleep")
++		}
++	}
++
++	cached := NewProcess(p, "")
++	if !cached.hasCompleteTree() || cached.Tree[1].Value != uint32(a.Process.Pid) {
++		t.Fatalf("fixture: P's tree %v does not go through A %d", treeOf(cached), a.Process.Pid)
++	}
++	cacheProc(t, cached)
++
++	stdin.Close() // A's read returns and A exits; P is reparented.
++	a.Wait()
++	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(10 * time.Millisecond) {
++		probe := NewProcessEmpty(p, "")
++		probe.ReadPPID()
++		if probe.PPID != a.Process.Pid {
++			break
++		}
++		if time.Now().After(deadline) {
++			t.Fatal("P was not reparented")
++		}
++	}
++
++	want := liveTree(t, c)
++	proc := NewProcess(c, "")
++	if got := treeOf(proc); !sameTree(got, want) {
++		t.Fatalf("tree\n got %v\nwant %v", got, want)
++	}
++	for _, n := range proc.Tree {
++		if int(n.Value) == a.Process.Pid {
++			t.Fatalf("dead parent %d kept in the chain: %v", a.Process.Pid, treeOf(proc))
++		}
++	}
++	checkParentChain(t, proc)
++}
 diff --git a/daemon/procmon/inode_lookup_test.go b/daemon/procmon/inode_lookup_test.go
 new file mode 100644
-index 00000000..0bd76f03
+index 00000000..8fe42e45
 --- /dev/null
 +++ b/daemon/procmon/inode_lookup_test.go
-@@ -0,0 +1,120 @@
+@@ -0,0 +1,208 @@
 +package procmon
 +
 +import (
++	"bufio"
 +	"fmt"
 +	"os"
 +	"os/exec"
 +	"strconv"
++	"strings"
 +	"syscall"
 +	"testing"
++	"time"
 +)
 +
 +// socketHolder starts a process that is the only holder of a new socket and
@@ -4617,48 +4480,133 @@ index 00000000..0bd76f03
 +	}
 +}
 +
-+// A pid in EventsCache is found before the /proc scan, and is marked checked.
-+func TestLookupPidInEvents(t *testing.T) {
-+	pid, inode, expect := socketHolder(t)
-+	cacheProc(t, NewProcess(pid, ""))
-+	checked := make(map[int]bool)
-+	if got := lookupPidInEvents(expect, t.Name(), inode, checked); got != pid {
-+		t.Fatalf("lookupPidInEvents = %d, want %d", got, pid)
++// upstreamFirstHolder is upstream's /proc order (newest /proc/<pid> first)
++// applied to the holders: the pid upstream attributes a shared socket to.
++func upstreamFirstHolder(t *testing.T, holders []int) int {
++	t.Helper()
++	f, err := os.Open("/proc")
++	if err != nil {
++		t.Fatal(err)
 +	}
-+	if !checked[pid] {
-+		t.Fatal("found pid not marked checked")
++	ls, err := f.Readdir(-1)
++	f.Close()
++	if err != nil {
++		t.Fatal(err)
++	}
++	for _, fi := range sortPidsByTime(ls) {
++		for _, h := range holders {
++			if fi.Name() == strconv.Itoa(h) {
++				return h
++			}
++		}
++	}
++	return -1
++}
++
++// A socket inherited across fork is held by the parent (this test) and the
++// newer child: the /proc scan must attribute it to the same pid as upstream,
++// the most recently instantiated /proc/<pid>, here the child.
++func TestLookupPidInProcSharedSocketOrder(t *testing.T) {
++	fd, err := syscall.Socket(syscall.AF_UNIX, syscall.SOCK_STREAM|syscall.SOCK_CLOEXEC, 0)
++	if err != nil {
++		t.Fatal(err)
++	}
++	f := os.NewFile(uintptr(fd), "socket")
++	defer f.Close()
++	var st syscall.Stat_t
++	if err := syscall.Fstat(fd, &st); err != nil {
++		t.Fatal(err)
++	}
++	expect := fmt.Sprintf("socket:[%d]", st.Ino)
++	// Instantiate our /proc entry first, so the child's is newer.
++	if _, err := os.Stat(fmt.Sprint("/proc/", myPid)); err != nil {
++		t.Fatal(err)
++	}
++	time.Sleep(50 * time.Millisecond)
++	cmd := exec.Command("sleep", "30")
++	cmd.ExtraFiles = []*os.File{f}
++	if err := cmd.Start(); err != nil {
++		t.Fatal(err)
++	}
++	t.Cleanup(func() {
++		cmd.Process.Kill()
++		cmd.Wait()
++		pidsCache.delete(cmd.Process.Pid)
++	})
++	child := cmd.Process.Pid
++
++	holders := socketHolders(t, expect)
++	if len(holders) != 2 {
++		t.Fatalf("holders of %s: %v, want %d and %d", expect, holders, myPid, child)
++	}
++	want := upstreamFirstHolder(t, holders)
++	if want != child {
++		t.Fatalf("fixture: upstream order picks %d, expected the newer child %d", want, child)
++	}
++	if got := lookupPidInProc("/proc/", expect, t.Name(), int(st.Ino)); got != want {
++		t.Fatalf("lookupPidInProc = %d, upstream order gives %d", got, want)
++	}
++}
++
++// A cached pid whose socket moved from fd 10 to fd 3 (dup2, then close)
++// after it was cached is still found.
++func TestPidsCacheSocketMovedToAnotherFd(t *testing.T) {
++	fd, err := syscall.Socket(syscall.AF_UNIX, syscall.SOCK_STREAM|syscall.SOCK_CLOEXEC, 0)
++	if err != nil {
++		t.Fatal(err)
++	}
++	f := os.NewFile(uintptr(fd), "socket")
++	var st syscall.Stat_t
++	if err := syscall.Fstat(fd, &st); err != nil {
++		t.Fatal(err)
++	}
++	inode := int(st.Ino)
++	expect := fmt.Sprintf("socket:[%d]", inode)
++	cmd := exec.Command("bash", "-c", "read x; exec 3<&10 10<&-; echo moved; read y") // sh may not take fd 10
++	cmd.ExtraFiles = make([]*os.File, 8)
++	cmd.ExtraFiles[7] = f // fd 10
++	stdin, err := cmd.StdinPipe()
++	if err != nil {
++		t.Fatal(err)
++	}
++	out, err := cmd.StdoutPipe()
++	if err != nil {
++		t.Fatal(err)
++	}
++	if err := cmd.Start(); err != nil {
++		t.Fatal(err)
++	}
++	f.Close()
++	pid := cmd.Process.Pid
++	t.Cleanup(func() {
++		stdin.Close()
++		cmd.Process.Kill()
++		cmd.Wait()
++		pidsCache.delete(pid)
++	})
++	fdPath := fmt.Sprint("/proc/", pid, "/fd/")
++	if link, _ := os.Readlink(fdPath + "10"); link != expect {
++		t.Fatalf("fd 10 is %q, want %s", link, expect)
++	}
++
++	pidsCache.add(fdPath, []string{"0", "1", "2", "10"}, pid)
++	if got, _ := pidsCache.getPid(inode, t.Name()+"-before", expect); got != pid {
++		t.Fatalf("before the move: pidsCache.getPid = %d, want %d", got, pid)
++	}
++	if _, err := stdin.Write([]byte("\n")); err != nil {
++		t.Fatal(err)
++	}
++	if line, err := bufio.NewReader(out).ReadString('\n'); err != nil || strings.TrimSpace(line) != "moved" {
++		t.Fatalf("child did not move the socket: %q %v", line, err)
++	}
++	if link, _ := os.Readlink(fdPath + "3"); link != expect {
++		t.Fatalf("fd 3 is %q, want %s", link, expect)
++	}
++	if got, _ := pidsCache.getPid(inode, t.Name()+"-after", expect); got != pid {
++		t.Fatalf("after the move: pidsCache.getPid = %d, want %d", got, pid)
 +	}
 +	if got := GetPIDFromINode(inode, t.Name()+"-full"); got != pid {
 +		t.Fatalf("GetPIDFromINode = %d, want %d", got, pid)
-+	}
-+}
-+
-+// The /proc scan skips the pids already read during the same lookup.
-+func TestLookupPidInProcSkipsChecked(t *testing.T) {
-+	pid, inode, expect := socketHolder(t)
-+	if got := lookupPidInProc("/proc/", expect, t.Name(), inode, map[int]bool{pid: true}); got != -1 {
-+		t.Fatalf("checked pid %d read again, got %d", pid, got)
-+	}
-+	if got := lookupPidInProc("/proc/", expect, t.Name(), inode, nil); got != pid {
-+		t.Fatalf("lookupPidInProc = %d, want %d", got, pid)
-+	}
-+}
-+
-+// A cached pid whose cached descriptors predate the socket is still found
-+// through its new descriptors; a cached pid without it is marked checked.
-+func TestPidsCacheNewDescriptors(t *testing.T) {
-+	pid, inode, expect := socketHolder(t)
-+	other, _, _ := socketHolder(t)
-+	fdPath := fmt.Sprint("/proc/", pid, "/fd/")
-+	pidsCache.add(fdPath, []string{"0", "1", "2"}, pid)
-+	pidsCache.add(fmt.Sprint("/proc/", other, "/fd/"), []string{"0"}, other)
-+	checked := make(map[int]bool)
-+	got, _ := pidsCache.getPid(inode, t.Name(), expect, checked)
-+	if got != pid {
-+		t.Fatalf("pidsCache.getPid = %d, want %d", got, pid)
-+	}
-+	if !checked[other] {
-+		t.Fatal("cached pid read in full but not marked checked")
 +	}
 +}
 diff --git a/daemon/queue_cleanup_order_test.go b/daemon/queue_cleanup_order_test.go
@@ -7787,10 +7735,10 @@ index 00000000..db0ba318
 +}
 diff --git a/daemon/runtime_defaults_test.go b/daemon/runtime_defaults_test.go
 new file mode 100644
-index 00000000..787ecc34
+index 00000000..4c423bdf
 --- /dev/null
 +++ b/daemon/runtime_defaults_test.go
-@@ -0,0 +1,42 @@
+@@ -0,0 +1,66 @@
 +package main
 +
 +import (
@@ -7800,8 +7748,25 @@ index 00000000..787ecc34
 +	"testing"
 +)
 +
-+func TestDefaultWorkers(t *testing.T) {
-+	if f := flag.Lookup("workers"); f == nil || f.DefValue != "4" {
++// The runtime's own default, read before any init function runs (package
++// variables are initialized first).
++var runtimeMaxProcs = runtime.GOMAXPROCS(0)
++
++// main.go's init applies the default to this test binary as to the daemon.
++func TestMaxProcsDefaultAppliedByInit(t *testing.T) {
++	if os.Getenv("GOMAXPROCS") != "" {
++		t.Skip("GOMAXPROCS is set for this test run")
++	}
++	if runtimeMaxProcs <= defaultMaxProcs {
++		t.Skipf("runtime default %d is not above %d: nothing to lower", runtimeMaxProcs, defaultMaxProcs)
++	}
++	if got := runtime.GOMAXPROCS(0); got != defaultMaxProcs {
++		t.Fatalf("GOMAXPROCS = %d after init, want %d (runtime default %d)", got, defaultMaxProcs, runtimeMaxProcs)
++	}
++}
++
++func TestWorkersDefaultUnchanged(t *testing.T) {
++	if f := flag.Lookup("workers"); f == nil || f.DefValue != "16" {
 +		t.Fatalf("-workers default: %v", f)
 +	}
 +}
@@ -7810,20 +7775,27 @@ index 00000000..787ecc34
 +	before := runtime.GOMAXPROCS(0)
 +	t.Cleanup(func() { runtime.GOMAXPROCS(before) })
 +
-+	t.Run("unset", func(t *testing.T) {
-+		t.Setenv("GOMAXPROCS", "")
-+		os.Unsetenv("GOMAXPROCS")
-+		runtime.GOMAXPROCS(8)
-+		setDefaultMaxProcs()
-+		if got := runtime.GOMAXPROCS(0); got != defaultMaxProcs || defaultMaxProcs != 4 {
-+			t.Fatalf("GOMAXPROCS = %d, want 4", got)
-+		}
-+		runtime.GOMAXPROCS(2)
-+		setDefaultMaxProcs()
-+		if got := runtime.GOMAXPROCS(0); got != 2 {
-+			t.Fatalf("GOMAXPROCS raised to %d, want 2", got)
-+		}
-+	})
++	for _, env := range []struct {
++		name  string
++		unset bool
++	}{{"unset", true}, {"empty", false}} {
++		t.Run(env.name, func(t *testing.T) {
++			t.Setenv("GOMAXPROCS", "")
++			if env.unset {
++				os.Unsetenv("GOMAXPROCS")
++			}
++			runtime.GOMAXPROCS(8)
++			setDefaultMaxProcs()
++			if got := runtime.GOMAXPROCS(0); got != 4 || defaultMaxProcs != 4 {
++				t.Fatalf("GOMAXPROCS = %d, want 4", got)
++			}
++			runtime.GOMAXPROCS(2)
++			setDefaultMaxProcs()
++			if got := runtime.GOMAXPROCS(0); got != 2 {
++				t.Fatalf("GOMAXPROCS raised to %d, want 2", got)
++			}
++		})
++	}
 +	t.Run("env set", func(t *testing.T) {
 +		t.Setenv("GOMAXPROCS", "8")
 +		runtime.GOMAXPROCS(8)

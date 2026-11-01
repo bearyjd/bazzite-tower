@@ -307,10 +307,10 @@ A change to the daemon patch updates, in order: `patchSha256` and every
 `sourceCommit` moves to a commit carrying that patch, `base-refresh` refuses
 ("accepted daemon source/patch differs from policy").
 
-The patched daemon defaults to `-workers 4` and lowers GOMAXPROCS to 4 when the
-`GOMAXPROCS` variable is unset (it never raises it). There is no local override:
-readiness refuses any extra daemon drop-in and pins `ExecStart` to the bare
-binary, so changing either default is a patch change.
+The patched daemon lowers GOMAXPROCS to 4 when the `GOMAXPROCS` variable is
+unset or empty (it never raises it; a set value is honored). `-workers` keeps
+upstream's 16. Readiness refuses any extra daemon drop-in and pins `ExecStart`
+to the bare binary, so on the image changing either is a patch change.
 
 Run `ujust opensnitch-readiness` for the image's selected profile. The legacy
 profile retains the [release-install contract](../README.md#opensnitch-application-firewall).

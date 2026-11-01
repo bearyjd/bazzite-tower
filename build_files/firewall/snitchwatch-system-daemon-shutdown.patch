@@ -127,7 +127,7 @@ index 08c08a2e..54e7a06a 100644
  	for _, fwCfg := range n.SysConfig.SystemRules {
  		for _, chain := range fwCfg.Chains {
 diff --git a/daemon/main.go b/daemon/main.go
-index f6247623..45c6d131 100644
+index f6247623..5274f7d0 100644
 --- a/daemon/main.go
 +++ b/daemon/main.go
 @@ -23,8 +23,8 @@
@@ -148,6 +148,15 @@ index f6247623..45c6d131 100644
  	"syscall"
  	"time"
  
+@@ -71,7 +72,7 @@ var (
+ 	noLiveReload      = false
+ 	queueNum          = 0
+ 	repeatQueueNum    int //will be set later to queueNum + 1
+-	workers           = 16
++	workers           = 4
+ 	debug             = false
+ 	warning           = false
+ 	important         = false
 @@ -98,8 +99,33 @@ var (
  	sigChan       = (chan os.Signal)(nil)
  	loggerMgr     *loggers.LoggerManager
@@ -455,24 +464,42 @@ index f6247623..45c6d131 100644
  		applyDefaultAction(packet, con)
  		ruleName := log.Green(r.Name)
  		log.Info("DISABLED (%s) %s %s -> %s:%d (%s)", uiClient.DefaultAction(), log.Bold(log.Green("✔")), log.Bold(con.Process.Path), log.Bold(con.To()), con.DstPort, ruleName)
-@@ -554,7 +677,7 @@ func acceptOrDeny(packet *netfilter.Packet, con *conman.Connection) *rule.Rule {
+@@ -554,7 +677,24 @@ func acceptOrDeny(packet *netfilter.Packet, con *conman.Connection) *rule.Rule {
  		log.Debug("%s %s -> %d:%s => %s:%d, mark: %x (%s)", log.Bold(log.Red("✘")), log.Bold(con.Process.Path), con.SrcPort, log.Bold(con.SrcIP.String()), log.Bold(con.To()), con.DstPort, packet.Mark, log.Red(r.Name))
  	}
  
 -	return r
 +	return r, "", false
++}
++
++// defaultMaxProcs caps the Go scheduler when GOMAXPROCS is not set: the
++// daemon runs a few packet workers and the process monitor, and on a host
++// with many cores the extra Ps cost CPU in idle scheduler spinning.
++const defaultMaxProcs = 4
++
++// setDefaultMaxProcs lowers GOMAXPROCS to defaultMaxProcs unless the
++// GOMAXPROCS environment variable is set, as rule.SetConfinedMemoryLimit does
++// for GOMEMLIMIT. It never raises it (e.g. above a cgroup CPU limit).
++func setDefaultMaxProcs() {
++	if _, set := os.LookupEnv("GOMAXPROCS"); set {
++		return
++	}
++	if runtime.GOMAXPROCS(0) > defaultMaxProcs {
++		runtime.GOMAXPROCS(defaultMaxProcs)
++	}
  }
  
  func main() {
-@@ -574,6 +697,7 @@ func main() {
+@@ -574,6 +714,8 @@ func main() {
  	setupLogging()
  	setupProfiling()
  	setupSignals()
 +	rule.SetConfinedMemoryLimit()
++	setDefaultMaxProcs()
  
  	log.Important("Starting %s v%s", core.Name, core.Version)
  
-@@ -611,6 +735,12 @@ func main() {
+@@ -611,6 +753,12 @@ func main() {
  
  	setupWorkers()
  	setupQueues(qNum)
@@ -485,7 +512,7 @@ index f6247623..45c6d131 100644
  
  	// queue and firewall rules should be ready by now
  
-@@ -665,19 +795,11 @@ func main() {
+@@ -665,19 +813,11 @@ func main() {
  	initSystemdResolvedMonitor()
  
  	log.Info("Running on netfilter queue #%d ...", queueNum)
@@ -1095,6 +1122,499 @@ index 9c06aab7..d80761c8 100644
  }
  
  #endif
+diff --git a/daemon/netlink/socket.go b/daemon/netlink/socket.go
+index 886a2b08..7935388b 100644
+--- a/daemon/netlink/socket.go
++++ b/daemon/netlink/socket.go
+@@ -47,6 +47,42 @@ func GetSocketInfo(proto string, srcIP net.IP, srcPort uint, dstIP net.IP, dstPo
+ 	if protoLen >= 4 && proto[:4] == "icmp" {
+ 		ipproto = syscall.IPPROTO_RAW
+ 	}
++	if sock := exactTCPSocket(family, ipproto, srcIP, srcPort, dstIP, dstPort); sock != nil {
++		if sock.UID != 0xffffffff {
++			uid = int(sock.UID)
++		}
++		return uid, []int{int(sock.INode)}
++	}
++	return socketInfoFromDump(family, ipproto, srcIP, srcPort, dstIP, dstPort)
++}
++
++// socketGetExact is the exact lookup GetSocketInfo uses; tests replace it.
++var socketGetExact = SocketGetExact
++
++// exactTCPSocket asks the kernel for the one socket of a connected TCP
++// 4-tuple, instead of dumping every socket on the source port. It returns nil
++// when GetSocketInfo must use the dump: not TCP, a wildcard or non-unicast
++// address, a lookup error or miss, or a reply that is not exactly this
++// connection in this family (the kernel lookup can also return a listening
++// socket, or a dual-stack socket that the dump of this family does not list).
++func exactTCPSocket(family, proto uint8, srcIP net.IP, srcPort uint, dstIP net.IP, dstPort uint) *Socket {
++	if proto != syscall.IPPROTO_TCP || srcPort == 0 || srcPort > 0xffff || dstPort == 0 || dstPort > 0xffff ||
++		srcIP == nil || srcIP.IsUnspecified() || !(dstIP.IsGlobalUnicast() || dstIP.IsLoopback()) {
++		return nil
++	}
++	sock, err := socketGetExact(family, proto, uint16(srcPort), uint16(dstPort), srcIP, dstIP)
++	if err != nil || sock == nil || sock.Family != family || sock.INode == 0 ||
++		sock.ID.SourcePort != uint16(srcPort) || !sock.ID.Source.Equal(srcIP) ||
++		sock.ID.DestinationPort != uint16(dstPort) || !sock.ID.Destination.Equal(dstIP) {
++		return nil
++	}
++	return sock
++}
++
++// socketInfoFromDump looks the connection up in a dump of the sockets on its
++// source port, handling the special cases described in GetSocketInfo.
++func socketInfoFromDump(family, ipproto uint8, srcIP net.IP, srcPort uint, dstIP net.IP, dstPort uint) (uid int, inodes []int) {
++	uid = -1
+ 	if sockList, err := SocketGet(family, ipproto, uint16(srcPort), uint16(dstPort), srcIP, dstIP); err == nil {
+ 		for n, sock := range sockList {
+ 			if sock.UID != 0xffffffff {
+diff --git a/daemon/netlink/socket_linux.go b/daemon/netlink/socket_linux.go
+index 1ce9a6e6..4a95f157 100644
+--- a/daemon/netlink/socket_linux.go
++++ b/daemon/netlink/socket_linux.go
+@@ -222,6 +222,38 @@ func SocketGet(family uint8, proto uint8, srcPort, dstPort uint16, local, remote
+ 	return netlinkRequest(sockReq, family, proto, srcPort, dstPort, local, remote)
+ }
+ 
++// SocketGetExact asks the kernel for the socket of an exact 4-tuple without
++// NLM_F_DUMP, so the kernel looks it up in its socket hash tables instead of
++// walking all of them. It fails when the kernel has no such socket.
++func SocketGetExact(family uint8, proto uint8, srcPort, dstPort uint16, local, remote net.IP) (*Socket, error) {
++	sockReq := &SocketRequest{
++		Family:   family,
++		Protocol: proto,
++		States:   TCP_ALL,
++		ID: SocketID{
++			Source:          local,
++			Destination:     remote,
++			SourcePort:      srcPort,
++			DestinationPort: dstPort,
++			Cookie:          [2]uint32{nl.TCPDIAG_NOCOOKIE, nl.TCPDIAG_NOCOOKIE},
++		},
++	}
++	req := nl.NewNetlinkRequest(nl.SOCK_DIAG_BY_FAMILY, syscall.NLM_F_REQUEST)
++	req.AddData(sockReq)
++	msgs, err := req.Execute(syscall.NETLINK_INET_DIAG, 0)
++	if err != nil {
++		return nil, err
++	}
++	if len(msgs) != 1 {
++		return nil, fmt.Errorf("exact socket lookup: %d replies", len(msgs))
++	}
++	s := &Socket{}
++	if err := s.deserialize(msgs[0]); err != nil {
++		return nil, err
++	}
++	return s, nil
++}
++
+ // SocketsDump returns the list of all connections from the kernel
+ func SocketsDump(family uint8, proto uint8) ([]*Socket, error) {
+ 	sockReq := &SocketRequest{
+diff --git a/daemon/procmon/activepids.go b/daemon/procmon/activepids.go
+index 062821e0..daf3b4a8 100644
+--- a/daemon/procmon/activepids.go
++++ b/daemon/procmon/activepids.go
+@@ -28,21 +28,7 @@ func MonitorProcEvents(stop <-chan struct{}) {
+ 			goto Exit
+ 		case ev := <-procmon.ProcEventsChannel:
+ 			if ev.IsExec() {
+-				// we don't receive the path of the process, therefore we need to discover it,
+-				// to check if the PID has replaced the PPID.
+-				proc := NewProcessWithParent(int(ev.PID), int(ev.TGID), "")
+-				proc.GetParent()
+-				proc.BuildTree()
+-
+-				log.Debug("[procmon exec event] %d, pid:%d tgid:%d %s, %s -> %s\n", ev.TimeStamp, ev.PID, ev.TGID, proc.Comm, proc.Path, proc.Parent.Path)
+-				if item, needsUpdate, found := EventsCache.IsInStore(int(ev.PID), proc); found {
+-					if needsUpdate {
+-						EventsCache.Update(&item.Proc, proc)
+-					}
+-					log.Debug("[procmon exec event inCache] %d, pid:%d tgid:%d\n", ev.TimeStamp, ev.PID, ev.TGID)
+-					continue
+-				}
+-				EventsCache.Add(proc)
++				onExecEvent(ev)
+ 			} else if ev.IsExit() {
+ 				p, _, found := EventsCache.IsInStore(int(ev.PID), nil)
+ 				if found && p.Proc.IsAlive() == false {
+@@ -54,3 +40,30 @@ func MonitorProcEvents(stop <-chan struct{}) {
+ Exit:
+ 	log.Debug("MonitorProcEvents stopped")
+ }
++
++// onExecEvent builds the process that has just exec'd and caches it. It
++// returns the process so tests can inspect it.
++func onExecEvent(ev procmon.ProcEvent) *Process {
++	// we don't receive the path of the process, therefore we need to discover it,
++	// to check if the PID has replaced the PPID.
++	// NewProcess reads the details, the ancestors and the tree once. On exec
++	// PID == TGID, so building the TGID as the parent duplicated that work.
++	proc := NewProcess(int(ev.PID), "")
++
++	// Parent is nil when /proc/<pid>/stat could not be read (the process has
++	// already exited). The arguments are evaluated at any log level.
++	parentPath := ""
++	if proc.Parent != nil {
++		parentPath = proc.Parent.Path
++	}
++	log.Debug("[procmon exec event] %d, pid:%d tgid:%d %s, %s -> %s\n", ev.TimeStamp, ev.PID, ev.TGID, proc.Comm, proc.Path, parentPath)
++	if item, needsUpdate, found := EventsCache.IsInStore(int(ev.PID), proc); found {
++		if needsUpdate {
++			EventsCache.Update(&item.Proc, proc)
++		}
++		log.Debug("[procmon exec event inCache] %d, pid:%d tgid:%d\n", ev.TimeStamp, ev.PID, ev.TGID)
++		return proc
++	}
++	EventsCache.Add(proc)
++	return proc
++}
+diff --git a/daemon/procmon/cache.go b/daemon/procmon/cache.go
+index 060fbec1..d2add634 100644
+--- a/daemon/procmon/cache.go
++++ b/daemon/procmon/cache.go
+@@ -196,8 +196,10 @@ func (c *CacheProcs) countItems() int {
+ 	return len(c.items)
+ }
+ 
+-// loop over the processes that have generated connections
+-func (c *CacheProcs) getPid(inode int, inodeKey string, expect string) (int, int) {
++// loop over the processes that have generated connections.
++// Every pid whose current descriptors were all read is added to checked
++// (if not nil).
++func (c *CacheProcs) getPid(inode int, inodeKey string, expect string, checked map[int]bool) (int, int) {
+ 	c.Lock()
+ 	defer c.Unlock()
+ 
+@@ -211,6 +213,7 @@ func (c *CacheProcs) getPid(inode int, inodeKey string, expect string) (int, int
+ 			return procItem.Pid, n
+ 		}
+ 
++		read := procItem.Descriptors
+ 		descriptors := lookupPidDescriptors(procItem.FdPath, procItem.Pid)
+ 		if descriptors == nil {
+ 			c.deleteItem(n)
+@@ -218,15 +221,35 @@ func (c *CacheProcs) getPid(inode int, inodeKey string, expect string) (int, int
+ 		}
+ 
+ 		procItem.updateDescriptors(descriptors)
+-		if idxDesc, _ := getPidDescriptorsFromCache(procItem.FdPath, inodeKey, expect, &descriptors, procItem.Pid); idxDesc != -1 {
++		// The cached descriptors were read just above: only the new ones are left.
++		unread := newDescriptors(descriptors, read)
++		if idxDesc, _ := getPidDescriptorsFromCache(procItem.FdPath, inodeKey, expect, &unread, procItem.Pid); idxDesc != -1 {
+ 			procItem.updateTime()
+ 			return procItem.Pid, n
+ 		}
++		if checked != nil {
++			checked[procItem.Pid] = true
++		}
+ 	}
+ 
+ 	return -1, -1
+ }
+ 
++// newDescriptors returns the descriptors that are not in read.
++func newDescriptors(descriptors, read []string) []string {
++	seen := make(map[string]bool, len(read))
++	for _, fd := range read {
++		seen[fd] = true
++	}
++	unread := make([]string, 0, len(descriptors))
++	for _, fd := range descriptors {
++		if !seen[fd] {
++			unread = append(unread, fd)
++		}
++	}
++	return unread
++}
++
+ //******************************************************************************
+ // cache of inodes
+ 
+diff --git a/daemon/procmon/cache_test.go b/daemon/procmon/cache_test.go
+index 5a7cd17f..e9302732 100644
+--- a/daemon/procmon/cache_test.go
++++ b/daemon/procmon/cache_test.go
+@@ -38,7 +38,7 @@ func TestCacheProcs(t *testing.T) {
+ 		}
+ 	})
+ 
+-	pid, _ := pidsCache.getPid(0, "", "/dev/null")
++	pid, _ := pidsCache.getPid(0, "", "/dev/null", nil)
+ 	t.Run("Test getPidFromCache", func(t *testing.T) {
+ 		if pid != myPid {
+ 			t.Error("pid not found in cache", pidsCache.countItems())
+@@ -98,6 +98,6 @@ func BenchmarkGetPid(b *testing.B) {
+ 	fdList := []string{"10", "9", "8", "7", "6", "5", "4", "3", "2", "1", "0"}
+ 	pidsCache.add(fmt.Sprint("/proc/", myPid, "/fd/"), fdList, myPid)
+ 	for i := 0; i < b.N; i++ {
+-		pidsCache.getPid(0, "", "/dev/null")
++		pidsCache.getPid(0, "", "/dev/null", nil)
+ 	}
+ }
+diff --git a/daemon/procmon/details.go b/daemon/procmon/details.go
+index c9f79e20..c72a63ca 100644
+--- a/daemon/procmon/details.go
++++ b/daemon/procmon/details.go
+@@ -42,7 +42,11 @@ func (p *Process) GetParent() {
+ 	it, found := EventsCache.IsInStoreByPID(p.PPID)
+ 	if found {
+ 		p.Parent = &it.Proc
+-		p.Parent.GetParent()
++		// A complete cached ancestry is reused instead of reading every
++		// ancestor's /proc/<pid>/stat again up to PID 1.
++		if !p.Parent.hasCompleteTree() {
++			p.Parent.GetParent()
++		}
+ 		return
+ 	}
+ 
+@@ -55,6 +59,25 @@ func (p *Process) GetParent() {
+ 	p.Parent.GetParent()
+ }
+ 
++// hasCompleteTree reports whether both the Tree and the Parent chain of this
++// process list the same ancestors up to PID 1. A tree that stops before PID 1
++// (an ancestor had exited, or was cached before its own ancestors) is not
++// complete, and neither is a Parent chain that differs from the Tree.
++func (p *Process) hasCompleteTree() bool {
++	n := len(p.Tree)
++	if n == 0 || p.Tree[0].Value != uint32(p.ID) || p.Tree[n-1].Value != 1 {
++		return false
++	}
++	pp := p
++	for _, item := range p.Tree[1:] {
++		pp = pp.Parent
++		if pp == nil || uint32(pp.ID) != item.Value {
++			return false
++		}
++	}
++	return true
++}
++
+ // BuildTree returns all the parents of this process.
+ func (p *Process) BuildTree() {
+ 	items := len(p.Tree)
+@@ -231,11 +254,12 @@ func (p *Process) ReadExeLink() (string, error) {
+ 
+ // ReadRoot obtains the root directory of the process.
+ // This symlink may point to any directory:
+-//  - Usually it'll point to the root filesystem (/).
+-//  - If the process chroot-ed to some dir, it'll point to it:
+-//    /proc/1234/root -> /etc/avahi
+-//    /proc/2345/root -> /var/cache/pbuilder/build/...
+-//    /proc/3456/root -> /proc
++//   - Usually it'll point to the root filesystem (/).
++//   - If the process chroot-ed to some dir, it'll point to it:
++//     /proc/1234/root -> /etc/avahi
++//     /proc/2345/root -> /var/cache/pbuilder/build/...
++//     /proc/3456/root -> /proc
++//
+ // In some cases it'll point to a fs root, and others no.
+ func (p *Process) ReadRoot() {
+ 	if p.Root != "" {
+@@ -334,10 +358,10 @@ func (p *Process) ReadCmdline() {
+ }
+ 
+ // CleanArgs applies fixes on the cmdline arguments.
+-// - AppImages cmdline reports the execuable launched as /proc/self/exe,
+-//   instead of the actual path to the binary.
+-// - For processes launched from a file descriptor, leave them with the orig
+-//   path, which usually starts with /proc/*/fd/<number>.
++//   - AppImages cmdline reports the execuable launched as /proc/self/exe,
++//     instead of the actual path to the binary.
++//   - For processes launched from a file descriptor, leave them with the orig
++//     path, which usually starts with /proc/*/fd/<number>.
+ func (p *Process) CleanArgs() {
+ 	if len(p.Args) > 0 && p.Args[0] == ProcSelfExe {
+ 		p.Args[0] = p.Path
+@@ -430,11 +454,11 @@ func (p *Process) readStatus() {
+ }
+ 
+ // CleanPath applies fixes on the path to the binary:
+-// - Remove extra characters from the link that it points to.
+-//   When a running process is deleted, the symlink has the bytes " (deleted")
+-//   appended to the link.
+-// - If the path is /proc/self/exe or /proc/<pid>/fd/<number>, resolve the symlink
+-//   that it points to.
++//   - Remove extra characters from the link that it points to.
++//     When a running process is deleted, the symlink has the bytes " (deleted")
++//     appended to the link.
++//   - If the path is /proc/self/exe or /proc/<pid>/fd/<number>, resolve the symlink
++//     that it points to.
+ func (p *Process) CleanPath() {
+ 
+ 	// Sometimes the path to the binary reported is the symbolic link of the process itself.
+diff --git a/daemon/procmon/find.go b/daemon/procmon/find.go
+index 65a0f6ff..5d9b3af7 100644
+--- a/daemon/procmon/find.go
++++ b/daemon/procmon/find.go
+@@ -8,15 +8,6 @@ import (
+ 	"github.com/evilsocket/opensnitch/daemon/core"
+ )
+ 
+-func sortPidsByTime(fdList []os.FileInfo) []os.FileInfo {
+-	sort.Slice(fdList, func(i, j int) bool {
+-		t := fdList[i].ModTime().UnixNano()
+-		u := fdList[j].ModTime().UnixNano()
+-		return t > u
+-	})
+-	return fdList
+-}
+-
+ // inodeFound searches for the given inode in /proc/<pid>/fd/ or
+ // /proc/<pid>/task/<tid>/fd/ and gets the symbolink link it points to,
+ // in order to compare it against the given inode.
+@@ -41,13 +32,48 @@ func inodeFound(pidsPath, expect, inodeKey string, inode, pid int) bool {
+ 	return false
+ }
+ 
++// lookupPidInEvents searches for an inode in the descriptors of the processes
++// in EventsCache, the most recently exec'd first: a new connection usually
++// comes from a process that has just started. Every pid it reads is added to
++// checked.
++func lookupPidInEvents(expect, inodeKey string, inode int, checked map[int]bool) int {
++	type candidate struct {
++		pid   int
++		start int64
++	}
++	EventsCache.mu.RLock()
++	candidates := make([]candidate, 0, len(EventsCache.eventByPID))
++	for pid := range EventsCache.eventByPID {
++		candidates = append(candidates, candidate{pid, EventsCache.eventByPID[pid].Proc.Starttime})
++	}
++	EventsCache.mu.RUnlock()
++	sort.Slice(candidates, func(i, j int) bool {
++		return candidates[i].start > candidates[j].start
++	})
++
++	for _, c := range candidates {
++		if checked[c.pid] {
++			continue
++		}
++		checked[c.pid] = true
++		if inodeFound("/proc/", expect, inodeKey, inode, c.pid) {
++			return c.pid
++		}
++	}
++	return -1
++}
++
+ // lookupPidInProc searches for an inode in /proc.
+ // First it gets the running PIDs and obtains the opened sockets.
++// PIDs in checked were already read during this lookup and are skipped.
+ // TODO: If the inode is not found, search again in the task/threads
+ // of every PID (costly).
+-func lookupPidInProc(pidsPath, expect, inodeKey string, inode int) int {
++func lookupPidInProc(pidsPath, expect, inodeKey string, inode int, checked map[int]bool) int {
+ 	pidList := getProcPids(pidsPath)
+ 	for _, pid := range pidList {
++		if checked[pid] {
++			continue
++		}
+ 		if inodeFound(pidsPath, expect, inodeKey, inode, pid) {
+ 			return pid
+ 		}
+@@ -68,19 +94,14 @@ func lookupPidDescriptors(fdPath string, pid int) []string {
+ 	// references that points to non existent files on disk, but that remains in
+ 	// memory (those with " (deleted)").
+ 	// This causes to have to iterate over 300 to 700 items, that are not sockets.
+-	fdList, err := f.Readdir(-1)
++	// Only the names are read: no lstat of every descriptor.
++	fdList, err := f.Readdirnames(-1)
+ 	f.Close()
+ 	if err != nil {
+ 		return nil
+ 	}
+-	fdList = sortPidsByTime(fdList)
+ 
+-	s := make([]string, len(fdList))
+-	for n, f := range fdList {
+-		s[n] = f.Name()
+-	}
+-
+-	return s
++	return fdList
+ }
+ 
+ // getProcPids returns the list of running PIDs, /proc or /proc/<pid>/task/ .
+@@ -89,19 +110,17 @@ func getProcPids(pidsPath string) []int {
+ 	if err != nil {
+ 		return []int{}
+ 	}
+-	ls, err := f.Readdir(-1)
++	// Only the names are read: no lstat of every entry. The numeric entries
++	// are the PID directories.
++	ls, err := f.Readdirnames(-1)
+ 	f.Close()
+ 	if err != nil {
+ 		return []int{}
+ 	}
+-	ls = sortPidsByTime(ls)
+ 
+ 	pidList := make([]int, 0, len(ls))
+-	for _, f := range ls {
+-		if f.IsDir() == false {
+-			continue
+-		}
+-		if pid, err := strconv.Atoi(f.Name()); err == nil {
++	for _, name := range ls {
++		if pid, err := strconv.Atoi(name); err == nil {
+ 			pidList = append(pidList, []int{pid}...)
+ 		}
+ 	}
+diff --git a/daemon/procmon/find_test.go b/daemon/procmon/find_test.go
+index 9588de8f..6e4b88ac 100644
+--- a/daemon/procmon/find_test.go
++++ b/daemon/procmon/find_test.go
+@@ -23,7 +23,7 @@ func TestLookupPidDescriptors(t *testing.T) {
+ func TestLookupPidInProc(t *testing.T) {
+ 	// we expect that the inode 1 points to /dev/null
+ 	expect := "/dev/null"
+-	foundPid := lookupPidInProc("/proc/", expect, "", myPid)
++	foundPid := lookupPidInProc("/proc/", expect, "", myPid, nil)
+ 	if foundPid == -1 {
+ 		t.Error("lookupPidInProc() should not return -1")
+ 	}
+diff --git a/daemon/procmon/parse.go b/daemon/procmon/parse.go
+index 15446e0e..5e00d268 100644
+--- a/daemon/procmon/parse.go
++++ b/daemon/procmon/parse.go
+@@ -50,8 +50,8 @@ func GetInodeFromNetstat(netEntry *netstat.Entry, inodeList *[]int, protocol str
+ // 1. Get the PID from the cache of Inodes.
+ // 2. Get the PID from the cache of PIDs.
+ // 3. Look for the PID using one of these methods:
+-//    - audit:  listening for socket creation from auditd.
+-//    - proc:   search /proc
++//   - audit:  listening for socket creation from auditd.
++//   - proc:   search /proc
+ //
+ // If the PID is not found by one of the 2 first methods, it'll try it using /proc.
+ func GetPIDFromINode(inode int, inodeKey string) int {
+@@ -67,7 +67,9 @@ func GetPIDFromINode(inode int, inodeKey string) int {
+ 		return cachedPidInode
+ 	}
+ 
+-	cachedPid, pos := pidsCache.getPid(inode, inodeKey, expect)
++	// pids already read during this lookup, so they are not read twice.
++	checked := make(map[int]bool)
++	cachedPid, pos := pidsCache.getPid(inode, inodeKey, expect, checked)
+ 	if cachedPid != -1 {
+ 		log.Debug("Socket found in known pids %v, pid: %d, inode: %d, pos: %d, pids in cache: %d", time.Since(start), cachedPid, inode, pos, pidsCache.countItems())
+ 		pidsCache.sort(cachedPid)
+@@ -82,7 +84,10 @@ func GetPIDFromINode(inode int, inodeKey string) int {
+ 		}
+ 	}
+ 	if found == -1 || MethodIsProc() {
+-		found = lookupPidInProc("/proc/", expect, inodeKey, inode)
++		found = lookupPidInEvents(expect, inodeKey, inode, checked)
++		if found == -1 {
++			found = lookupPidInProc("/proc/", expect, inodeKey, inode, checked)
++		}
+ 	}
+ 	log.Debug("new pid lookup took (%d): %v", found, time.Since(start))
+ 
 diff --git a/daemon/rule/loader.go b/daemon/rule/loader.go
 index 3d743556..2dc71fd7 100644
 --- a/daemon/rule/loader.go
@@ -3412,6 +3932,244 @@ index 00000000..7621d2e5
 +    puts("reader kept the bound queue after a failed message and received a full-size queued message");
 +    return 0;
 +}
+diff --git a/daemon/netlink/socket_exact_test.go b/daemon/netlink/socket_exact_test.go
+new file mode 100644
+index 00000000..7ab5c46a
+--- /dev/null
++++ b/daemon/netlink/socket_exact_test.go
+@@ -0,0 +1,232 @@
++package netlink
++
++import (
++	"errors"
++	"net"
++	"os"
++	"reflect"
++	"syscall"
++	"testing"
++)
++
++// These tests use loopback sockets only. They run by default (unlike the
++// NETLINK_TESTS-gated ones), skip if the environment has no usable loopback
++// or sock_diag, and fail instead when SNITCHWATCH_REQUIRE_CONFINED_TESTS is set.
++func unavailable(t *testing.T, err error) {
++	t.Helper()
++	if os.Getenv("SNITCHWATCH_REQUIRE_CONFINED_TESTS") != "" {
++		t.Fatal(err)
++	}
++	t.Skip(err)
++}
++
++type tuple struct {
++	src, dst     net.IP
++	sport, dport uint
++}
++
++func tupleOf(local, remote net.Addr) tuple {
++	l, r := local.(*net.TCPAddr), remote.(*net.TCPAddr)
++	return tuple{l.IP, r.IP, uint(l.Port), uint(r.Port)}
++}
++
++// connectTCP returns a connected TCP tuple over loopback addr ("127.0.0.1" or "::1").
++func connectTCP(t *testing.T, network, addr string) tuple {
++	t.Helper()
++	l, err := net.Listen(network, net.JoinHostPort(addr, "0"))
++	if err != nil {
++		unavailable(t, err)
++	}
++	t.Cleanup(func() { l.Close() })
++	c, err := net.Dial(network, l.Addr().String())
++	if err != nil {
++		unavailable(t, err)
++	}
++	t.Cleanup(func() { c.Close() })
++	return tupleOf(c.LocalAddr(), c.RemoteAddr())
++}
++
++// countExact counts the exact lookups and returns the real results.
++func countExact(t *testing.T) *int {
++	t.Helper()
++	calls := 0
++	t.Cleanup(func() { socketGetExact = SocketGetExact })
++	socketGetExact = func(family, proto uint8, srcPort, dstPort uint16, local, remote net.IP) (*Socket, error) {
++		calls++
++		return SocketGetExact(family, proto, srcPort, dstPort, local, remote)
++	}
++	return &calls
++}
++
++func family(proto string) uint8 {
++	if proto[len(proto)-1] == '6' {
++		return syscall.AF_INET6
++	}
++	return syscall.AF_INET
++}
++
++// dumpRecord returns the dumped socket with this inode.
++func dumpRecord(t *testing.T, fam, ipproto uint8, c tuple, inode int) *Socket {
++	t.Helper()
++	list, err := SocketGet(fam, ipproto, uint16(c.sport), uint16(c.dport), c.src, c.dst)
++	if err != nil {
++		unavailable(t, err)
++	}
++	for _, s := range list {
++		if s != nil && int(s.INode) == inode {
++			return s
++		}
++	}
++	t.Fatalf("inode %d not in the dump of port %d", inode, c.sport)
++	return nil
++}
++
++func TestExactTCPLookupMatchesDump(t *testing.T) {
++	for _, tc := range []struct{ proto, network, addr string }{
++		{"tcp", "tcp4", "127.0.0.1"},
++		{"tcp6", "tcp6", "::1"},
++	} {
++		t.Run(tc.proto, func(t *testing.T) {
++			c := connectTCP(t, tc.network, tc.addr)
++			calls := countExact(t)
++			uid, inodes := GetSocketInfo(tc.proto, c.src, c.sport, c.dst, c.dport)
++			if *calls != 1 {
++				t.Fatalf("exact lookup calls = %d, want 1", *calls)
++			}
++			sock := exactTCPSocket(family(tc.proto), syscall.IPPROTO_TCP, c.src, c.sport, c.dst, c.dport)
++			if sock == nil {
++				t.Fatal("exact lookup missed a connected socket; GetSocketInfo used the dump")
++			}
++			dumpUID, dumpInodes := socketInfoFromDump(family(tc.proto), syscall.IPPROTO_TCP, c.src, c.sport, c.dst, c.dport)
++			if len(inodes) != 1 || !reflect.DeepEqual(inodes, dumpInodes) {
++				t.Fatalf("inodes: exact %v, dump %v", inodes, dumpInodes)
++			}
++			if rec := dumpRecord(t, family(tc.proto), syscall.IPPROTO_TCP, c, inodes[0]); rec.UID != sock.UID {
++				t.Fatalf("uid: exact %d, dump record %d", sock.UID, rec.UID)
++			}
++			// Only this socket uses the ephemeral port, so the uids agree too.
++			if uid != dumpUID {
++				t.Fatalf("uid: exact %d, dump %d", uid, dumpUID)
++			}
++		})
++	}
++}
++
++func TestExactTCPLookupFallsBackToDump(t *testing.T) {
++	c := connectTCP(t, "tcp4", "127.0.0.1")
++	_, want := socketInfoFromDump(syscall.AF_INET, syscall.IPPROTO_TCP, c.src, c.sport, c.dst, c.dport)
++	if len(want) != 1 {
++		t.Fatalf("dump inodes %v", want)
++	}
++
++	t.Run("lookup error", func(t *testing.T) {
++		t.Cleanup(func() { socketGetExact = SocketGetExact })
++		socketGetExact = func(uint8, uint8, uint16, uint16, net.IP, net.IP) (*Socket, error) {
++			return nil, errors.New("forced")
++		}
++		if _, got := GetSocketInfo("tcp", c.src, c.sport, c.dst, c.dport); !reflect.DeepEqual(got, want) {
++			t.Fatalf("inodes %v, want dump %v", got, want)
++		}
++	})
++	t.Run("different tuple", func(t *testing.T) {
++		t.Cleanup(func() { socketGetExact = SocketGetExact })
++		socketGetExact = func(family, proto uint8, srcPort, dstPort uint16, local, remote net.IP) (*Socket, error) {
++			s, err := SocketGetExact(family, proto, srcPort, dstPort, local, remote)
++			if s != nil { // another connection's socket
++				s.ID.DestinationPort++
++				s.INode++
++			}
++			return s, err
++		}
++		if _, got := GetSocketInfo("tcp", c.src, c.sport, c.dst, c.dport); !reflect.DeepEqual(got, want) {
++			t.Fatalf("inodes %v, want dump %v", got, want)
++		}
++	})
++	t.Run("nonexistent tuple", func(t *testing.T) {
++		calls := countExact(t)
++		missing := c.dport + 1
++		if s := exactTCPSocket(syscall.AF_INET, syscall.IPPROTO_TCP, c.src, c.sport, c.dst, missing); s != nil {
++			t.Fatalf("exact lookup found a socket for a closed port: %+v", s.ID)
++		}
++		uid, got := GetSocketInfo("tcp", c.src, c.sport, c.dst, missing)
++		dumpUID, dump := socketInfoFromDump(syscall.AF_INET, syscall.IPPROTO_TCP, c.src, c.sport, c.dst, missing)
++		if *calls != 2 || uid != dumpUID || !reflect.DeepEqual(got, dump) {
++			t.Fatalf("calls %d, got %d %v, dump %d %v", *calls, uid, got, dumpUID, dump)
++		}
++	})
++}
++
++// A dual-stack AF_INET6 socket connected to an IPv4 address is listed by
++// neither the AF_INET dump nor, after the family check, the exact lookup.
++func TestExactTCPLookupKeepsFamily(t *testing.T) {
++	l, err := net.Listen("tcp4", "127.0.0.1:0")
++	if err != nil {
++		unavailable(t, err)
++	}
++	defer l.Close()
++	fd, err := syscall.Socket(syscall.AF_INET6, syscall.SOCK_STREAM|syscall.SOCK_CLOEXEC, 0)
++	if err != nil {
++		unavailable(t, err)
++	}
++	defer syscall.Close(fd)
++	mapped := [16]byte{10: 0xff, 11: 0xff, 12: 127, 15: 1}
++	if err := syscall.Connect(fd, &syscall.SockaddrInet6{Port: l.Addr().(*net.TCPAddr).Port, Addr: mapped}); err != nil {
++		unavailable(t, err)
++	}
++	sa, err := syscall.Getsockname(fd)
++	if err != nil {
++		t.Fatal(err)
++	}
++	c := tuple{net.IPv4(127, 0, 0, 1), net.IPv4(127, 0, 0, 1), uint(sa.(*syscall.SockaddrInet6).Port), uint(l.Addr().(*net.TCPAddr).Port)}
++	uid, got := GetSocketInfo("tcp", c.src, c.sport, c.dst, c.dport)
++	dumpUID, dump := socketInfoFromDump(syscall.AF_INET, syscall.IPPROTO_TCP, c.src, c.sport, c.dst, c.dport)
++	if uid != dumpUID || !reflect.DeepEqual(got, dump) {
++		t.Fatalf("got %d %v, dump %d %v", uid, got, dumpUID, dump)
++	}
++}
++
++// UDP and wildcard, broadcast or multicast destinations keep the dump path.
++func TestExactTCPLookupNotUsed(t *testing.T) {
++	u, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
++	if err != nil {
++		unavailable(t, err)
++	}
++	defer u.Close()
++	uc, err := net.DialUDP("udp4", nil, u.LocalAddr().(*net.UDPAddr))
++	if err != nil {
++		unavailable(t, err)
++	}
++	defer uc.Close()
++	la, ra := uc.LocalAddr().(*net.UDPAddr), uc.RemoteAddr().(*net.UDPAddr)
++	c := connectTCP(t, "tcp4", "127.0.0.1")
++
++	for _, tc := range []struct {
++		name, proto string
++		c           tuple
++	}{
++		{"udp", "udp", tuple{la.IP, ra.IP, uint(la.Port), uint(ra.Port)}},
++		{"wildcard", "tcp", tuple{c.src, net.IPv4zero, c.sport, c.dport}},
++		{"broadcast", "tcp", tuple{c.src, net.IPv4bcast, c.sport, c.dport}},
++		{"multicast", "tcp", tuple{c.src, net.IPv4(239, 255, 255, 250), c.sport, 1900}},
++		{"no port", "tcp", tuple{c.src, c.dst, c.sport, 0}},
++	} {
++		t.Run(tc.name, func(t *testing.T) {
++			calls := countExact(t)
++			ipproto := uint8(syscall.IPPROTO_TCP)
++			if tc.proto == "udp" {
++				ipproto = syscall.IPPROTO_UDP
++			}
++			uid, got := GetSocketInfo(tc.proto, tc.c.src, tc.c.sport, tc.c.dst, tc.c.dport)
++			dumpUID, dump := socketInfoFromDump(syscall.AF_INET, ipproto, tc.c.src, tc.c.sport, tc.c.dst, tc.c.dport)
++			if *calls != 0 {
++				t.Fatalf("exact lookup used %d times", *calls)
++			}
++			if uid != dumpUID || !reflect.DeepEqual(got, dump) {
++				t.Fatalf("got %d %v, dump %d %v", uid, got, dumpUID, dump)
++			}
++			if tc.proto == "udp" && len(got) != 1 {
++				t.Fatalf("connected UDP socket not found by the dump: %v", got)
++			}
++		})
++	}
++}
 diff --git a/daemon/packet_dispatch_test.go b/daemon/packet_dispatch_test.go
 new file mode 100644
 index 00000000..31a3b43f
@@ -3529,6 +4287,378 @@ index 00000000..31a3b43f
 +	// or stops the daemon at startup.
 +	if !(order["<-dispatched"] < order["close"] && order["<-dispatched"] < order["doCleanup"]) {
 +		t.Fatalf("main() must wait for the dispatcher before closing wrkChan and cleaning up: %v", order)
++	}
++}
+diff --git a/daemon/procmon/exec_tree_test.go b/daemon/procmon/exec_tree_test.go
+new file mode 100644
+index 00000000..0c56e66a
+--- /dev/null
++++ b/daemon/procmon/exec_tree_test.go
+@@ -0,0 +1,240 @@
++package procmon
++
++import (
++	"bufio"
++	"os"
++	"os/exec"
++	"strconv"
++	"strings"
++	"testing"
++	"time"
++
++	"github.com/evilsocket/opensnitch/daemon/netlink/procmon"
++)
++
++// These tests never call NewEventsStore() nor replace EventsCache: that
++// races with monitorEventsCache under -race. They add and remove their own
++// entries in the shared EventsCache instead.
++
++type treeNode struct {
++	path string
++	pid  int
++}
++
++// startChain starts test -> sh -> sleep and returns the pids of sleep and sh.
++func startChain(t *testing.T) (child, parent int) {
++	t.Helper()
++	cmd := exec.Command("sh", "-c", `sh -c 'echo $$; exec sleep 30'; :`)
++	out, err := cmd.StdoutPipe()
++	if err != nil {
++		t.Fatal(err)
++	}
++	if err := cmd.Start(); err != nil {
++		t.Fatal(err)
++	}
++	t.Cleanup(func() {
++		cmd.Process.Kill()
++		cmd.Wait()
++	})
++	line, err := bufio.NewReader(out).ReadString('\n')
++	if err != nil {
++		t.Fatal(err)
++	}
++	child, err = strconv.Atoi(strings.TrimSpace(line))
++	if err != nil {
++		t.Fatal(err)
++	}
++	t.Cleanup(func() { syscallKill(child) })
++	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(10 * time.Millisecond) {
++		if exe, _ := os.Readlink("/proc/" + strconv.Itoa(child) + "/exe"); strings.HasSuffix(exe, "/sleep") {
++			break
++		}
++		if time.Now().After(deadline) {
++			t.Fatal("inner shell did not exec sleep")
++		}
++	}
++	return child, cmd.Process.Pid
++}
++
++func syscallKill(pid int) {
++	if p, err := os.FindProcess(pid); err == nil {
++		p.Kill()
++	}
++}
++
++// liveTree walks /proc/<pid>/stat up to the process whose PPID is 0, with
++// the same primitives the daemon uses, but without GetParent or BuildTree:
++// this is the tree the daemon built before the cached-ancestor shortcut.
++func liveTree(t *testing.T, pid int) []treeNode {
++	t.Helper()
++	var tree []treeNode
++	for pid != 0 {
++		p := NewProcessEmpty(pid, "")
++		if err := p.ReadPath(); err != nil {
++			t.Fatalf("reading /proc/%d/exe: %v", pid, err)
++		}
++		p.ReadPPID()
++		tree = append(tree, treeNode{p.Path, pid})
++		pid = p.PPID
++	}
++	if tree[len(tree)-1].pid != 1 {
++		t.Fatalf("live tree does not reach PID 1: %v", tree)
++	}
++	return tree
++}
++
++func treeOf(p *Process) []treeNode {
++	tree := make([]treeNode, 0, len(p.Tree))
++	for _, n := range p.Tree {
++		tree = append(tree, treeNode{n.Key, int(n.Value)})
++	}
++	return tree
++}
++
++func sameTree(a, b []treeNode) bool {
++	if len(a) != len(b) {
++		return false
++	}
++	for i := range a {
++		if a[i] != b[i] {
++			return false
++		}
++	}
++	return true
++}
++
++// checkParentChain asserts that the Parent chain (what process.parent.path
++// rules match on) lists the same ancestors as the Tree.
++func checkParentChain(t *testing.T, p *Process) {
++	t.Helper()
++	i := 1
++	for pp := p.Parent; pp != nil; pp = pp.Parent {
++		if i >= len(p.Tree) || pp.Path != p.Tree[i].Key || uint32(pp.ID) != p.Tree[i].Value {
++			t.Fatalf("Parent chain differs from Tree at %d: %s/%d, tree %v", i, pp.Path, pp.ID, treeOf(p))
++		}
++		i++
++	}
++	if i != len(p.Tree) {
++		t.Fatalf("Parent chain has %d entries, Tree has %d", i, len(p.Tree))
++	}
++}
++
++func cacheProc(t *testing.T, p *Process) {
++	t.Helper()
++	EventsCache.UpdateItem(p)
++	t.Cleanup(func() { uncache(p.ID) })
++}
++
++func uncache(pid int) {
++	EventsCache.mu.Lock()
++	delete(EventsCache.eventByPID, pid)
++	EventsCache.mu.Unlock()
++}
++
++func TestExecEventExitedProcess(t *testing.T) {
++	cmd := exec.Command("true")
++	if err := cmd.Run(); err != nil {
++		t.Fatal(err)
++	}
++	pid := cmd.Process.Pid
++	if _, err := os.Stat("/proc/" + strconv.Itoa(pid) + "/stat"); err == nil {
++		t.Fatalf("pid %d still exists", pid)
++	}
++	t.Cleanup(func() { uncache(pid) })
++
++	// Must not panic: with no readable /proc/<pid>/stat there is no Parent.
++	proc := onExecEvent(procmon.ProcEvent{PID: uint32(pid), TGID: uint32(pid)})
++	if proc.Parent != nil {
++		t.Errorf("exited process got a parent: %d %q", proc.Parent.ID, proc.Parent.Path)
++	}
++	if _, found := EventsCache.IsInStoreByPID(pid); found {
++		t.Error("exited process without a path was cached")
++	}
++}
++
++func TestExecEventLiveProcess(t *testing.T) {
++	child, parent := startChain(t)
++	t.Cleanup(func() { uncache(child) })
++	want := liveTree(t, child)
++
++	proc := onExecEvent(procmon.ProcEvent{PID: uint32(child), TGID: uint32(child)})
++	if proc.Path != want[0].path || proc.PPID != parent {
++		t.Fatalf("got path %q ppid %d, want %q %d", proc.Path, proc.PPID, want[0].path, parent)
++	}
++	if got := treeOf(proc); !sameTree(got, want) {
++		t.Fatalf("tree\n got %v\nwant %v", got, want)
++	}
++	checkParentChain(t, proc)
++	if item, found := EventsCache.IsInStoreByPID(child); !found || item.Proc.Path != want[0].path {
++		t.Fatal("exec'd process not cached")
++	}
++}
++
++// A cached parent whose Tree and Parent chain reach PID 1 is reused as is:
++// its ancestors are not read again from /proc.
++func TestGetParentReusesCompleteCachedTree(t *testing.T) {
++	child, parent := startChain(t)
++	want := liveTree(t, child)
++
++	cached := NewProcess(parent, "")
++	if got := treeOf(cached); !sameTree(got, want[1:]) {
++		t.Fatalf("parent tree\n got %v\nwant %v", got, want[1:])
++	}
++	// Only a reused chain can carry this path into the child's Tree.
++	const sentinel = "/sentinel/cached-grandparent"
++	cached.Parent.Path = sentinel
++	cacheProc(t, cached)
++
++	proc := NewProcess(child, "")
++	want[2].path = sentinel
++	if got := treeOf(proc); !sameTree(got, want) {
++		t.Fatalf("tree\n got %v\nwant %v", got, want)
++	}
++	checkParentChain(t, proc)
++}
++
++// A cached parent whose Tree stops short of PID 1 (cached before its own
++// ancestors were readable) must not be reused: the child walks /proc instead.
++func TestGetParentIgnoresTruncatedCachedTree(t *testing.T) {
++	child, parent := startChain(t)
++	want := liveTree(t, child)
++
++	const sentinel = "/sentinel/truncated"
++	truncated := NewProcessEmpty(parent, "")
++	if err := truncated.ReadPath(); err != nil {
++		t.Fatal(err)
++	}
++	truncated.Parent = NewProcessEmpty(want[2].pid, "")
++	truncated.Parent.Path = sentinel
++	truncated.BuildTree()
++	if n := len(truncated.Tree); n != 2 || truncated.Tree[n-1].Value == 1 {
++		t.Fatalf("fixture tree is not truncated: %v", treeOf(truncated))
++	}
++	cacheProc(t, truncated)
++
++	proc := NewProcess(child, "")
++	if got := treeOf(proc); !sameTree(got, want) {
++		t.Fatalf("tree\n got %v\nwant %v", got, want)
++	}
++	checkParentChain(t, proc)
++}
++
++// A cached parent whose Tree reaches PID 1 but whose Parent chain does not
++// match it is not reused either: rules match on the Parent chain.
++func TestGetParentIgnoresBrokenCachedChain(t *testing.T) {
++	child, parent := startChain(t)
++	want := liveTree(t, child)
++
++	broken := NewProcess(parent, "")
++	if !broken.hasCompleteTree() {
++		t.Fatalf("fixture tree is not complete: %v", treeOf(broken))
++	}
++	broken.Parent = nil
++	cacheProc(t, broken)
++
++	proc := NewProcess(child, "")
++	if got := treeOf(proc); !sameTree(got, want) {
++		t.Fatalf("tree\n got %v\nwant %v", got, want)
++	}
++	checkParentChain(t, proc)
++}
+diff --git a/daemon/procmon/inode_lookup_test.go b/daemon/procmon/inode_lookup_test.go
+new file mode 100644
+index 00000000..0bd76f03
+--- /dev/null
++++ b/daemon/procmon/inode_lookup_test.go
+@@ -0,0 +1,120 @@
++package procmon
++
++import (
++	"fmt"
++	"os"
++	"os/exec"
++	"strconv"
++	"syscall"
++	"testing"
++)
++
++// socketHolder starts a process that is the only holder of a new socket and
++// returns its pid, the socket inode and the readlink target to look for.
++func socketHolder(t *testing.T) (pid, inode int, expect string) {
++	t.Helper()
++	fd, err := syscall.Socket(syscall.AF_UNIX, syscall.SOCK_STREAM|syscall.SOCK_CLOEXEC, 0)
++	if err != nil {
++		t.Fatal(err)
++	}
++	f := os.NewFile(uintptr(fd), "socket")
++	var st syscall.Stat_t
++	if err := syscall.Fstat(fd, &st); err != nil {
++		t.Fatal(err)
++	}
++	cmd := exec.Command("sleep", "30")
++	cmd.ExtraFiles = []*os.File{f}
++	if err := cmd.Start(); err != nil {
++		t.Fatal(err)
++	}
++	f.Close()
++	t.Cleanup(func() {
++		cmd.Process.Kill()
++		cmd.Wait()
++		pidsCache.delete(cmd.Process.Pid)
++		uncache(cmd.Process.Pid)
++	})
++	inode = int(st.Ino)
++	expect = fmt.Sprintf("socket:[%d]", inode)
++	if holders := socketHolders(t, expect); len(holders) != 1 || holders[0] != cmd.Process.Pid {
++		t.Fatalf("holders of %s: %v, want only %d", expect, holders, cmd.Process.Pid)
++	}
++	return cmd.Process.Pid, inode, expect
++}
++
++// socketHolders reads every /proc/<pid>/fd/* link: the attribution reference.
++func socketHolders(t *testing.T, expect string) []int {
++	t.Helper()
++	dirs, err := os.ReadDir("/proc")
++	if err != nil {
++		t.Fatal(err)
++	}
++	var holders []int
++	for _, d := range dirs {
++		pid, err := strconv.Atoi(d.Name())
++		if err != nil {
++			continue
++		}
++		fds, _ := os.ReadDir("/proc/" + d.Name() + "/fd")
++		for _, fd := range fds {
++			if link, _ := os.Readlink("/proc/" + d.Name() + "/fd/" + fd.Name()); link == expect {
++				holders = append(holders, pid)
++				break
++			}
++		}
++	}
++	return holders
++}
++
++// A pid that is in neither cache is found by the full /proc scan.
++func TestGetPIDFromINodeProcScan(t *testing.T) {
++	pid, inode, _ := socketHolder(t)
++	if got := GetPIDFromINode(inode, t.Name()); got != pid {
++		t.Fatalf("GetPIDFromINode = %d, want %d", got, pid)
++	}
++}
++
++// A pid in EventsCache is found before the /proc scan, and is marked checked.
++func TestLookupPidInEvents(t *testing.T) {
++	pid, inode, expect := socketHolder(t)
++	cacheProc(t, NewProcess(pid, ""))
++	checked := make(map[int]bool)
++	if got := lookupPidInEvents(expect, t.Name(), inode, checked); got != pid {
++		t.Fatalf("lookupPidInEvents = %d, want %d", got, pid)
++	}
++	if !checked[pid] {
++		t.Fatal("found pid not marked checked")
++	}
++	if got := GetPIDFromINode(inode, t.Name()+"-full"); got != pid {
++		t.Fatalf("GetPIDFromINode = %d, want %d", got, pid)
++	}
++}
++
++// The /proc scan skips the pids already read during the same lookup.
++func TestLookupPidInProcSkipsChecked(t *testing.T) {
++	pid, inode, expect := socketHolder(t)
++	if got := lookupPidInProc("/proc/", expect, t.Name(), inode, map[int]bool{pid: true}); got != -1 {
++		t.Fatalf("checked pid %d read again, got %d", pid, got)
++	}
++	if got := lookupPidInProc("/proc/", expect, t.Name(), inode, nil); got != pid {
++		t.Fatalf("lookupPidInProc = %d, want %d", got, pid)
++	}
++}
++
++// A cached pid whose cached descriptors predate the socket is still found
++// through its new descriptors; a cached pid without it is marked checked.
++func TestPidsCacheNewDescriptors(t *testing.T) {
++	pid, inode, expect := socketHolder(t)
++	other, _, _ := socketHolder(t)
++	fdPath := fmt.Sprint("/proc/", pid, "/fd/")
++	pidsCache.add(fdPath, []string{"0", "1", "2"}, pid)
++	pidsCache.add(fmt.Sprint("/proc/", other, "/fd/"), []string{"0"}, other)
++	checked := make(map[int]bool)
++	got, _ := pidsCache.getPid(inode, t.Name(), expect, checked)
++	if got != pid {
++		t.Fatalf("pidsCache.getPid = %d, want %d", got, pid)
++	}
++	if !checked[other] {
++		t.Fatal("cached pid read in full but not marked checked")
 +	}
 +}
 diff --git a/daemon/queue_cleanup_order_test.go b/daemon/queue_cleanup_order_test.go
@@ -6654,6 +7784,54 @@ index 00000000..db0ba318
 +		ops[i] = simple("dest.port", "443")
 +	}
 +	return ops
++}
+diff --git a/daemon/runtime_defaults_test.go b/daemon/runtime_defaults_test.go
+new file mode 100644
+index 00000000..787ecc34
+--- /dev/null
++++ b/daemon/runtime_defaults_test.go
+@@ -0,0 +1,42 @@
++package main
++
++import (
++	"flag"
++	"os"
++	"runtime"
++	"testing"
++)
++
++func TestDefaultWorkers(t *testing.T) {
++	if f := flag.Lookup("workers"); f == nil || f.DefValue != "4" {
++		t.Fatalf("-workers default: %v", f)
++	}
++}
++
++func TestDefaultMaxProcs(t *testing.T) {
++	before := runtime.GOMAXPROCS(0)
++	t.Cleanup(func() { runtime.GOMAXPROCS(before) })
++
++	t.Run("unset", func(t *testing.T) {
++		t.Setenv("GOMAXPROCS", "")
++		os.Unsetenv("GOMAXPROCS")
++		runtime.GOMAXPROCS(8)
++		setDefaultMaxProcs()
++		if got := runtime.GOMAXPROCS(0); got != defaultMaxProcs || defaultMaxProcs != 4 {
++			t.Fatalf("GOMAXPROCS = %d, want 4", got)
++		}
++		runtime.GOMAXPROCS(2)
++		setDefaultMaxProcs()
++		if got := runtime.GOMAXPROCS(0); got != 2 {
++			t.Fatalf("GOMAXPROCS raised to %d, want 2", got)
++		}
++	})
++	t.Run("env set", func(t *testing.T) {
++		t.Setenv("GOMAXPROCS", "8")
++		runtime.GOMAXPROCS(8)
++		setDefaultMaxProcs()
++		if got := runtime.GOMAXPROCS(0); got != 8 {
++			t.Fatalf("GOMAXPROCS = %d, want the environment's 8", got)
++		}
++	})
 +}
 diff --git a/daemon/shutdown_signal_test.go b/daemon/shutdown_signal_test.go
 new file mode 100644

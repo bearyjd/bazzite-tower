@@ -38,6 +38,11 @@ UPSTREAM_UI_RACE_FAILURES='^(TestClientDefaultConfig|TestClientInvalidProcMon|Te
 # it times out under -race when the host is loaded (passes 5/5 when idle).
 # It still runs in the plain go test pass below.
 UPSTREAM_RULE_RACE_FLAKES='^TestNewOperatorListsSimple$'
+# Upstream procmon tests that build their own EventsStore: NewEventsStore()
+# writes the package ticker that monitorEventsCache reads, a data race on the
+# pristine commit too (each fails alone under -race, verified 2026-10-31).
+# They still run in the plain go test pass below.
+UPSTREAM_PROCMON_RACE_FAILURES='^(TestCacheEvents|TestCacheEvents2|TestCacheEventsUpdate|TestCacheEventsDeleteOldItems)$'
 # Upstream vet findings in the root and ui packages (an unbuffered
 # signal.Notify channel; protobuf messages copied by value; unkeyed protobuf
 # literals). Every other analyzer still runs on the patched packages.
@@ -198,19 +203,21 @@ run_tests() {
         printf 'not gofmt-clean:\n%s\n' "$unformatted" >&2
         exit 1
     }
-    echo "== go vet ./netfilter ./firewall/nftables ./statistics; . ./ui ./rule without ${UPSTREAM_VET_FINDINGS[*]}"
-    go vet ./netfilter ./firewall/nftables ./statistics
-    go vet "${UPSTREAM_VET_FINDINGS[@]}" . ./ui ./rule
+    echo "== go vet ./netfilter ./firewall/nftables ./statistics ./netlink; . ./ui ./rule ./procmon without ${UPSTREAM_VET_FINDINGS[*]}"
+    go vet ./netfilter ./firewall/nftables ./statistics ./netlink
+    go vet "${UPSTREAM_VET_FINDINGS[@]}" . ./ui ./rule ./procmon
     # Upstream's privileged nftables tests skip here (they need PRIVILEGED_TESTS
     # and namespace creation); the patch's own nftables tests run.
-    echo "== go test -race (root, netfilter, firewall/nftables, statistics)"
-    go test -count=1 -race . ./netfilter ./firewall/nftables ./statistics
+    echo "== go test -race (root, netfilter, firewall/nftables, statistics, netlink)"
+    go test -count=1 -race . ./netfilter ./firewall/nftables ./statistics ./netlink
+    echo "== go test -race ./procmon (skipping upstream race failures: $UPSTREAM_PROCMON_RACE_FAILURES)"
+    go test -count=1 -race -skip "$UPSTREAM_PROCMON_RACE_FAILURES" ./procmon
     echo "== go test -race ./rule (skipping upstream timing flake: $UPSTREAM_RULE_RACE_FLAKES)"
     go test -count=1 -race -skip "$UPSTREAM_RULE_RACE_FLAKES" ./rule
     echo "== go test -race ./ui (skipping upstream race failures: $UPSTREAM_UI_RACE_FAILURES)"
     go test -count=1 -race -skip "$UPSTREAM_UI_RACE_FAILURES" ./ui
     echo "== go test (no -race; includes the skipped ui tests)"
-    go test -count=1 . ./netfilter ./firewall/nftables ./statistics ./ui ./rule
+    go test -count=1 . ./netfilter ./firewall/nftables ./statistics ./ui ./rule ./netlink ./procmon
     echo "PASS: OpenSnitch patch tests"
 }
 

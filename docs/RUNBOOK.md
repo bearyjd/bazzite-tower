@@ -299,6 +299,19 @@ then update `EXPECTED_PINS_SHA256` in the corresponding
 `snitchwatch-system-verify.py` or `snitchwatch-system-daemon-verify.py` and rerun
 the relevant toolchain and verifier tests.
 
+A change to the daemon patch updates, in order: `patchSha256` and every
+`patchedFiles` hash in the daemon pins, `EXPECTED_PINS_SHA256` in
+`snitchwatch-system-daemon-verify.py`, `daemonPatchSha256` in
+`.github/base-refresh-policy.json` and the file count in
+`tests/test-snitchwatch-image-build-daemon.py`. Until the policy's accepted
+`sourceCommit` moves to a commit carrying that patch, `base-refresh` refuses
+("accepted daemon source/patch differs from policy").
+
+The patched daemon lowers GOMAXPROCS to 4 when the `GOMAXPROCS` variable is
+unset or empty (it never raises it; a set value is honored). `-workers` keeps
+upstream's 16. Readiness refuses any extra daemon drop-in and pins `ExecStart`
+to the bare binary, so on the image changing either is a patch change.
+
 Run `ujust opensnitch-readiness` for the image's selected profile. The legacy
 profile retains the [release-install contract](../README.md#opensnitch-application-firewall).
 System readiness requires an explicit privileged read for cross-account

@@ -47,5 +47,5 @@
     "commit": "b404c4c6316760fa7bc415509d3f8d747f7dc9cc",
     "tree": "21593ba74c55b6f7ad7f220692c33477b65a3686"
   },
-  "daemonPatchSha256": "b0168992048bf7964a66dd1ed42e3e4f2fc55e61eecf6ddd98c259ed50e8e0df"
+  "daemonPatchSha256": "4b52c645864650acffa8244080800e442d02ca2a2efd90f1b0dd2dd0a8cbeaa8"
 }

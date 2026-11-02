@@ -183,7 +183,7 @@ sudo() {
             read -r count < "$copies"
             if [ "$scenario" = backup-validation-failure ] && [ "$count" = 1 ]; then return 44; fi
             if [ "$scenario" = restore-validation-failure ] && [ "$count" = 2 ]; then return 45; fi ;;
-        jq|systemctl|ujust) ;;
+        install|jq|systemctl|ujust) ;;
         *) return 99 ;;
     esac
 }
@@ -216,7 +216,9 @@ sleep() { printf 'recovery-wait\n' >> "$events"; }
                     self.assertNotIn('systemctl', sequence)
                     continue
                 self.assertEqual(sequence.count('edit'), 1)
-                self.assertEqual(sequence[-6:], ['cp', 'cmp', 'stat', 'jq', 'systemctl', 'ujust'])
+                # Restore deliberately does not run readiness (owner runs it after the block).
+                self.assertEqual(sequence[-5:], ['cp', 'cmp', 'stat', 'jq', 'systemctl'])
+                self.assertNotIn('ujust', sequence)
                 if scenario.startswith('restore-'):
                     self.assertIn('RECOVERY FAILED; migration lock retained', result.stderr)
                     self.assertEqual(sequence.count('systemctl'), 1)

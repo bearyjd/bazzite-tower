@@ -596,6 +596,7 @@ umask 077
 config=/etc/opensnitchd/default-config.json
 log=/var/log/opensnitchd.log
 sudo jq -e '.ProcMonitorMethod == "proc" and .DefaultAction == "allow" and .Server.Address == "unix:opensnitchd.sock"' "$config" >/dev/null
+sudo install -d -m 0755 -o root -g root /var/lib/bazzite-tower  # parent may not exist yet; same mode the repo helpers create
 backup_dir="$(sudo mktemp -d /var/lib/bazzite-tower/snitchwatch-ebpf.XXXXXX)"
 [ "$(sudo stat -c '%u:%g:%a' "$backup_dir")" = 0:0:700 ]
 sudo cp --preserve=all -- "$config" "$backup_dir/proc.json"
@@ -613,8 +614,7 @@ restore_proc() {
     [ "$restored_metadata" = "$original_metadata" ] || return 1
     sudo jq -e '.ProcMonitorMethod == "proc" and .DefaultAction == "allow" and .Server.Address == "unix:opensnitchd.sock"' "$config" >/dev/null || return 1
     sudo systemctl restart opensnitch.service || return 1
-    sudo ujust snitchwatch-system-readiness || return 1
-    printf 'Restored exact proc config, metadata and service readiness.\n'
+    printf 'Restored exact proc config and metadata; run sudo ujust snitchwatch-system-readiness after this block exits.\n'
 }
 recover() {
     local experiment_status=$?
@@ -633,13 +633,16 @@ trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
-# Change only ProcMonitorMethod from proc to ebpf; preserve every other key.
+# Change only ProcMonitorMethod (proc -> ebpf) and LogLevel (2 -> 1); preserve every other key.
+# The shipped LogLevel 2 hides the Info-level "[eBPF] module loaded" and
+# "Process monitor method" lines the checks below grep for; the backup restores 2.
 sudoedit "$config" </dev/tty
 sudo python3 - "$backup_dir/proc.json" "$config" <<'CHECK_CONFIG'
 import json, sys
 before, after = [json.load(open(path)) for path in sys.argv[1:]]
 before['ProcMonitorMethod'] = 'ebpf'
-assert after == before, 'Only ProcMonitorMethod may change'
+before['LogLevel'] = 1
+assert after == before, 'Only ProcMonitorMethod and LogLevel may change'
 CHECK_CONFIG
 log_inode="$(sudo stat -c %i "$log")"
 log_bytes="$(sudo stat -c %s "$log")"
@@ -687,7 +690,7 @@ the shipped allow/proc policy. Do not loosen readiness for this experiment.
 
 The recovery trap retries only after owner acknowledgement (or every 60 seconds
 if its terminal vanished) and keeps the lock held until copy, byte comparison,
-metadata/policy checks, service restart and readiness all succeed. A failed
+metadata/policy checks and service restart all succeed (readiness is a manual step afterwards). A failed
 copy/validation never proceeds to restart. Do not close/kill a recovery session;
 repair its reported failure from another owner terminal and retry. SIGKILL,
 power loss and a reboot cannot be trapped: use the printed protected backup

@@ -614,7 +614,8 @@ restore_proc() {
     [ "$restored_metadata" = "$original_metadata" ] || return 1
     sudo jq -e '.ProcMonitorMethod == "proc" and .DefaultAction == "allow" and .Server.Address == "unix:opensnitchd.sock"' "$config" >/dev/null || return 1
     sudo systemctl restart opensnitch.service || return 1
-    printf 'Restored exact proc config and metadata; run sudo ujust snitchwatch-system-readiness after this block exits.\n'
+    sudo ujust snitchwatch-system-readiness || return 1
+    printf 'Restored exact proc config, metadata and service readiness.\n'
 }
 recover() {
     local experiment_status=$?
@@ -690,7 +691,7 @@ the shipped allow/proc policy. Do not loosen readiness for this experiment.
 
 The recovery trap retries only after owner acknowledgement (or every 60 seconds
 if its terminal vanished) and keeps the lock held until copy, byte comparison,
-metadata/policy checks and service restart all succeed (readiness is a manual step afterwards). A failed
+metadata/policy checks, service restart and readiness all succeed. A failed
 copy/validation never proceeds to restart. Do not close/kill a recovery session;
 repair its reported failure from another owner terminal and retry. SIGKILL,
 power loss and a reboot cannot be trapped: use the printed protected backup

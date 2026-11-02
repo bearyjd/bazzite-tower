@@ -847,7 +847,7 @@ class SystemBehavior(unittest.TestCase):
 
     def test_flatpak_glob_character_in_section_header_is_non_canonical(self):
         path = self.installed_flatpak();text = path.read_text()
-        for section in ("*", "Context*"):
+        for section in ("*", "Context*", "?", "Con[text", " Context", "Context "):
             with self.subTest(section=section):
                 path.write_text(text+"\n["+section+"]\nx=1\n")
                 with self.assertRaisesRegex(common.Refusal, "non-canonical line"):common.flatpak_profiles(self.ctx)

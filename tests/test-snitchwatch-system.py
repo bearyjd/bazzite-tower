@@ -836,6 +836,15 @@ class SystemBehavior(unittest.TestCase):
         path.write_text(text)
         common.flatpak_profiles(self.ctx)
 
+    def test_flatpak_unreviewed_environment_keys_refuse(self):
+        path = self.installed_flatpak();text = path.read_text()
+        for line in ("LD_PRELOAD=/tmp/x.so", "FOO=bar", "SNITCHWATCH_WS_TOKEN=x"):
+            with self.subTest(line=line):
+                path.write_text(text.replace("SNITCHWATCH_SYSTEM_BRIDGE=1\n", "SNITCHWATCH_SYSTEM_BRIDGE=1\n"+line+"\n"))
+                with self.assertRaisesRegex(common.Refusal, "unreviewed \\[Environment\\] key"):common.flatpak_profiles(self.ctx)
+        path.write_text(text)
+        common.flatpak_profiles(self.ctx)
+
     def test_flatpak_unreviewed_context_keys_refuse(self):
         path = self.installed_flatpak();text = path.read_text()
         for line in ("features=devel;", "unset-environment=FOO;", "agent=x;", "x-unknown=1"):

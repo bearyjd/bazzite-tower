@@ -596,6 +596,7 @@ umask 077
 config=/etc/opensnitchd/default-config.json
 log=/var/log/opensnitchd.log
 sudo jq -e '.ProcMonitorMethod == "proc" and .DefaultAction == "allow" and .Server.Address == "unix:opensnitchd.sock"' "$config" >/dev/null
+sudo install -d -m 0755 -o root -g root /var/lib/bazzite-tower  # parent may not exist yet; same mode the repo helpers create
 backup_dir="$(sudo mktemp -d /var/lib/bazzite-tower/snitchwatch-ebpf.XXXXXX)"
 [ "$(sudo stat -c '%u:%g:%a' "$backup_dir")" = 0:0:700 ]
 sudo cp --preserve=all -- "$config" "$backup_dir/proc.json"
@@ -633,13 +634,16 @@ trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
-# Change only ProcMonitorMethod from proc to ebpf; preserve every other key.
+# Change only ProcMonitorMethod (proc -> ebpf) and LogLevel (2 -> 1); preserve every other key.
+# The shipped LogLevel 2 hides the Info-level "[eBPF] module loaded" and
+# "Process monitor method" lines the checks below grep for; the backup restores 2.
 sudoedit "$config" </dev/tty
 sudo python3 - "$backup_dir/proc.json" "$config" <<'CHECK_CONFIG'
 import json, sys
 before, after = [json.load(open(path)) for path in sys.argv[1:]]
 before['ProcMonitorMethod'] = 'ebpf'
-assert after == before, 'Only ProcMonitorMethod may change'
+before['LogLevel'] = 1
+assert after == before, 'Only ProcMonitorMethod and LogLevel may change'
 CHECK_CONFIG
 log_inode="$(sudo stat -c %i "$log")"
 log_bytes="$(sudo stat -c %s "$log")"

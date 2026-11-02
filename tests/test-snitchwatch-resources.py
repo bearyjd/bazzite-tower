@@ -157,6 +157,8 @@ class OwnerRecoveryRecipeTests(unittest.TestCase):
         # every privileged command replaced by a recording shell function.
         runbook = (ROOT / 'docs/RUNBOOK.md').read_text()
         recipe = runbook.split("<<'EBPF_EXPERIMENT'\n", 1)[1]
+        # Shipped LogLevel 2 hides the Info lines the log greps need; the edit must lower it to 1.
+        self.assertIn("before['LogLevel'] = 1\n", recipe)
         recipe = recipe.split("sudo python3 -", 1)[0]
         # CI has no controlling terminal; the fake editor does not read input.
         recipe = recipe.replace('</dev/tty', '</dev/null')
@@ -183,7 +185,7 @@ sudo() {
             read -r count < "$copies"
             if [ "$scenario" = backup-validation-failure ] && [ "$count" = 1 ]; then return 44; fi
             if [ "$scenario" = restore-validation-failure ] && [ "$count" = 2 ]; then return 45; fi ;;
-        jq|systemctl|ujust) ;;
+        install|jq|systemctl|ujust) ;;
         *) return 99 ;;
     esac
 }
@@ -216,6 +218,7 @@ sleep() { printf 'recovery-wait\n' >> "$events"; }
                     self.assertNotIn('systemctl', sequence)
                     continue
                 self.assertEqual(sequence.count('edit'), 1)
+                self.assertLess(sequence.index('install'), sequence.index('mktemp'))
                 self.assertEqual(sequence[-6:], ['cp', 'cmp', 'stat', 'jq', 'systemctl', 'ujust'])
                 if scenario.startswith('restore-'):
                     self.assertIn('RECOVERY FAILED; migration lock retained', result.stderr)

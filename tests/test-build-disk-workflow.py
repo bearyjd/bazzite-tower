@@ -57,6 +57,7 @@ class BuildDiskWorkflow(unittest.TestCase):
                        '/etc/containers/storage.conf', 'driver = "overlay"'):
             self.assertIn(needle, run)
         self.assertLess(run.index('/etc/containers/storage.conf'), run.index('sudo podman pull'))
+        self.assertLess(run.index('sudo rm -rf /var/lib/containers/storage'), run.index('sudo podman pull'))
 
     def test_pr_path_filters_and_platform_default(self):
         on = DOC.get('on', DOC.get(True))

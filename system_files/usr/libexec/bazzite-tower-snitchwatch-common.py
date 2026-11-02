@@ -445,7 +445,10 @@ METADATA_SECTIONS = frozenset({"Application", "Build", "Context", "Environment",
 # A value is empty or starts and ends with a non-space: configparser strips Unicode whitespace from
 # both ends of a value but GLib keeps everything except leading ASCII whitespace.
 METADATA_VALUE = r"(?:[^\s\x00-\x1f\x7f](?:[^\x00-\x08\x0a-\x1f\x7f]*[^\s\x00-\x1f\x7f])?)?"
-METADATA_LINE = re.compile(r"(?:|#[^\x00-\x1f\x7f]*|\[[^\[\]\x00-\x1f\x7f]+\]|[A-Za-z0-9._-]+(?:\[[A-Za-z0-9@_.-]+\])?="+METADATA_VALUE+")")
+METADATA_LINE = re.compile(r"(?:|#[^\x00-\x1f\x7f]*|\[[A-Za-z0-9._-]+(?: [A-Za-z0-9._-]+)*\]|[A-Za-z0-9._-]+(?:\[[A-Za-z0-9@_.-]+\])?="+METADATA_VALUE+")")
+
+
+ENVIRONMENT_KEYS = frozenset({"SNITCHWATCH_SYSTEM_BRIDGE", "SNITCHWATCH_WS_SOCKET", "SNITCHWATCH_WS_TOKEN_PATH"})
 
 
 def flatpak_profiles(ctx):
@@ -493,6 +496,8 @@ def flatpak_profiles(ctx):
             require(set(meta.sections()) <= METADATA_SECTIONS, "same-ID Flatpak has unreviewed metadata section: "+", ".join(sorted(set(meta.sections())-METADATA_SECTIONS)))
             context = meta["Context"] if meta.has_section("Context") else {}
             require(set(context) <= CONTEXT_KEYS, "same-ID Flatpak has unreviewed [Context] key: "+", ".join(sorted(set(context)-CONTEXT_KEYS)))
+            environment = meta["Environment"] if meta.has_section("Environment") else {}
+            require(set(environment) <= ENVIRONMENT_KEYS, "same-ID Flatpak has unreviewed [Environment] key: "+", ".join(sorted(set(environment)-ENVIRONMENT_KEYS)))
             def values(key):
                 return set(context.get(key, "").strip(";").split(";"))-{ "" }
             require(meta.get("Environment", "SNITCHWATCH_SYSTEM_BRIDGE", fallback="") == "1", "same-ID Flatpak uses a legacy/unknown bridge profile")

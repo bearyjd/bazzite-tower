@@ -448,7 +448,7 @@ METADATA_VALUE = r"(?:[^\s\x00-\x1f\x7f](?:[^\x00-\x08\x0a-\x1f\x7f]*[^\s\x00-\x
 METADATA_LINE = re.compile(r"(?:|#[^\x00-\x1f\x7f]*|\[[A-Za-z0-9 ._-]+\]|[A-Za-z0-9._-]+(?:\[[A-Za-z0-9@_.-]+\])?="+METADATA_VALUE+")")
 
 
-ENVIRONMENT_KEYS = frozenset({"SNITCHWATCH_SYSTEM_BRIDGE", "SNITCHWATCH_WS_SOCKET", "SNITCHWATCH_WS_TOKEN_PATH", "QT_QUICK_CONTROLS_STYLE"})
+ENVIRONMENT_KEYS = frozenset({"SNITCHWATCH_SYSTEM_BRIDGE", "SNITCHWATCH_WS_SOCKET", "SNITCHWATCH_WS_TOKEN_PATH"})
 
 
 def flatpak_profiles(ctx):

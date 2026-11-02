@@ -838,7 +838,7 @@ class SystemBehavior(unittest.TestCase):
 
     def test_flatpak_unreviewed_environment_keys_refuse(self):
         path = self.installed_flatpak();text = path.read_text()
-        for line in ("LD_PRELOAD=/tmp/x.so", "FOO=bar", "SNITCHWATCH_WS_TOKEN=x"):
+        for line in ("LD_PRELOAD=/tmp/x.so", "FOO=bar", "SNITCHWATCH_WS_TOKEN=x", "QT_QUICK_CONTROLS_STYLE=Basic"):
             with self.subTest(line=line):
                 path.write_text(text.replace("SNITCHWATCH_SYSTEM_BRIDGE=1\n", "SNITCHWATCH_SYSTEM_BRIDGE=1\n"+line+"\n"))
                 with self.assertRaisesRegex(common.Refusal, "unreviewed \\[Environment\\] key"):common.flatpak_profiles(self.ctx)
@@ -993,7 +993,7 @@ class SystemBehavior(unittest.TestCase):
                 with self.subTest(name=name,value=value):
                     path.write_text(original.replace("SNITCHWATCH_SYSTEM_BRIDGE=1", "SNITCHWATCH_SYSTEM_BRIDGE=1\n"+name+"="+value))
                     self.refuse_readiness("redirects protected system IPC")
-            path.write_text(original.replace("SNITCHWATCH_SYSTEM_BRIDGE=1", "SNITCHWATCH_SYSTEM_BRIDGE=1\n"+name+"="+expected+"\nQT_QUICK_CONTROLS_STYLE=Basic"))
+            path.write_text(original.replace("SNITCHWATCH_SYSTEM_BRIDGE=1", "SNITCHWATCH_SYSTEM_BRIDGE=1\n"+name+"="+expected))
             common.runtime_readiness(self.ctx)
         path.write_text(original)
 

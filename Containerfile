@@ -15,7 +15,7 @@
 # merges. The upstream version and kernel are recorded in each bump PR. To move
 # it by hand: `skopeo inspect docker://ghcr.io/ublue-os/bazzite-nvidia-open:stable`
 # and replace the digest below in its own PR.
-ARG BASE_IMAGE=ghcr.io/ublue-os/bazzite-nvidia-open@sha256:d0e5e105ebf43c7ddbe3c4a5dfecac1628b0e0dcf152bbd2aee0eda3e4b4cdd4
+ARG BASE_IMAGE=ghcr.io/ublue-os/bazzite-nvidia-open@sha256:1afdfa96a8011ae269e8a79dc550e1024fb953f19b3a0483c6522ad4d5d1f3d1
 ARG FIREWALL_DAEMON=opensnitch
 ARG SNITCHWATCH_BRIDGE=legacy
 ARG VM_GATE_SSH=0

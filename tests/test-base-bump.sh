@@ -10,15 +10,24 @@ old=$(printf '1%.0s' {1..64})
 new=$(printf 'a%.0s' {1..64})
 printf 'FROM scratch\nARG BASE_IMAGE=ghcr.io/ublue-os/bazzite-nvidia-open@sha256:%s\nARG OTHER=keep\n' "${old}" > "${work}/Containerfile"
 
-stub() { # $1 = digest the fake registry reports
-    printf '#!/usr/bin/env bash\necho "$*" > "%s/argv"\necho '"'"'{"Digest":"sha256:%s","Labels":{"org.opencontainers.image.version":"44.20990101"}}'"'"'\n' "${work}" "$1" > "${work}/bin/skopeo"
+# $1 = digest the fake registry reports for :stable, $2 = its kernel label.
+# The pinned (old) digest always reports an older 44.x base with kernel 7.2.9.
+stub() {
+    cat > "${work}/bin/skopeo" << EOS
+#!/usr/bin/env bash
+echo "\$*" >> "${work}/argv"
+case "\$*" in
+*@sha256:${old}) echo '{"Digest":"sha256:${old}","Labels":{"org.opencontainers.image.version":"44.20261030","ostree.linux":"7.2.9-ogc3.1.fc44.x86_64"}}' ;;
+*) echo '{"Digest":"sha256:$1","Labels":{"org.opencontainers.image.version":"44.20990101","ostree.linux":"${2:-}"}}' ;;
+esac
+EOS
     chmod +x "${work}/bin/skopeo"
 }
 fail() { echo "FAIL: $*" >&2; exit 1; }
 run() { PATH="${work}/bin:${PATH}" GITHUB_OUTPUT="${work}/out" "${repo_root}/ci/base-bump.sh" "${work}/Containerfile"; }
 
 # 1. upstream moved: digest rewritten, other lines untouched, outputs reported
-stub "${new}"
+stub "${new}" "7.2.10-ogc1.1.fc44.x86_64"
 : > "${work}/out"
 run
 grep -q "@sha256:${new}\$" "${work}/Containerfile" || fail "digest not updated"
@@ -27,6 +36,21 @@ grep -q '^changed=true$' "${work}/out" || fail "changed=true missing"
 grep -q 'docker://ghcr.io/ublue-os/bazzite-nvidia-open:stable' "${work}/argv" || fail "wrong repo/tag queried"
 grep -q '^version=44.20990101$' "${work}/out" || fail "version missing"
 grep -q "^current=sha256:${old}\$" "${work}/out" || fail "current missing"
+
+grep -q '^automerge=true$' "${work}/out" || fail "newer kernel, same major should automerge"
+
+# 1b. kernel downgrade / Fedora major jump / missing kernel label => automerge=false, PR still produced
+for k in "7.2.8-ogc3.1.fc44.x86_64" "7.3.1-ogc1.1.fc45.x86_64" ""; do
+    stub "${new}" "${k}"
+    printf 'FROM scratch\nARG BASE_IMAGE=ghcr.io/ublue-os/bazzite-nvidia-open@sha256:%s\n' "${old}" > "${work}/Containerfile"
+    : > "${work}/out"
+    run
+    grep -q '^changed=true$' "${work}/out" || fail "kernel '${k}': change not reported"
+    grep -q '^automerge=false$' "${work}/out" || fail "kernel '${k}': should not automerge"
+    grep -q '^reason=.' "${work}/out" || fail "kernel '${k}': reason missing"
+done
+printf 'FROM scratch\nARG BASE_IMAGE=ghcr.io/ublue-os/bazzite-nvidia-open@sha256:%s\nARG OTHER=keep\n' "${new}" > "${work}/Containerfile"
+stub "${new}" "7.2.10-ogc1.1.fc44.x86_64"
 
 # 2. already current: idempotent, no change reported
 : > "${work}/out"

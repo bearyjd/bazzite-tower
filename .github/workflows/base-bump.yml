@@ -1,8 +1,15 @@
 ---
 # Follow Bazzite upstream without unpinning: weekly, move the Containerfile's
 # digest-pinned BASE_IMAGE to the current bazzite-nvidia-open:stable and open a
-# PR. build.yml's smoke gate (and base-watch's package diff) then judge it; a
-# human merges. Nothing here builds, pushes an image, or merges.
+# PR. build.yml's smoke gate (and base-watch's package diff) then judge it.
+# Nothing here builds or pushes an image. ci/base-bump.sh also emits an
+# automerge guard decision (ci/base-bump-guard.py): only when the Fedora major
+# is unchanged and the kernel is same-or-newer does this workflow arm
+# `gh pr merge --auto --merge`, which merges only after the required checks go
+# green, and never while a release candidate workflow is in flight. Otherwise
+# (major jump, kernel downgrade, any parse failure) the PR stays open for a human.
+# Requires the repo's "Allow auto-merge" setting; without it arming fails with a
+# warning and the PR simply waits for a human.
 #
 # Needs a BUMP_TOKEN secret (fine-grained PAT or app token: contents + pull
 # requests write on this repo). A PR opened with the default GITHUB_TOKEN would
@@ -64,6 +71,8 @@ jobs:
           LATEST: ${{ steps.bump.outputs.latest }}
           CURRENT: ${{ steps.bump.outputs.current }}
           VERSION: ${{ steps.bump.outputs.version }}
+          AUTOMERGE: ${{ steps.bump.outputs.automerge }}
+          REASON: ${{ steps.bump.outputs.reason }}
         run: |
           set -euo pipefail
           branch="base-bump/${LATEST#sha256:}"
@@ -71,7 +80,7 @@ jobs:
           remote="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
 
           # Rerun-safe: push only if the branch is missing, open a PR only if
-          # none (open, merged or closed) exists for it.
+          # none (open, merged or closed) exists for it; an open one is re-armed.
           if ! git ls-remote --exit-code --heads "${remote}" "${branch}" > /dev/null; then
             git config user.name  "github-actions[bot]"
             git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -79,8 +88,29 @@ jobs:
             git commit -am "chore(base): bump bazzite-nvidia-open to ${VERSION}"
             git push "${remote}" "${branch}"
           fi
-          if [[ -n "$(gh pr list --head "${branch}" --state all --json number --jq '.[0].number')" ]]; then
-            echo "A PR for ${branch} already exists; nothing to do."
+          arm() { # $1 = PR number or branch; arm only on a positive guard, never mid-release
+            if [[ "${AUTOMERGE}" != "true" ]]; then
+              echo "Automerge not armed: ${REASON:-no guard decision}"
+              return 0
+            fi
+            local wf n
+            for wf in r13-candidate.yml r13-immutable-ci.yml release.yml; do
+              n=$(gh run list --workflow "${wf}" --json status \
+                --jq '[.[] | select(.status != "completed")] | length') \
+                || { echo "::warning::cannot list ${wf} runs; not arming automerge"; return 0; }
+              if [[ "${n}" != "0" ]]; then
+                echo "::notice::${wf} has ${n} run(s) in flight; not arming automerge (rerun to re-arm)."
+                return 0
+              fi
+            done
+            gh pr merge --auto --merge "$1" \
+              || echo "::warning::could not arm auto-merge (is 'Allow auto-merge' enabled?); a human merges."
+          }
+
+          existing=$(gh pr list --head "${branch}" --state all --json number,state --jq '.[0] | select(.) | "\(.number) \(.state)"')
+          if [[ -n "${existing}" ]]; then
+            echo "A PR for ${branch} already exists (${existing})."
+            if [[ "${existing##* }" == "OPEN" ]]; then arm "${branch}"; fi
             exit 0
           fi
 
@@ -95,6 +125,7 @@ jobs:
             "Automated weekly bump of the pinned upstream base." \
             "" \
             "- Upstream version: \`${VERSION}\`" \
+            "- Automerge guard: \`${AUTOMERGE:-false}\` (${REASON:-no guard decision})" \
             "- Old digest: \`${CURRENT}\`" \
             "- New digest: \`${LATEST}\`" \
             "" \
@@ -102,7 +133,10 @@ jobs:
             "- [ ] Smoke gate and build checks green on this head" \
             "- [ ] Read the latest \`base-bump\` issue from base-watch (kernel, qemu, libvirt, NetworkManager, Docker, systemd, polkit, bootc)" \
             "- [ ] Not mid-release: merging changes the Containerfile, so do not merge between a candidate cut and its promotion" \
-            "- [ ] Kernel unchanged or newer than the last accepted one (i915 MTL resume fix; see docs/research/i915-mtl-resume-2026-06-20.md)")
-          gh pr create --base main --head "${branch}" \
+            "- [ ] Kernel unchanged or newer than the last accepted one (i915 MTL resume fix; see docs/research/i915-mtl-resume-2026-06-20.md)" \
+            "" \
+            "If the guard above is \`true\` (same Fedora major, kernel same-or-newer, policy floor met) and no release candidate run is in flight, auto-merge is armed and these items are covered by the required checks; if \`false\`, this PR needs a human decision.")
+          pr_url=$(gh pr create --base main --head "${branch}" \
             --title "chore(base): bump bazzite-nvidia-open to ${VERSION}" \
-            --body "${body}"
+            --body "${body}")
+          arm "${pr_url}"

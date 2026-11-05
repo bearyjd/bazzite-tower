@@ -591,6 +591,7 @@ test-ci:
     set -euo pipefail
     bash tests/test-base-diff.sh
     bash tests/test-base-bump.sh
+    python3 tests/test-base-bump-guard.py
 
 # Offline fixture checks with hashed inputs and retained evidence; no runtime claim.
 [group('Test')]

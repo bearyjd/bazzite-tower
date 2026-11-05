@@ -47,12 +47,18 @@ fi
 
 # Automerge guard: compare the new base to the current pin. Fails closed.
 guard_script=$(dirname "${BASH_SOURCE[0]}")/base-bump-guard.py
-cur_info=$(skopeo inspect --retry-times 4 "docker://${repo}@${current}" 2> /dev/null || true)
+if ! cur_info=$(skopeo inspect --retry-times 4 "docker://${repo}@${current}" 2> /dev/null); then
+    echo "::notice::guard: skopeo lookup of the CURRENT pin ${repo}@${current} failed; automerge=false" >&2
+    cur_info=
+fi
 cur_version=$(jq -r '.Labels["org.opencontainers.image.version"] // ""' <<< "${cur_info}" 2> /dev/null | tr -cd '0-9A-Za-z._-' || true)
 cur_kernel=$(jq -r '.Labels["ostree.linux"] // ""' <<< "${cur_info}" 2> /dev/null | tr -cd '0-9A-Za-z._-' || true)
 cur_kernel=${cur_kernel%.x86_64}
-guard=$(python3 "${guard_script}" --current-version "${cur_version}" --current-kernel "${cur_kernel}" \
-    --new-version "${version}" --new-kernel "${kernel}" 2> /dev/null || true)
+if ! guard=$(python3 "${guard_script}" --current-version "${cur_version}" --current-kernel "${cur_kernel}" \
+    --new-version "${version}" --new-kernel "${kernel}"); then
+    echo "::notice::guard: ci/base-bump-guard.py itself failed to run; automerge=false" >&2
+    guard=
+fi
 automerge=$(sed -n 's/^automerge=\(true\|false\)$/\1/p' <<< "${guard}")
 if [[ "${automerge}" != "true" ]]; then automerge=false; fi
 reason=$(sed -n 's/^reason=//p' <<< "${guard}" | head -n1 | tr -cd '0-9A-Za-z._ ():,>/=-')

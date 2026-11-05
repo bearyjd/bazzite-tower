@@ -52,6 +52,24 @@ done
 printf 'FROM scratch\nARG BASE_IMAGE=ghcr.io/ublue-os/bazzite-nvidia-open@sha256:%s\nARG OTHER=keep\n' "${new}" > "${work}/Containerfile"
 stub "${new}" "7.2.10-ogc1.1.fc44.x86_64"
 
+# 1c. lookup of the CURRENT pin fails => automerge=false (fail closed), PR still produced, cause reported
+cat > "${work}/bin/skopeo" << EOS
+#!/usr/bin/env bash
+case "\$*" in
+*@sha256:${old}) exit 1 ;;
+*) echo '{"Digest":"sha256:${new}","Labels":{"org.opencontainers.image.version":"44.20990101","ostree.linux":"7.2.10-ogc1.1.fc44.x86_64"}}' ;;
+esac
+EOS
+chmod +x "${work}/bin/skopeo"
+printf 'FROM scratch\nARG BASE_IMAGE=ghcr.io/ublue-os/bazzite-nvidia-open@sha256:%s\n' "${old}" > "${work}/Containerfile"
+: > "${work}/out"
+run 2> "${work}/err"
+grep -q '^changed=true$' "${work}/out" || fail "current-lookup failure: change not reported"
+grep -q '^automerge=false$' "${work}/out" || fail "current-lookup failure: should not automerge"
+grep -q 'lookup of the CURRENT pin' "${work}/err" || fail "current-lookup failure: cause not reported"
+printf 'FROM scratch\nARG BASE_IMAGE=ghcr.io/ublue-os/bazzite-nvidia-open@sha256:%s\nARG OTHER=keep\n' "${new}" > "${work}/Containerfile"
+stub "${new}" "7.2.10-ogc1.1.fc44.x86_64"
+
 # 2. already current: idempotent, no change reported
 : > "${work}/out"
 run

@@ -6,8 +6,11 @@
 # automerge guard decision (ci/base-bump-guard.py): only when the Fedora major
 # is unchanged and the kernel is same-or-newer does this workflow arm
 # `gh pr merge --auto --merge`, which merges only after the required checks go
-# green, and never while a release candidate workflow is in flight. Otherwise
-# (major jump, kernel downgrade, any parse failure) the PR stays open for a human.
+# green. At arm time only (not re-checked at merge time) it also declines to arm
+# while a release candidate workflow is in flight; a release started after
+# arming is NOT blocked, so the owner must run `gh pr merge --disable-auto <n>`
+# if one starts. Otherwise (major jump, kernel downgrade, any parse failure) the
+# PR stays open for a human.
 # Requires the repo's "Allow auto-merge" setting; without it arming fails with a
 # warning and the PR simply waits for a human.
 #
@@ -88,7 +91,7 @@ jobs:
             git commit -am "chore(base): bump bazzite-nvidia-open to ${VERSION}"
             git push "${remote}" "${branch}"
           fi
-          arm() { # $1 = PR number or branch; arm only on a positive guard, never mid-release
+          arm() { # $1 = PR number or branch; arm only on a positive guard and no release in flight right now
             if [[ "${AUTOMERGE}" != "true" ]]; then
               echo "Automerge not armed: ${REASON:-no guard decision}"
               return 0
@@ -99,7 +102,7 @@ jobs:
                 --jq '[.[] | select(.status != "completed")] | length') \
                 || { echo "::warning::cannot list ${wf} runs; not arming automerge"; return 0; }
               if [[ "${n}" != "0" ]]; then
-                echo "::notice::${wf} has ${n} run(s) in flight; not arming automerge (rerun to re-arm)."
+                echo "::notice::${wf} has ${n} run(s) in flight; not arming automerge (rerun to re-arm). This check is made at arm time only."
                 return 0
               fi
             done
@@ -118,6 +121,7 @@ jobs:
           gh pr list --state open --json number,headRefName \
             --jq '.[] | select(.headRefName | startswith("base-bump/")) | .number' \
             | while read -r old; do
+                gh pr merge --disable-auto "${old}" || true
                 gh pr close "${old}" --comment "Superseded by a newer upstream digest (${branch})."
               done
 
@@ -132,10 +136,10 @@ jobs:
             "## Before merging" \
             "- [ ] Smoke gate and build checks green on this head" \
             "- [ ] Read the latest \`base-bump\` issue from base-watch (kernel, qemu, libvirt, NetworkManager, Docker, systemd, polkit, bootc)" \
-            "- [ ] Not mid-release: merging changes the Containerfile, so do not merge between a candidate cut and its promotion" \
+            "- [ ] Not mid-release: merging changes the Containerfile, so do not merge between a candidate cut and its promotion. Auto-merge, if armed, does NOT re-check this at merge time; if a release starts after arming, run \`gh pr merge --disable-auto <n>\`" \
             "- [ ] Kernel unchanged or newer than the last accepted one (i915 MTL resume fix; see docs/research/i915-mtl-resume-2026-06-20.md)" \
             "" \
-            "If the guard above is \`true\` (same Fedora major, kernel same-or-newer, policy floor met) and no release candidate run is in flight, auto-merge is armed and these items are covered by the required checks; if \`false\`, this PR needs a human decision.")
+            "If the guard above is \`true\` (same Fedora major, kernel same-or-newer, policy floor met) and no release candidate run was in flight when it was armed, auto-merge is armed; the checklist items other than the release one are covered by the required checks. A release started after arming is NOT blocked. If \`false\`, this PR needs a human decision.")
           pr_url=$(gh pr create --base main --head "${branch}" \
             --title "chore(base): bump bazzite-nvidia-open to ${VERSION}" \
             --body "${body}")

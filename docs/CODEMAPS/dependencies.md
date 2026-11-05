@@ -49,14 +49,15 @@ build at `5c2b44a` now passed on supported KDE 6.11 / Qt 6.11.2 with Rust
 1.98.1 and mold 2.42.0; actual default KDE behavior requires fresh VM proof.
 The GUI crate remains 0.1.0, separate from native bridge 0.1.1. See [system bridge research](../research/snitchwatch-system-bridge.md).
 
-Snitchwatch daemon build toolchain: 7 Fedora 44 RPMs pinned by sha256 in
+Snitchwatch daemon build toolchain: 7 Fedora 45 RPMs pinned by sha256 in
 `build_files/firewall/snitchwatch-system-daemon-pins.json` and fetched from Koji
 (signed copies, key sha256 pinned); see [image-build](image-build.md).
 Phase 2 separately pins three signed Koji bridge RPMs (rust, cargo,
-rust-std-static 1.99.0-1.fc44) in `build_files/firewall/snitchwatch-system-pins.json`.
+rust-std-static 1.99.1-2.fc45) in `build_files/firewall/snitchwatch-system-pins.json`.
 The shared toolchain helper runs after the byte-identical upstream installer
 and before the Rust gate; the daemon retains its seven pins. Remaining live
-toolchain and transitive dependencies, including LLVM, are not fully hermetic.
+toolchain and transitive dependencies, including LLVM, are not fully hermetic
+(protobuf 33.5's libraries come from live `protobuf-cpp`/`abseil-cpp`).
 Re-pin `EXPECTED_PINS_SHA256` in the respective bridge
 `snitchwatch-system-verify.py` or daemon `snitchwatch-system-daemon-verify.py`
 whenever its pins manifest changes, and rerun relevant tests.

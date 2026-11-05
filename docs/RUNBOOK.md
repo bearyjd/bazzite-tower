@@ -301,12 +301,13 @@ build uid can still edit other crates' unpacked sources in its cargo home.
 The daemon build toolchain (Go, protoc, libnetfilter_queue) is installed from
 pinned, Fedora-signed Koji RPMs (`toolchainRpms` in
 `build_files/firewall/snitchwatch-system-daemon-pins.json`), not live repos, so
-Fedora repo updates cannot change the Go, protoc and libnetfilter_queue RPMs (7 pinned, signed). Phase 2 also pins the bridge's rust, cargo and rust-std-static 1.99.0-1.fc44 as three signed Koji RPMs in `build_files/firewall/snitchwatch-system-pins.json`. The shared `snitchwatch-system-toolchain.sh` helper runs after the byte-identical upstream `install-deps.sh` and before the Rust version gate. Remaining live toolchain and transitive dependencies, including LLVM, gcc, binutils, libnfnetlink-devel, pkgconf, git and python3, are not fully hermetic. `just test-snitchwatch-daemon-patch` uses the same daemon RPMs (helper `fetch` mode). Koji is therefore a build-time
+Fedora repo updates cannot change the Go, protoc and libnetfilter_queue RPMs (7 pinned, signed). Phase 2 also pins the bridge's rust, cargo and rust-std-static 1.99.1-2.fc45 as three signed Koji RPMs in `build_files/firewall/snitchwatch-system-pins.json`. The shared `snitchwatch-system-toolchain.sh` helper runs after the byte-identical upstream `install-deps.sh` and before the Rust version gate. Remaining live toolchain and transitive dependencies, including LLVM, gcc, binutils, libnfnetlink-devel, pkgconf, git and python3, are not fully hermetic. On the Fedora 45 builder the pinned `protobuf` 33.5 RPM is an empty metapackage: libprotobuf/libprotoc come from live `protobuf-cpp` (held to the exact `6.33.5-7.fc45` by its `Requires`, file not hashed) and live `abseil-cpp`. `just test-snitchwatch-daemon-patch` uses the same daemon RPMs (helper `fetch` mode). Koji is therefore a build-time
 dependency: if `kojipkgs.fedoraproject.org` is unreachable the build fails
 closed. To re-pin: download each RPM from
-`https://kojipkgs.fedoraproject.org/packages/<name>/<ver>/<rel>/data/signed/6d9f90a6/<arch>/`
+`https://kojipkgs.fedoraproject.org/packages/<name>/<ver>/<rel>/data/signed/f577861e/<arch>/`
 (never the unsigned `/packages/.../<arch>/` copy), confirm `rpm -K` reports
-`digests signatures OK` against `/etc/pki/rpm-gpg/RPM-GPG-KEY-fedora-44-primary`,
+`digests signatures OK` against `/usr/share/pki/rpm-gpg/RPM-GPG-KEY-fedora-45-primary`
+(Fedora 45 ships the keys there; `/etc/pki/rpm-gpg` is empty in the image),
 record sha256/size/NEVRA in the respective bridge or daemon pins file, update
 `rustVersion` or `goVersion`/`protocVersion`/`libnetfilterQueueVersion` to match,
 then update `EXPECTED_PINS_SHA256` in the corresponding

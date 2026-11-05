@@ -4,8 +4,9 @@
 # reports old/new digest and upstream version via $GITHUB_OUTPUT (stdout if unset).
 # Used by .github/workflows/base-bump.yml, which opens the PR. It also reports
 # automerge=true|false + reason (ci/base-bump-guard.py): true only when the
-# Fedora major is unchanged and the kernel is same-or-newer than the current
-# pin; anything else (or any lookup/parse failure) is false and a human merges.
+# Fedora major is unchanged, the kernel is same-or-newer than the current pin
+# and the blast-radius package diff (ci/base-blast-diff.sh) is empty; it also
+# reports that diff as the multiline `blast_report`. Anything else (or any lookup/parse failure) is false and a human merges.
 # Usage: ci/base-bump.sh [Containerfile]
 set -euo pipefail
 
@@ -54,17 +55,28 @@ fi
 cur_version=$(jq -r '.Labels["org.opencontainers.image.version"] // ""' <<< "${cur_info}" 2> /dev/null | tr -cd '0-9A-Za-z._-' || true)
 cur_kernel=$(jq -r '.Labels["ostree.linux"] // ""' <<< "${cur_info}" 2> /dev/null | tr -cd '0-9A-Za-z._-' || true)
 cur_kernel=${cur_kernel%.x86_64}
-if ! guard=$(python3 "${guard_script}" --current-version "${cur_version}" --current-kernel "${cur_kernel}" \
+# Blast-radius package diff (pulls both digests); failure => no report => guard says false.
+blast_file=$(mktemp)
+trap 'rm -f "${blast_file}"' EXIT
+if ! "$(dirname "${BASH_SOURCE[0]}")/base-blast-diff.sh" "${repo}" "${current}" "${latest}" "${blast_file}"; then
+    echo "::notice::guard: blast-radius diff could not be computed; automerge=false" >&2
+    : > "${blast_file}"
+fi
+if ! guard=$(python3 "${guard_script}" --blast-report "${blast_file}" --current-version "${cur_version}" --current-kernel "${cur_kernel}" \
     --new-version "${version}" --new-kernel "${kernel}"); then
     echo "::notice::guard: ci/base-bump-guard.py itself failed to run; automerge=false" >&2
     guard=
 fi
 automerge=$(sed -n 's/^automerge=\(true\|false\)$/\1/p' <<< "${guard}")
 if [[ "${automerge}" != "true" ]]; then automerge=false; fi
+blast_eof="BLAST_EOF_${RANDOM}${RANDOM}${RANDOM}"
 reason=$(sed -n 's/^reason=//p' <<< "${guard}" | head -n1 | tr -cd '0-9A-Za-z._ ():,>/=-')
 {
     echo "automerge=${automerge}"
     echo "reason=${reason:-guard produced no decision}"
+    echo "blast_report<<${blast_eof}"
+    if [[ -s "${blast_file}" ]]; then cat "${blast_file}"; echo; else echo "_Blast-radius diff could not be computed._"; fi
+    echo "${blast_eof}"
 } >> "${out}"
 
 sed -i "s|^\\(ARG BASE_IMAGE=.*@\\)${current}\$|\\1${latest}|" "${containerfile}"

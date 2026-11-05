@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Offline test for ci/base-bump.sh: stubs skopeo, so no network or registry.
+# Offline test for ci/base-bump.sh: stubs skopeo and podman, so no network, registry or image pull.
 set -euo pipefail
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 work=$(mktemp -d)
@@ -23,6 +23,19 @@ esac
 EOS
     chmod +x "${work}/bin/skopeo"
 }
+# podman stub: `run ... <repo>@sha256:D rpm -qa` prints ${work}/manifest-D (exit 1 if absent); pull/rmi succeed.
+cat > "${work}/bin/podman" << EOS
+#!/usr/bin/env bash
+case "\$1" in
+pull | rmi) exit 0 ;;
+run) for a in "\$@"; do case "\$a" in *@sha256:*) cat "${work}/manifest-\${a##*@sha256:}" || exit 1 ;; esac; done ;;
+esac
+EOS
+chmod +x "${work}/bin/podman"
+# $1 = digest, $2... = extra "name evr" lines; a plausible base manifest (>=50 lines, has systemd)
+manifest() { local d=$1; shift; { seq -f 'pkg%g 1-1.fc44.x86_64' 1 60; echo 'systemd 256-1.fc44.x86_64'; printf '%s\n' "$@"; } > "${work}/manifest-${d}"; }
+manifest "${old}"
+manifest "${new}"
 fail() { echo "FAIL: $*" >&2; exit 1; }
 run() { PATH="${work}/bin:${PATH}" GITHUB_OUTPUT="${work}/out" "${repo_root}/ci/base-bump.sh" "${work}/Containerfile"; }
 
@@ -37,7 +50,9 @@ grep -q 'docker://ghcr.io/ublue-os/bazzite-nvidia-open:stable' "${work}/argv" ||
 grep -q '^version=44.20990101$' "${work}/out" || fail "version missing"
 grep -q "^current=sha256:${old}\$" "${work}/out" || fail "current missing"
 
-grep -q '^automerge=true$' "${work}/out" || fail "newer kernel, same major should automerge"
+grep -q '^automerge=true$' "${work}/out" || fail "newer kernel, same major, empty blast diff should automerge"
+grep -q 'No blast-radius package changes' "${work}/out" || fail "empty blast report missing from outputs"
+grep -q '^blast_report<<BLAST_EOF_' "${work}/out" || fail "blast_report multiline output missing"
 
 # 1b. kernel downgrade / Fedora major jump / missing kernel label => automerge=false, PR still produced
 for k in "7.2.8-ogc3.1.fc44.x86_64" "7.3.1-ogc1.1.fc45.x86_64" ""; do
@@ -69,6 +84,38 @@ grep -q '^automerge=false$' "${work}/out" || fail "current-lookup failure: shoul
 grep -q 'lookup of the CURRENT pin' "${work}/err" || fail "current-lookup failure: cause not reported"
 printf 'FROM scratch\nARG BASE_IMAGE=ghcr.io/ublue-os/bazzite-nvidia-open@sha256:%s\nARG OTHER=keep\n' "${new}" > "${work}/Containerfile"
 stub "${new}" "7.2.10-ogc1.1.fc44.x86_64"
+
+# 1d. non-empty blast-radius diff => automerge=false, names in reason and full diff in blast_report, sanitized
+# shellcheck disable=SC2016 # literal shell metacharacters on purpose
+manifest "${new}" 'qemu-kvm 9.1-1.fc44.x86_64' 'qemu-evil@x[y]|z$(id) 1-1.fc44.x86_64'
+manifest "${old}" 'qemu-kvm 9.0-1.fc44.x86_64'
+printf 'FROM scratch\nARG BASE_IMAGE=ghcr.io/ublue-os/bazzite-nvidia-open@sha256:%s\n' "${old}" > "${work}/Containerfile"
+: > "${work}/out"
+run
+grep -q '^changed=true$' "${work}/out" || fail "blast diff: change not reported"
+grep -q '^automerge=false$' "${work}/out" || fail "blast diff: should not automerge"
+grep -q '^reason=.*qemu-kvm' "${work}/out" || fail "blast diff: reason must name qemu-kvm"
+grep -q 'qemu-kvm. 9.0-1.fc44.x86_64 -> 9.1-1.fc44.x86_64' "${work}/out" || fail "blast diff: full report missing"
+if grep -q '[@|$]' "${work}/out"; then fail "blast diff: unsanitized char reached GITHUB_OUTPUT"; fi
+
+# 1e. diff cannot be computed (pull/run of the CURRENT pin fails; both manifests implausible) => automerge=false
+manifest "${new}"
+rm -f "${work}/manifest-${old}"
+printf 'FROM scratch\nARG BASE_IMAGE=ghcr.io/ublue-os/bazzite-nvidia-open@sha256:%s\n' "${old}" > "${work}/Containerfile"
+: > "${work}/out"
+run 2> "${work}/err"
+grep -q '^changed=true$' "${work}/out" || fail "blast failure: change not reported"
+grep -q '^automerge=false$' "${work}/out" || fail "blast failure: should not automerge"
+grep -q '^reason=.*not computed' "${work}/out" || fail "blast failure: reason should say not computed"
+grep -q 'could not be computed' "${work}/out" || fail "blast failure: PR body text missing"
+for d in "${old}" "${new}"; do echo 'systemd 1-1' > "${work}/manifest-${d}"; done
+printf 'FROM scratch\nARG BASE_IMAGE=ghcr.io/ublue-os/bazzite-nvidia-open@sha256:%s\n' "${old}" > "${work}/Containerfile"
+: > "${work}/out"
+run 2> /dev/null
+grep -q '^automerge=false$' "${work}/out" || fail "identical truncated manifests must not read as an empty diff"
+manifest "${old}"
+manifest "${new}"
+printf 'FROM scratch\nARG BASE_IMAGE=ghcr.io/ublue-os/bazzite-nvidia-open@sha256:%s\nARG OTHER=keep\n' "${new}" > "${work}/Containerfile"
 
 # 2. already current: idempotent, no change reported
 : > "${work}/out"

@@ -24,16 +24,22 @@ EOS
     chmod +x "${work}/bin/skopeo"
 }
 # podman stub: `run ... <repo>@sha256:D rpm -qa` prints ${work}/manifest-D (exit 1 if absent); pull/rmi succeed.
+# Switches: ${work}/pullfail makes pull fail; ${work}/rpmfail makes `run` print then exit 1. Every call is logged.
 cat > "${work}/bin/podman" << EOS
 #!/usr/bin/env bash
+echo "\$*" >> "${work}/podman.log"
 case "\$1" in
-pull | rmi) exit 0 ;;
-run) for a in "\$@"; do case "\$a" in *@sha256:*) cat "${work}/manifest-\${a##*@sha256:}" || exit 1 ;; esac; done ;;
+pull) [[ ! -e "${work}/pullfail" ]] || exit 1 ;;
+rmi) exit 0 ;;
+run) for a in "\$@"; do case "\$a" in *@sha256:*) cat "${work}/manifest-\${a##*@sha256:}" || exit 1 ;; esac; done
+    [[ ! -e "${work}/rpmfail" ]] || exit 1 ;;
 esac
 EOS
+printf '#!/usr/bin/%s\n' 'env bash' > "${work}/bin/sleep" # no real retry back-off in tests
+chmod +x "${work}/bin/sleep"
 chmod +x "${work}/bin/podman"
-# $1 = digest, $2... = extra "name evr" lines; a plausible base manifest (>=50 lines, has systemd)
-manifest() { local d=$1; shift; { seq -f 'pkg%g 1-1.fc44.x86_64' 1 60; echo 'systemd 256-1.fc44.x86_64'; printf '%s\n' "$@"; } > "${work}/manifest-${d}"; }
+# $1 = digest, $2... = extra "name evr" lines; a plausible base manifest (>=500 lines, has the anchors)
+manifest() { local d=$1; shift; { seq -f 'pkg%g 1-1.fc44.x86_64' 1 600; printf '%s 1-1.fc44.x86_64\n' kernel-core NetworkManager bootc systemd; printf '%s\n' "$@"; } > "${work}/manifest-${d}"; }
 manifest "${old}"
 manifest "${new}"
 fail() { echo "FAIL: $*" >&2; exit 1; }
@@ -114,6 +120,75 @@ printf 'FROM scratch\nARG BASE_IMAGE=ghcr.io/ublue-os/bazzite-nvidia-open@sha256
 run 2> /dev/null
 grep -q '^automerge=false$' "${work}/out" || fail "identical truncated manifests must not read as an empty diff"
 manifest "${old}"
+manifest "${new}"
+printf 'FROM scratch\nARG BASE_IMAGE=ghcr.io/ublue-os/bazzite-nvidia-open@sha256:%s\nARG OTHER=keep\n' "${new}" > "${work}/Containerfile"
+
+# 1f. new guards: each must force automerge=false with the PR body fallback text
+blocked() { # $1 = label; expects changed=true, automerge=false, not-computed reason
+    printf 'FROM scratch\nARG BASE_IMAGE=ghcr.io/ublue-os/bazzite-nvidia-open@sha256:%s\n' "${old}" > "${work}/Containerfile"
+    : > "${work}/out"
+    run 2> /dev/null
+    grep -q '^changed=true$' "${work}/out" || fail "$1: change not reported"
+    grep -q '^automerge=false$' "${work}/out" || fail "$1: should not automerge"
+    grep -q 'could not be computed' "${work}/out" || fail "$1: PR body fallback text missing"
+}
+manifest "${old}"
+manifest "${new}"
+# pull failure (all retries)
+touch "${work}/pullfail"
+blocked "pull failure"
+rm -f "${work}/pullfail"
+# rpm exits non-zero after printing a plausible manifest
+touch "${work}/rpmfail"
+blocked "rpm nonzero with output"
+rm -f "${work}/rpmfail"
+# >=500 lines but a missing anchor, in either manifest
+for anchor in kernel-core NetworkManager bootc systemd; do
+    for d in "${old}" "${new}"; do
+        manifest "${old}"
+        manifest "${new}"
+        grep -v "^${anchor} " "${work}/manifest-${d}" > "${work}/m.tmp"
+        mv "${work}/m.tmp" "${work}/manifest-${d}"
+        blocked "manifest missing ${anchor}"
+    done
+done
+# 60 lines with all anchors is still too small
+for d in "${old}" "${new}"; do printf '%s 1-1\n' kernel-core NetworkManager bootc systemd > "${work}/manifest-${d}"; seq -f 'p%g 1-1' 1 60 >> "${work}/manifest-${d}"; done
+blocked "short manifest"
+manifest "${old}"
+manifest "${new}"
+# offline, no implicit pull on the rpm step
+grep -q '^run .*--network=none' "${work}/podman.log" || fail "podman run must use --network=none"
+grep -q '^run .*--pull=never' "${work}/podman.log" || fail "podman run must use --pull=never"
+# both refs are removed on exit
+grep -q "^rmi -f .*@sha256:${old} .*@sha256:${new}" "${work}/podman.log" || fail "EXIT trap must rmi both refs"
+
+# 1g. over-cap diff (400 changed qemu pkgs): blocked, report capped at 300 lines
+manifest "${old}"
+manifest "${new}"
+for i in $(seq 1 400); do echo "qemu-p${i} 2-1.fc44.x86_64" >> "${work}/manifest-${new}"; done
+printf 'FROM scratch\nARG BASE_IMAGE=ghcr.io/ublue-os/bazzite-nvidia-open@sha256:%s\n' "${old}" > "${work}/Containerfile"
+: > "${work}/out"
+run
+grep -q '^automerge=false$' "${work}/out" || fail "over-cap: should not automerge"
+[[ $(grep -c '^- `qemu-p' "${work}/out") -le 300 ]] || fail "over-cap: report not capped"
+
+# 1h. report containing the multiline delimiter => fail closed, report dropped
+cat > "${work}/bin/openssl" << 'EOS'
+#!/usr/bin/env bash
+echo deadbeefdeadbeefdeadbeefdeadbeef
+EOS
+chmod +x "${work}/bin/openssl"
+manifest "${old}"
+manifest "${new}" 'qemu-BLAST_EOF_deadbeefdeadbeefdeadbeefdeadbeef 1-1.fc44.x86_64'
+printf 'FROM scratch\nARG BASE_IMAGE=ghcr.io/ublue-os/bazzite-nvidia-open@sha256:%s\n' "${old}" > "${work}/Containerfile"
+: > "${work}/out"
+run 2> /dev/null
+grep -q '^automerge=false$' "${work}/out" || fail "delimiter collision: should not automerge"
+grep -q '^reason=.*delimiter collision' "${work}/out" || fail "delimiter collision: reason missing"
+grep -q 'could not be computed' "${work}/out" || fail "delimiter collision: fallback text missing"
+[[ $(grep -c '^BLAST_EOF_deadbeef' "${work}/out") -eq 1 ]] || fail "delimiter collision: delimiter appears more than once"
+rm -f "${work}/bin/openssl"
 manifest "${new}"
 printf 'FROM scratch\nARG BASE_IMAGE=ghcr.io/ublue-os/bazzite-nvidia-open@sha256:%s\nARG OTHER=keep\n' "${new}" > "${work}/Containerfile"
 

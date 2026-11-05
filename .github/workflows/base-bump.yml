@@ -129,6 +129,11 @@ jobs:
                 gh pr close "${old}" --comment "Superseded by a newer upstream digest (${branch})."
               done
 
+          # Fence the (upstream-influenced) report in a code block whose fence is longer than any
+          # backtick run inside it, so it cannot close the block and swallow the checklist.
+          report=${BLAST_REPORT:-_Blast-radius diff could not be computed._}
+          longest=$(grep -o '`*' <<< "${report}" | awk '{ if (length($0) > m) m = length($0) } END { print m + 0 }')
+          fence=$(printf '`%.0s' $(seq 1 $((longest > 2 ? longest + 1 : 3))))
           body=$(printf '%s\n' \
             "Automated weekly bump of the pinned upstream base." \
             "" \
@@ -139,7 +144,9 @@ jobs:
             "" \
             "## Blast-radius package diff (current pin -> new base)" \
             "" \
-            "${BLAST_REPORT:-_Blast-radius diff could not be computed._}" \
+            "${fence}text" \
+            "${report}" \
+            "${fence}" \
             "" \
             "## Before merging" \
             "- [ ] Smoke gate and build checks green on this head" \

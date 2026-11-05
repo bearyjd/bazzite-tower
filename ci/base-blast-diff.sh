@@ -13,7 +13,10 @@ set -euo pipefail
 repo=$1 cur=$2 new=$3 outfile=$4
 here=$(dirname "${BASH_SOURCE[0]}")
 work=$(mktemp -d)
-trap 'rm -rf "${work}"' EXIT
+trap 'rm -rf "${work}"; podman rmi -f "${repo}@${cur}" "${repo}@${new}" > /dev/null 2>&1 || true' EXIT
+# Anchors every real bazzite-nvidia-open manifest carries (verified on the live image). qemu/libvirt
+# are NOT in the base (our 10-virt-packages.sh layer adds them), so they cannot be required here.
+anchors=(kernel-core NetworkManager bootc systemd)
 
 manifest() { # $1 = digest, $2 = output file
     local ref="${repo}@$1" i
@@ -22,13 +25,24 @@ manifest() { # $1 = digest, $2 = output file
         [[ "${i}" == 4 ]] && { echo "::notice::blast-radius: could not pull ${ref}" >&2; return 1; }
         sleep $((2 ** i))
     done
-    podman run --rm "${ref}" rpm -qa --qf '%{NAME} %{VERSION}-%{RELEASE}.%{ARCH}\n' | sort > "$2" || { podman rmi -f "${ref}" > /dev/null 2>&1 || true; return 1; }
-    podman rmi -f "${ref}" > /dev/null 2>&1 || true
-    # A truncated or empty manifest would make two bad manifests "identical".
-    if [[ $(wc -l < "$2") -lt 50 ]] || ! grep -q '^systemd ' "$2"; then
-        echo "::notice::blast-radius: implausible manifest for ${ref}" >&2
+    # Offline, no implicit pull; rpm's own exit status must count (pipefail), not just sort's.
+    if ! podman run --rm --network=none --pull=never "${ref}" rpm -qa --qf '%{NAME} %{VERSION}-%{RELEASE}.%{ARCH}\n' | sort > "$2"; then
+        echo "::notice::blast-radius: rpm -qa failed for ${ref}" >&2
         return 1
     fi
+    podman rmi -f "${ref}" > /dev/null 2>&1 || true
+    # A truncated or empty manifest would make two bad manifests "identical".
+    local a
+    if [[ $(wc -l < "$2") -lt 500 ]]; then
+        echo "::notice::blast-radius: implausible manifest for ${ref} (<500 lines)" >&2
+        return 1
+    fi
+    for a in "${anchors[@]}"; do
+        if ! grep -q "^${a} " "$2"; then
+            echo "::notice::blast-radius: implausible manifest for ${ref} (no ${a})" >&2
+            return 1
+        fi
+    done
 }
 
 manifest "${cur}" "${work}/old.txt"

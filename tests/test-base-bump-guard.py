@@ -88,6 +88,18 @@ class Guard(unittest.TestCase):
         decision, reason = guard(blast=NONE)
         self.assertIn('not computed', reason)
 
+    def test_clean_marker_with_extra_content_blocks(self):
+        # A clean marker followed by anything (appended or truncated-in) must not read as an empty diff.
+        for blast in (CLEAN + '- `qemu-kvm` 9.0-1 -> 9.1-1\n', CLEAN + 'x', 'x' + CLEAN):
+            decision, _ = guard(blast=blast)
+            self.assertEqual(decision, 'automerge=false', repr(blast))
+
+    def test_overcap_report_blocks(self):
+        report = ''.join('- `qemu-pkg%d` 1-1 -> 1-2\n' % i for i in range(300))
+        decision, reason = guard(blast=report)
+        self.assertEqual(decision, 'automerge=false')
+        self.assertIn('(300)', reason)
+
     def test_missing_report_file_fails_closed(self):
         out = subprocess.run([sys.executable, str(GUARD), '--root', str(FIXTURE), '--blast-report', '/nonexistent/x',
                               '--current-version', CUR[0], '--current-kernel', CUR[1],

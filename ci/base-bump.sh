@@ -69,7 +69,14 @@ if ! guard=$(python3 "${guard_script}" --blast-report "${blast_file}" --current-
 fi
 automerge=$(sed -n 's/^automerge=\(true\|false\)$/\1/p' <<< "${guard}")
 if [[ "${automerge}" != "true" ]]; then automerge=false; fi
-blast_eof="BLAST_EOF_${RANDOM}${RANDOM}${RANDOM}"
+blast_eof="BLAST_EOF_$(openssl rand -hex 16)"
+# Fail closed if the report could terminate the multiline output early (upstream-influenced text).
+if grep -qF "${blast_eof}" "${blast_file}"; then
+    echo "::notice::guard: blast report contains the output delimiter; automerge=false" >&2
+    automerge=false
+    guard="reason=blast-radius report not computed (delimiter collision)"
+    : > "${blast_file}"
+fi
 reason=$(sed -n 's/^reason=//p' <<< "${guard}" | head -n1 | tr -cd '0-9A-Za-z._ ():,>/=-')
 {
     echo "automerge=${automerge}"

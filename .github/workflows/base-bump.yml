@@ -4,7 +4,9 @@
 # PR. build.yml's smoke gate (and base-watch's package diff) then judge it.
 # Nothing here builds or pushes an image. ci/base-bump.sh also emits an
 # automerge guard decision (ci/base-bump-guard.py): only when the Fedora major
-# is unchanged and the kernel is same-or-newer does this workflow arm
+# is unchanged, the kernel is same-or-newer AND the blast-radius package diff
+# between the current pin and the new base is empty (ci/base-blast-diff.sh pulls
+# both digests with podman, one at a time) does this workflow arm
 # `gh pr merge --auto --merge`, which merges only after the required checks go
 # green. At arm time only (not re-checked at merge time) it also declines to arm
 # while a release candidate workflow is in flight; a release started after
@@ -38,6 +40,7 @@ jobs:
     name: Open base digest bump PR
     runs-on: ubuntu-24.04
     if: github.repository == 'bearyjd/bazzite-tower'
+    timeout-minutes: 60  # the blast-radius diff pulls two base images
     steps:
       - name: Require BUMP_TOKEN
         env:
@@ -76,6 +79,7 @@ jobs:
           VERSION: ${{ steps.bump.outputs.version }}
           AUTOMERGE: ${{ steps.bump.outputs.automerge }}
           REASON: ${{ steps.bump.outputs.reason }}
+          BLAST_REPORT: ${{ steps.bump.outputs.blast_report }}
         run: |
           set -euo pipefail
           branch="base-bump/${LATEST#sha256:}"
@@ -125,6 +129,11 @@ jobs:
                 gh pr close "${old}" --comment "Superseded by a newer upstream digest (${branch})."
               done
 
+          # Fence the (upstream-influenced) report in a code block whose fence is longer than any
+          # backtick run inside it, so it cannot close the block and swallow the checklist.
+          report=${BLAST_REPORT:-_Blast-radius diff could not be computed._}
+          longest=$(grep -o '`*' <<< "${report}" | awk '{ if (length($0) > m) m = length($0) } END { print m + 0 }')
+          fence=$(printf '`%.0s' $(seq 1 $((longest > 2 ? longest + 1 : 3))))
           body=$(printf '%s\n' \
             "Automated weekly bump of the pinned upstream base." \
             "" \
@@ -133,13 +142,20 @@ jobs:
             "- Old digest: \`${CURRENT}\`" \
             "- New digest: \`${LATEST}\`" \
             "" \
+            "## Blast-radius package diff (current pin -> new base)" \
+            "" \
+            "${fence}text" \
+            "${report}" \
+            "${fence}" \
+            "" \
             "## Before merging" \
             "- [ ] Smoke gate and build checks green on this head" \
             "- [ ] Read the latest \`base-bump\` issue from base-watch (kernel, qemu, libvirt, NetworkManager, Docker, systemd, polkit, bootc)" \
             "- [ ] Not mid-release: merging changes the Containerfile, so do not merge between a candidate cut and its promotion. Auto-merge, if armed, does NOT re-check this at merge time; if a release starts after arming, run \`gh pr merge --disable-auto <n>\`" \
+            "- [ ] Reviewed the blast-radius package diff above (qemu, libvirt, NetworkManager, systemd, polkit, bootc, kernel, Docker): auto-merge is only armed when it is empty" \
             "- [ ] Kernel unchanged or newer than the last accepted one (i915 MTL resume fix; see docs/research/i915-mtl-resume-2026-06-20.md)" \
             "" \
-            "If the guard above is \`true\` (same Fedora major, kernel same-or-newer, policy floor met) and no release candidate run was in flight when it was armed, auto-merge is armed; the checklist items other than the release one are covered by the required checks. A release started after arming is NOT blocked. If \`false\`, this PR needs a human decision.")
+            "If the guard above is \`true\` (same Fedora major, kernel same-or-newer, policy floor met, empty blast-radius diff) and no release candidate run was in flight when it was armed, auto-merge is armed; the checklist items other than the release one are covered by the required checks. A release started after arming is NOT blocked. If \`false\`, this PR needs a human decision.")
           pr_url=$(gh pr create --base main --head "${branch}" \
             --title "chore(base): bump bazzite-nvidia-open to ${VERSION}" \
             --body "${body}")

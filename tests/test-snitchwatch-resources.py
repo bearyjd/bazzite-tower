@@ -183,7 +183,9 @@ sudo() {
             read -r count < "$copies"
             if [ "$scenario" = backup-validation-failure ] && [ "$count" = 1 ]; then return 44; fi
             if [ "$scenario" = restore-validation-failure ] && [ "$count" = 2 ]; then return 45; fi ;;
-        jq|systemctl|ujust) ;;
+        jq|systemctl) ;;
+        mkdir) printf '%s\n' "$*" > "$events.mkdir"; ;;
+        ujust) [ "$scenario" != readiness-failure ] || return 46 ;;
         *) return 99 ;;
     esac
 }
@@ -199,7 +201,7 @@ sudoedit() {
 sleep() { printf 'recovery-wait\n' >> "$events"; }
 '''
         cases = {'normal': 0, 'backup-failure': 41, 'backup-validation-failure': 44,
-                 'editor-failure': 42, 'restore-failure': 0, 'restore-validation-failure': 0,
+                 'editor-failure': 42, 'readiness-failure': 0, 'restore-failure': 0, 'restore-validation-failure': 0,
                  'signal-HUP': 129, 'signal-INT': 130, 'signal-TERM': 143}
         for scenario, expected_status in cases.items():
             with self.subTest(scenario=scenario), tempfile.TemporaryDirectory() as directory:
@@ -211,12 +213,27 @@ sleep() { printf 'recovery-wait\n' >> "$events"; }
                                              'scenario': scenario})
                 sequence = events.read_text().splitlines()
                 self.assertEqual(result.returncode, expected_status, result.stderr)
+                # The protected parent directory must exist before mktemp -d uses it.
+                self.assertLess(sequence.index('mkdir'), sequence.index('mktemp'))
+                self.assertEqual((Path(str(events) + '.mkdir')).read_text().strip(),
+                                 '-p -m 0755 -- /var/lib/bazzite-tower')
                 if scenario.startswith('backup-'):
                     self.assertNotIn('edit', sequence)
                     self.assertNotIn('systemctl', sequence)
                     continue
                 self.assertEqual(sequence.count('edit'), 1)
-                self.assertEqual(sequence[-6:], ['cp', 'cmp', 'stat', 'jq', 'systemctl', 'ujust'])
+                if scenario != 'readiness-failure':
+                    self.assertEqual(sequence[-6:], ['cp', 'cmp', 'stat', 'jq', 'systemctl', 'ujust'])
+                if scenario == 'normal':
+                    self.assertIn('Restored exact proc config, metadata and service readiness', result.stdout)
+                if scenario == 'readiness-failure':
+                    # Readiness is reported, but must not hold the recovery loop/lock.
+                    self.assertIn('READINESS NOT CONFIRMED', result.stderr)
+                    self.assertEqual(sequence.count('ujust'), 3)  # bounded retry
+                    self.assertNotIn('Restored exact proc config, metadata and service readiness',
+                                     result.stdout)
+                    self.assertNotIn('RECOVERY FAILED', result.stderr)
+                    self.assertEqual(sequence.count('cp'), 2)
                 if scenario.startswith('restore-'):
                     self.assertIn('RECOVERY FAILED; migration lock retained', result.stderr)
                     self.assertEqual(sequence.count('systemctl'), 1)

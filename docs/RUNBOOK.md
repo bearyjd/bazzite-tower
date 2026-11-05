@@ -83,6 +83,20 @@ again on a future kernel bump.
 | Default NAT network | `ujust vm-net-status` |
 | Wi-Fi diagnostics (offline) | `ujust wifi-debug` |
 
+**Testing suspend/resume.** This laptop is s2idle-only (`/sys/power/mem_sleep` shows
+only `s2idle`). `rtcwake -m mem` failed here with `rtcwake: write error` on
+2026-11-04: the kernel logged `PM: suspend entry (deep)` and exited at once. The
+likely cause is the stale `mem_sleep_default=deep` still on `/proc/cmdline` (see the
+Common-issues row on that karg), which makes `mem` request a state the firmware does
+not offer. Use `sudo rtcwake -m freeze -s N` (s2idle, the state in real use). If that also fails with `write error`, read the
+kernel log for the cycle: `journalctl -k --since -3min | grep -A12 Freezing`.
+`Freezing user space processes failed ... tasks refusing to freeze` with tasks in `D`
+state under `fuse_*` means a process was blocked in a FUSE request (for example the
+flatpak document portal at `/run/user/1000/doc`) after the FUSE daemon was frozen.
+The suspend aborts after 20 s. This is caused by what is running, not by the image:
+quiet the session (stop frequent user timers/scripts) and retry before suspecting a
+regression.
+
 **Docker/libvirt forwarding on libvirt network changes (manual, real hardware).**
 Reconciliation is triggered by the systemd path unit `docker-libvirt-forwarding.path`,
 not a libvirt network hook: libvirt's confined `virtnetworkd_t` cannot exec hooks
@@ -596,6 +610,7 @@ umask 077
 config=/etc/opensnitchd/default-config.json
 log=/var/log/opensnitchd.log
 sudo jq -e '.ProcMonitorMethod == "proc" and .DefaultAction == "allow" and .Server.Address == "unix:opensnitchd.sock"' "$config" >/dev/null
+sudo mkdir -p -m 0755 -- /var/lib/bazzite-tower
 backup_dir="$(sudo mktemp -d /var/lib/bazzite-tower/snitchwatch-ebpf.XXXXXX)"
 [ "$(sudo stat -c '%u:%g:%a' "$backup_dir")" = 0:0:700 ]
 sudo cp --preserve=all -- "$config" "$backup_dir/proc.json"
@@ -613,8 +628,18 @@ restore_proc() {
     [ "$restored_metadata" = "$original_metadata" ] || return 1
     sudo jq -e '.ProcMonitorMethod == "proc" and .DefaultAction == "allow" and .Server.Address == "unix:opensnitchd.sock"' "$config" >/dev/null || return 1
     sudo systemctl restart opensnitch.service || return 1
-    sudo ujust snitchwatch-system-readiness || return 1
-    printf 'Restored exact proc config, metadata and service readiness.\n'
+    # Readiness is a report, not a gate: an unrelated readiness failure must not
+    # keep this loop (and the migration lock) retrying forever. Retry briefly so a
+    # daemon still coming up after the restart is not reported as a failure.
+    local attempt
+    for attempt in 1 2 3; do
+        if sudo ujust snitchwatch-system-readiness; then
+            printf 'Restored exact proc config, metadata and service readiness.\n'
+            return 0
+        fi
+        sleep 2
+    done
+    printf 'WARNING: readiness did not pass after restore; READINESS NOT CONFIRMED. Run it and repair before resuming normal operations.\n' >&2
 }
 recover() {
     local experiment_status=$?
@@ -687,7 +712,8 @@ the shipped allow/proc policy. Do not loosen readiness for this experiment.
 
 The recovery trap retries only after owner acknowledgement (or every 60 seconds
 if its terminal vanished) and keeps the lock held until copy, byte comparison,
-metadata/policy checks, service restart and readiness all succeed. A failed
+metadata/policy checks and service restart all succeed; readiness then runs and
+prints a warning if it fails, but does not hold the lock. A failed
 copy/validation never proceeds to restart. Do not close/kill a recovery session;
 repair its reported failure from another owner terminal and retry. SIGKILL,
 power loss and a reboot cannot be trapped: use the printed protected backup

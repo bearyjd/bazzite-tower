@@ -47,7 +47,7 @@ COPY build_files/firewall/snitchwatch-system-legacy-marker /out/usr/share/bazzit
 # are byte-identical (M1 step 2). Both bridge builds and the scanner build run
 # their third-party code unprivileged (M1 step 3). A deterministic hostile crate
 # in Cargo.lock still builds the same bytes in both (M1 not closed).
-FROM registry.fedoraproject.org/fedora:45@sha256:f5afe36c8ddb2aa5333597e900f53c5ed0267d9ebb27be765dc8ec2633aa1648 AS snitchwatch-prep
+FROM registry.fedoraproject.org/fedora:45@sha256:ea0998f4c945b85c2134793cda4fac35ee394f0d677a04c5b1fe769e13f959b8 AS snitchwatch-prep
 ARG FIREWALL_DAEMON
 COPY --from=ctx /firewall/snitchwatch-system* /factory/
 COPY system_files/usr/share/bazzite-tower/opensnitchd-default-config.json /candidate/legacy-config.json

@@ -1,6 +1,6 @@
 {
   "bridgeVersion": "0.1.1",
-  "builderImage": "registry.fedoraproject.org/fedora:45@sha256:f5afe36c8ddb2aa5333597e900f53c5ed0267d9ebb27be765dc8ec2633aa1648",
+  "builderImage": "registry.fedoraproject.org/fedora:45@sha256:ea0998f4c945b85c2134793cda4fac35ee394f0d677a04c5b1fe769e13f959b8",
   "flatpakFinishArgs": [
     "--socket=wayland",
     "--socket=fallback-x11",

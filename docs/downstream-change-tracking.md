@@ -186,7 +186,7 @@ Wi-Fi and virtqemud silent-runtime gap that Layer 2 can only approximate.
 > manifest back (`docs/**` is in `build.yml`'s `paths-ignore`, so that commit
 > doesn't trigger an image rebuild). First run just records the baseline.
 
-**Automated bump PRs (2026-10-21).** `.github/workflows/base-bump.yml` opens a weekly PR moving the `Containerfile` digest pin to upstream `:stable` (`ci/base-bump.sh`, tested offline by `tests/test-base-bump.sh`). It requires a `BUMP_TOKEN` secret so the PR triggers `build.yml`; without it the workflow is a no-op. Merging stays manual.
+**Automated bump PRs (2026-10-21).** `.github/workflows/base-bump.yml` opens a weekly PR moving the `Containerfile` digest pin to upstream `:stable` (`ci/base-bump.sh`, tested offline by `tests/test-base-bump.sh`). It requires a `BUMP_TOKEN` secret so the PR triggers `build.yml`; without it the workflow is a no-op. Merge is automatic only when `ci/base-bump-guard.py` approves (same Fedora major, kernel same-or-newer, policy floor met); the "no release-candidate run in flight" check is made at arm time only and is not enforced at merge time, so a release started after arming is not blocked (disable with `gh pr merge --disable-auto <n>`). Otherwise it stays manual.
 
 On each scheduled run, before/after pulling the base:
 

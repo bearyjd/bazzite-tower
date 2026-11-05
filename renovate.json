@@ -16,5 +16,11 @@
       "datasourceTemplate": "docker",
       "versioningTemplate": "docker"
     }
+  ],
+  "packageRules": [
+    {
+      "matchPackageNames": ["ghcr.io/ublue-os/bazzite-nvidia-open"],
+      "enabled": false
+    }
   ]
 }

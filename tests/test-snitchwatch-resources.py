@@ -230,6 +230,10 @@ sleep() { printf 'recovery-wait\n' >> "$events"; }
                     # Readiness is reported, but must not hold the recovery loop/lock.
                     self.assertIn('READINESS NOT CONFIRMED', result.stderr)
                     self.assertEqual(sequence.count('ujust'), 3)  # bounded retry
+                    steps = [e for e in sequence if e != 'recovery-wait']
+                    self.assertEqual(steps[-8:], ['cp', 'cmp', 'stat', 'jq', 'systemctl',
+                                                  'ujust', 'ujust', 'ujust'])
+                    self.assertEqual(sequence.count('recovery-wait'), 2)  # none after the last try
                     self.assertNotIn('Restored exact proc config, metadata and service readiness',
                                      result.stdout)
                     self.assertNotIn('RECOVERY FAILED', result.stderr)

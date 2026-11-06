@@ -83,6 +83,20 @@ again on a future kernel bump.
 | Default NAT network | `ujust vm-net-status` |
 | Wi-Fi diagnostics (offline) | `ujust wifi-debug` |
 
+**Testing suspend/resume.** This laptop is s2idle-only (`/sys/power/mem_sleep` shows
+only `s2idle`). `rtcwake -m mem` failed here with `rtcwake: write error` on
+2026-11-04: the kernel logged `PM: suspend entry (deep)` and exited at once. The
+likely cause is the stale `mem_sleep_default=deep` still on `/proc/cmdline` (see the
+Common-issues row on that karg), which makes `mem` request a state the firmware does
+not offer. Use `sudo rtcwake -m freeze -s N` (s2idle, the state in real use). If that also fails with `write error`, read the
+kernel log for the cycle: `journalctl -k --since -3min | grep -A12 Freezing`.
+`Freezing user space processes failed ... tasks refusing to freeze` with tasks in `D`
+state under `fuse_*` means a process was blocked in a FUSE request (for example the
+flatpak document portal at `/run/user/$UID/doc`) after the FUSE daemon was frozen.
+The suspend aborts after 20 s. This is caused by what is running, not by the image:
+quiet the session (stop frequent user timers/scripts) and retry before suspecting a
+regression.
+
 **Docker/libvirt forwarding on libvirt network changes (manual, real hardware).**
 Reconciliation is triggered by the systemd path unit `docker-libvirt-forwarding.path`,
 not a libvirt network hook: libvirt's confined `virtnetworkd_t` cannot exec hooks
@@ -596,6 +610,7 @@ umask 077
 config=/etc/opensnitchd/default-config.json
 log=/var/log/opensnitchd.log
 sudo jq -e '.ProcMonitorMethod == "proc" and .DefaultAction == "allow" and .Server.Address == "unix:opensnitchd.sock"' "$config" >/dev/null
+sudo mkdir -p -m 0755 -- /var/lib/bazzite-tower
 backup_dir="$(sudo mktemp -d /var/lib/bazzite-tower/snitchwatch-ebpf.XXXXXX)"
 [ "$(sudo stat -c '%u:%g:%a' "$backup_dir")" = 0:0:700 ]
 sudo cp --preserve=all -- "$config" "$backup_dir/proc.json"
@@ -613,8 +628,17 @@ restore_proc() {
     [ "$restored_metadata" = "$original_metadata" ] || return 1
     sudo jq -e '.ProcMonitorMethod == "proc" and .DefaultAction == "allow" and .Server.Address == "unix:opensnitchd.sock"' "$config" >/dev/null || return 1
     sudo systemctl restart opensnitch.service || return 1
-    sudo ujust snitchwatch-system-readiness || return 1
-    printf 'Restored exact proc config, metadata and service readiness.\n'
+    # Readiness is a report, not a gate: an unrelated readiness failure must not
+    # keep this loop (and the migration lock) retrying forever. Retry briefly so a
+    # daemon still coming up after the restart is not reported as a failure.
+    for attempt in 1 2 3; do
+        if sudo ujust snitchwatch-system-readiness; then
+            printf 'Restored exact proc config, metadata and service readiness.\n'
+            return 0
+        fi
+        [ "$attempt" = 3 ] || sleep 2
+    done
+    printf 'WARNING: readiness did not pass after restore; READINESS NOT CONFIRMED. Run it and repair before resuming normal operations.\n' >&2
 }
 recover() {
     local experiment_status=$?
@@ -687,7 +711,8 @@ the shipped allow/proc policy. Do not loosen readiness for this experiment.
 
 The recovery trap retries only after owner acknowledgement (or every 60 seconds
 if its terminal vanished) and keeps the lock held until copy, byte comparison,
-metadata/policy checks, service restart and readiness all succeed. A failed
+metadata/policy checks and service restart all succeed; readiness then runs and
+prints a warning if it fails, but does not hold the lock. A failed
 copy/validation never proceeds to restart. Do not close/kill a recovery session;
 repair its reported failure from another owner terminal and retry. SIGKILL,
 power loss and a reboot cannot be trapped: use the printed protected backup
@@ -882,7 +907,7 @@ always beats these allows.
 | Libvirt NAT guests cannot reach the default uplink after Docker starts | Docker's `DOCKER-USER` chain was not created or the active NAT bridge lacks an IPv4 address | `sudo systemctl restart docker.service`; inspect `journalctl -u docker.service -b`; the post-start helper refuses to create a missing Docker chain but does not fail Docker itself. Changes in libvirt's network state directory (path unit) and the 10-minute self-heal timer and NetworkManager route/VPN/reapply events retry it. From a repository checkout, run `just test-docker-libvirt-forwarding` on a suitable host. |
 | `docker.socket` fails at boot (`Failed to resolve group 'docker'`) | the `docker` group wasn't baked into the image (stale gshadow orphan made `systemd-sysusers` abort, so the group got created late) | `build.sh` now strips all shadow/gshadow orphans and bakes `groupadd -r docker`; the smoke test asserts the group exists |
 | Display flicker / ~30s sluggish wake | i915 PSR/DC or `deep` suspend on Meteor Lake | baked kargs disable PSR/DC and pin `s2idle`; verify `cat /sys/power/mem_sleep` |
-| `cat /proc/cmdline` shows `mem_sleep_default=deep` despite `20-suspend.toml` declaring `s2idle` | [`bootc` docs](https://bootc.dev/bootc/building/kernel-arguments.html) mark it **undefined behavior** when a kargs.d value changes across versions of the same fragment (this one shipped `deep` before PR #16 corrected it to `s2idle`) — once a value like this is baked into a deployment's persisted kernelopts, later `bootc upgrade`s can keep carrying the old value forward instead of reconciling to the fragment's current content. Confirmed on this machine 2026-09-19: `rpm-ostree kargs` showed `deep` on a deployment built long after the `s2idle` fix landed. **Harmless in practice on this hardware**: `cat /sys/power/mem_sleep` reports only `s2idle` — the firmware exposes no `deep` state at all, so the stale karg has nothing to select and resume is not currently degraded by it. Worth fixing for hygiene (declared intent should match reality) and because a future firmware/BIOS update could theoretically add a `deep` state this karg would then actually select, not because anything is broken today | one-time local correction, which then persists correctly across future upgrades the same way the wrong value did. Run `rpm-ostree kargs` bare first to confirm the deployment actually carries `deep` — `--delete` fails if it doesn't: `sudo rpm-ostree kargs --delete=mem_sleep_default=deep --append=mem_sleep_default=s2idle`, then reboot. Re-check any OTHER kargs.d fragment you edit after its first deploy — this isn't specific to suspend, it's a general bootc kargs.d gotcha |
+| `cat /proc/cmdline` shows `mem_sleep_default=deep` despite `20-suspend.toml` declaring `s2idle` | [`bootc` docs](https://bootc.dev/bootc/building/kernel-arguments.html) mark it **undefined behavior** when a kargs.d value changes across versions of the same fragment (this one shipped `deep` before PR #16 corrected it to `s2idle`) — once a value like this is baked into a deployment's persisted kernelopts, later `bootc upgrade`s can keep carrying the old value forward instead of reconciling to the fragment's current content. Confirmed on this machine 2026-09-19: `rpm-ostree kargs` showed `deep` on a deployment built long after the `s2idle` fix landed. **Harmless in practice on this hardware**: `cat /sys/power/mem_sleep` reports only `s2idle` — the firmware exposes no `deep` state at all, so the stale karg has nothing to select and resume is not currently degraded by it. One observed effect: `rtcwake -m mem` asks for the stale `deep` and fails with `write error` (2026-11-04; see "Testing suspend/resume"); desktop suspend was not tested against it. Worth fixing for hygiene (declared intent should match reality) and because a future firmware/BIOS update could theoretically add a `deep` state this karg would then actually select, not because anything is broken today | one-time local correction, which then persists correctly across future upgrades the same way the wrong value did. Run `rpm-ostree kargs` bare first to confirm the deployment actually carries `deep` — `--delete` fails if it doesn't: `sudo rpm-ostree kargs --delete=mem_sleep_default=deep --append=mem_sleep_default=s2idle`, then reboot. Re-check any OTHER kargs.d fragment you edit after its first deploy — this isn't specific to suspend, it's a general bootc kargs.d gotcha |
 | No audio; journal floods with `FW reported error: 9` / `failed to create module pipeline` | SOF topology ABI (3.29) newer than the kernel's SOF driver ABI (3.23); no ABI-≤3.23 firmware in repos to downgrade to | `25-audio-sof-bypass.toml` forces the legacy HDA driver (`snd_intel_dspcfg.dsp_driver=1`), sidestepping SOF; verify `journalctl -k \| grep -i dsp_driver` |
 | Frequent corrected MCEs in the journal | machine-check events need per-event bank/status decode; zero EDAC `igen6` counters alone do not exclude DRAM faults | `rasdaemon` records/decodes them; `mcelog` is masked (its trigger tried to offline a CPU). Decode with `sudo ras-mc-ctl --errors` |
 | `smartd` warns of media errors / available-spare drop | NVMe wear or developing fault | `journalctl -u smartd`; confirm with `sudo smartctl -a /dev/nvmeN`; a falling available-spare or rising media-error count is an escalation/back-up signal |

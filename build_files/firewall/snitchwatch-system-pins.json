@@ -31,9 +31,9 @@
   },
   "rustVersion": "1.99.1",
   "schemaVersion": 1,
-  "sourceCommit": "5860dcdb118917daf61bb9f5ef0c999595bc0edc",
+  "sourceCommit": "32eca9a74be1c67af4333b40c9711d61dee1cba4",
   "sourceFiles": {
-    "Cargo.lock": "48e49bd49869ac32b38063c5356c50d31050c97235a303ba9105262c15a7a73f",
+    "Cargo.lock": "777902b4f50d372f199a157b7e65d9a441aa395f92998316ae5c09955d51816a",
     "Cargo.toml": "ef17d9cc674731d5046110f15e747a994b93725474f1e9d2018b67bcc76bc2f2",
     "crates/scanner-broker/Cargo.toml": "6cf534926fbbcc0b592e45dff4aaad1c687891fdb8f8a1c06ee8d34b99ed8fce",
     "crates/scanner-broker/src/lib.rs": "760fe683f08f8ac6f49eff7dd14292ce0b085829a64fb40bc058a0f2239bcfd2",
@@ -63,7 +63,7 @@
     "packaging/release/bridge_artifact.py": "6a82d12348772446d57ca0163d0b31fadf268db2345b6de3db485896d279d3e2",
     "packaging/release/build-bridge.sh": "b752941d3fd9c2ab7d986006eed7398c1a73110707df133fdec5ac1c241b2006",
     "packaging/release/install-deps.sh": "247a396c0f3d504023f001c33bb1211f5f0f9bfd2c6685077d4bd312ac95f8cb",
-    "packaging/release/pins.env": "cf5903315781c0b3edbb5afa53354a8c8a4c332942e3041de2bf8a32e6c5766e",
+    "packaging/release/pins.env": "49278d33dc09c1039c1d0d51819b86d3fe3d8e84f9cc110a8bc2ae8d5018e3cd",
     "packaging/release/repro-check.sh": "b915ac388d28dce593bc652a07ff7d9a1fcef33e4a4434e03502d2e28cfe767e",
     "packaging/scanner/org.snitchwatch.Scanner.service": "f4318e9b375eb0c06390111789700ac625f1c130ba41bb27407d5348851baf47",
     "packaging/scanner/snitchwatch-scanner.conf": "f54371321c416abd209d0a035ae22c02a05b7fb832f29e0a037943047d8118c1",
@@ -78,7 +78,7 @@
     "packaging/system/stage.sh": "64327742d69caf99ce63baae6503d3a5a5ce4c1f4c54ad4f425191b0fc44d328"
   },
   "sourceRepository": "https://github.com/bearyjd/snitchwatch.git",
-  "sourceTree": "b44cb6674cf67de8fedfeceaab0c6e926735fbd8",
+  "sourceTree": "b4d8d159f3ebd93848b2363785470108784d8315",
   "submoduleCommit": "b404c4c6316760fa7bc415509d3f8d747f7dc9cc",
   "toolchainRpms": [
     {

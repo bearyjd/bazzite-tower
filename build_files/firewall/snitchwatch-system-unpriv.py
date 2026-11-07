@@ -172,7 +172,9 @@ def children(parent, proc=Path('/proc')):
     for entry in proc.iterdir():
         if entry.name.isdigit():
             try:
-                fields = (entry / 'stat').read_text().rsplit(')', 1)[1].split()
+                # Bytes, not text: comm is arbitrary bytes (a non-UTF-8 name must not abort the scan), and the
+                # last ')' ends it however many the name contains.
+                fields = (entry / 'stat').read_bytes().rsplit(b')', 1)[1].split()
             except (FileNotFoundError, ProcessLookupError, IndexError):
                 continue
             if int(fields[1]) == parent:

@@ -906,6 +906,32 @@ python3() {
                 self.assertEqual(result.returncode, 0 if valid else 1)
 
 
+class UnprivProcScan(unittest.TestCase):
+    """children() must survive arbitrary comm bytes: the scanner's own tests run processes with non-UTF-8 names."""
+
+    def proc(self, entries):
+        root = Path(tempfile.mkdtemp(prefix='fakeproc-'))
+        self.addCleanup(shutil.rmtree, root, True)
+        for pid, raw in entries.items():
+            (root / str(pid)).mkdir()
+            (root / str(pid) / 'stat').write_bytes(raw)
+        (root / 'self').mkdir()
+        (root / 'self' / 'stat').write_bytes(b'not a pid directory')
+        return root
+
+    def test_children_survives_non_utf8_and_paren_names(self):
+        helper = runpy.run_path(str(FACTORY / 'snitchwatch-system-unpriv.py'))
+        proc = self.proc({
+            100: b'100 (\xff\xfe) S 7 100 100 0',
+            101: b'101 (ok) S 9 101 101 0',
+            102: b'102 (a) b) S 7 102 102 0',
+            103: b'103 (\xc3\x28 \x80) Z 7 103 103 0',
+        })
+        self.assertEqual(sorted(helper['children'](7, proc)), [100, 102, 103])
+        self.assertEqual(helper['children'](9, proc), [101])
+        self.assertEqual(helper['children'](12345, proc), [])
+
+
 class StageOutputContracts(unittest.TestCase):
     """Run the real stage.py against fixture inputs (no network, no build)."""
 

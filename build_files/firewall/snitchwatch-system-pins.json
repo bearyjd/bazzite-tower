@@ -1,6 +1,6 @@
 {
   "bridgeVersion": "0.1.1",
-  "builderImage": "registry.fedoraproject.org/fedora:44@sha256:e1656bc110fc33e855f7a02e4420c21066428bc7a0277160d40ee125ef8a1c65",
+  "builderImage": "registry.fedoraproject.org/fedora:45@sha256:ea0998f4c945b85c2134793cda4fac35ee394f0d677a04c5b1fe769e13f959b8",
   "flatpakFinishArgs": [
     "--socket=wayland",
     "--socket=fallback-x11",
@@ -23,17 +23,17 @@
   "flatpakRuntimeRef": "org.kde.Platform/x86_64/6.11",
   "kojiBase": "https://kojipkgs.fedoraproject.org/packages/",
   "legacyConfigSha256": "4df22dca00a0c08d5b843946bbc50154f0e0529724840b12df623f565768fe3d",
-  "protocVersion": "3.19.6",
+  "protocVersion": "33.5",
   "rpmSigningKey": {
-    "fingerprint": "36F612DCF27F7D1A48A835E4DBFCF71C6D9F90A6",
-    "path": "/etc/pki/rpm-gpg/RPM-GPG-KEY-fedora-44-primary",
-    "sha256": "93642aec521a1e5e96dd715f7ae0ec0850ebc9de09a94ce03cae5263f26cc18a"
+    "fingerprint": "4F50A6114CD5C6976A7F1179655A4B02F577861E",
+    "path": "/usr/share/pki/rpm-gpg/RPM-GPG-KEY-fedora-45-primary",
+    "sha256": "846912c73a910dab32da8ef0c0d68cb89d11ff514f598d2d1dd96d04d58b2425"
   },
-  "rustVersion": "1.99.0",
+  "rustVersion": "1.99.1",
   "schemaVersion": 1,
-  "sourceCommit": "5860dcdb118917daf61bb9f5ef0c999595bc0edc",
+  "sourceCommit": "32eca9a74be1c67af4333b40c9711d61dee1cba4",
   "sourceFiles": {
-    "Cargo.lock": "48e49bd49869ac32b38063c5356c50d31050c97235a303ba9105262c15a7a73f",
+    "Cargo.lock": "777902b4f50d372f199a157b7e65d9a441aa395f92998316ae5c09955d51816a",
     "Cargo.toml": "ef17d9cc674731d5046110f15e747a994b93725474f1e9d2018b67bcc76bc2f2",
     "crates/scanner-broker/Cargo.toml": "6cf534926fbbcc0b592e45dff4aaad1c687891fdb8f8a1c06ee8d34b99ed8fce",
     "crates/scanner-broker/src/lib.rs": "760fe683f08f8ac6f49eff7dd14292ce0b085829a64fb40bc058a0f2239bcfd2",
@@ -63,7 +63,7 @@
     "packaging/release/bridge_artifact.py": "6a82d12348772446d57ca0163d0b31fadf268db2345b6de3db485896d279d3e2",
     "packaging/release/build-bridge.sh": "b752941d3fd9c2ab7d986006eed7398c1a73110707df133fdec5ac1c241b2006",
     "packaging/release/install-deps.sh": "247a396c0f3d504023f001c33bb1211f5f0f9bfd2c6685077d4bd312ac95f8cb",
-    "packaging/release/pins.env": "cf5903315781c0b3edbb5afa53354a8c8a4c332942e3041de2bf8a32e6c5766e",
+    "packaging/release/pins.env": "49278d33dc09c1039c1d0d51819b86d3fe3d8e84f9cc110a8bc2ae8d5018e3cd",
     "packaging/release/repro-check.sh": "b915ac388d28dce593bc652a07ff7d9a1fcef33e4a4434e03502d2e28cfe767e",
     "packaging/scanner/org.snitchwatch.Scanner.service": "f4318e9b375eb0c06390111789700ac625f1c130ba41bb27407d5348851baf47",
     "packaging/scanner/snitchwatch-scanner.conf": "f54371321c416abd209d0a035ae22c02a05b7fb832f29e0a037943047d8118c1",
@@ -78,32 +78,32 @@
     "packaging/system/stage.sh": "64327742d69caf99ce63baae6503d3a5a5ce4c1f4c54ad4f425191b0fc44d328"
   },
   "sourceRepository": "https://github.com/bearyjd/snitchwatch.git",
-  "sourceTree": "b44cb6674cf67de8fedfeceaab0c6e926735fbd8",
+  "sourceTree": "b4d8d159f3ebd93848b2363785470108784d8315",
   "submoduleCommit": "b404c4c6316760fa7bc415509d3f8d747f7dc9cc",
   "toolchainRpms": [
     {
-      "file": "rust-1.99.0-1.fc44.x86_64.rpm",
-      "kojiPath": "rust/1.99.0/1.fc44/data/signed/6d9f90a6/x86_64/rust-1.99.0-1.fc44.x86_64.rpm",
+      "file": "rust-1.99.1-2.fc45.x86_64.rpm",
+      "kojiPath": "rust/1.99.1/2.fc45/data/signed/f577861e/x86_64/rust-1.99.1-2.fc45.x86_64.rpm",
       "name": "rust",
-      "nevra": "rust-0:1.99.0-1.fc44.x86_64",
-      "sha256": "cbbedd9794b017a3b654382170c55a4ba75dcfdbb7a828d3dd63d0c4b93e01be",
-      "size": 32479878
+      "nevra": "rust-0:1.99.1-2.fc45.x86_64",
+      "sha256": "a92898fcc0aefbee228e5a02fae04e3569f7ed8aa232d37b4891b0306b153cfd",
+      "size": 32488438
     },
     {
-      "file": "cargo-1.99.0-1.fc44.x86_64.rpm",
-      "kojiPath": "rust/1.99.0/1.fc44/data/signed/6d9f90a6/x86_64/cargo-1.99.0-1.fc44.x86_64.rpm",
+      "file": "cargo-1.99.1-2.fc45.x86_64.rpm",
+      "kojiPath": "rust/1.99.1/2.fc45/data/signed/f577861e/x86_64/cargo-1.99.1-2.fc45.x86_64.rpm",
       "name": "cargo",
-      "nevra": "cargo-0:1.99.0-1.fc44.x86_64",
-      "sha256": "133d5003f7b30708a9143bd63ba4f2848dae5b1d9768dca7c4d2f65497af7206",
-      "size": 8270638
+      "nevra": "cargo-0:1.99.1-2.fc45.x86_64",
+      "sha256": "3e57cabdaf0d9a5e990106b9e8e33f1d08f69721ae2094248fe7478752941052",
+      "size": 8309626
     },
     {
-      "file": "rust-std-static-1.99.0-1.fc44.x86_64.rpm",
-      "kojiPath": "rust/1.99.0/1.fc44/data/signed/6d9f90a6/x86_64/rust-std-static-1.99.0-1.fc44.x86_64.rpm",
+      "file": "rust-std-static-1.99.1-2.fc45.x86_64.rpm",
+      "kojiPath": "rust/1.99.1/2.fc45/data/signed/f577861e/x86_64/rust-std-static-1.99.1-2.fc45.x86_64.rpm",
       "name": "rust-std-static",
-      "nevra": "rust-std-static-0:1.99.0-1.fc44.x86_64",
-      "sha256": "5b1753c706960ec4a6b2158cb5525e677111cff681c6b54c88f95f0f0fbe4202",
-      "size": 42781168
+      "nevra": "rust-std-static-0:1.99.1-2.fc45.x86_64",
+      "sha256": "9a53146899a3e225d077cf7afbbabd55c03aa1e7ae07f578e53ad66c429d7b28",
+      "size": 43108540
     }
   ]
 }

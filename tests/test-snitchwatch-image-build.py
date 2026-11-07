@@ -775,20 +775,20 @@ class ImageBuildContracts(unittest.TestCase):
         for key in ('rpmSigningKey', 'kojiBase'):
             self.assertEqual(self.pins[key], daemon[key])
         expected = {
-            'rust': ('cbbedd9794b017a3b654382170c55a4ba75dcfdbb7a828d3dd63d0c4b93e01be', 32479878),
-            'cargo': ('133d5003f7b30708a9143bd63ba4f2848dae5b1d9768dca7c4d2f65497af7206', 8270638),
-            'rust-std-static': ('5b1753c706960ec4a6b2158cb5525e677111cff681c6b54c88f95f0f0fbe4202', 42781168),
+            'rust': ('a92898fcc0aefbee228e5a02fae04e3569f7ed8aa232d37b4891b0306b153cfd', 32488438),
+            'cargo': ('3e57cabdaf0d9a5e990106b9e8e33f1d08f69721ae2094248fe7478752941052', 8309626),
+            'rust-std-static': ('9a53146899a3e225d077cf7afbbabd55c03aa1e7ae07f578e53ad66c429d7b28', 43108540),
         }
         rpms = self.pins['toolchainRpms']
         self.assertEqual(len(rpms), 3)
         self.assertEqual({r['name'] for r in rpms}, set(expected))
         for rpm in rpms:
             name = rpm['name']
-            filename = f'{name}-1.99.0-1.fc44.x86_64.rpm'
+            filename = f'{name}-1.99.1-2.fc45.x86_64.rpm'
             self.assertEqual((rpm['sha256'], rpm['size']), expected[name])
             self.assertEqual(rpm['file'], filename)
-            self.assertEqual(rpm['nevra'], f'{name}-0:1.99.0-1.fc44.x86_64')
-            self.assertEqual(rpm['kojiPath'], 'rust/1.99.0/1.fc44/data/signed/6d9f90a6/x86_64/' + filename)
+            self.assertEqual(rpm['nevra'], f'{name}-0:1.99.1-2.fc45.x86_64')
+            self.assertEqual(rpm['kojiPath'], 'rust/1.99.1/2.fc45/data/signed/f577861e/x86_64/' + filename)
         installer = (FACTORY / 'snitchwatch-system-install-deps.sh').read_bytes()
         self.assertEqual(sha(installer), '247a396c0f3d504023f001c33bb1211f5f0f9bfd2c6685077d4bd312ac95f8cb')
 
@@ -827,9 +827,9 @@ dnf() {
 rustc() {
     echo rustc >> "$events"
     [[ -f "$installed" ]] || return 1
-    echo 'rustc 1.99.0 (fixture)'
+    echo 'rustc 1.99.1 (fixture)'
 }
-protoc() { echo 'libprotoc 3.19.6'; }
+protoc() { echo 'libprotoc 33.5'; }
 python3() {
     # The toolchain fingerprint reads the host RPM db and the probe needs a network;
     # this test must depend on neither.

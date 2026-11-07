@@ -975,9 +975,23 @@ class SystemBehavior(unittest.TestCase):
                 with self.subTest(name=name,value=value):
                     path.write_text(original.replace("SNITCHWATCH_SYSTEM_BRIDGE=1", "SNITCHWATCH_SYSTEM_BRIDGE=1\n"+name+"="+value))
                     self.refuse_readiness("redirects protected system IPC")
-            path.write_text(original.replace("SNITCHWATCH_SYSTEM_BRIDGE=1", "SNITCHWATCH_SYSTEM_BRIDGE=1\n"+name+"="+expected+"\nQT_QUICK_CONTROLS_STYLE=Basic"))
+            path.write_text(original.replace("SNITCHWATCH_SYSTEM_BRIDGE=1", "SNITCHWATCH_SYSTEM_BRIDGE=1\n"+name+"="+expected))
             common.runtime_readiness(self.ctx)
         path.write_text(original)
+
+    def test_flatpak_environment_key_allowlist(self):
+        # Intent change: the old test accepted an arbitrary extra key (QT_QUICK_CONTROLS_STYLE);
+        # only the reviewed [Environment] keys may now appear.
+        self.ctx.system_config();path=self.ctx.flatpak();original=path.read_text()
+        anchor = "SNITCHWATCH_SYSTEM_BRIDGE=1"
+        for extra in ("QT_QUICK_CONTROLS_STYLE=Basic", "LD_PRELOAD=/tmp/x.so", "snitchwatch_system_bridge=1", "SNITCHWATCH_WS_URL=x"):
+            with self.subTest(extra=extra):
+                path.write_text(original.replace(anchor, anchor+"\n"+extra))
+                self.refuse_readiness(r"unreviewed \[Environment\] key")
+        path.write_text(original.replace(anchor, anchor+"\nSNITCHWATCH_WS_SOCKET=/run/snitchwatch/bridge.sock\nSNITCHWATCH_WS_TOKEN_PATH=/run/snitchwatch-auth/token"))
+        common.runtime_readiness(self.ctx)
+        path.write_text(original)
+        common.runtime_readiness(self.ctx)
 
     def test_extended_runtime_acl_refuses_outsider_grants(self):
         self.ctx.system_config()

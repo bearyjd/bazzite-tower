@@ -439,6 +439,9 @@ def read_user_metadata(path):
 # Reviewed [Context] keys and metadata sections. Adding a Flatpak permission (e.g. --allow=, --unset-env=,
 # a new section) to the image's finishArgs must extend these in the same change, or readiness refuses.
 CONTEXT_KEYS = frozenset({"shared", "sockets", "devices", "filesystems", "persistent"})
+# Reviewed [Environment] keys. Canonical metadata (flatpak --env=SNITCHWATCH_SYSTEM_BRIDGE=1) carries only the
+# first; the two IPC keys are tolerated solely at their pinned values (checked below). Anything else refuses.
+ENVIRONMENT_KEYS = frozenset({"SNITCHWATCH_SYSTEM_BRIDGE", "SNITCHWATCH_WS_SOCKET", "SNITCHWATCH_WS_TOKEN_PATH"})
 METADATA_SECTIONS = frozenset({"Application", "Build", "Context", "Environment", "Session Bus Policy", "System Bus Policy", "Extension org.snitchwatch.Snitchwatch.Debug"})
 # One strict grammar so configparser and GLib's GKeyFile cannot read a line differently: no leading
 # whitespace, no control characters other than TAB inside values, no \r/\f/\v/NEL line separators.
@@ -493,6 +496,8 @@ def flatpak_profiles(ctx):
             require(set(meta.sections()) <= METADATA_SECTIONS, "same-ID Flatpak has unreviewed metadata section: "+", ".join(sorted(set(meta.sections())-METADATA_SECTIONS)))
             context = meta["Context"] if meta.has_section("Context") else {}
             require(set(context) <= CONTEXT_KEYS, "same-ID Flatpak has unreviewed [Context] key: "+", ".join(sorted(set(context)-CONTEXT_KEYS)))
+            if meta.has_section("Environment"):
+                require(set(meta["Environment"]) <= ENVIRONMENT_KEYS, "same-ID Flatpak has unreviewed [Environment] key: "+", ".join(sorted(set(meta["Environment"])-ENVIRONMENT_KEYS)))
             def values(key):
                 return set(context.get(key, "").strip(";").split(";"))-{ "" }
             require(meta.get("Environment", "SNITCHWATCH_SYSTEM_BRIDGE", fallback="") == "1", "same-ID Flatpak uses a legacy/unknown bridge profile")

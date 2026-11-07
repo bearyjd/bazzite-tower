@@ -664,13 +664,14 @@ trap 'exit 143' TERM
 # at INFO (level 1), so at the shipped LogLevel 2 the greps below could never
 # match. LogLevel 1 is experiment-only; restore_proc copies the backup back.
 sudoedit "$config" </dev/tty
-sudo python3 - "$backup_dir/proc.json" "$config" <<'CHECK_CONFIG'
+sudo python3 -I - "$backup_dir/proc.json" "$config" <<'CHECK_CONFIG'
 import json, sys
 before, after = [json.load(open(path)) for path in sys.argv[1:]]
 before['ProcMonitorMethod'] = 'ebpf'
 before['LogLevel'] = 1
-assert after == before and type(after['LogLevel']) is int, \
-    'Only ProcMonitorMethod (ebpf) and LogLevel (1) may change'
+# Compare serialized forms: Python == equates 150 with 150.0 and 0 with False.
+if json.dumps(after, sort_keys=True) != json.dumps(before, sort_keys=True) or type(after['LogLevel']) is not int:
+    sys.exit('Only ProcMonitorMethod (ebpf) and LogLevel (1) may change')
 CHECK_CONFIG
 log_inode="$(sudo stat -c %i "$log")"
 log_bytes="$(sudo stat -c %s "$log")"

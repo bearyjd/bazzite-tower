@@ -249,12 +249,13 @@ class EbpfConfigCheckTests(unittest.TestCase):
     """Run the RUNBOOK's CHECK_CONFIG heredoc python against fixture configs."""
 
     SHIPPED = {'ProcMonitorMethod': 'proc', 'DefaultAction': 'allow', 'LogLevel': 2,
-               'Server': {'Address': 'unix:opensnitchd.sock'}}
+               'MaxEvents': 150, 'InterceptUnknown': False, 'Server': {'Address': 'unix:opensnitchd.sock'}}
 
     @classmethod
     def setUpClass(cls):
         runbook = (ROOT / 'docs/RUNBOOK.md').read_text()
         body = runbook.split("<<'CHECK_CONFIG'\n", 1)[1]
+        cls.invocation = runbook.split("<<'CHECK_CONFIG'", 1)[0].splitlines()[-1]
         cls.script = body.split("\nCHECK_CONFIG\n", 1)[0] + "\n"
 
     def run_check(self, **changes):
@@ -265,6 +266,10 @@ class EbpfConfigCheckTests(unittest.TestCase):
             after_path.write_text(json.dumps(after))
             return subprocess.run(['python3', '-', str(before_path), str(after_path)],
                                   input=self.script, text=True, capture_output=True, timeout=10)
+
+    def test_invocation_isolates_python_and_stays_detectable(self):
+        # -I keeps the owner's cwd (e.g. a planted json.py) off root's sys.path.
+        self.assertIn('sudo python3 -I -', self.invocation)
 
     def test_ebpf_and_loglevel_one_passes(self):
         result = self.run_check(ProcMonitorMethod='ebpf', LogLevel=1)
@@ -283,12 +288,14 @@ class EbpfConfigCheckTests(unittest.TestCase):
                                        Server={'Address': 'tcp:evil'}),
             'extra key added': dict(ProcMonitorMethod='ebpf', LogLevel=1, Extra=1),
             'no change': {},
+            'int to float': dict(ProcMonitorMethod='ebpf', LogLevel=1, MaxEvents=150.0),
+            'bool to int': dict(ProcMonitorMethod='ebpf', LogLevel=1, InterceptUnknown=0),
         }
         for name, changes in cases.items():
             with self.subTest(name):
                 result = self.run_check(**changes)
                 self.assertNotEqual(result.returncode, 0, name)
-                self.assertIn('AssertionError', result.stderr)
+                self.assertIn('may change', result.stderr)
 
 
 if __name__ == '__main__':

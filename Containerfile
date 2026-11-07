@@ -81,6 +81,9 @@ COPY --from=snitchwatch-bridge-rebuild /handoff/bridge-rebuild/ /handoff/bridge-
 COPY --from=snitchwatch-daemon /handoff/daemon/ /handoff/daemon/
 RUN --network=none SNITCHWATCH_BRIDGE=system FIREWALL_DAEMON="${FIREWALL_DAEMON}" bash /tools/snitchwatch-system-assemble.sh /work/native /handoff /out
 
+# DL3006 is a false positive here: this names a build STAGE picked by an ARG
+# (snitchwatch-legacy/-system), not an untagged registry image.
+# hadolint ignore=DL3006
 FROM snitchwatch-${SNITCHWATCH_BRIDGE} AS snitchwatch-selected
 
 # Base: bazzite KDE + NVIDIA **open** kernel modules, F44+, desktop variant

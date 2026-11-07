@@ -440,12 +440,12 @@ class ImageBuildContracts(unittest.TestCase):
         ['crates/scanner-broker/' + n for n in ('Cargo.toml', 'src/lib.rs', 'src/main.rs')]
         + ['crates/scanner-privileged/' + n for n in (
             'Cargo.toml', 'src/checks/kargs.rs', 'src/checks/lockdown.rs', 'src/checks/mod.rs', 'src/checks/modules.rs',
-            'src/checks/rootkit.rs', 'src/command.rs', 'src/error.rs', 'src/facts.rs', 'src/lib.rs', 'src/main.rs',
+            'src/checks/rootkit.rs', 'src/command.rs', 'src/containment.rs', 'src/error.rs', 'src/facts.rs', 'src/lib.rs', 'src/main.rs',
             'src/model.rs', 'src/scan.rs', 'src/store.rs', 'tests/end_to_end.rs')]))
 
     def test_every_built_scanner_source_file_is_hash_pinned(self):
         pinned = sorted(name for name in self.pins['sourceFiles'] if name.startswith('crates/scanner-'))
-        self.assertEqual(len(self.SCANNER_SOURCES), 18)
+        self.assertEqual(len(self.SCANNER_SOURCES), 19)
         self.assertEqual(pinned, list(self.SCANNER_SOURCES))
         for name in pinned:
             self.assertRegex(self.pins['sourceFiles'][name], '^[0-9a-f]{64}$')

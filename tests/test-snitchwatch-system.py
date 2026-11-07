@@ -979,6 +979,18 @@ class SystemBehavior(unittest.TestCase):
             common.runtime_readiness(self.ctx)
         path.write_text(original)
 
+    def test_flatpak_default_group_refuses_because_parsers_disagree(self):
+        # configparser copies [DEFAULT] keys into every section; GLib ignores the group.
+        self.ctx.system_config();path=self.ctx.flatpak();original=path.read_text()
+        bridge = "SNITCHWATCH_SYSTEM_BRIDGE=1\n"
+        for header in ("[DEFAULT]", "[default]", "[Default]"):
+            for payload in (bridge, "foo=bar\n", ""):
+                with self.subTest(header=header, payload=payload):
+                    path.write_text(original.replace("[Environment]\n"+bridge, header+"\n"+payload+"[Environment]\n"))
+                    self.refuse_readiness(r"\[DEFAULT\] group" if header == "[DEFAULT]" else "unreviewed metadata section|DEFAULT")
+        path.write_text(original)
+        common.runtime_readiness(self.ctx)
+
     def test_flatpak_environment_key_allowlist(self):
         # Intent change: the old test accepted an arbitrary extra key (QT_QUICK_CONTROLS_STYLE);
         # only the reviewed [Environment] keys may now appear.

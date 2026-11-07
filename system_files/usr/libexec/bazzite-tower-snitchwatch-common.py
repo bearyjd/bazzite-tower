@@ -489,6 +489,9 @@ def flatpak_profiles(ctx):
             body = text[:-1] if text.endswith("\n") else text
             bad_line = next((number for number, line in enumerate(body.split("\n"), 1) if not METADATA_LINE.fullmatch(line)), None)
             require(bad_line is None, "unreadable Flatpak metadata "+str(path)+": non-canonical line "+str(bad_line))
+            # configparser folds a [DEFAULT] group into every section; GLib treats it as an ordinary
+            # ignored group, so the two would disagree about which keys exist.
+            require(not any(line.lower() == "[default]" for line in body.split("\n")), "unreadable Flatpak metadata "+str(path)+": [DEFAULT] group")
             try:
                 meta.read_string(text, str(path))
             except configparser.Error as error:

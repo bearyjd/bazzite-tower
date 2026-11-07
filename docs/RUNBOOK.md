@@ -597,6 +597,7 @@ the owner; `sudoedit` retains the selected owner editor. Every failure before
 editing aborts. After the verified private backup exists, EXIT/HUP/INT/TERM
 restore proc automatically, including editor failure and Ctrl-C. The trap is
 registered **before** the first edit. Do not run individual lines separately.
+The owner edit sets `ProcMonitorMethod` to `ebpf` and `LogLevel` to `1` (see below).
 
 ```bash
 sudo bash -c '
@@ -658,13 +659,18 @@ trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
-# Change only ProcMonitorMethod from proc to ebpf; preserve every other key.
+# Change exactly two keys and preserve every other one: ProcMonitorMethod from
+# proc to ebpf, and LogLevel from 2 to 1. The daemon logs the eBPF success lines
+# at INFO (level 1), so at the shipped LogLevel 2 the greps below could never
+# match. LogLevel 1 is experiment-only; restore_proc copies the backup back.
 sudoedit "$config" </dev/tty
 sudo python3 - "$backup_dir/proc.json" "$config" <<'CHECK_CONFIG'
 import json, sys
 before, after = [json.load(open(path)) for path in sys.argv[1:]]
 before['ProcMonitorMethod'] = 'ebpf'
-assert after == before, 'Only ProcMonitorMethod may change'
+before['LogLevel'] = 1
+assert after == before and type(after['LogLevel']) is int, \
+    'Only ProcMonitorMethod (ebpf) and LogLevel (1) may change'
 CHECK_CONFIG
 log_inode="$(sudo stat -c %i "$log")"
 log_bytes="$(sudo stat -c %s "$log")"
@@ -700,6 +706,15 @@ cat "$ebpf_log"
 # End of block triggers the EXIT trap and restores proc before the root parent releases its lock.
 EBPF_EXPERIMENT
 ```
+
+The experiment edit sets exactly two keys: `ProcMonitorMethod` to `ebpf` and
+`LogLevel` to `1`. OpenSnitch v1.8.0 logs `[eBPF] module loaded: ...` and
+`Process monitor method ebpf` at INFO (level 1), while the shipped configs use
+`LogLevel` 2 (levels: DEBUG 0, INFO 1, IMPORTANT 2, WARNING 3, ERROR 4,
+FATAL 5), so leaving it at 2 hides every success line and the check always
+fails. `LogLevel` 1 is experiment-only: the restore path copies the private
+backup back, so the final restored config must be the shipped
+`proc`/`allow`/`LogLevel` 2. Any other key change aborts and restores.
 
 Missing logs, log rotation/truncation, absent successes, fallback, module load
 errors, relevant kprobe/kretprobe warnings or missing syscall/scheduler

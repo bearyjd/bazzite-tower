@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Offline fixtures for interval accounting and packaged ELF BPF objects."""
+import json
 import os
 from pathlib import Path
 import runpy
@@ -242,6 +243,52 @@ sleep() { printf 'recovery-wait\n' >> "$events"; }
                     self.assertIn('RECOVERY FAILED; migration lock retained', result.stderr)
                     self.assertEqual(sequence.count('systemctl'), 1)
                     self.assertEqual(sequence.count('cp'), 3)
+
+
+class EbpfConfigCheckTests(unittest.TestCase):
+    """Run the RUNBOOK's CHECK_CONFIG heredoc python against fixture configs."""
+
+    SHIPPED = {'ProcMonitorMethod': 'proc', 'DefaultAction': 'allow', 'LogLevel': 2,
+               'Server': {'Address': 'unix:opensnitchd.sock'}}
+
+    @classmethod
+    def setUpClass(cls):
+        runbook = (ROOT / 'docs/RUNBOOK.md').read_text()
+        body = runbook.split("<<'CHECK_CONFIG'\n", 1)[1]
+        cls.script = body.split("\nCHECK_CONFIG\n", 1)[0] + "\n"
+
+    def run_check(self, **changes):
+        after = {**self.SHIPPED, **changes}
+        with tempfile.TemporaryDirectory() as directory:
+            before_path, after_path = Path(directory) / 'proc.json', Path(directory) / 'after.json'
+            before_path.write_text(json.dumps(self.SHIPPED))
+            after_path.write_text(json.dumps(after))
+            return subprocess.run(['python3', '-', str(before_path), str(after_path)],
+                                  input=self.script, text=True, capture_output=True, timeout=10)
+
+    def test_ebpf_and_loglevel_one_passes(self):
+        result = self.run_check(ProcMonitorMethod='ebpf', LogLevel=1)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_everything_else_fails(self):
+        cases = {
+            'ebpf with LogLevel left at 2': dict(ProcMonitorMethod='ebpf'),
+            'LogLevel 1 with proc': dict(LogLevel=1),
+            'LogLevel 0': dict(ProcMonitorMethod='ebpf', LogLevel=0),
+            'LogLevel 3': dict(ProcMonitorMethod='ebpf', LogLevel=3),
+            'LogLevel true': dict(ProcMonitorMethod='ebpf', LogLevel=True),
+            'method audit': dict(ProcMonitorMethod='audit', LogLevel=1),
+            'extra key changed': dict(ProcMonitorMethod='ebpf', LogLevel=1, DefaultAction='deny'),
+            'nested key changed': dict(ProcMonitorMethod='ebpf', LogLevel=1,
+                                       Server={'Address': 'tcp:evil'}),
+            'extra key added': dict(ProcMonitorMethod='ebpf', LogLevel=1, Extra=1),
+            'no change': {},
+        }
+        for name, changes in cases.items():
+            with self.subTest(name):
+                result = self.run_check(**changes)
+                self.assertNotEqual(result.returncode, 0, name)
+                self.assertIn('AssertionError', result.stderr)
 
 
 if __name__ == '__main__':

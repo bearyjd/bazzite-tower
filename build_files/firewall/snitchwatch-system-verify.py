@@ -10,7 +10,7 @@ import sys
 
 MANIFEST = '/usr/share/snitchwatch/system-bridge-manifest.json'
 PINS = '/usr/share/snitchwatch/build-pins.json'
-EXPECTED_PINS_SHA256 = '0058f0f6f5130fbb6e08033c9b0b9c1d2f0f25f29f4a813fdf2d2f0d3fc0d2b0'
+EXPECTED_PINS_SHA256 = 'af516ac33083994a469eb56c78a2defe94c278a782b82dc186d4fcc973c0b6fb'
 BINARY = '/usr/bin/snitchwatch-bridge-cli'
 PROFILE = '/usr/share/bazzite-tower/snitchwatch-bridge-profile'
 CONFIG = '/usr/share/bazzite-tower/opensnitchd-system-bridge-config.json'
@@ -82,6 +82,7 @@ SCANNER_SOURCE_ALLOWLIST = frozenset({
     'crates/scanner-privileged/src/checks/modules.rs',
     'crates/scanner-privileged/src/checks/rootkit.rs',
     'crates/scanner-privileged/src/command.rs',
+    'crates/scanner-privileged/src/containment.rs',
     'crates/scanner-privileged/src/error.rs',
     'crates/scanner-privileged/src/facts.rs',
     'crates/scanner-privileged/src/lib.rs',

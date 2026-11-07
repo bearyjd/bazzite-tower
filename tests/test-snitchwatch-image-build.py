@@ -440,12 +440,12 @@ class ImageBuildContracts(unittest.TestCase):
         ['crates/scanner-broker/' + n for n in ('Cargo.toml', 'src/lib.rs', 'src/main.rs')]
         + ['crates/scanner-privileged/' + n for n in (
             'Cargo.toml', 'src/checks/kargs.rs', 'src/checks/lockdown.rs', 'src/checks/mod.rs', 'src/checks/modules.rs',
-            'src/checks/rootkit.rs', 'src/command.rs', 'src/error.rs', 'src/facts.rs', 'src/lib.rs', 'src/main.rs',
+            'src/checks/rootkit.rs', 'src/command.rs', 'src/containment.rs', 'src/error.rs', 'src/facts.rs', 'src/lib.rs', 'src/main.rs',
             'src/model.rs', 'src/scan.rs', 'src/store.rs', 'tests/end_to_end.rs')]))
 
     def test_every_built_scanner_source_file_is_hash_pinned(self):
         pinned = sorted(name for name in self.pins['sourceFiles'] if name.startswith('crates/scanner-'))
-        self.assertEqual(len(self.SCANNER_SOURCES), 18)
+        self.assertEqual(len(self.SCANNER_SOURCES), 19)
         self.assertEqual(pinned, list(self.SCANNER_SOURCES))
         for name in pinned:
             self.assertRegex(self.pins['sourceFiles'][name], '^[0-9a-f]{64}$')
@@ -904,6 +904,32 @@ python3() {
                 env = {**os.environ, 'SNITCHWATCH_BRIDGE': bridge, 'FIREWALL_DAEMON': firewall}
                 result = subprocess.run(['bash', str(FACTORY / 'snitchwatch-system-mode.sh')], env=env, capture_output=True)
                 self.assertEqual(result.returncode, 0 if valid else 1)
+
+
+class UnprivProcScan(unittest.TestCase):
+    """children() must survive arbitrary comm bytes: the scanner's own tests run processes with non-UTF-8 names."""
+
+    def proc(self, entries):
+        root = Path(tempfile.mkdtemp(prefix='fakeproc-'))
+        self.addCleanup(shutil.rmtree, root, True)
+        for pid, raw in entries.items():
+            (root / str(pid)).mkdir()
+            (root / str(pid) / 'stat').write_bytes(raw)
+        (root / 'self').mkdir()
+        (root / 'self' / 'stat').write_bytes(b'not a pid directory')
+        return root
+
+    def test_children_survives_non_utf8_and_paren_names(self):
+        helper = runpy.run_path(str(FACTORY / 'snitchwatch-system-unpriv.py'))
+        proc = self.proc({
+            100: b'100 (\xff\xfe) S 7 100 100 0',
+            101: b'101 (ok) S 9 101 101 0',
+            102: b'102 (a) b) S 7 102 102 0',
+            103: b'103 (\xc3\x28 \x80) Z 7 103 103 0',
+        })
+        self.assertEqual(sorted(helper['children'](7, proc)), [100, 102, 103])
+        self.assertEqual(helper['children'](9, proc), [101])
+        self.assertEqual(helper['children'](12345, proc), [])
 
 
 class StageOutputContracts(unittest.TestCase):

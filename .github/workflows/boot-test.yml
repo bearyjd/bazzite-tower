@@ -42,7 +42,7 @@ env:
 
 jobs:
   immutable-r13:
-    name: Verify original r13 immutable candidate
+    name: Verify immutable candidate (PR 107 only)
     if: github.event_name == 'pull_request' && github.repository == 'bearyjd/bazzite-tower' && github.event.pull_request.number == 107 && github.event.pull_request.head.repo.full_name == 'bearyjd/bazzite-tower'
     permissions:
       contents: read

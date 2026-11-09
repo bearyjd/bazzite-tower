@@ -83,6 +83,20 @@ again on a future kernel bump.
 | Default NAT network | `ujust vm-net-status` |
 | Wi-Fi diagnostics (offline) | `ujust wifi-debug` |
 
+**Testing suspend/resume.** This laptop is s2idle-only (`/sys/power/mem_sleep` shows
+only `s2idle`). `rtcwake -m mem` failed here with `rtcwake: write error` on
+2026-11-04: the kernel logged `PM: suspend entry (deep)` and exited at once. The
+likely cause is the stale `mem_sleep_default=deep` still on `/proc/cmdline` (see the
+Common-issues row on that karg), which makes `mem` request a state the firmware does
+not offer. Use `sudo rtcwake -m freeze -s N` (s2idle, the state in real use). If that also fails with `write error`, read the
+kernel log for the cycle: `journalctl -k --since -3min | grep -A12 Freezing`.
+`Freezing user space processes failed ... tasks refusing to freeze` with tasks in `D`
+state under `fuse_*` means a process was blocked in a FUSE request (for example the
+flatpak document portal at `/run/user/$UID/doc`) after the FUSE daemon was frozen.
+The suspend aborts after 20 s. This is caused by what is running, not by the image:
+quiet the session (stop frequent user timers/scripts) and retry before suspecting a
+regression.
+
 **Docker/libvirt forwarding on libvirt network changes (manual, real hardware).**
 Reconciliation is triggered by the systemd path unit `docker-libvirt-forwarding.path`,
 not a libvirt network hook: libvirt's confined `virtnetworkd_t` cannot exec hooks
@@ -287,12 +301,13 @@ build uid can still edit other crates' unpacked sources in its cargo home.
 The daemon build toolchain (Go, protoc, libnetfilter_queue) is installed from
 pinned, Fedora-signed Koji RPMs (`toolchainRpms` in
 `build_files/firewall/snitchwatch-system-daemon-pins.json`), not live repos, so
-Fedora repo updates cannot change the Go, protoc and libnetfilter_queue RPMs (7 pinned, signed). Phase 2 also pins the bridge's rust, cargo and rust-std-static 1.99.0-1.fc44 as three signed Koji RPMs in `build_files/firewall/snitchwatch-system-pins.json`. The shared `snitchwatch-system-toolchain.sh` helper runs after the byte-identical upstream `install-deps.sh` and before the Rust version gate. Remaining live toolchain and transitive dependencies, including LLVM, gcc, binutils, libnfnetlink-devel, pkgconf, git and python3, are not fully hermetic. `just test-snitchwatch-daemon-patch` uses the same daemon RPMs (helper `fetch` mode). Koji is therefore a build-time
+Fedora repo updates cannot change the Go, protoc and libnetfilter_queue RPMs (7 pinned, signed). Phase 2 also pins the bridge's rust, cargo and rust-std-static 1.99.1-2.fc45 as three signed Koji RPMs in `build_files/firewall/snitchwatch-system-pins.json`. The shared `snitchwatch-system-toolchain.sh` helper runs after the byte-identical upstream `install-deps.sh` and before the Rust version gate. Remaining live toolchain and transitive dependencies, including LLVM, gcc, binutils, libnfnetlink-devel, pkgconf, git and python3, are not fully hermetic. On the Fedora 45 builder the pinned `protobuf` 33.5 RPM is an empty metapackage: libprotobuf/libprotoc come from live `protobuf-cpp` (held to the exact `6.33.5-7.fc45` by its `Requires`, file not hashed) and live `abseil-cpp`. `just test-snitchwatch-daemon-patch` uses the same daemon RPMs (helper `fetch` mode). Koji is therefore a build-time
 dependency: if `kojipkgs.fedoraproject.org` is unreachable the build fails
 closed. To re-pin: download each RPM from
-`https://kojipkgs.fedoraproject.org/packages/<name>/<ver>/<rel>/data/signed/6d9f90a6/<arch>/`
+`https://kojipkgs.fedoraproject.org/packages/<name>/<ver>/<rel>/data/signed/f577861e/<arch>/`
 (never the unsigned `/packages/.../<arch>/` copy), confirm `rpm -K` reports
-`digests signatures OK` against `/etc/pki/rpm-gpg/RPM-GPG-KEY-fedora-44-primary`,
+`digests signatures OK` against `/usr/share/pki/rpm-gpg/RPM-GPG-KEY-fedora-45-primary`
+(Fedora 45 ships the keys there; `/etc/pki/rpm-gpg` is empty in the image),
 record sha256/size/NEVRA in the respective bridge or daemon pins file, update
 `rustVersion` or `goVersion`/`protocVersion`/`libnetfilterQueueVersion` to match,
 then update `EXPECTED_PINS_SHA256` in the corresponding
@@ -582,6 +597,7 @@ the owner; `sudoedit` retains the selected owner editor. Every failure before
 editing aborts. After the verified private backup exists, EXIT/HUP/INT/TERM
 restore proc automatically, including editor failure and Ctrl-C. The trap is
 registered **before** the first edit. Do not run individual lines separately.
+The owner edit sets `ProcMonitorMethod` to `ebpf` and `LogLevel` to `1` (see below).
 
 ```bash
 sudo bash -c '
@@ -596,7 +612,7 @@ umask 077
 config=/etc/opensnitchd/default-config.json
 log=/var/log/opensnitchd.log
 sudo jq -e '.ProcMonitorMethod == "proc" and .DefaultAction == "allow" and .Server.Address == "unix:opensnitchd.sock"' "$config" >/dev/null
-sudo install -d -m 0755 -o root -g root /var/lib/bazzite-tower  # parent may not exist yet; same mode the repo helpers create
+sudo mkdir -p -m 0755 -- /var/lib/bazzite-tower
 backup_dir="$(sudo mktemp -d /var/lib/bazzite-tower/snitchwatch-ebpf.XXXXXX)"
 [ "$(sudo stat -c '%u:%g:%a' "$backup_dir")" = 0:0:700 ]
 sudo cp --preserve=all -- "$config" "$backup_dir/proc.json"
@@ -614,8 +630,17 @@ restore_proc() {
     [ "$restored_metadata" = "$original_metadata" ] || return 1
     sudo jq -e '.ProcMonitorMethod == "proc" and .DefaultAction == "allow" and .Server.Address == "unix:opensnitchd.sock"' "$config" >/dev/null || return 1
     sudo systemctl restart opensnitch.service || return 1
-    sudo ujust snitchwatch-system-readiness || return 1
-    printf 'Restored exact proc config, metadata and service readiness.\n'
+    # Readiness is a report, not a gate: an unrelated readiness failure must not
+    # keep this loop (and the migration lock) retrying forever. Retry briefly so a
+    # daemon still coming up after the restart is not reported as a failure.
+    for attempt in 1 2 3; do
+        if sudo ujust snitchwatch-system-readiness; then
+            printf 'Restored exact proc config, metadata and service readiness.\n'
+            return 0
+        fi
+        [ "$attempt" = 3 ] || sleep 2
+    done
+    printf 'WARNING: readiness did not pass after restore; READINESS NOT CONFIRMED. Run it and repair before resuming normal operations.\n' >&2
 }
 recover() {
     local experiment_status=$?
@@ -634,16 +659,19 @@ trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
-# Change only ProcMonitorMethod (proc -> ebpf) and LogLevel (2 -> 1); preserve every other key.
-# The shipped LogLevel 2 hides the Info-level "[eBPF] module loaded" and
-# "Process monitor method" lines the checks below grep for; the backup restores 2.
+# Change exactly two keys and preserve every other one: ProcMonitorMethod from
+# proc to ebpf, and LogLevel from 2 to 1. The daemon logs the eBPF success lines
+# at INFO (level 1), so at the shipped LogLevel 2 the greps below could never
+# match. LogLevel 1 is experiment-only; restore_proc copies the backup back.
 sudoedit "$config" </dev/tty
-sudo python3 - "$backup_dir/proc.json" "$config" <<'CHECK_CONFIG'
+sudo python3 -I - "$backup_dir/proc.json" "$config" <<'CHECK_CONFIG'
 import json, sys
 before, after = [json.load(open(path)) for path in sys.argv[1:]]
 before['ProcMonitorMethod'] = 'ebpf'
 before['LogLevel'] = 1
-assert after == before, 'Only ProcMonitorMethod and LogLevel may change'
+# Compare serialized forms: Python == equates 150 with 150.0 and 0 with False.
+if json.dumps(after, sort_keys=True) != json.dumps(before, sort_keys=True) or type(after['LogLevel']) is not int:
+    sys.exit('Only ProcMonitorMethod (ebpf) and LogLevel (1) may change')
 CHECK_CONFIG
 log_inode="$(sudo stat -c %i "$log")"
 log_bytes="$(sudo stat -c %s "$log")"
@@ -680,6 +708,15 @@ cat "$ebpf_log"
 EBPF_EXPERIMENT
 ```
 
+The experiment edit sets exactly two keys: `ProcMonitorMethod` to `ebpf` and
+`LogLevel` to `1`. OpenSnitch v1.8.0 logs `[eBPF] module loaded: ...` and
+`Process monitor method ebpf` at INFO (level 1), while the shipped configs use
+`LogLevel` 2 (levels: DEBUG 0, INFO 1, IMPORTANT 2, WARNING 3, ERROR 4,
+FATAL 5), so leaving it at 2 hides every success line and the check always
+fails. `LogLevel` 1 is experiment-only: the restore path copies the private
+backup back, so the final restored config must be the shipped
+`proc`/`allow`/`LogLevel` 2. Any other key change aborts and restores.
+
 Missing logs, log rotation/truncation, absent successes, fallback, module load
 errors, relevant kprobe/kretprobe warnings or missing syscall/scheduler
 tracepoints abort and trigger restoration. Inspect the complete interval for
@@ -691,7 +728,8 @@ the shipped allow/proc policy. Do not loosen readiness for this experiment.
 
 The recovery trap retries only after owner acknowledgement (or every 60 seconds
 if its terminal vanished) and keeps the lock held until copy, byte comparison,
-metadata/policy checks, service restart and readiness all succeed. A failed
+metadata/policy checks and service restart all succeed; readiness then runs and
+prints a warning if it fails, but does not hold the lock. A failed
 copy/validation never proceeds to restart. Do not close/kill a recovery session;
 repair its reported failure from another owner terminal and retry. SIGKILL,
 power loss and a reboot cannot be trapped: use the printed protected backup
@@ -886,7 +924,7 @@ always beats these allows.
 | Libvirt NAT guests cannot reach the default uplink after Docker starts | Docker's `DOCKER-USER` chain was not created or the active NAT bridge lacks an IPv4 address | `sudo systemctl restart docker.service`; inspect `journalctl -u docker.service -b`; the post-start helper refuses to create a missing Docker chain but does not fail Docker itself. Changes in libvirt's network state directory (path unit) and the 10-minute self-heal timer and NetworkManager route/VPN/reapply events retry it. From a repository checkout, run `just test-docker-libvirt-forwarding` on a suitable host. |
 | `docker.socket` fails at boot (`Failed to resolve group 'docker'`) | the `docker` group wasn't baked into the image (stale gshadow orphan made `systemd-sysusers` abort, so the group got created late) | `build.sh` now strips all shadow/gshadow orphans and bakes `groupadd -r docker`; the smoke test asserts the group exists |
 | Display flicker / ~30s sluggish wake | i915 PSR/DC or `deep` suspend on Meteor Lake | baked kargs disable PSR/DC and pin `s2idle`; verify `cat /sys/power/mem_sleep` |
-| `cat /proc/cmdline` shows `mem_sleep_default=deep` despite `20-suspend.toml` declaring `s2idle` | [`bootc` docs](https://bootc.dev/bootc/building/kernel-arguments.html) mark it **undefined behavior** when a kargs.d value changes across versions of the same fragment (this one shipped `deep` before PR #16 corrected it to `s2idle`) — once a value like this is baked into a deployment's persisted kernelopts, later `bootc upgrade`s can keep carrying the old value forward instead of reconciling to the fragment's current content. Confirmed on this machine 2026-09-19: `rpm-ostree kargs` showed `deep` on a deployment built long after the `s2idle` fix landed. **Harmless in practice on this hardware**: `cat /sys/power/mem_sleep` reports only `s2idle` — the firmware exposes no `deep` state at all, so the stale karg has nothing to select and resume is not currently degraded by it. Worth fixing for hygiene (declared intent should match reality) and because a future firmware/BIOS update could theoretically add a `deep` state this karg would then actually select, not because anything is broken today | one-time local correction, which then persists correctly across future upgrades the same way the wrong value did. Run `rpm-ostree kargs` bare first to confirm the deployment actually carries `deep` — `--delete` fails if it doesn't: `sudo rpm-ostree kargs --delete=mem_sleep_default=deep --append=mem_sleep_default=s2idle`, then reboot. Re-check any OTHER kargs.d fragment you edit after its first deploy — this isn't specific to suspend, it's a general bootc kargs.d gotcha |
+| `cat /proc/cmdline` shows `mem_sleep_default=deep` despite `20-suspend.toml` declaring `s2idle` | [`bootc` docs](https://bootc.dev/bootc/building/kernel-arguments.html) mark it **undefined behavior** when a kargs.d value changes across versions of the same fragment (this one shipped `deep` before PR #16 corrected it to `s2idle`) — once a value like this is baked into a deployment's persisted kernelopts, later `bootc upgrade`s can keep carrying the old value forward instead of reconciling to the fragment's current content. Confirmed on this machine 2026-09-19: `rpm-ostree kargs` showed `deep` on a deployment built long after the `s2idle` fix landed. **Harmless in practice on this hardware**: `cat /sys/power/mem_sleep` reports only `s2idle` — the firmware exposes no `deep` state at all, so the stale karg has nothing to select and resume is not currently degraded by it. One observed effect: `rtcwake -m mem` asks for the stale `deep` and fails with `write error` (2026-11-04; see "Testing suspend/resume"); desktop suspend was not tested against it. Worth fixing for hygiene (declared intent should match reality) and because a future firmware/BIOS update could theoretically add a `deep` state this karg would then actually select, not because anything is broken today | one-time local correction, which then persists correctly across future upgrades the same way the wrong value did. Run `rpm-ostree kargs` bare first to confirm the deployment actually carries `deep` — `--delete` fails if it doesn't: `sudo rpm-ostree kargs --delete=mem_sleep_default=deep --append=mem_sleep_default=s2idle`, then reboot. Re-check any OTHER kargs.d fragment you edit after its first deploy — this isn't specific to suspend, it's a general bootc kargs.d gotcha |
 | No audio; journal floods with `FW reported error: 9` / `failed to create module pipeline` | SOF topology ABI (3.29) newer than the kernel's SOF driver ABI (3.23); no ABI-≤3.23 firmware in repos to downgrade to | `25-audio-sof-bypass.toml` forces the legacy HDA driver (`snd_intel_dspcfg.dsp_driver=1`), sidestepping SOF; verify `journalctl -k \| grep -i dsp_driver` |
 | Frequent corrected MCEs in the journal | machine-check events need per-event bank/status decode; zero EDAC `igen6` counters alone do not exclude DRAM faults | `rasdaemon` records/decodes them; `mcelog` is masked (its trigger tried to offline a CPU). Decode with `sudo ras-mc-ctl --errors` |
 | `smartd` warns of media errors / available-spare drop | NVMe wear or developing fault | `journalctl -u smartd`; confirm with `sudo smartctl -a /dev/nvmeN`; a falling available-spare or rising media-error count is an escalation/back-up signal |

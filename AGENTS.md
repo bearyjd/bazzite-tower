@@ -25,7 +25,7 @@ Full detail lives in `CLAUDE.md` (same rules, longer), `README.md`, `docs/RUNBOO
 - Never weaken or delete an assertion in `tests/smoke.sh` or `tests/boot-check.sh`; update it to the new intent and say so.
 - Hardware tuning (`kargs.d/*.toml`, RAS/thermal/audio in `build_files/build.d/`, RUNBOOK "verified" facts) changes only with an owner instruction or evidence from THIS machine (journalctl/smartctl/ras-mc-ctl). Otherwise ask for it.
 - `build_files/firewall/snitchwatch-system-install-deps.sh` must stay byte-identical to the upstream Snitchwatch copy (`cmp` in `snitchwatch-system-prep.sh` and again in `snitchwatch-system-assemble.sh`).
-- The pinned toolchain RPMs live in `build_files/firewall/snitchwatch-system-daemon-pins.json`; if you change that file, update `EXPECTED_PINS_SHA256` in `snitchwatch-system-daemon-verify.py` and rerun the tests. Use only the signed Koji copies (`.../data/signed/6d9f90a6/...`).
+- The pinned toolchain RPMs live in `build_files/firewall/snitchwatch-system-daemon-pins.json`; if you change that file, update `EXPECTED_PINS_SHA256` in `snitchwatch-system-daemon-verify.py` and rerun the tests. Use only the signed Koji copies (`.../data/signed/f577861e/...`, the Fedora 45 key).
 - Update the relevant `docs/CODEMAPS/*` in the same change as the code. Conventional-commit subjects (`feat:`, `fix:`, `ci:`, `chore:`, `docs:`).
 
 ## Releases (snitchwatch-system image)

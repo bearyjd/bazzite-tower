@@ -1,12 +1,12 @@
 {
   "buildCommand": "go build -mod=readonly -trimpath -o <fresh-output> .",
-  "builderImage": "registry.fedoraproject.org/fedora:44@sha256:e1656bc110fc33e855f7a02e4420c21066428bc7a0277160d40ee125ef8a1c65",
+  "builderImage": "registry.fedoraproject.org/fedora:45@sha256:ea0998f4c945b85c2134793cda4fac35ee394f0d677a04c5b1fe769e13f959b8",
   "daemonVersion": "1.8.0",
   "generatedFiles": {
-    "ui.pb.go": "54d5d0068bbd0e2be7179b2829f0c770d4e21381fe955b6ffa35650578085a3f",
-    "ui_grpc.pb.go": "55ae171accdac281e34f22fcc9939ec74751e2b625b8a0de0b10b2f264a1842e"
+    "ui.pb.go": "a0d78e80827a4d26c8a931787b3c966013868d3e2ca532deaa20984a013ea304",
+    "ui_grpc.pb.go": "4b1c3a606fed0fa0bc4e1d26b6ad40351e849a68c0d022c6889b579d1f8232fb"
   },
-  "goVersion": "go version go1.26.10-X:nodwarf5 linux/amd64",
+  "goVersion": "go version go1.27.3-X:nodwarf5 linux/amd64",
   "kojiBase": "https://kojipkgs.fedoraproject.org/packages/",
   "libnetfilterQueueVersion": "1.0.5",
   "licenseSha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
@@ -76,73 +76,73 @@
     "daemon/ui/notifications.go": "de8a488c41a08fc28889ddc337d6d257303ce755c5309abe44c4ca66843e3762"
   },
   "protoSourceSha256": "62de7d3661c33558daeae1092cd7eb98cdc05179695f5d41f166b1c8f7ffbd06",
-  "protocVersion": "libprotoc 3.19.6",
+  "protocVersion": "libprotoc 33.5",
   "rpmSigningKey": {
-    "fingerprint": "36F612DCF27F7D1A48A835E4DBFCF71C6D9F90A6",
-    "path": "/etc/pki/rpm-gpg/RPM-GPG-KEY-fedora-44-primary",
-    "sha256": "93642aec521a1e5e96dd715f7ae0ec0850ebc9de09a94ce03cae5263f26cc18a"
+    "fingerprint": "4F50A6114CD5C6976A7F1179655A4B02F577861E",
+    "path": "/usr/share/pki/rpm-gpg/RPM-GPG-KEY-fedora-45-primary",
+    "sha256": "846912c73a910dab32da8ef0c0d68cb89d11ff514f598d2d1dd96d04d58b2425"
   },
   "schemaVersion": 1,
-  "signedKeyId": "6d9f90a6",
+  "signedKeyId": "f577861e",
   "sourceCommit": "b404c4c6316760fa7bc415509d3f8d747f7dc9cc",
   "sourceRepository": "https://github.com/evilsocket/opensnitch.git",
   "sourceTree": "21593ba74c55b6f7ad7f220692c33477b65a3686",
   "toolchainRpms": [
     {
-      "file": "golang-1.26.10-1.fc44.x86_64.rpm",
-      "kojiPath": "golang/1.26.10/1.fc44/data/signed/6d9f90a6/x86_64/golang-1.26.10-1.fc44.x86_64.rpm",
+      "file": "golang-1.27.3-1.fc45.x86_64.rpm",
+      "kojiPath": "golang/1.27.3/1.fc45/data/signed/f577861e/x86_64/golang-1.27.3-1.fc45.x86_64.rpm",
       "name": "golang",
-      "nevra": "golang-0:1.26.10-1.fc44.x86_64",
-      "sha256": "f7b347122d8cb2e93eafbb8405acf2b643c68180d40ce393c739eec98c22527f",
-      "size": 1499222
+      "nevra": "golang-0:1.27.3-1.fc45.x86_64",
+      "sha256": "f5fde74a54d1c12ff0185a427265a467ab6b9edc2be25ea2de185eba7ad68c57",
+      "size": 1502160
     },
     {
-      "file": "golang-bin-1.26.10-1.fc44.x86_64.rpm",
-      "kojiPath": "golang/1.26.10/1.fc44/data/signed/6d9f90a6/x86_64/golang-bin-1.26.10-1.fc44.x86_64.rpm",
+      "file": "golang-bin-1.27.3-1.fc45.x86_64.rpm",
+      "kojiPath": "golang/1.27.3/1.fc45/data/signed/f577861e/x86_64/golang-bin-1.27.3-1.fc45.x86_64.rpm",
       "name": "golang-bin",
-      "nevra": "golang-bin-0:1.26.10-1.fc44.x86_64",
-      "sha256": "da6d778ba0745e15ce555e13ea7378e72f68741f9acd7d371d37c34f1097205b",
-      "size": 22058844
+      "nevra": "golang-bin-0:1.27.3-1.fc45.x86_64",
+      "sha256": "c22717d750e86f226a0c3b8b5e3bae5a89195f6be02cf93a77a24bc6b7c2aa1e",
+      "size": 24816178
     },
     {
-      "file": "golang-src-1.26.10-1.fc44.noarch.rpm",
-      "kojiPath": "golang/1.26.10/1.fc44/data/signed/6d9f90a6/noarch/golang-src-1.26.10-1.fc44.noarch.rpm",
+      "file": "golang-src-1.27.3-1.fc45.noarch.rpm",
+      "kojiPath": "golang/1.27.3/1.fc45/data/signed/f577861e/noarch/golang-src-1.27.3-1.fc45.noarch.rpm",
       "name": "golang-src",
-      "nevra": "golang-src-0:1.26.10-1.fc44.noarch",
-      "sha256": "afa2c78dce37f8e0928f18580f86f34ba5b5824c4f2e1aa44e06cbbe306abe72",
-      "size": 15297629
+      "nevra": "golang-src-0:1.27.3-1.fc45.noarch",
+      "sha256": "32ec3d6edd3e92898109c1f5f5fb8df5f547f2bfe634a5efb4bccdb40ee5de07",
+      "size": 16156777
     },
     {
-      "file": "protobuf-3.19.6-20.fc44.x86_64.rpm",
-      "kojiPath": "protobuf/3.19.6/20.fc44/data/signed/6d9f90a6/x86_64/protobuf-3.19.6-20.fc44.x86_64.rpm",
+      "file": "protobuf-33.5-7.fc45.x86_64.rpm",
+      "kojiPath": "protobuf/33.5/7.fc45/data/signed/f577861e/x86_64/protobuf-33.5-7.fc45.x86_64.rpm",
       "name": "protobuf",
-      "nevra": "protobuf-0:3.19.6-20.fc44.x86_64",
-      "sha256": "f1237999a0fc0e7e780da26ba5e0cad3defb130d51645ae8b7918b497f909607",
-      "size": 1088474
+      "nevra": "protobuf-0:33.5-7.fc45.x86_64",
+      "sha256": "6ba6cd47d9119fd26e9722b236aacde09b0afe2a36d9ee665f638715559d8084",
+      "size": 7965
     },
     {
-      "file": "protobuf-compiler-3.19.6-20.fc44.x86_64.rpm",
-      "kojiPath": "protobuf/3.19.6/20.fc44/data/signed/6d9f90a6/x86_64/protobuf-compiler-3.19.6-20.fc44.x86_64.rpm",
+      "file": "protobuf-compiler-33.5-7.fc45.x86_64.rpm",
+      "kojiPath": "protobuf/33.5/7.fc45/data/signed/f577861e/x86_64/protobuf-compiler-33.5-7.fc45.x86_64.rpm",
       "name": "protobuf-compiler",
-      "nevra": "protobuf-compiler-0:3.19.6-20.fc44.x86_64",
-      "sha256": "4129d67d4270d6c1f64908625628836fc6385d890992d6925b1fc4cfe8df1caa",
-      "size": 814843
+      "nevra": "protobuf-compiler-0:33.5-7.fc45.x86_64",
+      "sha256": "0ec9aeee7be465bd6680612d28cb9ef4c911455a34b6793ba8d4e5e88d8d0749",
+      "size": 1645677
     },
     {
-      "file": "libnetfilter_queue-1.0.5-13.fc44.x86_64.rpm",
-      "kojiPath": "libnetfilter_queue/1.0.5/13.fc44/data/signed/6d9f90a6/x86_64/libnetfilter_queue-1.0.5-13.fc44.x86_64.rpm",
+      "file": "libnetfilter_queue-1.0.5-14.fc45.x86_64.rpm",
+      "kojiPath": "libnetfilter_queue/1.0.5/14.fc45/data/signed/f577861e/x86_64/libnetfilter_queue-1.0.5-14.fc45.x86_64.rpm",
       "name": "libnetfilter_queue",
-      "nevra": "libnetfilter_queue-0:1.0.5-13.fc44.x86_64",
-      "sha256": "ebd80fb61f002f944d9ca981fab16a67f10f116085833ff99684de5a0aef5de8",
-      "size": 29050
+      "nevra": "libnetfilter_queue-0:1.0.5-14.fc45.x86_64",
+      "sha256": "d8ffe20b2e1d5d7ce2a8182134bb3c50b9ed6789c4a5d67c18997b59d2c5043e",
+      "size": 28937
     },
     {
-      "file": "libnetfilter_queue-devel-1.0.5-13.fc44.x86_64.rpm",
-      "kojiPath": "libnetfilter_queue/1.0.5/13.fc44/data/signed/6d9f90a6/x86_64/libnetfilter_queue-devel-1.0.5-13.fc44.x86_64.rpm",
+      "file": "libnetfilter_queue-devel-1.0.5-14.fc45.x86_64.rpm",
+      "kojiPath": "libnetfilter_queue/1.0.5/14.fc45/data/signed/f577861e/x86_64/libnetfilter_queue-devel-1.0.5-14.fc45.x86_64.rpm",
       "name": "libnetfilter_queue-devel",
-      "nevra": "libnetfilter_queue-devel-0:1.0.5-13.fc44.x86_64",
-      "sha256": "fc4b5805a1088bd69c23a57887d59e30aa6eca957a945762f7227f818067b0cb",
-      "size": 13071
+      "nevra": "libnetfilter_queue-devel-0:1.0.5-14.fc45.x86_64",
+      "sha256": "e44328328b5a2dc03d3942c76cb1fe57796baddff874eeab4ce7981d2599a06b",
+      "size": 12937
     }
   ],
   "tools": {

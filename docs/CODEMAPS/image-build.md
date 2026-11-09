@@ -7,7 +7,7 @@
 ## Accepted products and upstream base refresh
 
 `.github/base-refresh-policy.json` pins both accepted product profiles to
-`4b963674045214ca7d79f628270c9c8cf6b47f28`. Legacy publishes `:stable` and
+`45c1427adc2b069dd727e427efaa7501eb4ee53f`. Legacy publishes `:stable` and
 compatibility `:latest` with `IMAGE_TAG=latest`; reviewed r16.1 system publishes
 only `:snitchwatch-system`. The policy transition follows successful protected
 promotion and independent destination signature/SPDX checks. Host runtime
@@ -51,7 +51,7 @@ bridge's third-party build scripts cannot reach anything trusted later (H1):
 
 | Stage | FROM | Network | Runs | Hands over |
 |---|---|---|---|---|
-| `snitchwatch-prep` | pinned `fedora:44@sha256` (= `builderImage`) | yes | `snitchwatch-system-prep.sh`: install-deps, Koji toolchain, `--record-toolchain`, dbus-daemon, online probe (positive control), clone + `sourceFiles` hash check, `bridge_artifact.py version`, `cargo fetch --locked --target x86_64-unknown-linux-gnu`, `rpm -qa` inventory | `/work/native` (to its descendants) |
+| `snitchwatch-prep` | pinned `fedora:45@sha256` (= `builderImage`) | yes | `snitchwatch-system-prep.sh`: install-deps, Koji toolchain, `--record-toolchain`, dbus-daemon, online probe (positive control), clone + `sourceFiles` hash check, `bridge_artifact.py version`, `cargo fetch --locked --target x86_64-unknown-linux-gnu`, `rpm -qa` inventory | `/work/native` (to its descendants) |
 | `snitchwatch-scanner` | prep | `--network=none` | `snitchwatch-system-scanner-stage.sh`: offline probe, inventory `cmp`; root: `scanner-build.py --phase inputs` (git archive, pin checks, allowlisted cargo home, toolchain digest) into new `scanner-inputs`/`scanner-cargo`, `unpriv.py prepare … scanner` + `selfcheck`; as uid 65534 (`unpriv.py run`): `--phase build` (both builds and their compare, `cargo test`, private-bus test, `ldd`, `cargo metadata`/`tree`, licenses, provenance); root: export | `/handoff/scanner`: 2 binaries + 10 evidence files, flat |
 | `snitchwatch-bridge` | prep | `--network=none` | `snitchwatch-system-bridge-build.sh`: offline probe, fresh `CARGO_HOME` from prep's cache (only `.crate` files matching the `Cargo.lock` sha256, plus the index; no config/bin/src), exported `CARGO_NET_OFFLINE=true`, `unpriv.py prepare` + `selfcheck`, then as uid 65534 (`unpriv.py run` → `bridge-unpriv.sh`): offline `cargo fetch` preflight, `build-bridge.sh` (~660 crates), `repro-check.sh`, executing `verify --check-ldd --run-flags`; root: inventory `cmp`, export | `/handoff/bridge`: tarball, `.sha256` sidecar, `build.log`, `repro.log` |
 | `snitchwatch-bridge-rebuild` | prep | `--network=none` | `snitchwatch-system-bridge-rebuild.sh` (M1 step 2): the same lines as the bridge stage from the probe to the one-tarball check (a test compares them), at the same `/work/native` paths and also as uid 65534, in a separate container; no repro-check, no `verify`, never runs the binary; inventory `cmp` | `/handoff/bridge-rebuild`: the tarball only |
@@ -65,7 +65,7 @@ entries (an xattr listing error other than "not supported" is a refusal); assemb
 `pins.json`, the staged file set and modes are unchanged (provenance gained one key in M1 step 3, below), so `EXPECTED_PINS_SHA256`
 and base-refresh `validate-system` do not move. Static contracts: `tests/test-snitchwatch-image-stages.py`.
 Only a CI build proves: buildah 1.33.7 accepts and enforces `RUN --network=none` (the in-build probe
-fails loudly if not), unused-stage skipping still keeps `fedora:44` out of the legacy legs, 65534
+fails loudly if not), unused-stage skipping still keeps `fedora:45` out of the legacy legs, 65534
 can be entered in the build user namespace, and disk fits the extra stage commits.
 M1 step 1 (bridge offline): the bridge build scripts cannot reach the network (no second-stage download,
 no exfiltration over the network; the tarball and the public CI log still leave the stage). The build uses
@@ -166,7 +166,7 @@ command-prefix on the `RUN`, so the runner's shell has them and every child
 `SNITCHWATCH_BRIDGE=legacy` is the default and does not compile a native bridge.
 The opt-in `system` profile requires `FIREWALL_DAEMON=opensnitch` and consumes a
 native version 0.1.1 release built from an exact clean Git source/submodule checkout using the
-pinned Fedora 44 builder. Source, RPM toolchain inventory, licenses and binary
+pinned Fedora 45 builder. Source, RPM toolchain inventory, licenses and binary
 identity accompany the original release artifact. The installer extracts only
 verified binary/licenses and stages system units from that same source; its
 separate installed-overlay manifest hashes immutable files and records their
@@ -266,7 +266,7 @@ NEVRA, then installs them in one dnf transaction. The version-string gate in
 (fails closed). A `fetch` mode does the same verification without installing; `tests/test-snitchwatch-daemon-patch.sh` uses it in its network phase so the offline test phase installs the same pinned RPMs. Test: `tests/test-snitchwatch-toolchain.sh`.
 
 Phase 2 adds three signed Koji RPMs (rust, cargo, rust-std-static
-1.99.0-1.fc44) to `snitchwatch-system-pins.json` for the bridge. The same helper
+1.99.1-2.fc45) to `snitchwatch-system-pins.json` for the bridge. The same helper
 runs after the byte-identical upstream installer and before the Rust version
 gate in `snitchwatch-system-prep.sh`; the daemon retains its seven pins.
 Remaining live toolchain and transitive dependencies, including LLVM, are not

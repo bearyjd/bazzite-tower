@@ -539,7 +539,8 @@ lint:
 # run a linter is not a trade worth making.
 #
 # NOT a CI gate. It passes clean on the current Containerfile (hadolint 2.14.0,
-# verified 2026-08-07); wiring it into build.yml is a separate, deliberate
+# re-verified 2026-11-07; the ARG-selected stage FROM carries a scoped DL3006
+# ignore); wiring it into build.yml is a separate, deliberate
 # change. See .agent_native/agent_roadmap.md item 5.
 
 # Static-lints the Containerfile in seconds, without building the image
@@ -591,6 +592,7 @@ test-ci:
     set -euo pipefail
     bash tests/test-base-diff.sh
     bash tests/test-base-bump.sh
+    python3 tests/test-base-bump-guard.py
 
 # Offline fixture checks with hashed inputs and retained evidence; no runtime claim.
 [group('Test')]

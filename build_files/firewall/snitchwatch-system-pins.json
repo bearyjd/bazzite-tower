@@ -1,6 +1,6 @@
 {
   "bridgeVersion": "0.1.1",
-  "builderImage": "registry.fedoraproject.org/fedora:44@sha256:e1656bc110fc33e855f7a02e4420c21066428bc7a0277160d40ee125ef8a1c65",
+  "builderImage": "registry.fedoraproject.org/fedora:45@sha256:ea0998f4c945b85c2134793cda4fac35ee394f0d677a04c5b1fe769e13f959b8",
   "flatpakFinishArgs": [
     "--socket=wayland",
     "--socket=fallback-x11",
@@ -23,17 +23,17 @@
   "flatpakRuntimeRef": "org.kde.Platform/x86_64/6.11",
   "kojiBase": "https://kojipkgs.fedoraproject.org/packages/",
   "legacyConfigSha256": "4df22dca00a0c08d5b843946bbc50154f0e0529724840b12df623f565768fe3d",
-  "protocVersion": "3.19.6",
+  "protocVersion": "33.5",
   "rpmSigningKey": {
-    "fingerprint": "36F612DCF27F7D1A48A835E4DBFCF71C6D9F90A6",
-    "path": "/etc/pki/rpm-gpg/RPM-GPG-KEY-fedora-44-primary",
-    "sha256": "93642aec521a1e5e96dd715f7ae0ec0850ebc9de09a94ce03cae5263f26cc18a"
+    "fingerprint": "4F50A6114CD5C6976A7F1179655A4B02F577861E",
+    "path": "/usr/share/pki/rpm-gpg/RPM-GPG-KEY-fedora-45-primary",
+    "sha256": "846912c73a910dab32da8ef0c0d68cb89d11ff514f598d2d1dd96d04d58b2425"
   },
-  "rustVersion": "1.99.0",
+  "rustVersion": "1.99.1",
   "schemaVersion": 1,
-  "sourceCommit": "5860dcdb118917daf61bb9f5ef0c999595bc0edc",
+  "sourceCommit": "c9807ebe58ab2b03587f5c19d22431789ca6cd6b",
   "sourceFiles": {
-    "Cargo.lock": "48e49bd49869ac32b38063c5356c50d31050c97235a303ba9105262c15a7a73f",
+    "Cargo.lock": "777902b4f50d372f199a157b7e65d9a441aa395f92998316ae5c09955d51816a",
     "Cargo.toml": "ef17d9cc674731d5046110f15e747a994b93725474f1e9d2018b67bcc76bc2f2",
     "crates/scanner-broker/Cargo.toml": "6cf534926fbbcc0b592e45dff4aaad1c687891fdb8f8a1c06ee8d34b99ed8fce",
     "crates/scanner-broker/src/lib.rs": "760fe683f08f8ac6f49eff7dd14292ce0b085829a64fb40bc058a0f2239bcfd2",
@@ -44,11 +44,20 @@
     "crates/scanner-privileged/src/checks/mod.rs": "51c2e3103316feceba4fdd8860382d3b2226401a837645803d3f3fa6272ebe22",
     "crates/scanner-privileged/src/checks/modules.rs": "b3475f7c4f7f9555231ebe1c62ff52d12b0f680121f9e490c4c36e4424f645ab",
     "crates/scanner-privileged/src/checks/rootkit.rs": "c9366d295882c37063b86911b91cc58207bfdf83089e1ee7e5834eb58e17cfa7",
-    "crates/scanner-privileged/src/command.rs": "e9948cbb9d3cad53b07d4502bbdeff57348fecffd01b9271e91409209ef9def7",
+    "crates/scanner-privileged/src/command.rs": "aa1c00e453f681dca75845743b74aa1f6f911b2b9e61d0b74b8dbee221d5af9c",
+    "crates/scanner-privileged/src/command/tests/exit_tests.rs": "0af181d833f363db52b9c8a6c83634052300cca2af1fb93cdbc8c36adf21b2c2",
+    "crates/scanner-privileged/src/containment.rs": "423bf94e57910fe10de2dd5e6899819126c4eeb3da5a5b89a00776dc38fd70ee",
+    "crates/scanner-privileged/src/containment/test_fixtures/forked_tree.rs": "bcfcbe5218175271fddb6e54176d1b7ebba02fbc296fdbb8f1b55da9f3fc877c",
+    "crates/scanner-privileged/src/containment/test_fixtures/marked_sleeps.rs": "3f9f0c558338e12bc7e90b70d3eb6e7a521afd9a3c86e734b7da7259b2789ec2",
+    "crates/scanner-privileged/src/containment/test_fixtures/mod.rs": "45dc14fc11a3ac59d4725187a664dd9c31ca788b4dd381316cea717b896a5273",
+    "crates/scanner-privileged/src/containment/test_fixtures/reaped.rs": "f792e27bc05e6a86e2f0c4d05c614ed075e6717a031b572e6bcac3de9548fa2b",
+    "crates/scanner-privileged/src/containment/test_fixtures/scanner_fixture.rs": "262064f681c33dc84e27f041efc2b899556013223808de204725ea972602d478",
+    "crates/scanner-privileged/src/containment/test_fixtures/signal.rs": "dfa42ab6779a253c7b4ed36b77eb9cba1c97a7c892b8b92f7fb65c333451d41a",
+    "crates/scanner-privileged/src/containment/test_fixtures/signal/tests.rs": "7bba8365cb7b12f9043876982f8370dc4ca5bcedcc8b0c447449610334e46d93",
     "crates/scanner-privileged/src/error.rs": "96e4bae4db5a7b091dfec5e68ed66c016f9f3236cce0f27485a2cdd47c7f8241",
     "crates/scanner-privileged/src/facts.rs": "e6cf557c4788f0a37036cd0a002b71f9dc3afa9e9fe2cc11a1c6a92acb770a27",
-    "crates/scanner-privileged/src/lib.rs": "caf9b5565b454259716e7cfe53d4ea5b92f0941be9a09874158a689ac6fd9be8",
-    "crates/scanner-privileged/src/main.rs": "2298b50c535209a2210cdb60d2d8c7f6e7222c3b76e016bbf73a873f1ec56c9a",
+    "crates/scanner-privileged/src/lib.rs": "76eb64f9c4097dd25508b825ac571274eff8be5adb4d14ad7b44f51f40f7429d",
+    "crates/scanner-privileged/src/main.rs": "2e2719de0407d2e089f96c9a8bb17f6ae4264339652d5d587658ca7f59b1c985",
     "crates/scanner-privileged/src/model.rs": "2696113c0e785c3d1560c47e6e2e89619e4f7501c51562a0ad078aa7675cf992",
     "crates/scanner-privileged/src/scan.rs": "883ab711650a99c4bebbea6094fd4c3e0de081ea95ea1f6d9ebaa2bd6c8c1bd8",
     "crates/scanner-privileged/src/store.rs": "eb24d792beddda4d388c4080cd4796afb17717725e780a04f73b639c396862a1",
@@ -63,7 +72,7 @@
     "packaging/release/bridge_artifact.py": "6a82d12348772446d57ca0163d0b31fadf268db2345b6de3db485896d279d3e2",
     "packaging/release/build-bridge.sh": "b752941d3fd9c2ab7d986006eed7398c1a73110707df133fdec5ac1c241b2006",
     "packaging/release/install-deps.sh": "247a396c0f3d504023f001c33bb1211f5f0f9bfd2c6685077d4bd312ac95f8cb",
-    "packaging/release/pins.env": "cf5903315781c0b3edbb5afa53354a8c8a4c332942e3041de2bf8a32e6c5766e",
+    "packaging/release/pins.env": "49278d33dc09c1039c1d0d51819b86d3fe3d8e84f9cc110a8bc2ae8d5018e3cd",
     "packaging/release/repro-check.sh": "b915ac388d28dce593bc652a07ff7d9a1fcef33e4a4434e03502d2e28cfe767e",
     "packaging/scanner/org.snitchwatch.Scanner.service": "f4318e9b375eb0c06390111789700ac625f1c130ba41bb27407d5348851baf47",
     "packaging/scanner/snitchwatch-scanner.conf": "f54371321c416abd209d0a035ae22c02a05b7fb832f29e0a037943047d8118c1",
@@ -78,32 +87,32 @@
     "packaging/system/stage.sh": "64327742d69caf99ce63baae6503d3a5a5ce4c1f4c54ad4f425191b0fc44d328"
   },
   "sourceRepository": "https://github.com/bearyjd/snitchwatch.git",
-  "sourceTree": "b44cb6674cf67de8fedfeceaab0c6e926735fbd8",
+  "sourceTree": "05a5927f36fa64a6c33363fb99c597b75426cf86",
   "submoduleCommit": "b404c4c6316760fa7bc415509d3f8d747f7dc9cc",
   "toolchainRpms": [
     {
-      "file": "rust-1.99.0-1.fc44.x86_64.rpm",
-      "kojiPath": "rust/1.99.0/1.fc44/data/signed/6d9f90a6/x86_64/rust-1.99.0-1.fc44.x86_64.rpm",
+      "file": "rust-1.99.1-2.fc45.x86_64.rpm",
+      "kojiPath": "rust/1.99.1/2.fc45/data/signed/f577861e/x86_64/rust-1.99.1-2.fc45.x86_64.rpm",
       "name": "rust",
-      "nevra": "rust-0:1.99.0-1.fc44.x86_64",
-      "sha256": "cbbedd9794b017a3b654382170c55a4ba75dcfdbb7a828d3dd63d0c4b93e01be",
-      "size": 32479878
+      "nevra": "rust-0:1.99.1-2.fc45.x86_64",
+      "sha256": "a92898fcc0aefbee228e5a02fae04e3569f7ed8aa232d37b4891b0306b153cfd",
+      "size": 32488438
     },
     {
-      "file": "cargo-1.99.0-1.fc44.x86_64.rpm",
-      "kojiPath": "rust/1.99.0/1.fc44/data/signed/6d9f90a6/x86_64/cargo-1.99.0-1.fc44.x86_64.rpm",
+      "file": "cargo-1.99.1-2.fc45.x86_64.rpm",
+      "kojiPath": "rust/1.99.1/2.fc45/data/signed/f577861e/x86_64/cargo-1.99.1-2.fc45.x86_64.rpm",
       "name": "cargo",
-      "nevra": "cargo-0:1.99.0-1.fc44.x86_64",
-      "sha256": "133d5003f7b30708a9143bd63ba4f2848dae5b1d9768dca7c4d2f65497af7206",
-      "size": 8270638
+      "nevra": "cargo-0:1.99.1-2.fc45.x86_64",
+      "sha256": "3e57cabdaf0d9a5e990106b9e8e33f1d08f69721ae2094248fe7478752941052",
+      "size": 8309626
     },
     {
-      "file": "rust-std-static-1.99.0-1.fc44.x86_64.rpm",
-      "kojiPath": "rust/1.99.0/1.fc44/data/signed/6d9f90a6/x86_64/rust-std-static-1.99.0-1.fc44.x86_64.rpm",
+      "file": "rust-std-static-1.99.1-2.fc45.x86_64.rpm",
+      "kojiPath": "rust/1.99.1/2.fc45/data/signed/f577861e/x86_64/rust-std-static-1.99.1-2.fc45.x86_64.rpm",
       "name": "rust-std-static",
-      "nevra": "rust-std-static-0:1.99.0-1.fc44.x86_64",
-      "sha256": "5b1753c706960ec4a6b2158cb5525e677111cff681c6b54c88f95f0f0fbe4202",
-      "size": 42781168
+      "nevra": "rust-std-static-0:1.99.1-2.fc45.x86_64",
+      "sha256": "9a53146899a3e225d077cf7afbbabd55c03aa1e7ae07f578e53ad66c429d7b28",
+      "size": 43108540
     }
   ]
 }

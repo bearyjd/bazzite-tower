@@ -31,7 +31,7 @@ concurrency:
 
 jobs:
   immutable-r13:
-    name: Verify original r13 immutable candidate
+    name: Verify immutable candidate (PR 107 only)
     if: github.event_name == 'pull_request' && github.repository == 'bearyjd/bazzite-tower' && github.event.pull_request.number == 107 && github.event.pull_request.head.repo.full_name == 'bearyjd/bazzite-tower'
     permissions:
       contents: read
@@ -136,6 +136,7 @@ jobs:
           python3 tests/test-base-refresh.py
           python3 tests/test-workflow-signing-secret.py
           python3 tests/test-build-disk-workflow.py
+          python3 tests/test-build-workflow-job-names.py
           python3 tests/test-snitchwatch-gate.py
           python3 tests/test-snitchwatch-image-build.py
           python3 tests/test-snitchwatch-image-build-daemon.py
@@ -198,7 +199,7 @@ jobs:
           TAG_BASE: ${{ matrix.tag_base }}
 
   release:
-    name: Build, verify, and release image (${{ matrix.variant }})
+    name: Release image, main only (${{ matrix.variant }})
     if: github.event_name != 'pull_request' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
     runs-on: ubuntu-24.04
 
@@ -258,6 +259,7 @@ jobs:
           python3 tests/test-base-refresh.py
           python3 tests/test-workflow-signing-secret.py
           python3 tests/test-build-disk-workflow.py
+          python3 tests/test-build-workflow-job-names.py
           python3 tests/test-snitchwatch-gate.py
           python3 tests/test-snitchwatch-image-build.py
           python3 tests/test-snitchwatch-image-build-daemon.py
@@ -625,7 +627,7 @@ jobs:
   # manual cancel hit early enough, or a concurrency supersede that lands
   # before `notify` gets queued at all.
   notify:
-    name: Report release gate result
+    name: Release gate result (main only)
     needs: release
     if: always() && github.event_name != 'pull_request' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
     runs-on: ubuntu-24.04
@@ -664,7 +666,7 @@ jobs:
             });
             let matched = 0;
             for (const variant of Object.keys(TAG_BASE)) {
-              const job = jobs.find(j => j.name === `Build, verify, and release image (${variant})`);
+              const job = jobs.find(j => j.name === `Release image, main only (${variant})`);
               if (!job || !job.conclusion || job.conclusion === 'skipped') continue;
               matched++;
               // One variant's GitHub API call failing (rate limit, transient

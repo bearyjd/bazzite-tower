@@ -997,6 +997,32 @@ class SystemBehavior(unittest.TestCase):
             common.runtime_readiness(self.ctx)
         path.write_text(original)
 
+    def test_flatpak_default_group_refuses_because_parsers_disagree(self):
+        # configparser copies [DEFAULT] keys into every section; GLib ignores the group.
+        self.ctx.system_config();path=self.ctx.flatpak();original=path.read_text()
+        bridge = "SNITCHWATCH_SYSTEM_BRIDGE=1\n"
+        for header in ("[DEFAULT]", "[default]", "[Default]"):
+            for payload in (bridge, "foo=bar\n", ""):
+                with self.subTest(header=header, payload=payload):
+                    path.write_text(original.replace("[Environment]\n"+bridge, header+"\n"+payload+"[Environment]\n"))
+                    self.refuse_readiness(r"\[DEFAULT\] group" if header == "[DEFAULT]" else "unreviewed metadata section|DEFAULT")
+        path.write_text(original)
+        common.runtime_readiness(self.ctx)
+
+    def test_flatpak_environment_key_allowlist(self):
+        # Intent change: the old test accepted an arbitrary extra key (QT_QUICK_CONTROLS_STYLE);
+        # only the reviewed [Environment] keys may now appear.
+        self.ctx.system_config();path=self.ctx.flatpak();original=path.read_text()
+        anchor = "SNITCHWATCH_SYSTEM_BRIDGE=1"
+        for extra in ("QT_QUICK_CONTROLS_STYLE=Basic", "LD_PRELOAD=/tmp/x.so", "snitchwatch_system_bridge=1", "SNITCHWATCH_WS_URL=x"):
+            with self.subTest(extra=extra):
+                path.write_text(original.replace(anchor, anchor+"\n"+extra))
+                self.refuse_readiness(r"unreviewed \[Environment\] key")
+        path.write_text(original.replace(anchor, anchor+"\nSNITCHWATCH_WS_SOCKET=/run/snitchwatch/bridge.sock\nSNITCHWATCH_WS_TOKEN_PATH=/run/snitchwatch-auth/token"))
+        common.runtime_readiness(self.ctx)
+        path.write_text(original)
+        common.runtime_readiness(self.ctx)
+
     def test_extended_runtime_acl_refuses_outsider_grants(self):
         self.ctx.system_config()
         def xattrs(path):

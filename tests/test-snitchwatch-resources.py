@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Offline fixtures for interval accounting and packaged ELF BPF objects."""
+import json
 import os
 from pathlib import Path
 import runpy
@@ -157,8 +158,6 @@ class OwnerRecoveryRecipeTests(unittest.TestCase):
         # every privileged command replaced by a recording shell function.
         runbook = (ROOT / 'docs/RUNBOOK.md').read_text()
         recipe = runbook.split("<<'EBPF_EXPERIMENT'\n", 1)[1]
-        # Shipped LogLevel 2 hides the Info lines the log greps need; the edit must lower it to 1.
-        self.assertIn("before['LogLevel'] = 1\n", recipe)
         recipe = recipe.split("sudo python3 -", 1)[0]
         # CI has no controlling terminal; the fake editor does not read input.
         recipe = recipe.replace('</dev/tty', '</dev/null')
@@ -185,7 +184,9 @@ sudo() {
             read -r count < "$copies"
             if [ "$scenario" = backup-validation-failure ] && [ "$count" = 1 ]; then return 44; fi
             if [ "$scenario" = restore-validation-failure ] && [ "$count" = 2 ]; then return 45; fi ;;
-        install|jq|systemctl|ujust) ;;
+        jq|systemctl) ;;
+        mkdir) printf '%s\n' "$*" > "$events.mkdir"; ;;
+        ujust) [ "$scenario" != readiness-failure ] || return 46 ;;
         *) return 99 ;;
     esac
 }
@@ -201,7 +202,7 @@ sudoedit() {
 sleep() { printf 'recovery-wait\n' >> "$events"; }
 '''
         cases = {'normal': 0, 'backup-failure': 41, 'backup-validation-failure': 44,
-                 'editor-failure': 42, 'restore-failure': 0, 'restore-validation-failure': 0,
+                 'editor-failure': 42, 'readiness-failure': 0, 'restore-failure': 0, 'restore-validation-failure': 0,
                  'signal-HUP': 129, 'signal-INT': 130, 'signal-TERM': 143}
         for scenario, expected_status in cases.items():
             with self.subTest(scenario=scenario), tempfile.TemporaryDirectory() as directory:
@@ -213,17 +214,88 @@ sleep() { printf 'recovery-wait\n' >> "$events"; }
                                              'scenario': scenario})
                 sequence = events.read_text().splitlines()
                 self.assertEqual(result.returncode, expected_status, result.stderr)
+                # The protected parent directory must exist before mktemp -d uses it.
+                self.assertLess(sequence.index('mkdir'), sequence.index('mktemp'))
+                self.assertEqual((Path(str(events) + '.mkdir')).read_text().strip(),
+                                 '-p -m 0755 -- /var/lib/bazzite-tower')
                 if scenario.startswith('backup-'):
                     self.assertNotIn('edit', sequence)
                     self.assertNotIn('systemctl', sequence)
                     continue
                 self.assertEqual(sequence.count('edit'), 1)
-                self.assertLess(sequence.index('install'), sequence.index('mktemp'))
-                self.assertEqual(sequence[-6:], ['cp', 'cmp', 'stat', 'jq', 'systemctl', 'ujust'])
+                if scenario != 'readiness-failure':
+                    self.assertEqual(sequence[-6:], ['cp', 'cmp', 'stat', 'jq', 'systemctl', 'ujust'])
+                if scenario == 'normal':
+                    self.assertIn('Restored exact proc config, metadata and service readiness', result.stdout)
+                if scenario == 'readiness-failure':
+                    # Readiness is reported, but must not hold the recovery loop/lock.
+                    self.assertIn('READINESS NOT CONFIRMED', result.stderr)
+                    self.assertEqual(sequence.count('ujust'), 3)  # bounded retry
+                    steps = [e for e in sequence if e != 'recovery-wait']
+                    self.assertEqual(steps[-8:], ['cp', 'cmp', 'stat', 'jq', 'systemctl',
+                                                  'ujust', 'ujust', 'ujust'])
+                    self.assertEqual(sequence.count('recovery-wait'), 2)  # none after the last try
+                    self.assertNotIn('Restored exact proc config, metadata and service readiness',
+                                     result.stdout)
+                    self.assertNotIn('RECOVERY FAILED', result.stderr)
+                    self.assertEqual(sequence.count('cp'), 2)
                 if scenario.startswith('restore-'):
                     self.assertIn('RECOVERY FAILED; migration lock retained', result.stderr)
                     self.assertEqual(sequence.count('systemctl'), 1)
                     self.assertEqual(sequence.count('cp'), 3)
+
+
+class EbpfConfigCheckTests(unittest.TestCase):
+    """Run the RUNBOOK's CHECK_CONFIG heredoc python against fixture configs."""
+
+    SHIPPED = {'ProcMonitorMethod': 'proc', 'DefaultAction': 'allow', 'LogLevel': 2,
+               'MaxEvents': 150, 'InterceptUnknown': False, 'Server': {'Address': 'unix:opensnitchd.sock'}}
+
+    @classmethod
+    def setUpClass(cls):
+        runbook = (ROOT / 'docs/RUNBOOK.md').read_text()
+        body = runbook.split("<<'CHECK_CONFIG'\n", 1)[1]
+        cls.invocation = runbook.split("<<'CHECK_CONFIG'", 1)[0].splitlines()[-1]
+        cls.script = body.split("\nCHECK_CONFIG\n", 1)[0] + "\n"
+
+    def run_check(self, **changes):
+        after = {**self.SHIPPED, **changes}
+        with tempfile.TemporaryDirectory() as directory:
+            before_path, after_path = Path(directory) / 'proc.json', Path(directory) / 'after.json'
+            before_path.write_text(json.dumps(self.SHIPPED))
+            after_path.write_text(json.dumps(after))
+            return subprocess.run(['python3', '-', str(before_path), str(after_path)],
+                                  input=self.script, text=True, capture_output=True, timeout=10)
+
+    def test_invocation_isolates_python_and_stays_detectable(self):
+        # -I keeps the owner's cwd (e.g. a planted json.py) off root's sys.path.
+        self.assertIn('sudo python3 -I -', self.invocation)
+
+    def test_ebpf_and_loglevel_one_passes(self):
+        result = self.run_check(ProcMonitorMethod='ebpf', LogLevel=1)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_everything_else_fails(self):
+        cases = {
+            'ebpf with LogLevel left at 2': dict(ProcMonitorMethod='ebpf'),
+            'LogLevel 1 with proc': dict(LogLevel=1),
+            'LogLevel 0': dict(ProcMonitorMethod='ebpf', LogLevel=0),
+            'LogLevel 3': dict(ProcMonitorMethod='ebpf', LogLevel=3),
+            'LogLevel true': dict(ProcMonitorMethod='ebpf', LogLevel=True),
+            'method audit': dict(ProcMonitorMethod='audit', LogLevel=1),
+            'extra key changed': dict(ProcMonitorMethod='ebpf', LogLevel=1, DefaultAction='deny'),
+            'nested key changed': dict(ProcMonitorMethod='ebpf', LogLevel=1,
+                                       Server={'Address': 'tcp:evil'}),
+            'extra key added': dict(ProcMonitorMethod='ebpf', LogLevel=1, Extra=1),
+            'no change': {},
+            'int to float': dict(ProcMonitorMethod='ebpf', LogLevel=1, MaxEvents=150.0),
+            'bool to int': dict(ProcMonitorMethod='ebpf', LogLevel=1, InterceptUnknown=0),
+        }
+        for name, changes in cases.items():
+            with self.subTest(name):
+                result = self.run_check(**changes)
+                self.assertNotEqual(result.returncode, 0, name)
+                self.assertIn('may change', result.stderr)
 
 
 if __name__ == '__main__':

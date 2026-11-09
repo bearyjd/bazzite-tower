@@ -440,12 +440,14 @@ class ImageBuildContracts(unittest.TestCase):
         ['crates/scanner-broker/' + n for n in ('Cargo.toml', 'src/lib.rs', 'src/main.rs')]
         + ['crates/scanner-privileged/' + n for n in (
             'Cargo.toml', 'src/checks/kargs.rs', 'src/checks/lockdown.rs', 'src/checks/mod.rs', 'src/checks/modules.rs',
-            'src/checks/rootkit.rs', 'src/command.rs', 'src/error.rs', 'src/facts.rs', 'src/lib.rs', 'src/main.rs',
+            'src/checks/rootkit.rs', 'src/command.rs', 'src/command/tests/exit_tests.rs', 'src/containment.rs',
+            'src/containment/test_fixtures/forked_tree.rs', 'src/containment/test_fixtures/marked_sleeps.rs', 'src/containment/test_fixtures/mod.rs', 'src/containment/test_fixtures/reaped.rs', 'src/containment/test_fixtures/scanner_fixture.rs', 'src/containment/test_fixtures/signal.rs', 'src/containment/test_fixtures/signal/tests.rs',
+            'src/error.rs', 'src/facts.rs', 'src/lib.rs', 'src/main.rs',
             'src/model.rs', 'src/scan.rs', 'src/store.rs', 'tests/end_to_end.rs')]))
 
     def test_every_built_scanner_source_file_is_hash_pinned(self):
         pinned = sorted(name for name in self.pins['sourceFiles'] if name.startswith('crates/scanner-'))
-        self.assertEqual(len(self.SCANNER_SOURCES), 18)
+        self.assertEqual(len(self.SCANNER_SOURCES), 27)
         self.assertEqual(pinned, list(self.SCANNER_SOURCES))
         for name in pinned:
             self.assertRegex(self.pins['sourceFiles'][name], '^[0-9a-f]{64}$')
@@ -775,20 +777,20 @@ class ImageBuildContracts(unittest.TestCase):
         for key in ('rpmSigningKey', 'kojiBase'):
             self.assertEqual(self.pins[key], daemon[key])
         expected = {
-            'rust': ('cbbedd9794b017a3b654382170c55a4ba75dcfdbb7a828d3dd63d0c4b93e01be', 32479878),
-            'cargo': ('133d5003f7b30708a9143bd63ba4f2848dae5b1d9768dca7c4d2f65497af7206', 8270638),
-            'rust-std-static': ('5b1753c706960ec4a6b2158cb5525e677111cff681c6b54c88f95f0f0fbe4202', 42781168),
+            'rust': ('a92898fcc0aefbee228e5a02fae04e3569f7ed8aa232d37b4891b0306b153cfd', 32488438),
+            'cargo': ('3e57cabdaf0d9a5e990106b9e8e33f1d08f69721ae2094248fe7478752941052', 8309626),
+            'rust-std-static': ('9a53146899a3e225d077cf7afbbabd55c03aa1e7ae07f578e53ad66c429d7b28', 43108540),
         }
         rpms = self.pins['toolchainRpms']
         self.assertEqual(len(rpms), 3)
         self.assertEqual({r['name'] for r in rpms}, set(expected))
         for rpm in rpms:
             name = rpm['name']
-            filename = f'{name}-1.99.0-1.fc44.x86_64.rpm'
+            filename = f'{name}-1.99.1-2.fc45.x86_64.rpm'
             self.assertEqual((rpm['sha256'], rpm['size']), expected[name])
             self.assertEqual(rpm['file'], filename)
-            self.assertEqual(rpm['nevra'], f'{name}-0:1.99.0-1.fc44.x86_64')
-            self.assertEqual(rpm['kojiPath'], 'rust/1.99.0/1.fc44/data/signed/6d9f90a6/x86_64/' + filename)
+            self.assertEqual(rpm['nevra'], f'{name}-0:1.99.1-2.fc45.x86_64')
+            self.assertEqual(rpm['kojiPath'], 'rust/1.99.1/2.fc45/data/signed/f577861e/x86_64/' + filename)
         installer = (FACTORY / 'snitchwatch-system-install-deps.sh').read_bytes()
         self.assertEqual(sha(installer), '247a396c0f3d504023f001c33bb1211f5f0f9bfd2c6685077d4bd312ac95f8cb')
 
@@ -827,9 +829,9 @@ dnf() {
 rustc() {
     echo rustc >> "$events"
     [[ -f "$installed" ]] || return 1
-    echo 'rustc 1.99.0 (fixture)'
+    echo 'rustc 1.99.1 (fixture)'
 }
-protoc() { echo 'libprotoc 3.19.6'; }
+protoc() { echo 'libprotoc 33.5'; }
 python3() {
     # The toolchain fingerprint reads the host RPM db and the probe needs a network;
     # this test must depend on neither.
@@ -904,6 +906,32 @@ python3() {
                 env = {**os.environ, 'SNITCHWATCH_BRIDGE': bridge, 'FIREWALL_DAEMON': firewall}
                 result = subprocess.run(['bash', str(FACTORY / 'snitchwatch-system-mode.sh')], env=env, capture_output=True)
                 self.assertEqual(result.returncode, 0 if valid else 1)
+
+
+class UnprivProcScan(unittest.TestCase):
+    """children() must survive arbitrary comm bytes: the scanner's own tests run processes with non-UTF-8 names."""
+
+    def proc(self, entries):
+        root = Path(tempfile.mkdtemp(prefix='fakeproc-'))
+        self.addCleanup(shutil.rmtree, root, True)
+        for pid, raw in entries.items():
+            (root / str(pid)).mkdir()
+            (root / str(pid) / 'stat').write_bytes(raw)
+        (root / 'self').mkdir()
+        (root / 'self' / 'stat').write_bytes(b'not a pid directory')
+        return root
+
+    def test_children_survives_non_utf8_and_paren_names(self):
+        helper = runpy.run_path(str(FACTORY / 'snitchwatch-system-unpriv.py'))
+        proc = self.proc({
+            100: b'100 (\xff\xfe) S 7 100 100 0',
+            101: b'101 (ok) S 9 101 101 0',
+            102: b'102 (a) b) S 7 102 102 0',
+            103: b'103 (\xc3\x28 \x80) Z 7 103 103 0',
+        })
+        self.assertEqual(sorted(helper['children'](7, proc)), [100, 102, 103])
+        self.assertEqual(helper['children'](9, proc), [101])
+        self.assertEqual(helper['children'](12345, proc), [])
 
 
 class StageOutputContracts(unittest.TestCase):

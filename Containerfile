@@ -15,7 +15,7 @@
 # merges. The upstream version and kernel are recorded in each bump PR. To move
 # it by hand: `skopeo inspect docker://ghcr.io/ublue-os/bazzite-nvidia-open:stable`
 # and replace the digest below in its own PR.
-ARG BASE_IMAGE=ghcr.io/ublue-os/bazzite-nvidia-open@sha256:d0e5e105ebf43c7ddbe3c4a5dfecac1628b0e0dcf152bbd2aee0eda3e4b4cdd4
+ARG BASE_IMAGE=ghcr.io/ublue-os/bazzite-nvidia-open@sha256:1afdfa96a8011ae269e8a79dc550e1024fb953f19b3a0483c6522ad4d5d1f3d1
 ARG FIREWALL_DAEMON=opensnitch
 ARG SNITCHWATCH_BRIDGE=legacy
 ARG VM_GATE_SSH=0
@@ -47,7 +47,7 @@ COPY build_files/firewall/snitchwatch-system-legacy-marker /out/usr/share/bazzit
 # are byte-identical (M1 step 2). Both bridge builds and the scanner build run
 # their third-party code unprivileged (M1 step 3). A deterministic hostile crate
 # in Cargo.lock still builds the same bytes in both (M1 not closed).
-FROM registry.fedoraproject.org/fedora:44@sha256:e1656bc110fc33e855f7a02e4420c21066428bc7a0277160d40ee125ef8a1c65 AS snitchwatch-prep
+FROM registry.fedoraproject.org/fedora:45@sha256:ea0998f4c945b85c2134793cda4fac35ee394f0d677a04c5b1fe769e13f959b8 AS snitchwatch-prep
 ARG FIREWALL_DAEMON
 COPY --from=ctx /firewall/snitchwatch-system* /factory/
 COPY system_files/usr/share/bazzite-tower/opensnitchd-default-config.json /candidate/legacy-config.json
@@ -81,6 +81,9 @@ COPY --from=snitchwatch-bridge-rebuild /handoff/bridge-rebuild/ /handoff/bridge-
 COPY --from=snitchwatch-daemon /handoff/daemon/ /handoff/daemon/
 RUN --network=none SNITCHWATCH_BRIDGE=system FIREWALL_DAEMON="${FIREWALL_DAEMON}" bash /tools/snitchwatch-system-assemble.sh /work/native /handoff /out
 
+# DL3006 is a false positive here: this names a build STAGE picked by an ARG
+# (snitchwatch-legacy/-system), not an untagged registry image.
+# hadolint ignore=DL3006
 FROM snitchwatch-${SNITCHWATCH_BRIDGE} AS snitchwatch-selected
 
 # Base: bazzite KDE + NVIDIA **open** kernel modules, F44+, desktop variant

@@ -21,6 +21,11 @@
     {
       "matchPackageNames": ["ghcr.io/ublue-os/bazzite-nvidia-open"],
       "enabled": false
+    },
+    {
+      "description": "The snitchwatch-prep builder digest is pinned in Containerfile, snitchwatch-system-pins.json, snitchwatch-system-daemon-pins.json and the snitchwatch release builder; bump it only as a deliberate coordinated change.",
+      "matchPackageNames": ["registry.fedoraproject.org/fedora"],
+      "enabled": false
     }
   ]
 }

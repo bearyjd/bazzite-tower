@@ -29,8 +29,8 @@ The exact system release baseline is
 old/arbitrary digests need destination-bound signed refresh provenance, and a
 missing system tag always fails closed. The legacy run2 recovery is unchanged.
 
-The candidate `Containerfile` default pin is Bazzite `44.20261023`, digest
-`sha256:d0e5e105ebf43c7ddbe3c4a5dfecac1628b0e0dcf152bbd2aee0eda3e4b4cdd4`.
+The candidate `Containerfile` default pin is the digest in `ARG BASE_IMAGE` (read it
+there; this map deliberately does not copy it, it changes with every bump).
 Weekly `base-bump.yml` PRs maintain this default; automatic refresh independently
 resolves its base. Neither path changes hardware tuning or proves host eBPF
 compatibility. Both profiles retain allow/proc defaults.

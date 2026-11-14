@@ -49,8 +49,8 @@ profiles pin reviewed source `45c1427adc2b069dd727e427efaa7501eb4ee53f`.
 Legacy retains `IMAGE_TAG=latest`; system retains
 `IMAGE_TAG=snitchwatch-system`. Source SHA/tree/cleanliness and profile contracts
 are checked before the build; independent validation checks image/RPM/SPDX
-identity and actual Bazzite/kernel floors (`44.20261023` /
-`7.2.9-ogc3.1.fc44`). The publisher fetches trusted code from the GitHub API at
+identity and actual Bazzite/kernel floors (`45.20261105` /
+`7.2.15-ogc1.1.fc45`). The publisher fetches trusted code from the GitHub API at
 the dispatched main SHA, with no source checkout. Policy staleness blocks tag
 movement. Features still need owner runtime acceptance, protected fixed-digest
 promotion and a subsequent reviewed policy update.

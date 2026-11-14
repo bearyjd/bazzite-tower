@@ -67,14 +67,14 @@ class RefreshTests(unittest.TestCase):
         self.env.start(); self.addCleanup(self.env.stop)
         self.data = Path(self.tmp.name) / 'data'; self.data.mkdir()
         archive(self.data / 'image.oci.tar')
-        (self.data / 'rpms.tsv').write_text('kernel-core\t0\t7.2.9\togc3.1.fc44\tx86_64\n')
+        (self.data / 'rpms.tsv').write_text('kernel-core\t0\t7.2.15\togc1.1.fc45\tx86_64\n')
         records = r.rpm.parse_inventory(self.data / 'rpms.tsv')
         write(self.data / 'sbom.json', r.rpm.make_document(records, self.policy['sourceCreated']))
         self.base = self.policy['upstream'] + '@sha256:' + 'b' * 64
-        self.version = '44.20261023'
+        self.version = '45.20261105'
         active = self.merged_policy()
         write(self.data / 'installed.json', {'profile': 'legacy', 'trust': {name: r.pub.file_sha(self.root / path) for name, path in r.TRUST.items()}, 'activePolicy': active.decode(), 'activePolicySha256': r.pub.sha(active)})
-        self.proof = r.evidence(self.policy, 'legacy', self.base, self.version, r.pub.image_identity(self.data / 'image.oci.tar'), r.pub.file_sha(self.data / 'sbom.json'), '7.2.9-ogc3.1.fc44')
+        self.proof = r.evidence(self.policy, 'legacy', self.base, self.version, r.pub.image_identity(self.data / 'image.oci.tar'), r.pub.file_sha(self.data / 'sbom.json'), '7.2.15-ogc1.1.fc45')
         self.proof['installedSha256'] = r.pub.file_sha(self.data / 'installed.json')
         write(self.data / 'build-provenance.json', self.proof)
 
@@ -181,14 +181,14 @@ class RefreshTests(unittest.TestCase):
             with self.assertRaises(ValueError): r.immutable_base(value, self.policy)
 
     def test_floor_and_signed_baseline_downgrades_refused(self):
-        for kernel, version in [('7.1.99-ogc9.1.fc44', self.version), ('7.2.8-ogc9.1.fc44', self.version), ('7.2.9-ogc2.9.fc44', self.version), ('7.2.9-ogc3.1.fc44', '44.20261022')]:
+        for kernel, version in [('7.1.99-ogc9.1.fc45', self.version), ('7.2.14-ogc9.1.fc45', self.version), ('7.2.15-ogc1.0.fc45', self.version), ('7.2.15-ogc0.9.fc45', self.version), ('7.2.15-ogc1.1.fc44', self.version), ('7.2.15-ogc1.1.fc45', '45.20261104')]:
             with self.subTest(kernel=kernel, version=version), self.assertRaises(ValueError):
                 r.evidence(self.policy, 'legacy', self.base, version, self.proof['image'], self.proof['sbomSha256'], kernel)
-        previous = copy.deepcopy(self.proof); previous['kernel'] = '7.2.10-ogc1.1.fc44'
+        previous = copy.deepcopy(self.proof); previous['kernel'] = '7.2.16-ogc1.1.fc45'
         with self.assertRaises(ValueError): r.monotonic(self.policy, self.proof, previous)
-        previous = copy.deepcopy(self.proof); previous['baseVersion'] = '44.20261024'
+        previous = copy.deepcopy(self.proof); previous['baseVersion'] = '45.20261106'
         with self.assertRaises(ValueError): r.monotonic(self.policy, self.proof, previous)
-        newer = copy.deepcopy(self.proof); newer['kernel'] = '7.3.0-ogc1.1.fc44'; newer['baseVersion'] = '44.20261024'
+        newer = copy.deepcopy(self.proof); newer['kernel'] = '7.3.0-ogc1.1.fc45'; newer['baseVersion'] = '45.20261106'
         r.monotonic(self.policy, newer, self.proof)
 
     def test_unsafe_artifact_inventory_and_symlink_refused(self):
@@ -199,7 +199,7 @@ class RefreshTests(unittest.TestCase):
         path.unlink(); path.write_bytes(saved)
 
     def test_sbom_inventory_and_provenance_substitution_refused(self):
-        for key, value in [('sourceCommit', 'c' * 40), ('sourceTree', 'd' * 40), ('profile', 'system'), ('baseImage', self.base.replace('b' * 64, 'c' * 64)), ('kernel', '7.3.0-ogc1.1.fc44')]:
+        for key, value in [('sourceCommit', 'c' * 40), ('sourceTree', 'd' * 40), ('profile', 'system'), ('baseImage', self.base.replace('b' * 64, 'c' * 64)), ('kernel', '7.3.0-ogc1.1.fc45')]:
             proof = copy.deepcopy(self.proof); proof[key] = value; write(self.data / 'build-provenance.json', proof)
             with self.subTest(key=key), self.assertRaises(ValueError): self.valid()
         write(self.data / 'build-provenance.json', self.proof)
@@ -310,8 +310,8 @@ class RefreshTests(unittest.TestCase):
                          lambda v: v['predicate'].update(repository='attacker/fork'),
                          lambda v: v['predicate'].update(workflow='.github/workflows/other.yml'),
                          lambda v: v['predicate'].update(ref='refs/heads/feature'),
-                         lambda v: v['predicate'].update(baseVersion='44.20261024'),
-                         lambda v: v['predicate'].update(kernel='7.2.10-ogc1.1.fc44')]
+                         lambda v: v['predicate'].update(baseVersion='45.20261106'),
+                         lambda v: v['predicate'].update(kernel='7.2.16-ogc1.1.fc45')]
             for mutate in mutations:
                 value = copy.deepcopy(statement); mutate(value)
                 with self.subTest(profile=profile, value=value), self.assertRaises(ValueError): baseline(value)

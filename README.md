@@ -354,8 +354,8 @@ acceptance remains unverified; the owner authorized the CI-based release path.
   continue receiving this channel.
 - `base-refresh.yml` runs daily and by dispatch on `main`. It resolves upstream
   `bazzite-nvidia-open:stable` to an immutable digest and overrides `BASE_IMAGE`
-  in the accepted source checkout. It rejects bases below Bazzite `44.20261023`
-  / kernel `7.2.9-ogc3.1.fc44` and stale policy before publication.
+  in the accepted source checkout. It rejects bases below Bazzite `45.20261105`
+  / kernel `7.2.15-ogc1.1.fc45` and stale policy before publication.
 
 **`latest-kernel` — opt-in development channel**
 

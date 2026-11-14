@@ -181,7 +181,7 @@ class RefreshTests(unittest.TestCase):
             with self.assertRaises(ValueError): r.immutable_base(value, self.policy)
 
     def test_floor_and_signed_baseline_downgrades_refused(self):
-        for kernel, version in [('7.1.99-ogc9.1.fc45', self.version), ('7.2.14-ogc9.1.fc45', self.version), ('7.2.15-ogc1.0.fc45', self.version), ('7.2.15-ogc1.1.fc45', '45.20261104')]:
+        for kernel, version in [('7.1.99-ogc9.1.fc45', self.version), ('7.2.14-ogc9.1.fc45', self.version), ('7.2.15-ogc1.0.fc45', self.version), ('7.2.15-ogc0.9.fc45', self.version), ('7.2.15-ogc1.1.fc44', self.version), ('7.2.15-ogc1.1.fc45', '45.20261104')]:
             with self.subTest(kernel=kernel, version=version), self.assertRaises(ValueError):
                 r.evidence(self.policy, 'legacy', self.base, version, self.proof['image'], self.proof['sbomSha256'], kernel)
         previous = copy.deepcopy(self.proof); previous['kernel'] = '7.2.16-ogc1.1.fc45'

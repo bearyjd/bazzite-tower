@@ -22,7 +22,7 @@ approval. `.github/base-refresh-policy.json` pins accepted product source
 compatibility alias `:latest` (`IMAGE_TAG=latest`); reviewed r16.1 system publishes
 only `:snitchwatch-system`. Both profiles use this exact product source.
 The workflow resolves a fresh immutable Bazzite base, enforces the
-`44.20261023` / `7.2.9-ogc3.1.fc44` floor and rejects stale policy, then requires
+`45.20261105` / `7.2.15-ogc1.1.fc45` floor and rejects stale policy, then requires
 build/test/signing/SPDX/provenance/host-policy gates before publication.
 
 The r16.1 refresh-policy transition must merge only after protected promotion

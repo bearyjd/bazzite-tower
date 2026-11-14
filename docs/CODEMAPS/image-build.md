@@ -16,7 +16,7 @@ acceptance remains unverified under the owner-authorized CI-based release path.
 `base-refresh.yml` resolves upstream `bazzite-nvidia-open:stable` once to an
 immutable digest and supplies `BASE_IMAGE` to that accepted checkout. Independent
 validation checks the actual image's Bazzite version and RPM kernel against
-floors `44.20261023` / `7.2.9-ogc3.1.fc44`, as well as source/profile/SPDX
+floors `45.20261105` / `7.2.15-ogc1.1.fc45`, as well as source/profile/SPDX
 identity. Build, smoke/runtime-systemd, signature, SPDX, build provenance, GitHub
 attestation and host signature policy gates precede publication; a current-main
 policy hash recheck rejects stale policy before public pointers move. Daily and

@@ -44,8 +44,8 @@
     "submoduleCommit": "b404c4c6316760fa7bc415509d3f8d747f7dc9cc"
   },
   "daemonSource": {
-    "commit": "b404c4c6316760fa7bc415509d3f8d747f7dc9cc",
-    "tree": "21593ba74c55b6f7ad7f220692c33477b65a3686"
+    "commit": "a1353848ba1b660320e90cefea782c3fba272c00",
+    "tree": "bb34535e6558664dd19764875b65bb805258f910"
   },
-  "daemonPatchSha256": "4b52c645864650acffa8244080800e442d02ca2a2efd90f1b0dd2dd0a8cbeaa8"
+  "daemonPatchSha256": "8e06e8ebb253aed53f861e1179de11c3d57d6e4617f32fb67563c756943741a9"
 }

@@ -194,7 +194,7 @@ def immutable_daemon(ctx, pins):
     require(manifest.get("schemaVersion") == 1 and manifest.get("profile") == "system", "invalid patched daemon manifest profile/schema")
     require(manifest.get("source", {}).get("commit") == pins.get("submoduleCommit"), "patched daemon upstream differs from reviewed bridge submodule")
     binary, patch = manifest.get("binary", {}), manifest.get("patch", {})
-    require(binary.get("path") == DAEMON and binary.get("candidatePath") == DAEMON_CANDIDATE and binary.get("version") == "1.8.0", "patched daemon binary path/version drift")
+    require(binary.get("path") == DAEMON and binary.get("candidatePath") == DAEMON_CANDIDATE and binary.get("version") == "1.9.0", "patched daemon binary path/version drift")
     require(patch.get("path") == DAEMON_PATCH, "patched daemon repair patch path drift")
     for name, expected in ((DAEMON, binary.get("sha256")), (DAEMON_CANDIDATE, binary.get("sha256")), (DAEMON_PATCH, patch.get("sha256"))):
         require(re.fullmatch(r"[0-9a-f]{64}", expected or ""), "missing patched daemon artifact identity")
@@ -204,7 +204,7 @@ def immutable_daemon(ctx, pins):
     require(proof.get("profile") == "system" and proof.get("sourceCommit") == manifest["source"]["commit"] and proof.get("patchSha256") == patch["sha256"]
             and proof.get("binaryPath") == DAEMON and proof.get("binarySha256") == binary["sha256"] and proof.get("installedBinaryChecked") is True,
             "daemon verifier did not establish installed patched binary identity")
-    require(ctx.command([DAEMON, "-version"]).stdout.strip() == "1.8.0", "installed patched daemon version drift")
+    require(ctx.command([DAEMON, "-version"]).stdout.strip() == "1.9.0", "installed patched daemon version drift")
     return manifest
 
 

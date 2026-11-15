@@ -365,8 +365,18 @@ check "opensnitch dynamic libs all resolve" \
 # for the rpm2cpio extraction dropped the only assertion on the installed
 # version; this restores it. Deliberately duplicates the pin in build.sh — a
 # version bump must update both, and smoke.sh exists to encode that intent.
-check "opensnitchd execs and reports pinned version 1.8.0" \
-    bash -c '/usr/bin/opensnitchd -version 2>/dev/null | grep -qx "1.8.0"'
+# The version is per profile: legacy keeps the pinned upstream v1.8.0 RPM
+# (95-firewall.sh); system ships the source-built, patched OpenSnitch a1353848
+# (daemonVersion in snitchwatch-system-daemon-pins.json). An unknown profile
+# expects nothing it can match, so it fails here as well as in the dispatch below.
+case "$(cat /usr/share/bazzite-tower/snitchwatch-bridge-profile 2>/dev/null || true)" in
+system) opensnitch_version="1.9.0" ;;
+legacy) opensnitch_version="1.8.0" ;;
+*) opensnitch_version="unknown-bridge-profile" ;;
+esac
+# shellcheck disable=SC2016 # the inner bash expands $1 (passed as an argument).
+check "opensnitchd execs and reports pinned version ${opensnitch_version}" \
+    bash -c '/usr/bin/opensnitchd -version 2>/dev/null | grep -qx "$1"' _ "${opensnitch_version}"
 check "opensnitch default-config present" test -f /etc/opensnitchd/default-config.json
 # Pristine image-intent copy, for diffing against a locally-edited /etc.
 check "opensnitch staged config present" \

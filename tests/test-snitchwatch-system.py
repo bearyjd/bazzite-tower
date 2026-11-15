@@ -51,7 +51,7 @@ class Fixture(common.Context):
         self.unix = ""
         self.global_legacy = "masked"
         self.daemon_proof_failure = False
-        self.daemon_version = "1.8.0"
+        self.daemon_version = "1.9.0"
         self.daemon_process_path = common.DAEMON
         self.socket_types = {}
         self.states = {unit: dict(enabled="enabled" if unit in common.SOCKETS or unit == "opensnitch.service" else "static", active="active" if unit in common.SOCKETS or unit == "opensnitch.service" else "inactive") for unit in common.UNITS}
@@ -80,14 +80,14 @@ class Fixture(common.Context):
         system = json.loads(legacy_text);system["Server"]["Address"] = "unix:opensnitchd.sock";system["DefaultAction"] = "allow"
         self.write(common.REFERENCE, json.dumps(system, indent=4)+"\n")
         self.write(common.CONFIG, legacy_text)
-        self.write(common.PINS, json.dumps(dict(sourceCommit="d09defc8ea3d55b335c746248a4d90743ae014e3", submoduleCommit="b404c4c6316760fa7bc415509d3f8d747f7dc9cc", bridgeVersion="0.1.1")))
+        self.write(common.PINS, json.dumps(dict(sourceCommit="d09defc8ea3d55b335c746248a4d90743ae014e3", submoduleCommit="a1353848ba1b660320e90cefea782c3fba272c00", bridgeVersion="0.1.1")))
         mandatory.extend((common.PINS, common.LEGACY_REFERENCE))
         self.refresh_manifest(mandatory)
         self.write(common.DAEMON, "reviewed patched GPL daemon executable\n", 0o755)
         self.write(common.DAEMON_CANDIDATE, self.path(common.DAEMON).read_text(), 0o755)
         self.write(common.DAEMON_PATCH, "reviewed14file repair patch\n")
         self.daemon_manifest = dict(schemaVersion=1, profile="system", source=dict(commit=self.manifest["source"]["submoduleCommit"]),
-            binary=dict(path=common.DAEMON, candidatePath=common.DAEMON_CANDIDATE, sha256=common.digest(self.path(common.DAEMON)), version="1.8.0"),
+            binary=dict(path=common.DAEMON, candidatePath=common.DAEMON_CANDIDATE, sha256=common.digest(self.path(common.DAEMON)), version="1.9.0"),
             patch=dict(path=common.DAEMON_PATCH, sha256=common.digest(self.path(common.DAEMON_PATCH))))
         self.write(common.DAEMON_MANIFEST, json.dumps(self.daemon_manifest))
         self.daemon_proof = dict(profile="system", sourceCommit=self.daemon_manifest["source"]["commit"], patchSha256=self.daemon_manifest["patch"]["sha256"],
@@ -118,7 +118,7 @@ class Fixture(common.Context):
     def refresh_manifest(self, files=None):
         if files is None:
             files = self.manifest["files"]
-        self.manifest = dict(schemaVersion=1, profile="system", source=dict(commit="d09defc8ea3d55b335c746248a4d90743ae014e3", submoduleCommit="b404c4c6316760fa7bc415509d3f8d747f7dc9cc"),
+        self.manifest = dict(schemaVersion=1, profile="system", source=dict(commit="d09defc8ea3d55b335c746248a4d90743ae014e3", submoduleCommit="a1353848ba1b660320e90cefea782c3fba272c00"),
             binary=dict(path=common.BINARY, sha256=common.digest(self.path(common.BINARY)), version="0.1.1"), files={path:common.digest(self.path(path)) for path in files},
             flatpak=dict(appId=common.APP, profile="system", sourceCommit="d09defc8ea3d55b335c746248a4d90743ae014e3", runtimeRef="org.kde.Platform/x86_64/6.9", manifestSha256="a"*64))
         self.write(common.MANIFEST, json.dumps(self.manifest))
@@ -1230,7 +1230,7 @@ class SystemBehavior(unittest.TestCase):
     def test_patched_daemon_wrong_manifest_or_staging_only_proof_refuses(self):
         self.ctx.system_config();original=copy.deepcopy(self.ctx.daemon_manifest)
         variants=[]
-        for mutate in (lambda m:m["source"].update(commit="f"*40),lambda m:m["binary"].update(version="1.9.0"),lambda m:m["binary"].update(path="/tmp/daemon"),lambda m:m["patch"].update(path="/tmp/patch")):
+        for mutate in (lambda m:m["source"].update(commit="f"*40),lambda m:m["binary"].update(version="1.8.0"),lambda m:m["binary"].update(path="/tmp/daemon"),lambda m:m["patch"].update(path="/tmp/patch")):
             changed=copy.deepcopy(original);mutate(changed);variants.append(changed)
         for changed in variants:
             self.ctx.path(common.DAEMON_MANIFEST).write_text(json.dumps(changed))
@@ -1238,8 +1238,10 @@ class SystemBehavior(unittest.TestCase):
         self.ctx.path(common.DAEMON_MANIFEST).write_text(json.dumps(original))
         self.ctx.daemon_proof["installedBinaryChecked"]=False
         self.refuse_readiness("did not establish installed patched")
-        self.ctx.daemon_proof["installedBinaryChecked"]=True;self.ctx.daemon_version="1.8.0-unreviewed"
-        self.refuse_readiness("patched daemon version")
+        self.ctx.daemon_proof["installedBinaryChecked"]=True
+        for version in ("1.8.0", "1.9.0-unreviewed"):
+            self.ctx.daemon_version=version
+            self.refuse_readiness("patched daemon version")
 
     def test_actual_daemon_pid_path_hash_uid_and_exec_contract_refuse_drift(self):
         self.ctx.system_config()

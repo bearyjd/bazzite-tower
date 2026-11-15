@@ -1700,7 +1700,7 @@ index e81c2405..d646b1db 100644
  
  func (o *Operator) simpleCmp(v string) bool {
 diff --git a/daemon/rule/operator_lists.go b/daemon/rule/operator_lists.go
-index 1f94c89b..38b0b530 100644
+index 1f94c89b..4096bb87 100644
 --- a/daemon/rule/operator_lists.go
 +++ b/daemon/rule/operator_lists.go
 @@ -69,9 +69,43 @@ func (t *domainWildcardTrie) matchesHost(host string) bool {
@@ -1766,7 +1766,7 @@ index 1f94c89b..38b0b530 100644
  			}
  			numFiles = 0
  
-@@ -128,22 +162,25 @@ func (o *Operator) monitorLists() {
+@@ -128,54 +162,57 @@ func (o *Operator) monitorLists() {
  				}
  				needReload = false
  			}
@@ -1795,11 +1795,21 @@ index 1f94c89b..38b0b530 100644
  	defer o.Unlock()
  
 -	log.Info("clearing domains lists: %d - %s", len(o.lists), o.Data)
+-	for k := range o.lists {
+-		delete(o.lists, k)
+-	}
 +	log.Info("clearing domains lists: %d - %q", len(o.lists), o.Data)
- 	for k := range o.lists {
- 		delete(o.lists, k)
- 	}
-@@ -155,27 +192,25 @@ func (o *Operator) ClearLists() {
++	// The lock-free matchers may still be reading the published snapshot,
++	// which shares o.lists: unpublish it first and replace the map rather
++	// than delete from it (an in-place delete is a fatal concurrent map
++	// write in the root daemon).
++	o.listSnapshot.Store(nil)
++	o.lists = make(map[string]interface{})
+ 	o.domainWildcards = newDomainWildcardTrie()
+ 	o.domainGlobs = nil
+ 	o.listExact = nil
+ 	o.listNets = nil
+-	o.listSnapshot.Store(nil)
  	debug.FreeOSMemory()
  }
  
@@ -1840,7 +1850,7 @@ index 1f94c89b..38b0b530 100644
  	}
  	if host == "local" || host == "localhost" || host == "localhost.localdomain" || host == "broadcasthost" {
  		return true, line, defValue
-@@ -310,6 +345,11 @@ func (o *Operator) readSimpleList(raw, fileName string) (dups uint64) {
+@@ -310,6 +347,11 @@ func (o *Operator) readSimpleList(raw, fileName string) (dups uint64) {
  }
  
  func (o *Operator) readLists() error {
@@ -1852,7 +1862,7 @@ index 1f94c89b..38b0b530 100644
  	o.ClearLists()
  
  	var dups uint64
-@@ -341,20 +381,7 @@ func (o *Operator) readLists() error {
+@@ -341,20 +383,7 @@ func (o *Operator) readLists() error {
  			log.Warning("Error reading list of IPs (%s): %s", fileName, err)
  			continue
  		}
@@ -1874,7 +1884,7 @@ index 1f94c89b..38b0b530 100644
  	}
  	o.listSnapshot.Store(o.buildListSnapshot())
  	log.Info("%d lists loaded, %d domains, %d duplicated", len(fileList), len(o.lists), dups)
-@@ -439,13 +466,42 @@ func matchDomainGlob(pattern, host string) bool {
+@@ -439,13 +468,42 @@ func matchDomainGlob(pattern, host string) bool {
  	return true
  }
  
@@ -4807,10 +4817,10 @@ index 00000000..753b883d
 +}
 diff --git a/daemon/rule/operator_lists_confined.go b/daemon/rule/operator_lists_confined.go
 new file mode 100644
-index 00000000..fb9e8a46
+index 00000000..218924e5
 --- /dev/null
 +++ b/daemon/rule/operator_lists_confined.go
-@@ -0,0 +1,490 @@
+@@ -0,0 +1,496 @@
 +package rule
 +
 +import (
@@ -5160,12 +5170,17 @@ index 00000000..fb9e8a46
 +}
 +
 +// clearConfinedList empties o's list and returns its bytes, without the
-+// per-entry delete and GC of the upstream ClearLists.
++// per-entry delete and GC of the upstream ClearLists. A retired operator
++// keeps its snapshot: it is the never-mutated map now owned (and charged)
++// by its replacement, and an in-flight FindFirstMatch on the old rule set
++// must still match it.
 +func (o *Operator) clearConfinedList() {
 +	o.Lock()
 +	defer o.Unlock()
 +	o.lists = map[string]interface{}{}
-+	o.listSnapshot.Store(nil)
++	if !o.retired {
++		o.listSnapshot.Store(nil)
++	}
 +	o.releaseConfinedBytes()
 +	o.confinedSeen = confinedListState{}
 +}
@@ -5173,8 +5188,10 @@ index 00000000..fb9e8a46
 +// handOverConfinedList moves old's loaded list to next when both read the
 +// same bridge-owned list, so a replacement (or its fsnotify echo) is never
 +// empty and costs no reload. old is retired so a late reload of it can't
-+// swap a list in. The caller holds the loader lock; next's monitor has not
-+// started.
++// swap a list in. old keeps its snapshot (shared with next, never mutated)
++// so a FindFirstMatch still walking the old rule set cannot see the
++// blocklist empty while the loader publishes the new one. The caller holds
++// the loader lock; next's monitor has not started.
 +func handOverConfinedList(old, next *Operator) {
 +	// only a compiled operator gets a monitor (disabled rules are not
 +	// compiled); one without would hold the list and its bytes forever.
@@ -5188,7 +5205,6 @@ index 00000000..fb9e8a46
 +	next.lists, next.confinedBytes, next.confinedSeen = old.lists, old.confinedBytes, old.confinedSeen
 +	next.listSnapshot.Store(old.listSnapshot.Load())
 +	old.lists, old.confinedBytes, old.confinedSeen, old.retired = map[string]interface{}{}, 0, confinedListState{}, true
-+	old.listSnapshot.Store(nil)
 +	next.Unlock()
 +	old.Unlock()
 +	releaseBudget(stale)
@@ -5975,10 +5991,10 @@ index 00000000..7a7e00bd
 +}
 diff --git a/daemon/rule/operator_lists_confined_test.go b/daemon/rule/operator_lists_confined_test.go
 new file mode 100644
-index 00000000..1df1f82b
+index 00000000..da36c493
 --- /dev/null
 +++ b/daemon/rule/operator_lists_confined_test.go
-@@ -0,0 +1,858 @@
+@@ -0,0 +1,976 @@
 +package rule
 +
 +import (
@@ -6792,8 +6808,10 @@ index 00000000..1df1f82b
 +}
 +
 +// A compiled bridge-owned lists operator must match through the upstream
-+// list snapshot: domains by exact host, ips by canonical address. Both stop
-+// matching once the list is cleared, and a handover moves the match.
++// list snapshot: domains by exact host, ips by canonical address (IPv6, and
++// IPv4 in the 16-byte form netfilter produces). A handover shares the match
++// (the retired operator keeps it, also once its monitor clears it, and holds
++// no budget); the replacement stops matching once its list is cleared.
 +func TestConfinedListsMatchThroughCompile(t *testing.T) {
 +	dir := useSnitchwatchRoot(t)
 +	writeFile(t, dir+"/ads/domains/domains.list", "0.0.0.0 Blocked.Example\n0.0.0.0 *.wild.example\n")
@@ -6807,6 +6825,11 @@ index 00000000..1df1f82b
 +			conman.Connection{DstHost: "blocked.example"}, conman.Connection{DstHost: "a.wild.example"}},
 +		{OpIPLists, dir + "/ads/ips",
 +			conman.Connection{DstIP: net.ParseIP("2001:db8::1")}, conman.Connection{DstIP: net.ParseIP("192.0.2.8")}},
++		{OpIPLists, dir + "/ads/ips",
++			conman.Connection{DstIP: net.ParseIP("192.0.2.7")}, conman.Connection{DstIP: net.ParseIP("192.0.2.9")}},
++	}
++	if ip := cases[2].hit.DstIP; len(ip) != net.IPv6len {
++		t.Fatalf("IPv4 hit is %d bytes, want the 16-byte form netfilter produces", len(ip))
 +	}
 +	for _, c := range cases {
 +		o := &Operator{Type: Lists, Operand: c.operand, Data: c.data, deferMonitor: true}
@@ -6824,9 +6847,15 @@ index 00000000..1df1f82b
 +		if err := next.Compile(); err != nil {
 +			t.Fatalf("%s: %v", c.operand, err)
 +		}
++		used := budgetUsed()
 +		handOverConfinedList(o, next)
-+		if o.Match(&c.hit, false) || !next.Match(&c.hit, false) {
-+			t.Errorf("%s: handover did not move the match", c.operand)
++		if !o.Match(&c.hit, false) || !next.Match(&c.hit, false) {
++			t.Errorf("%s: handover did not share the match", c.operand)
++		}
++		o.ClearLists() // what the retired operator's exiting monitor does
++		if !o.Match(&c.hit, false) || !next.Match(&c.hit, false) || budgetUsed() != used {
++			t.Errorf("%s: clearing the retired operator dropped the match or the budget (%d of %d bytes)",
++				c.operand, budgetUsed(), used)
 +		}
 +		next.ClearLists()
 +		if next.Match(&c.hit, false) {
@@ -6836,6 +6865,111 @@ index 00000000..1df1f82b
 +	if used := budgetUsed(); used != 0 {
 +		t.Errorf("budget not released: %d", used)
 +	}
++}
++
++// deniedBy walks s as FindFirstMatch does and reports whether con is denied.
++func deniedBy(s *activeRulesSnapshot, con *conman.Connection) bool {
++	for _, r := range s.rules {
++		if r.Match(con, false) && (r.Action == Deny || r.Action == Reject) {
++			return true
++		}
++	}
++	return false
++}
++
++// Replacing a blocklist rule must not fail open for a FindFirstMatch that
++// loaded the old rule set before the replacement was published: it must
++// still deny a listed host, also after the replaced rule's monitor has
++// exited (and cleared it). Deterministic: the in-flight walk is replayed on
++// the captured old snapshot after the replacement completed.
++func TestBlocklistReplacementNeverFailsOpen(t *testing.T) {
++	blk := useSnitchwatchRoot(t)
++	useConfinedTimings(t, 10*time.Millisecond, 0)
++	writeFile(t, blk+"/ads/domains/domains.list", "0.0.0.0 blocked.example\n")
++	l := newTestLoader(t, false, t.TempDir())
++	const name = "z00-blocklist:ads:domains"
++	t.Cleanup(func() { l.Delete(name); waitSettled(t, "cleanup") })
++	if err := l.Replace(lifecycleRule(t, blk+"/ads/domains", true), false); err != nil {
++		t.Fatal(err)
++	}
++	waitFor(t, "list not loaded", func() bool { return numLists(&activeRule(l, name).Operator) == 1 })
++	hit := &conman.Connection{DstHost: "blocked.example"}
++	old, inFlight, used := activeRule(l, name), l.activeSnapshot.Load(), budgetUsed()
++	if !deniedBy(inFlight, hit) {
++		t.Fatal("loaded blocklist does not deny its host")
++	}
++	if err := l.Replace(lifecycleRule(t, blk+"/ads/domains", true), false); err != nil {
++		t.Fatal(err)
++	}
++	select {
++	case <-old.Operator.monitorDone:
++	case <-time.After(5 * time.Second):
++		t.Fatal("replaced rule's lists monitor did not exit")
++	}
++	if !deniedBy(inFlight, hit) {
++		t.Error("in-flight match on the replaced rule set let a blocklisted host through")
++	}
++	if !deniedBy(l.activeSnapshot.Load(), hit) {
++		t.Error("replacement rule set does not deny the blocklisted host")
++	}
++	if got := budgetUsed(); got != used {
++		t.Errorf("budget %d bytes after the replacement, want %d (charged once)", got, used)
++	}
++}
++
++// The upstream (non-bridge) ClearLists must unpublish the snapshot and
++// replace the map, never empty the map the lock-free matchers may still be
++// reading through the old snapshot.
++func TestUpstreamClearListsLeavesThePublishedMapIntact(t *testing.T) {
++	dir := t.TempDir()
++	writeFile(t, dir+"/hosts.list", "0.0.0.0 blocked.example\n")
++	o := readListsOnce(t, OpDomainsLists, dir)
++	if bridgeOwned(o.Data) {
++		t.Fatalf("%s is bridge-owned; this tests the upstream reader", o.Data)
++	}
++	s := o.listSnapshot.Load()
++	if s == nil || len(s.lists) != 1 {
++		t.Fatal("upstream list not loaded")
++	}
++	o.ClearLists()
++	if len(s.lists) != 1 {
++		t.Error("ClearLists emptied the published map in place")
++	}
++	if numLists(o) != 0 || o.listSnapshot.Load() != nil {
++		t.Error("ClearLists did not clear the operator")
++	}
++}
++
++// Run with -race: matchers read the upstream list while it is cleared and
++// reloaded (readLists clears first). An in-place clear is a data race, and
++// without -race may be a fatal concurrent map read and map write.
++func TestUpstreamListsReloadUnderConcurrentMatch(t *testing.T) {
++	dir := t.TempDir()
++	writeFile(t, dir+"/hosts.list", "0.0.0.0 blocked.example\n0.0.0.0 other.example\n")
++	o := &Operator{Type: Lists, Operand: OpDomainsLists, Data: dir, deferMonitor: true}
++	if err := o.Compile(); err != nil {
++		t.Fatal(err)
++	}
++	t.Cleanup(o.ClearLists)
++	o.readLists()
++	stop, done := make(chan struct{}), make(chan struct{})
++	go func() {
++		defer close(done)
++		con := &conman.Connection{DstHost: "blocked.example"}
++		for {
++			select {
++			case <-stop:
++				return
++			default:
++				o.Match(con, false)
++			}
++		}
++	}()
++	for i := 0; i < 200; i++ {
++		o.readLists()
++	}
++	close(stop)
++	<-done
 +}
 diff --git a/daemon/rule/rule_name_test.go b/daemon/rule/rule_name_test.go
 new file mode 100644

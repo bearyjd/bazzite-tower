@@ -5540,10 +5540,10 @@ index 00000000..b45b60f2
 +}
 diff --git a/daemon/rule/operator_lists_confined_lifecycle_test.go b/daemon/rule/operator_lists_confined_lifecycle_test.go
 new file mode 100644
-index 00000000..c92cc4dd
+index 00000000..f283fafd
 --- /dev/null
 +++ b/daemon/rule/operator_lists_confined_lifecycle_test.go
-@@ -0,0 +1,290 @@
+@@ -0,0 +1,324 @@
 +package rule
 +
 +import (
@@ -5567,16 +5567,50 @@ index 00000000..c92cc4dd
 +	if err != nil {
 +		t.Fatal(err)
 +	}
++	if live {
++		stopLiveReloadAtCleanup(t, l)
++	}
 +	if err := l.Load(dir); err != nil {
 +		t.Fatal(err)
 +	}
 +	return l
 +}
 +
++// stopLiveReloadAtCleanup stops l's rules watcher and waits for it to leave
++// its event loop, so no fsnotify event (e.g. the Remove a cleanup Delete
++// causes) is handled after useSnitchwatchRoot restores SnitchwatchRoot.
++// Registered after useSnitchwatchRoot, it runs before that restore and after
++// the test's own later cleanups. The send is unbuffered, so once it returns
++// the watcher reads nothing more.
++func stopLiveReloadAtCleanup(t *testing.T, l *Loader) {
++	t.Helper()
++	t.Cleanup(func() {
++		if l.isLiveReloadRunning() {
++			select {
++			case l.stopLiveReload <- struct{}{}:
++			case <-time.After(5 * time.Second):
++				t.Error("rules watcher did not stop")
++			}
++		}
++		l.watcher.Close()
++	})
++}
++
 +func activeRule(l *Loader, name string) *Rule {
 +	l.RLock()
 +	defer l.RUnlock()
 +	return l.rules[name]
++}
++
++// A live test loader's rules watcher has left its event loop once the test
++// that made it is done, so it cannot read package vars the test restores.
++func TestLiveTestLoaderStopsItsWatcher(t *testing.T) {
++	var l *Loader
++	t.Run("loader", func(t *testing.T) {
++		l = newTestLoader(t, true, t.TempDir())
++		waitFor(t, "rules watcher not running", l.isLiveReloadRunning)
++	})
++	waitFor(t, "rules watcher still running after its test", func() bool { return !l.isLiveReloadRunning() })
 +}
 +
 +// Disabling a loaded blocklist must not hand its list to the disabled rule,
@@ -7144,10 +7178,10 @@ index 00000000..4456f295
 +}
 diff --git a/daemon/rule/ui_blocklist_test.go b/daemon/rule/ui_blocklist_test.go
 new file mode 100644
-index 00000000..f0f5f5b8
+index 00000000..dcb75fdc
 --- /dev/null
 +++ b/daemon/rule/ui_blocklist_test.go
-@@ -0,0 +1,466 @@
+@@ -0,0 +1,460 @@
 +package rule
 +
 +import (
@@ -7572,13 +7606,7 @@ index 00000000..f0f5f5b8
 +	if err := os.Mkdir(rules, 0700); err != nil {
 +		t.Fatal(err)
 +	}
-+	l, err := NewLoader(true)
-+	if err != nil {
-+		t.Fatal(err)
-+	}
-+	if err := l.Load(rules); err != nil {
-+		t.Fatal(err)
-+	}
++	l := newTestLoader(t, true, rules)
 +	waitFor(t, "rules watcher not running", l.isLiveReloadRunning)
 +	time.Sleep(100 * time.Millisecond) // let it add the inotify watch
 +	const name = "z00-blocklist:ads:domains"

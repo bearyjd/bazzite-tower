@@ -113,7 +113,7 @@ the pinned native bridge version 0.1.1, system socket/service units and immutabl
 The r15.1 bridge/GUI source pin is `5c969a2e21dc7f5c976e7048aa9f95e5663c7de2`;
 its native bridge, wire protocol, packaging inputs and Flatpak permissions retain
 the r15 bytes.
-It also builds OpenSnitch 1.8.0 from the reviewed upstream pin plus the downstream
+It also builds OpenSnitch 1.9.0 (upstream a1353848, eBPF off: `proc` only) from the reviewed upstream pin plus the downstream
 queue-shutdown and NFT policy-ownership repair. A separate daemon manifest
 verifies the installed executable, repair patch, build inputs and licenses.
 OpenSnitch uses `unix:opensnitchd.sock` from `/run/snitchwatch` (upstream's

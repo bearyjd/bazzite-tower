@@ -53,13 +53,15 @@ build_files/build.d/ ─RUN────┘        │
 `build_files/build.d/95-firewall.sh` selects the firewall and the independent
 `SNITCHWATCH_BRIDGE=legacy|system` profile. Legacy remains the default: OpenSnitch
 1.8.0 uses TCP `127.0.0.1:50051` and the user bridge is separately installed.
-Both profiles retain `proc` and fail-open `allow`.
+Both profiles retain `proc` and fail-open `allow`; eBPF stays off (the image's
+BPF objects are the v1.8.0 RPM's and do not match the system 1.9.0 daemon).
 
 The opt-in system candidate consumes a pinned native build and stages units
 from the same Snitchwatch source. It supplies `/usr/bin/snitchwatch-bridge-cli`,
 root-only gRPC and GUI-group Unix sockets, sysusers/tmpfiles, licensing and an
 immutable installed-overlay manifest. The candidate separately compiles the
-reviewed OpenSnitch 1.8.0 shutdown/NFT ownership repair and records its source,
+OpenSnitch 1.9.0 (upstream a1353848, the bridge's `vendor/opensnitch` gitlink) with the
+reviewed shutdown/NFT ownership repair and records its source,
 patch, binary and licenses in a daemon manifest. OpenSnitch's relative Unix address is
 resolved from `/run/snitchwatch`; readiness/migration respect mutable `/etc`.
 The GUI remains per user and no account receives GUI membership implicitly.

@@ -43,6 +43,13 @@ UPSTREAM_RULE_RACE_FLAKES='^TestNewOperatorListsSimple$'
 # pristine commit too (each fails alone under -race, verified 2026-10-31).
 # They still run in the plain go test pass below.
 UPSTREAM_PROCMON_RACE_FAILURES='^(TestCacheEvents|TestCacheEvents2|TestCacheEventsUpdate|TestCacheEventsDeleteOldItems)$'
+# Upstream a1353848 netfilter tests that create NFQUEUE handles: they need
+# CAP_NET_ADMIN, which this harness drops on purpose (so the patch's
+# queue-permission test runs instead of skipping). On the pristine commit they
+# fail the same way without it ("unbinding existing q handler ... operation not
+# permitted", verified 2026-11-15). Skipped in every pass; the patch's own
+# netfilter tests and the unprivileged upstream ones still run.
+UPSTREAM_NETFILTER_PRIVILEGED='^(TestQueueCreation|TestPacketCapture|TestVerdictAccept|TestVerdictDrop|TestVerdictMark|TestMultipleQueues|TestConcurrentPacketHandling|TestProductionRules)$'
 # Upstream vet findings in the root and ui packages (an unbuffered
 # signal.Notify channel; protobuf messages copied by value; unkeyed protobuf
 # literals). Every other analyzer still runs on the patched packages.
@@ -208,16 +215,16 @@ run_tests() {
     go vet "${UPSTREAM_VET_FINDINGS[@]}" . ./ui ./rule ./procmon
     # Upstream's privileged nftables tests skip here (they need PRIVILEGED_TESTS
     # and namespace creation); the patch's own nftables tests run.
-    echo "== go test -race (root, netfilter, firewall/nftables, statistics, netlink)"
-    go test -count=1 -race . ./netfilter ./firewall/nftables ./statistics ./netlink
+    echo "== go test -race (root, netfilter, firewall/nftables, statistics, netlink; skipping privileged upstream netfilter tests: $UPSTREAM_NETFILTER_PRIVILEGED)"
+    go test -count=1 -race -skip "$UPSTREAM_NETFILTER_PRIVILEGED" . ./netfilter ./firewall/nftables ./statistics ./netlink
     echo "== go test -race ./procmon (skipping upstream race failures: $UPSTREAM_PROCMON_RACE_FAILURES)"
     go test -count=1 -race -skip "$UPSTREAM_PROCMON_RACE_FAILURES" ./procmon
     echo "== go test -race ./rule (skipping upstream timing flake: $UPSTREAM_RULE_RACE_FLAKES)"
     go test -count=1 -race -skip "$UPSTREAM_RULE_RACE_FLAKES" ./rule
     echo "== go test -race ./ui (skipping upstream race failures: $UPSTREAM_UI_RACE_FAILURES)"
     go test -count=1 -race -skip "$UPSTREAM_UI_RACE_FAILURES" ./ui
-    echo "== go test (no -race; includes the skipped ui tests)"
-    go test -count=1 . ./netfilter ./firewall/nftables ./statistics ./ui ./rule ./netlink ./procmon
+    echo "== go test (no -race; includes the skipped ui tests, not the privileged netfilter ones)"
+    go test -count=1 -skip "$UPSTREAM_NETFILTER_PRIVILEGED" . ./netfilter ./firewall/nftables ./statistics ./ui ./rule ./netlink ./procmon
     echo "PASS: OpenSnitch patch tests"
 }
 

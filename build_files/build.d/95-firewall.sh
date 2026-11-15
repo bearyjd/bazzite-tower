@@ -70,6 +70,9 @@ if [[ "${FIREWALL_DAEMON:-opensnitch}" == "opensnitch" ]]; then
     rm -f "/tmp/${opensnitch_rpm}"
     # The native Go build does not embed BPF objects; retain the RPM payload.
     # Packaging proof only: successful loading still needs an owner runtime test.
+    # These objects are v1.8.0. The system profile's source-built 1.9.0 daemon
+    # (OpenSnitch a1353848) is NOT a matched pair with them, so that profile is
+    # proc-only until matching modules ship (see docs/RUNBOOK.md eBPF section).
     python3 /usr/libexec/bazzite-tower-opensnitch-ebpf-check
 
     # Overwrite the RPM's default-config.json with the Snitchwatch-tuned one. This

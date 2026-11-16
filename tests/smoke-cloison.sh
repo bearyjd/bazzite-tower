@@ -17,7 +17,8 @@
 # vfio-pci.ids binding anywhere. The daily assertions themselves are
 # tests/smoke.sh, which the variant must also pass.
 #
-# UNVERIFIED against a built image (no image build in the scaffold PR).
+# VERIFIED 2026-11-16 against a real image built on an older local daily image
+# (not the current published one); re-verify after the parent changes.
 set -uo pipefail
 
 fail=0

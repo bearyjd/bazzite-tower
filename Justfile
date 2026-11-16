@@ -163,6 +163,8 @@ build-cloison $parent_image $parent_source_commit="unknown" $parent_profile="unk
         .
     # Host-side check: the recorded parent label must equal the digest we were given.
     label="$(podman inspect --format '{{ "{{" }} index .Config.Labels "io.github.bearyjd.cloison.parent" {{ "}}" }}' "${target_image}:${tag}")"
+    # A podman wrapper that goes through a pty (toolbox host-spawn) appends a CR; strip only that.
+    label="${label%$'\r'}"
     if [[ "${label}" != "${parent_image}" ]]; then
         echo "build-cloison: label io.github.bearyjd.cloison.parent is '${label}', expected '${parent_image}'" >&2
         exit 1

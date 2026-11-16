@@ -1,6 +1,6 @@
 # Cloison: Qubes-style compartments on KVM for bazzite-tower
 
-**Status:** PROPOSAL / design draft, rev 1 (2026-11-16; rev 0 was 2026-11-13). Nothing here has been built or tested on the machine yet. "Cloison" (French for a partition or bulkhead) is a working name, and the owner can change it.
+**Status:** PROPOSAL / design draft, rev 2 (2026-11-16; rev 1 earlier the same day, rev 0 was 2026-11-13). Nothing here has been built or tested on the machine yet. "Cloison" (French for a partition or bulkhead) is a working name, and the owner can change it.
 **Proposed location:** `docs/prp/cloison-kvm-compartments.md`
 **Target:** ThinkPad P1 Gen 7 (Core Ultra 9 185H / Meteor Lake, RTX 4070 Max-Q on the open modules, Intel BE200, s2idle only)
 **Decided by owner:** this is a **separate bootc image** in a **separate repository**, `ghcr.io/bearyjd/bazzite-tower-cloison` (D1), built from this repo and **built locally only until M3** (D5). It is not a mode or layer switch inside the daily-driver image. `:latest` stays untouched until the variant is proven.
@@ -23,6 +23,15 @@
 | 11 | M | KSM launch-time only; core scheduling too narrow | §5.4: KSM enforced for the whole run with per-process audit; full scheduling trust group; SMT exclusion kept explicit (D7) |
 | 12 | H | Roadmap gates contradictory | §8 reordered: M0 = preliminary topology only, hardware acceptance gates H-net/H-usb inside M9/M13, suspend rows split by device, M1 local only, §10.2 milestone-specific smoke contracts |
 | 13 | M | Daily-image identity not established | §4.1 `cloison/parent.lock` (digest + source commit + profile + how verified); input identity defined by tree hashes, not output digests; M14 gets its own assertion contract (D10) |
+
+### Rev 2 changelog: answers to the Codex re-critic of rev 1 (REWORK, 4 HIGH, PR #204)
+
+| # | Sev | Finding (short) | Answered in |
+|---|---|---|---|
+| R1 | H | Digest-pinned install makes `bootc upgrade` a silent no-op | §4.3 Operations 2 and 4: every Cloison update is a new `cosign verify` + `bootc switch --enforce-container-sigpolicy …@sha256:<new>`; return-to-daily ends on daily's signed tracking tag; §5.10, §4.2; signed tracking tag offered as D13 |
+| R2 | H | vsock isolation observational; listener check only blocks new launches | §5.11 B2: unproven backend gets **no vsock device** (helper-enforced, proof flag in the root allowlist, bound to VMM version); CH hybrid vsock only in v1, vhost-vsock only behind a host-wide bind restriction; tripwire stops **running** VMs |
+| R3 | H | Template records written by guest-facing `cloisond` become helper launch authority | §5.3 + §5.1: separate `cloison-template-installer` (own uid/unit, no guest-facing parser) verifies and writes records; `cloisond` cannot write them; §4.5, B1, M6, §9 |
+| R4 | H | Trust bootstrap circular (publish needs tests, tests need published image) | §4.4 split into three authorised steps: (a) publish non-bootable `trust-test-*` images, (b) bootstrap + tests against them, (c) only then publish the real image, with a pre-switch digest gate; §4.2, §8, D5, D14 |
 
 Accepted risks that remain (not fixed by design): host kernel/KVM/VMM escapes; a large desktop host TCB (KWin, Plasma, NVIDIA module); side channels beyond D7; BE200 Bluetooth on the host USB stack; firmware persistence across a VM restart. Each is in §2.
 
@@ -113,7 +122,7 @@ Accepted risks that remain (not fixed by design): host kernel/KVM/VMM escapes; a
                      └────────────┘  └────────────┘  └─────────────┘  └─────────────┘
    all guests: cloison-agent on vsock :5000 (RPC), waypipe server on vsock :5100 (GUI-capable only)
    design rule: no guest↔guest vsock; cross-domain data goes only through cloisond relays. This holds only on a
-   backend whose routing has been proven by the §5.11 B2 tests; unproven backends get no RPC at all (default deny)
+   backend whose routing has been proven by the §5.11 B2 tests; unproven backends get no vsock device at all (default deny)
 ```
 
 **Key choices**
@@ -169,7 +178,7 @@ Containerfile.cloison  (new)        ARG PARENT_IMAGE   # exact digest of the ima
 | Smoke | `tests/smoke.sh` | `just smoke-cloison` locally: `tests/smoke.sh` (every daily assertion), then `tests/smoke-cloison.sh` for the current milestone contract | same, as the CI gate |
 | Boot test | `boot-test.yml` → `tests/boot-check.sh` | local `podman run --systemd=always` with `tests/boot-check-cloison.sh` | the `boot-test.yml` harness |
 | VM-level | n/a | `tests/vm/*.sh` on the laptop | same (CI only if a KVM runner exists; *verify*) |
-| Publish | `release.yml` → cosign sign + SBOM | none | own candidate tag, cosign sign by digest with the same key, owner authorisation + `release` environment, **and** the §4.4 bootstrap done and its negative tests passed on the laptop |
+| Publish | `release.yml` → cosign sign + SBOM | none | three separately authorised steps (§4.4): (a) `trust-test-*` images only, (b) bootstrap + tests on the laptop, (c) only then the real image: own candidate tag, cosign sign by digest with the same key, `release` environment. Each release records its digest; the laptop moves to it by a verified digest switch (§4.3 Operation 2), never by `bootc upgrade` |
 
 The publish leg is added only in the M3 PR. Adding it changes a workflow, so it needs the owner's explicit release authorisation (`docs/release-playbook.md`).
 
@@ -184,23 +193,30 @@ The publish leg is added only in the M3 PR. Adding it changes a workflow, so it 
 **Operation 0: record and pin daily (once, before the first switch).**
 ```bash
 rpm-ostree status --json | sudo tee /var/lib/cloison-daily-record.json   # the read is unprivileged; keep a printed copy too
-# record: booted deployment checksum, image ref + digest, version string shown in GRUB
+# record: booted deployment checksum, tracking image ref (tag) + digest, version string shown in GRUB
 sudo ostree admin pin <index-of-that-checksum>                  # index looked up from the same status output, not assumed 0
 ```
 The record lives outside `/var/lib/cloison/` so `cloison` tooling cannot overwrite it. The owner also writes the GRUB title/version string on paper, for Operation 5.
 
 **Operation 1: switch to Cloison.**
 - M1–M2 (local, D5): `sudo bootc switch --transport containers-storage localhost/bazzite-tower-cloison@sha256:<recorded>`. **No signature check applies to this transport.** Trust rests on "built on this machine from `parent.lock` by the owner", and the digest the owner switches to is the one `just build-cloison` printed. `--transport containers-storage` support on the installed bootc is *verify*.
-- From M3: `sudo bootc switch --enforce-container-sigpolicy ghcr.io/bearyjd/bazzite-tower-cloison@sha256:<digest>`. This is allowed only after §4.4 is done. Without §4.4 the repository falls through to the `docker` transport's `insecureAcceptAnything` fallback, and the switch would accept an unsigned image.
+- From M3: `sudo bootc switch --enforce-container-sigpolicy ghcr.io/bearyjd/bazzite-tower-cloison@sha256:<digest>`. This is allowed only after all three §4.4 steps are done, and only **from the booted deployment that received the bootstrap** (daily). A local Cloison deployment created in M1–M2 before the bootstrap lacks the scope, so `podman image trust show` must list the Cloison scope immediately before the switch. Without §4.4 the repository falls through to the `docker` transport's `insecureAcceptAnything` fallback, and the switch would accept an unsigned image.
 - Effect: a new deployment whose `/etc` is merged from daily's. Reboot.
 
-**Operation 2: upgrade Cloison.** `bootc upgrade` (registry, from M3) or a new local `switch` to the new digest (M1–M2). Before it, run `cloison state backup` (§4.5). Afterwards the rollback slot is the previous **Cloison**, not daily.
+**Operation 2: update Cloison (a new verified-digest switch, every time).** A deployment installed from `…@sha256:<digest>` tracks that digest only. `bootc upgrade` and `bootc upgrade --check` then report nothing new forever, so they are **not** used, and "no update found" from them means nothing.
+1. Learn the new digest from the release record (the publish job prints it; from M3).
+2. `cosign verify --key /etc/pki/containers/bazzite-tower-cosign.pub ghcr.io/bearyjd/bazzite-tower-cloison@sha256:<new>` passes, and the digest's `parent` label equals a `parent.lock` the owner accepts.
+3. `cloison state backup` (§4.5).
+4. `sudo bootc switch --enforce-container-sigpolicy ghcr.io/bearyjd/bazzite-tower-cloison@sha256:<new>`, reboot, and confirm with `bootc status` that the booted digest is `<new>`.
+- M1–M2 (local): the same, with `--transport containers-storage localhost/…@sha256:<new>` and step 2 replaced by "the digest `just build-cloison` printed".
+- Alternative (D13): switch once to a **signed tracking tag** (for example `:cloison-candidate`) under the enforced policy, after which `bootc upgrade` works. Default is the digest switch, because a tag lets whoever can push it choose what the laptop boots next.
+- Afterwards the rollback slot is the previous **Cloison**, not daily.
 
 **Operation 3: roll back Cloison.** `bootc rollback` returns to the previous Cloison deployment. `/var/lib/cloison` is **not** rolled back. The older daemon must read the newer state, or refuse to start (§4.5). Rolling back never restores template, volume or snapshot contents. Use `cloison state restore <backup>` for that.
 
 **Operation 4: return to daily (online).** In order of preference:
 1. If daily is the current rollback slot (no Cloison upgrade since the switch), use `bootc rollback`, then confirm with `rpm-ostree status` that the booted checksum equals the recorded one.
-2. Otherwise run `sudo bootc switch ghcr.io/bearyjd/bazzite-tower@sha256:<recorded or newer verified digest>`. This creates a **new** daily deployment whose `/etc` is merged from Cloison's. `/etc/cloison/` and `/etc/usbguard/` come along, inert, because daily ships neither consumer. This needs network: run `cloison net mode host` first (§5.5).
+2. Otherwise run `sudo bootc switch --enforce-container-sigpolicy <daily's recorded tracking ref>` (the signed tag daily normally follows, for example `ghcr.io/bearyjd/bazzite-tower:latest`, taken from the Operation 0 record), then confirm with `bootc status` that the booted digest equals a `cosign verify`-ed daily digest. **Do not** return to daily by `@sha256:` digest: that would pin daily and silently stop its own updates. This creates a **new** daily deployment whose `/etc` is merged from Cloison's. `/etc/cloison/` and `/etc/usbguard/` come along, inert, because daily ships neither consumer. This needs network: run `cloison net mode host` first (§5.5).
 3. Making the pinned deployment the default in place (`ostree admin set-default` or similar) is *UNVERIFIED* on this ostree version and is not part of the procedure until checked.
 
 **Operation 5: offline recovery from GRUB.** If Cloison does not boot to a usable session, pick the pinned daily entry by the recorded version string in the GRUB menu. Bazzite may hide the menu, and the key to reveal it on this laptop is *UNVERIFIED* (try Esc or Shift). That entry boots with daily's own `/etc` and kargs and ignores `/var/lib/cloison`. No VFIO binding survives a reboot. Then use Operation 4.2 to make daily the default. This path is drilled in M1 acceptance.
@@ -215,6 +231,11 @@ The record lives outside `/var/lib/cloison/` so `cloison` tooling cannot overwri
 
 ### 4.4 Signature-trust bootstrap for the new repository (owner-run, once, before the first remote switch at M3)
 
+**Order: three separately authorised steps, so nothing is circular.**
+- **(a) Test artifacts.** The owner authorises one publish of **test images only**, under the tag prefix `trust-test-*` in the real repository `ghcr.io/bearyjd/bazzite-tower-cloison`. Using the real repository is deliberate: a separate test repository would not exercise the real scope's `matchRepository` binding. Each test image is `FROM scratch` with one label file. It has no kernel or ostree commit, so a mistaken `bootc switch` to one fails. The set is `trust-test-unsigned`, `trust-test-otherkey` (signed with a throwaway key), `trust-test-wrongrepo` (the daily image's signature copied with `cosign copy`) and `trust-test-signed` (signed with the real key). Who pushes and signs them, and where (owner on the laptop, or a dispatch-only job in the M3 PR), is D14. No agent uses the local `cosign.key`.
+- **(b) Install trust and test.** Do steps 1–3 below on daily, then run the test table below against the `trust-test-*` tags. No real Cloison image is needed or exists yet.
+- **(c) Real image.** Only after (b) passes, the owner separately authorises publishing the real Cloison image (§4.2). Before the first remote switch, its digest must be accepted by `skopeo copy` under the installed policy and pass `cosign verify`. This is the pre-switch gate in §4.3 Operation 2, step 2.
+
 **Why it is needed.** The shipped `/etc/containers/policy.json` (from `system_files/usr/share/bazzite-tower/containers/policy.json`, installed by `15-signature-policy.sh`) has a `sigstoreSigned` scope only for `ghcr.io/bearyjd/bazzite-tower`. The top-level default is `reject`, but the `docker` transport keeps a `""` compatibility fallback of `insecureAcceptAnything`, and `tests/smoke.sh` asserts that fallback on purpose. Scopes match on repository path components, so `ghcr.io/bearyjd/bazzite-tower-cloison` is **not** covered today. A signature-"enforced" switch would accept anything. The daily deployment must trust the new repository **before** the first enforced switch, and an image cannot install its own trust.
 
 **What the owner runs (on the booted daily deployment):**
@@ -224,14 +245,15 @@ The record lives outside `/var/lib/cloison/` so `cloison` tooling cannot overwri
 
 A `cloison/bootstrap-trust.sh` script will do steps 1–3 and the tests below. The owner reviews and runs it, with sudo, interactively. No image, unit or CI job runs it.
 
-**Negative and positive tests (all must pass before the first remote switch):**
+**Negative and positive tests (step b; all must pass before step c is authorised):**
 | Test | Expect |
 |---|---|
-| Before the bootstrap: `podman image trust show` | the Cloison repository resolves to the default (`insecureAcceptAnything`). This proves the gap and that the test can see it |
-| After: an **unsigned** test tag in the Cloison repo, `skopeo copy docker://…cloison:unsigned-test dir:/tmp/x` | refused |
-| After: a tag **signed with a throwaway key** | refused |
-| After: the daily image signed for `bazzite-tower`, re-pushed under the Cloison repo | refused (`matchRepository` binds the signed identity) |
-| After: the real signed Cloison digest | accepted |
+| Before the bootstrap: `podman image trust show`, and `skopeo copy docker://…cloison:trust-test-unsigned dir:/tmp/x` | default (`insecureAcceptAnything`) and **accepted**. This proves the gap and that the test can see it |
+| After: `trust-test-unsigned` | refused |
+| After: `trust-test-otherkey` | refused |
+| After: `trust-test-wrongrepo` | refused (`matchRepository` binds the signed identity) |
+| After: `trust-test-signed` | accepted (a test image, not the real one) |
+| After: `bootc switch` to `trust-test-signed` | fails (non-bootable by construction) |
 
 **Consequences, stated honestly.**
 - Once `policy.json` is locally modified, the 3-way merge keeps the local file. **Later daily-image changes to `policy.json` stop landing** on this machine until it is reverted. `tests/smoke.sh` checks only the policy shipped in the image, so it cannot see this host-side drift. Mitigation: the bootstrap script prints a diff between the image default and `/etc` on every run. M3 also decides whether the Cloison scope moves **into the daily image's** `policy.json` through a normal reviewed PR. That retires the exception (D11).
@@ -242,9 +264,9 @@ A `cloison/bootstrap-trust.sh` script will do steps 1–3 and the tests below. T
 
 | State | Survives OS rollback? | Rule |
 |---|---|---|
-| `state-version` + daemon DB (domain registry, template records, grants log) | yes (shared `/var`) | **major.minor** schema. A daemon reads N and N-1. Minor bumps are additive only. A daemon that finds a **newer major** starts read-only (lists, no launches) and says so. Migrations write N only after `cloison state backup` succeeds |
+| `state-version` + daemon DB (domain registry, grants log). Template records are **not** here: they belong to the installer (§5.3) | yes (shared `/var`) | **major.minor** schema. A daemon reads N and N-1. Minor bumps are additive only. A daemon that finds a **newer major** starts read-only (lists, no launches) and says so. Migrations write N only after `cloison state backup` succeeds |
 | Private volumes `domains/<name>/private.img` | yes | never migrated by the host. `cloison state backup` takes a reflink copy (`cp --reflink=always`; behaviour on `chattr +C` files is *verify*) before every Cloison upgrade and keeps 2 |
-| Pulled templates `templates/<name>/<digest>/` | yes | content-addressed, so an older daemon simply sees extra digests. Records carry their schema version |
+| Pulled templates `templates/<name>/<digest>/` + records `template-records/` | yes | content-addressed, so an older daemon simply sees extra digests. Owned by `cloison-tinst` (§5.3); `cloisond` has read-only access. Records carry their schema version |
 | Snapshots `snapshots/…` | yes, but **treated as cache** | keyed by template digest **and** VMM version. On any mismatch they are deleted, never restored |
 | Credentials `credentials/*.cred` | yes | sealed format versioned. Re-seal after a PCR change (§5.9) |
 
@@ -257,7 +279,8 @@ A `cloison/bootstrap-trust.sh` script will do steps 1–3 and the tests below. T
 | Process | Runs as | Responsibilities | Exposure |
 |---|---|---|---|
 | `cloison-helper` | root, socket-activated, tiny | VFIO bind/unbind (`driver_override`), tap/bridge/veth in the `cloison` netns, starting `cloison-vm@` transient units, fs-verity checks, USB authorize/redirect | varlink socket readable only by the `cloison` group; verbs take a **domain name + generation only** and resolve everything else from root-owned config (§5.11 B1) |
-| `cloisond` | system user `cloison`, seccomp, `ProtectSystem=strict` | domain registry (`domains.d`), policy engine, vsock RPC relay, template store, secrets injection, logind delay inhibitor | system bus `io.github.bearyjd.Cloison1` with polkit actions per method; vsock to guests |
+| `cloisond` | system user `cloison`, seccomp, `ProtectSystem=strict` | domain registry (`domains.d`), policy engine, vsock RPC relay, template **listing** (read-only), secrets injection, logind delay inhibitor | system bus `io.github.bearyjd.Cloison1` with polkit actions per method; vsock to guests |
+| `cloison-template-installer` (M6) | system user `cloison-tinst`, own socket-activated unit, `ProtectSystem=strict`, network only to the registry | pulls, verifies, extracts and atomically installs pulled templates; sole writer of `/var/lib/cloison/templates/` and `template-records/` (§5.3) | varlink socket for the CLI only, every call gated by polkit admin auth. **No vsock, no guest-facing parser, no connection from `cloisond`** |
 | `cloison` | user | CLI (`cloison ls/start/stop/run/copy/usb/net/template/policy check`) | calls D-Bus |
 | `cloison-session` | user service in Plasma | tray (SNI), KRunner D-Bus runner, trusted prompts, notification forwarding, clipboard hotkeys, per-domain `waypipe` client and `cloison-wlproxy` units | session bus only |
 
@@ -342,13 +365,15 @@ cloison.Exec              *      @anyvm            @anyvm               deny
 - **Image-baked templates.** Service templates (`sys-net`, `sys-firewall`, `sys-usb`, guest kernel) are baked into the variant at `/usr/lib/cloison/templates/`. So are `app-base` and `app-browser` **until M6**. They are covered by the host image's identity and by ostree/composefs `/usr` integrity. That identity is the recorded local digest in M1–M2 and the cosign signature from M3. They update atomically with the host. This is the template trust that M2–M5 rely on, and nothing in those milestones pulls a template.
 - **Pulled templates (M6 onward):** `app-*` and `dev` with their own cadence, via `cloison template pull`.
 
+**Who does it: a separate trusted installer, not `cloisond`.** `cloisond` parses guest-controlled input and is assumed compromisable (§5.11), so it must not create the records the helper trusts. `cloison template pull <name>@<digest>` goes from the CLI straight to `cloison-template-installer` (§5.1): its own uid `cloison-tinst`, its own unit, polkit admin auth per call, no vsock, no D-Bus path from `cloisond`, and no parser of anything a guest wrote. The request carries only a name and a digest. Repository, key and policy come from the installer's root-owned config in the image. Steps 1–5 run inside the installer. Only the installer uid can write `templates/` and `template-records/`; `cloisond` and the VMMs read them only.
+
 **Pulled-template trust chain (M6; every step must pass, otherwise nothing is installed):**
 1. **Signer and repository.** `skopeo copy` with a **Cloison-only** `--policy /usr/share/cloison/containers/policy.json`. Its default is `reject` with no `insecureAcceptAnything` fallback anywhere, and its scope is exactly `ghcr.io/bearyjd/cloison-templates/<name>` with `matchRepository` and the pinned key. It is never run under the shared `/etc/containers/policy.json`, which keeps an unsigned fallback for `docker`.
 2. **Digest.** The pull is by digest, resolved from the signed tag. The OCI manifest digest is covered by the signature. `manifest.json` lives **inside** the signed layer, so replacing it changes the digest.
 3. **Safe extraction** into `/var/lib/cloison/templates/.staging-<txid>/`. Only the fixed file names (`rootfs.erofs`, `vmlinux`|`bzImage`, `initramfs`, `manifest.json`) are accepted, as regular files. Links, devices and extra entries are refused. The extractor runs with `openat2(RESOLVE_BENEATH|RESOLVE_NO_SYMLINKS)`, `O_EXCL`, and per-file and total size caps.
 4. **Payload binding.** The sha256 of each extracted file equals the manifest entry. Then fs-verity is enabled and its digest recorded. Whether fs-verity works on the pinned btrfs is *verify*.
-5. **Atomic install.** The staging directory is renamed to `<name>/<digest>/`. A root-owned record holds `{oci_digest, signer_key_id, repo, manifest_sha256, file fs-verity digests, version, created}`.
-6. **Launch check.** The helper compares the fs-verity digests of kernel, initramfs and rootfs to the record before handing their fds to the VMM.
+5. **Atomic install.** The staging directory is renamed to `<name>/<digest>/`. The installer then writes the record `template-records/<name>/<digest>.json` (temp file + `rename`), owned by `cloison-tinst`, mode 0444, holding `{oci_digest, signer_key_id, repo, manifest_sha256, file fs-verity digests, version, created}`. Whether an unprivileged uid can enable fs-verity on its own files on the pinned kernel/btrfs is *verify*; if not, the installer runs as root with the same isolation.
+6. **Launch check (helper).** The helper accepts a record only if the file and every directory above it are owned by `cloison-tinst` or root, not group/world writable, and the name and digest match the allowlisted template (B1). It then compares the fs-verity digests of kernel, initramfs and rootfs to the record before handing their fds to the VMM. A record failing any check refuses the launch and is logged.
 
 **Template lifecycle policy.**
 - **Downgrade:** a pull with a lower manifest `version` than the highest seen for that name is refused unless `--allow-downgrade` is given with polkit admin auth.
@@ -519,8 +544,8 @@ backend = ["vfio", "host-netns"]                    # tried in order
 
 ### 5.10 Update model
 
-- **Host and service templates:** a local switch to a new digest (M1–M2), or `bootc upgrade` of the variant tag (from M3). The parent moves only through `parent.lock`. Rollback and return-to-daily follow the operations in §4.3, with the state rules in §4.5.
-- **App templates:** `cloison template pull` keeps N=3 digests. Disposables use the newest on next launch; persistent domains pick up a new template on restart (TemplateVM model). Rollback is `cloison template use <name>@<digest>`.
+- **Host and service templates:** every update is a new verified-digest switch (§4.3 Operation 2), locally in M1–M2 and from the registry from M3. `bootc upgrade` is a no-op on a digest-pinned deployment and is not used unless D13 picks a signed tracking tag. The parent moves only through `parent.lock`. Rollback and return-to-daily follow the operations in §4.3, with the state rules in §4.5.
+- **App templates:** `cloison template pull` (through the installer, §5.3) keeps N=3 digests. Disposables use the newest on next launch; persistent domains pick up a new template on restart (TemplateVM model). Rollback is `cloison template use <name>@<digest>`.
 - **Daemon:** ships in the variant image (pinned build), so it updates and rolls back with the host.
 
 ### 5.11 Enforceable boundaries (normative; each is a gate for the milestone named, specified before code)
@@ -529,14 +554,18 @@ backend = ["vfio", "host-netns"]                    # tried in order
 
 **B1. Helper allowlist (M2).** `cloison-helper` (root) is the only process with device, unit or credential authority.
 - **Verb inputs** are `{domain, generation}` and, for USB, a device handle the helper itself issued. Never a path, BDF, unit property, kernel cmdline, credential file or template path.
-- **Root-owned allowlist.** The helper resolves everything from root-owned files: `/usr/share/cloison/helper-allowlist.toml` (image) plus `/etc/cloison/helper.d/*.toml`. It refuses to load any file not owned by root with mode `0644` or stricter. The allowlist maps domain → permitted template names, device match rules (vendor:device + topology path, re-resolved and re-checked against the IOMMU group at each call), credential ids and resource caps.
+- **Root-owned allowlist.** The helper resolves everything from root-owned files: `/usr/share/cloison/helper-allowlist.toml` (image) plus `/etc/cloison/helper.d/*.toml`. It refuses to load any file not owned by root with mode `0644` or stricter. The allowlist maps domain → permitted template names, device match rules (vendor:device + topology path, re-resolved and re-checked against the IOMMU group at each call), credential ids, resource caps, and the vsock proof flag per backend (B2). Templates resolve only to image-baked paths under `/usr/lib/cloison/templates/` or to installer-owned records (§5.3 step 6), never to anything `cloisond` wrote.
 - **Transient units** come from one fixed template in the helper. `cloisond` cannot pass properties. The VMM runs with `DynamicUser=`, `DeviceAllow=` only for the resolved `/dev/vfio/<group>`, seccomp and `LimitCORE=0`.
 - **Interface versioning.** The varlink interface is versioned (`io.github.bearyjd.cloison.Helper1`). Unknown fields are rejected. Helper and daemon ship in the same image, and a version mismatch refuses service.
 - **Test (M2):** a fuzzed client on the helper socket. Verbs naming an unlisted domain or device, a path-like string or an extra property are all refused, and the refusal is logged.
 
 **B2. vsock identity and transactions (M2).**
-- **Backend proof before use.** For each backend (CH hybrid Unix-socket vsock, or kernel vhost-vsock with QEMU), an M2 test from inside a guest tries three things: connecting to another guest's CID; connecting to every host port 1–65535 except the agent and daemon ports; and spoofing a source CID. Each must fail. A backend that has not passed gets **no RPC** (default deny), and the domain runs without data crossing.
-- **Host listener inventory.** At start and every 60 s, `cloisond` lists host `AF_VSOCK` listeners (`ss --vsock -l`). Anything that listens on `VMADDR_CID_ANY` other than Cloison's own sockets blocks new launches until the owner acknowledges it.
+- **Backend proof before use.** For each backend (CH hybrid Unix-socket vsock, or kernel vhost-vsock with QEMU), an M2 test from inside a guest tries three things: connecting to another guest's CID; connecting to every host port 1–65535 except the agent and daemon ports; and spoofing a source CID. Each must fail.
+- **Unproven backend ⇒ no vsock device at all (default deny by construction, helper-enforced).** The proof result is a flag in the root-owned image allowlist (B1), bound to the pinned VMM name and version, so a VMM bump clears it until the test is re-run and the image rebuilt. The helper's fixed unit template adds the vsock device (`--vsock` for CH, `vhost-vsock-pci` for QEMU) **only** when the flag is set. Without it the guest has no vsock transport, not merely no RPC. That also means no agent and no GUI, so **M2 acceptance is blocked** until one backend passes; there is no degraded "run without data crossing" mode.
+- **Backend rules for new host listeners, including while VMs run.**
+  - **CH hybrid vsock (the only v1 backend by default).** A guest connect to port P is terminated by the VMM as a connect to the Unix socket `<vsock-path>_P`. Kernel `AF_VSOCK` listeners on the host are therefore unreachable from the guest, whenever they appear. The per-VM directory holding `<vsock-path>` is created by the helper, owned by root, and writable only by `cloisond`'s uid. The VMM's `DynamicUser` and every other host process cannot add a `_P` socket, so no new listener becomes reachable from a running VM either. The exact path layout on the pinned CH is *verify*.
+  - **QEMU vhost-vsock** (kernel transport: any host process binding `VMADDR_CID_ANY` is reachable from every guest, and netfilter does not apply). It is allowed only if a host-wide bind restriction is in place and proven: an SELinux `vsock_socket` rule or a BPF-LSM program letting only `cloisond` bind `AF_VSOCK` (*verify* which is enforceable on this kernel and policy). Without it, QEMU domains get no vsock device (rule above).
+  - **Tripwire, not the control.** Every 10 s the helper lists host `AF_VSOCK` listeners (`ss --vsock -l`). A non-Cloison listener stops **running** vhost-vsock VMs (not just new launches) and refuses new ones. An owner acknowledgement does not re-enable them while that listener exists.
 - **Generation-bound identity.** Each launch gets a 128-bit generation id. The CID→generation map is held by the helper. A CID is reused only after the old VMM is reaped and a 30 s quarantine has passed. A connection whose CID has no live generation is dropped.
 - **Single-use transaction tokens.** An allowed call mints a token bound to `(service, arg, src generation, dst generation, byte cap)`. It expires in 30 s and is consumed on first use. Data streams must present it as their first frame. Token replay, wrong generation or expiry drops the stream. This rule is enforced by `cloisond`, so a compromised `cloisond` breaks it; that is accepted, see §2.
 
@@ -630,25 +659,25 @@ backend = ["vfio", "host-netns"]                    # tried in order
 
 Record each acceptance run in `docs/research/iommu-groups-p1g7-<date>.md`, using the same template as the i915 investigation.
 
-## 8. Phased roadmap (rev 1 order)
+## 8. Phased roadmap (rev 2 order)
 
 `:latest` is never touched by any milestone. Every milestone ships only in the **variant**. Its acceptance includes the §4.3 return-to-daily drill (Operation 4) and its own smoke contract (§10.2). Rollback names the operation used. Risk scale: L (low), M (medium), H (high).
 
 **Gates that cut across milestones:**
 - **Template trust:** M2–M5 use only image-baked templates (§5.3). Pulled templates come in M6.
 - **Hardware:** every passthrough milestone opens with its §7 acceptance gate (H-net in M9, H-usb in M13). M0 decides nothing.
-- **Publishing (D5):** local builds only through M2. M3 is the earliest publish, after owner release authorisation and the §4.4 bootstrap with its negative tests.
+- **Publishing (D5):** local builds only through M2. From M3, three separate owner authorisations in order (§4.4): (a) publish `trust-test-*` images only; (b) bootstrap + tests against them; (c) publish the real image. The first remote switch follows (c) and the pre-switch digest gate. Every later update is a verified-digest switch (§4.3 Operation 2).
 - **Suspend:** suspend rows are split by implemented device (§10.5).
 
 | # | Milestone | Deliverables | Acceptance tests | Rollback | Risk |
 |---|---|---|---|---|---|
 | **M0** | Preliminary topology (**done, partial**) | `scripts/cloison-hw-report.sh`, `docs/research/iommu-groups-p1g7-2026-11-16.md` (non-root) | script shellcheck-clean; snapshot committed with no secrets. **Decides nothing**: D3/D4 wait for H-net/H-usb | none needed (read-only) | L |
 | **M1** | Variant scaffold, **local only** | `Containerfile.cloison`, `cloison/parent.lock`, `cloison/build.sh` + `build.d/`, packages (`cloud-hypervisor`, `erofs-utils`, `waypipe`, `virtiofsd`, `usbguard` disabled; each *verify* availability), `just build-cloison` / `just smoke-cloison`, `tests/smoke-cloison.sh` with the M1 contract, isolation test, RUNBOOK "Cloison variant" with §4.3 Operations 0–5 | local build on the recorded parent; variant passes `tests/smoke.sh` + M1 contract; isolation test (input identity, §4.1); on the laptop: Operation 0, local switch (Operation 1), boot, **Operation 4 and Operation 5 both drilled**, `tower-health` green both ways. No CI image build, no push | §4.3 Operation 4/5 | L |
-| **M2** | Daemon + enforced boundaries + headless disposable | `cloisond`/`cloison-helper`/CLI v0, **B1 allowlist**, **B2 backend proof + generations + tokens**, B4 quota mechanism, **sanitiser crate + fuzz targets**, `cloison state backup/restore` + schema v1 (§4.5), D-Bus + polkit, policy parser + `policy check`, netns `cloison`, **image-baked** `app-base`, agent `Ping`/`Exec`/`Shutdown` | `cloison run --disp app-base -- uname -a` round-trips; B1 fuzz refusals; B2 guest-to-guest, host-port and spoof attempts fail; VM→VM `Exec` denied; nothing left in `/run/cloison` after kill; KSM refuse + runtime watch (§5.4); state backup/restore round-trip; older-daemon read-only on newer major | stop/disable `cloisond`; Operation 3 | M |
-| **M3** | GUI + interim network (+ earliest publish gate) | waypipe/vsock, `cloison-wlproxy` with **B6 sandbox** and sanitised titles, KWin colour script, `.desktop` + KRunner, **image-baked** `app-browser`, interim netns NAT + per-domain nftables (D8). Optional, only with owner release authorisation: publish leg + §4.4 bootstrap | B6 compromise-equivalent test; `[disp-browser]` prefix and border; app_id/title spoofing rewritten; fullscreen denied; `wl_data_device` unavailable; Docker enabled does not break VM networking; OpenSnitch readiness unchanged; **if publishing:** all §4.4 negative tests pass before the first remote switch | disable `cloison-session`; Operation 3/4 | M |
+| **M2** | Daemon + enforced boundaries + headless disposable | `cloisond`/`cloison-helper`/CLI v0, **B1 allowlist**, **B2 backend proof + generations + tokens**, B4 quota mechanism, **sanitiser crate + fuzz targets**, `cloison state backup/restore` + schema v1 (§4.5), D-Bus + polkit, policy parser + `policy check`, netns `cloison`, **image-baked** `app-base`, agent `Ping`/`Exec`/`Shutdown` | `cloison run --disp app-base -- uname -a` round-trips; B1 fuzz refusals; B2 guest-to-guest, host-port and spoof attempts fail (CH hybrid vsock); with the proof flag unset the VMM has no vsock device; a host `AF_VSOCK` listener and a foreign `_P` socket started **after** a VM is running stay unreachable from it; VM→VM `Exec` denied; nothing left in `/run/cloison` after kill; KSM refuse + runtime watch (§5.4); state backup/restore round-trip; older-daemon read-only on newer major | stop/disable `cloisond`; Operation 3 | M |
+| **M3** | GUI + interim network (+ earliest publish gate) | waypipe/vsock, `cloison-wlproxy` with **B6 sandbox** and sanitised titles, KWin colour script, `.desktop` + KRunner, **image-baked** `app-browser`, interim netns NAT + per-domain nftables (D8). Optional, only with owner authorisation for each of §4.4 (a), (b), (c): `trust-test-*` publish, bootstrap, then publish leg | B6 compromise-equivalent test; `[disp-browser]` prefix and border; app_id/title spoofing rewritten; fullscreen denied; `wl_data_device` unavailable; Docker enabled does not break VM networking; OpenSnitch readiness unchanged; **if publishing:** all §4.4 tests pass against `trust-test-*` before the real image is published; the real digest passes the pre-switch gate; a second release reaches the laptop by Operation 2 (digest switch), proving updates are not silent no-ops | disable `cloison-session`; Operation 3/4 | M |
 | **M4** | Explicit data crossing | B3 clipboard grants, B5 FileCopy, `OpenURL`/`OpenInDisp` with B4 quotas, `Notify`, trusted prompts | offer without grant dropped; paste to unfocused domain refused; 2 MiB clipboard refused; hardlink/symlink/device/`../` entries refused and partial dir removed; launch quota trips to `ask`; fuzzers 10 min clean | policy reverts to deny-all for the new services | M |
 | **M5** | Fast launch + memory hygiene + Kata spike | **never-used pool** (default); snapshot/restore only behind the §5.4 restore barrier (opt-in); balloon free-page reporting; KSM/THP audit; scheduling trust group if D7 | launch-to-window time measured (no number promised); pool VMs are single-use; if snapshots are enabled: barrier blocks RPC/net until reseed, and two restores differ in `getrandom()`, machine-id and fresh keys; `ksm_merging_pages` 0 for every VMM | `snapshot=false` (pool only) | M |
-| **M6** | Pulled-template pipeline | `cloison/guests/*`, `guest-templates.yml` (needs owner approval as a workflow change), Cloison-only signature policy, §5.3 chain (extract → bind → atomic install → launch check), downgrade/revocation/age policy, SBOM | unsigned, other-key, wrong-repo, tampered-manifest, extra-file and symlink templates refused; fs-verity mismatch refuses launch; downgrade refused without admin auth; revoked digest refused | `cloison template use <old digest>` | M |
+| **M6** | Pulled-template pipeline | `cloison/guests/*`, `guest-templates.yml` (needs owner approval as a workflow change), **`cloison-template-installer`** (own uid/unit, §5.3), Cloison-only signature policy, §5.3 chain (extract → bind → atomic install → launch check), downgrade/revocation/age policy, SBOM | unsigned, other-key, wrong-repo, tampered-manifest, extra-file and symlink templates refused; fs-verity mismatch refuses launch; downgrade refused without admin auth; revoked digest refused; a record written by the `cloison` uid (stand-in for compromised `cloisond`) refused by the helper; installer reachable only with polkit admin auth | `cloison template use <old digest>` | M |
 | **M7** | Persistent `dev` VM | `dev` template, private volume (backed up per §4.5), `cloison exec dev` + tmux (D9), migration doc; **distrobox kept** | one week of parallel use; 2–3 owner repos build/test inside `dev`; no host secrets that `dev` needs; GUI editor via waypipe | keep the distrobox; volume is a file | M |
 | **M8** | `sys-firewall` VM | template, §5.5 topology, per-domain rules, DNS | app VMs reach the internet only via `sys-firewall`; no app↔app path; restart restores within N s | domains point back to interim NAT | M |
 | **M9** | `sys-net` spike (manual; **H-net gate first**) | §7.1 evidence capture (with sudo), §7.2 steps 1–7 for the BE200, `cloison net try`, BE200 modprobe copy + `cmp` test, recovery-uplink port check | all §7.2 steps pass, or the BE200 is recorded as FALLBACK (D3); the reset proof is empirical; **no automatic reclaim** exists | stop `sys-net`; cold boot (no persistent binding) | **H** |
@@ -674,6 +703,7 @@ cloison/
   guests/{app-base,app-browser,dev,sys-net,sys-firewall,sys-usb}/Containerfile
   guests/sys-net/etc/modprobe.d/iwlwifi-be200-stability.conf   # cmp-identical to system_files copy
   system_files/usr/lib/systemd/system/{cloisond.service,cloisond.socket,cloison-helper.socket,cloison-helper@.service,cloison-vm@.service,cloison-netns.service}
+  system_files/usr/lib/systemd/system/cloison-template-installer.{socket,service}   # M6; own uid cloison-tinst (§5.3)
   system_files/usr/lib/systemd/user/cloison-session.service, cloison-wlproxy@.service, cloison-waypipe@.service
   system_files/usr/lib/systemd/system-sleep/bazzite-tower-cloison-vfio-guard
   system_files/usr/lib/sysusers.d/cloison.conf
@@ -774,7 +804,7 @@ renovate.json: guest Fedora digests, cloud-hypervisor pin
 | **D2** | Daemon in a separate repo or vendored; D-Bus prefix | Partial: maintainer = owner. Signing ownership, release cadence and the vendoring cost are not yet weighed | separate AGPL-3.0 repo `bearyjd/cloison`, consumed by sha256-pinned tarball (snitchwatch pattern); prefix `io.github.bearyjd` |
 | **D3** | BE200: passthrough vs `host-netns` | **No.** Needs §7.1 interrupt remapping, the empirical reset proof (4b), the soak, S3/S4/S7 and the recovery-port check | **`host-netns` (a recorded downgrade) until M9 passes every §7.2 step.** No passthrough by default |
 | **D4** | `sys-usb` xHCI passthrough vs USBGuard redirect | **No**, but the M0 topology points one way: both xHCI groups contain an endpoint a VM should not own, and neither exposes `reset_method` | **USBGuard fallback** (M12 is the end state); M13 only if new evidence passes §7.2 |
-| **D5** | CI publishing vs local builds | **Decided 2026-11-16** | local builds only until M3. Publishing then needs owner release authorisation, the publish-leg workflow PR and the §4.4 bootstrap with its negative tests |
+| **D5** | CI publishing vs local builds | **Decided 2026-11-16** | local builds only until M3. Publishing then needs three separate owner authorisations (§4.4 a/b/c: test images, bootstrap + tests, real image) and the publish-leg workflow PR |
 | **D6** | Drop `iommu=pt` (variant only, by replacing `00-iommu.toml`); strict invalidation | **No.** Needs §7.1 domain types, invalidation mode, TB tunnel behaviour and a week of iwlwifi/NVIDIA regression evidence on this machine | keep `iommu=pt` (inherited); record the evidence in M9; revisit after |
 | **D7** | SMT: `nosmt`, core scheduling for the full trust group, or accept | Partial: the risk is explained; core-scheduling support for the full group (vhost workers) and workload cost are unmeasured | **accept the risk, stated in §2**, until M5 measures the cost; no kargs change |
 | **D8** | Interim host-netns firewall (M3–M7) vs straight to the VM | Partial: the weaker parser exposure is stated; migration cost is small (a domain points back) | interim host-netns nftables, labelled weaker, replaced in M8 |
@@ -782,6 +812,8 @@ renovate.json: guest Fedora digests, cloud-hypervisor pin
 | **D10** | M14 slim host in scope; NVIDIA off the host | **No.** HDMI/display wiring, required host services and the M14 assertion contract are unknown | **out of scope** until M13 is closed; M14 needs its own approved contract |
 | **D11** (new) | Keep the §4.4 local `policy.json` exception, or move the Cloison scope into the daily image's `policy.json` | Yes, at M3 | **move it into the daily image** with a normal reviewed PR at M3, then revert the local edit (retires the only `/etc` exception and its drift) |
 | **D12** (new) | Numeric defaults: launch quotas (B4), memory reserve, template age warn/refuse (30/90 days), credential recovery copy | Yes | the values in §5.3, §5.9 and §5.11 as written; no host-key recovery copy unless opted in |
+| **D13** (rev 2) | Cloison updates: verified-digest switch per release, or a signed tracking tag with `bootc upgrade` | Yes | **digest switch** (§4.3 Operation 2): the owner picks each digest; a tag lets whoever can push it pick |
+| **D14** (rev 2) | Who pushes and signs the `trust-test-*` images, and where | Yes, before M3 | the owner, on the laptop, with the real key for `trust-test-signed` and a throwaway key for `trust-test-otherkey`; no agent uses `cosign.key` |
 
 ## 13. Prior art
 

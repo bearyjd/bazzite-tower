@@ -128,6 +128,7 @@ jobs:
           tests/check-supply-chain.sh
           tests/test-rpm-inventory-spdx.sh
           tests/test-firstboot-no-docker.sh
+          tests/test-docker-ce-gpg-pin.sh
           tests/test-tower-health.sh
           tests/test-opensnitch-readiness.sh
           tests/test-snitchwatch-system.sh
@@ -251,6 +252,7 @@ jobs:
           tests/check-supply-chain.sh
           tests/test-rpm-inventory-spdx.sh
           tests/test-firstboot-no-docker.sh
+          tests/test-docker-ce-gpg-pin.sh
           tests/test-tower-health.sh
           tests/test-opensnitch-readiness.sh
           tests/test-snitchwatch-system.sh

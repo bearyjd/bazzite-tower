@@ -26,7 +26,7 @@ any of it.
 |---|---|
 | `just build` | Build the container image locally with podman (adds `SHA_HEAD_SHORT` build-arg when the git tree is clean) |
 | `just smoke` | Offline-assert the built image — **this is the exact CI gate** run in `build.yml` before push (`tests/smoke.sh`) |
-| `just build-cloison <parent_image@sha256:…>` | Build the Cloison M1 scaffold variant locally from `Containerfile.cloison`; refuses a non-digest parent. Local only, no CI/publish (`docs/CODEMAPS/cloison.md`) |
+| `just build-cloison <parent_image@sha256:…>` | Build the Cloison M1 scaffold variant locally from `Containerfile.cloison`; refuses a non-digest parent and verifies the parent label. Local only, no CI/publish (`docs/CODEMAPS/cloison.md`) |
 | `just smoke-cloison` | Offline-assert the built Cloison image with the M1-specific `tests/smoke-cloison.sh`; not a CI gate |
 | `just build-qcow2` | Turn the image into a bootable qcow2 via bootc-image-builder (needs sudo + KVM + tens of GB free) |
 | `just run-vm-qcow2` | Boot the qcow2 in qemu; browser console at `localhost:8006` |

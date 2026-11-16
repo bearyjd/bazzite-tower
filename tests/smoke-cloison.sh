@@ -37,26 +37,39 @@ check "parent-digest file present and a sha256 digest" \
     bash -c 'grep -Eqx "sha256:[0-9a-f]{64}" /usr/share/cloison/parent-digest'
 check "README present" test -f /usr/share/cloison/README
 
+echo "== daily-derived base is present (guards the negative checks below) =="
+check "kargs.d/00-iommu.toml present (inherited from daily)" test -f /usr/lib/bootc/kargs.d/00-iommu.toml
+check "kargs.d/30-vfio-kvm.toml present (inherited from daily)" test -f /usr/lib/bootc/kargs.d/30-vfio-kvm.toml
+
 echo "== M1 adds no kargs =="
 check "no kargs.d fragment named for cloison" \
-    bash -c '! compgen -G "/usr/lib/bootc/kargs.d/*cloison*" >/dev/null'
+    bash -c 'test -d /usr/lib/bootc/kargs.d && ! compgen -G "/usr/lib/bootc/kargs.d/*cloison*" >/dev/null'
 check "no kargs.d fragment mentions cloison" \
-    bash -c '! grep -rqi cloison /usr/lib/bootc/kargs.d/'
+    bash -c 'test -d /usr/lib/bootc/kargs.d && ! grep -rqi cloison /usr/lib/bootc/kargs.d/'
 check "no kargs.d fragment binds vfio-pci.ids" \
-    bash -c '! grep -rqiE "vfio[-_]pci\.ids" /usr/lib/bootc/kargs.d/'
+    bash -c 'test -d /usr/lib/bootc/kargs.d && ! grep -rqiE "vfio[-_]pci\.ids" /usr/lib/bootc/kargs.d/'
 
 echo "== M1 adds no VFIO binding =="
+# shellcheck disable=SC2016  # $d is expanded by the inner bash -c, on purpose
 check "no vfio-pci ids binding in modprobe.d/dracut.conf.d" \
-    bash -c '! grep -rqiE "vfio[-_]pci[[:space:]]+ids=|vfio[-_]pci\.ids" /etc/modprobe.d /usr/lib/modprobe.d /etc/dracut.conf.d /usr/lib/dracut/dracut.conf.d 2>/dev/null'
+    bash -c 'for d in /etc/modprobe.d /usr/lib/modprobe.d /usr/lib/dracut/dracut.conf.d; do test -d "$d" || exit 2; done; ! grep -rqiE "vfio[-_]pci[[:space:]]+ids=|vfio[-_]pci\.ids" /etc/modprobe.d /usr/lib/modprobe.d /etc/dracut.conf.d /usr/lib/dracut/dracut.conf.d 2>/dev/null'
 
 echo "== M1 enables no units =="
 check "no cloison* unit file shipped" \
-    bash -c '! find /usr/lib/systemd /etc/systemd -iname "cloison*" 2>/dev/null | grep -q .'
-usbguard_state="$(systemctl is-enabled usbguard.service 2>/dev/null || true)"
-case "${usbguard_state}" in
-    enabled|enabled-runtime|static|alias|indirect|generated) bad "usbguard.service not enabled (got '${usbguard_state}')" ;;
-    *) pass "usbguard.service not enabled (${usbguard_state:-absent})" ;;
-esac
+    bash -c 'test -d /usr/lib/systemd && test -d /etc/systemd && ! find /usr/lib/systemd /etc/systemd -iname "cloison*" | grep -q .'
+check "no cloison* unit linked into any .wants/.requires dir" \
+    bash -c 'test -d /etc/systemd/system && ! find /etc/systemd/system /usr/lib/systemd/system -path "*.wants/*" -iname "cloison*" -o -path "*.requires/*" -iname "cloison*" | grep -q .'
+check "no preset enables a cloison* unit" \
+    bash -c 'test -d /usr/lib/systemd/system-preset && ! grep -rqiE "^[[:space:]]*enable[[:space:]]+cloison" /usr/lib/systemd/system-preset /etc/systemd/system-preset 2>/dev/null'
+if command -v systemctl >/dev/null 2>&1; then
+    usbguard_state="$(systemctl is-enabled usbguard.service 2>/dev/null || true)"
+    case "${usbguard_state}" in
+        disabled|masked|not-found) pass "usbguard.service not enabled (${usbguard_state})" ;;
+        *) bad "usbguard.service not enabled (got '${usbguard_state:-<empty>}')" ;;
+    esac
+else
+    bad "systemctl missing: cannot assert usbguard.service state"
+fi
 
 echo
 if [[ "${fail}" -ne 0 ]]; then

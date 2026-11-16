@@ -25,9 +25,10 @@ revised before M2 starts. Findings that shape this scaffold:
 | `cloison/build.sh` | Runs `cloison/build.d/*.sh` in filename order (mirrors `build_files/build.sh`) |
 | `cloison/build.d/10-cloison-marker.sh` | Writes `/usr/share/cloison/variant` = `cloison-m1-scaffold`; nothing else |
 | `cloison/system_files/usr/share/cloison/README` | One-paragraph note |
-| `tests/test-cloison-isolation.sh` | Daily `Containerfile`, `build_files/`, `system_files/` must not mention cloison; `Containerfile.cloison` FROM only `${PARENT_IMAGE}`/`scratch` |
-| `tests/smoke-cloison.sh` | Offline, M1 assertions (marker, parent-digest, no cloison kargs/units, no vfio-pci.ids binding, usbguard not enabled). **UNVERIFIED against a built image** |
-| `just build-cloison <parent@sha256:...>` / `just smoke-cloison` | Local recipes; the build refuses a non-digest parent |
+| `tests/test-cloison-isolation.sh` | Daily `Containerfile`, `build_files/`, `system_files/` must exist and not mention cloison; `Containerfile.cloison` FROM only `${PARENT_IMAGE}`/`scratch`; Justfile/workflow mentions are NOTES, a workflow referencing `Containerfile.cloison` FAILS (no CI leg until M3) |
+| `tests/test-cloison-isolation-mutations.sh` | Applies each isolation violation to a temp copy and asserts the isolation test fails |
+| `tests/smoke-cloison.sh` | Offline, M1 assertions (marker, parent-digest, daily kargs present, no cloison kargs/units/presets, no vfio-pci.ids binding, usbguard not enabled; fails loudly on missing dirs/systemctl). **UNVERIFIED against a built image** |
+| `just build-cloison <parent@sha256:...>` / `just smoke-cloison` | Local recipes; the build refuses a non-digest parent and checks the `cloison.parent` label equals it (host-side `podman inspect`) |
 
 Usage: `just build-cloison ghcr.io/bearyjd/bazzite-tower@sha256:<64 hex> <source-commit> <profile>`.
 

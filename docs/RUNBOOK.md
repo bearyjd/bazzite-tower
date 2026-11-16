@@ -210,7 +210,8 @@ opt-in. Unanswered unruled connections use allow, while explicit rules still
 apply. `DropWhileAsking` remains absent (default false); opting into it can drop
 traffic while a prompt is pending even with allow. The candidate supplies native system bridge version 0.1.1,
 its two socket units, named system accounts and immutable artifact provenance.
-The candidate also supplies the reviewed OpenSnitch 1.8.0 shutdown/NFT repair
+The candidate also supplies OpenSnitch 1.9.0, built from upstream a1353848
+(the bridge's `vendor/opensnitch` submodule) with the reviewed shutdown/NFT repair
 with its own `/usr/share/snitchwatch/system-daemon-manifest.json`;
 `/usr/libexec/snitchwatch/verify-system-daemon.py --root /` checks the actual
 installed `/usr/bin/opensnitchd` against the source, patch and license inventory;
@@ -541,6 +542,13 @@ packages' install-time preset behavior in the real base image, a real image
 build, SELinux behavior of TCP 514 on this host, and any live flow to Vigie.
 
 ### OpenSnitch resource baseline and owner eBPF experiment
+
+> **INVALID for the system profile (OpenSnitch 1.9.0 daemon, a1353848).** The
+> BPF objects below come from the v1.8.0 RPM and do not match the source-built
+> 1.9.0 daemon, so an eBPF result there proves nothing and must not be run.
+> The system profile stays `allow`/`proc` (no `ModulesPath`, no kernel-devel or
+> clang in the builder) until matched daemon+module pairs ship from one commit.
+> The procedure below applies only to the legacy profile (RPM daemon 1.8.0).
 
 This is an optional **owner-operated** test on the candidate, after its initial
 `allow`/`proc` boot passes `sudo ujust snitchwatch-system-readiness` and the full

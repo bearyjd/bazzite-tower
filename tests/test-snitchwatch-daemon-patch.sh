@@ -32,8 +32,9 @@ TOOLCHAIN_RPMS=(golang libnetfilter_queue-devel libnfnetlink-devel pkgconf-pkg-c
 # Upstream b404c4c's entire ui test suite. On the pristine commit these fail
 # under -race too (data races in upstream ui code; TestClientDefaultConfig
 # intermittently, verified 2026-10-07), so they are skipped only in the -race
-# pass and still run in the plain pass.
-UPSTREAM_UI_RACE_FAILURES='^(TestClientDefaultConfig|TestClientInvalidProcMon|TestClientReloadingConfig)$'
+# pass and still run in the plain pass, each in its own process (see run_tests).
+UPSTREAM_UI_CONFIG_TESTS='TestClientDefaultConfig|TestClientInvalidProcMon|TestClientReloadingConfig'
+UPSTREAM_UI_RACE_FAILURES="^($UPSTREAM_UI_CONFIG_TESTS)\$"
 # Upstream rule test that loads a blocklist directory against a 5 s deadline;
 # it times out under -race when the host is loaded (passes 5/5 when idle).
 # It still runs in the plain go test pass below.
@@ -43,6 +44,13 @@ UPSTREAM_RULE_RACE_FLAKES='^TestNewOperatorListsSimple$'
 # pristine commit too (each fails alone under -race, verified 2026-10-31).
 # They still run in the plain go test pass below.
 UPSTREAM_PROCMON_RACE_FAILURES='^(TestCacheEvents|TestCacheEvents2|TestCacheEventsUpdate|TestCacheEventsDeleteOldItems)$'
+# Upstream a1353848 netfilter tests that create NFQUEUE handles: they need
+# CAP_NET_ADMIN, which this harness drops on purpose (so the patch's
+# queue-permission test runs instead of skipping). On the pristine commit they
+# fail the same way without it ("unbinding existing q handler ... operation not
+# permitted", verified 2026-11-15). Skipped in every pass; the patch's own
+# netfilter tests and the unprivileged upstream ones still run.
+UPSTREAM_NETFILTER_PRIVILEGED='^(TestQueueCreation|TestPacketCapture|TestVerdictAccept|TestVerdictDrop|TestVerdictMark|TestMultipleQueues|TestConcurrentPacketHandling|TestProductionRules)$'
 # Upstream vet findings in the root and ui packages (an unbuffered
 # signal.Notify channel; protobuf messages copied by value; unkeyed protobuf
 # literals). Every other analyzer still runs on the patched packages.
@@ -180,6 +188,30 @@ for name in sorted(json.load(open(sys.argv[1]))['patchedFiles']):
 PY
 }
 
+# Every top-level test in the patch's own netfilter test files must report
+# "--- PASS" in the -v log <file>: the package "ok" line also prints when
+# upstream's TestMain ran only its own tests. Run from /work/src/daemon.
+assert_netfilter_tests_ran() {
+    local log=$1 file name
+    local -a files names=() missing=()
+    readarray -t files < <(grep -E '^netfilter/[^/]+_test\.go$' /work/patched-go-files.txt | grep -vxF netfilter/netfilter_test.go)
+    for file in "${files[@]}"; do
+        readarray -t -O "${#names[@]}" names < <(sed -n 's/^func \(Test[A-Za-z0-9_]*\)(t \*testing\.T).*/\1/p' "$file")
+    done
+    ((${#names[@]})) || {
+        echo 'no patch netfilter tests found' >&2
+        exit 1
+    }
+    for name in "${names[@]}"; do
+        grep -q -- "^--- PASS: $name (" "$log" || missing+=("$name")
+    done
+    ((${#missing[@]} == 0)) || {
+        printf 'patch netfilter tests did not PASS (not run, skipped or failed): %s\n' "${missing[*]}" >&2
+        exit 1
+    }
+    echo "== ${#names[@]} patch netfilter tests reported PASS"
+}
+
 run_tests() {
     in_container test
     install_toolchain
@@ -188,6 +220,12 @@ run_tests() {
     # The confined blocklist reader refuses FUSE, and the tests fall back to
     # /dev/shm when /tmp is one; fail rather than skip if neither is usable.
     export SNITCHWATCH_REQUIRE_CONFINED_TESTS=1
+    # Upstream netfilter TestMain: when `ip netns add` works (root with
+    # CAP_SYS_ADMIN, e.g. a privileged VM gate) it runs only its own 12
+    # allTests in subprocesses and drops -skip, so the patch's netfilter tests
+    # would silently not run. TEST_NATIVE=1 makes it call m.Run() (no test
+    # body reads it); assert_netfilter_tests_ran checks they actually ran.
+    export TEST_NATIVE=1
     cd /work/src/daemon
     local -a patched_go
     readarray -t patched_go < /work/patched-go-files.txt
@@ -208,16 +246,36 @@ run_tests() {
     go vet "${UPSTREAM_VET_FINDINGS[@]}" . ./ui ./rule ./procmon
     # Upstream's privileged nftables tests skip here (they need PRIVILEGED_TESTS
     # and namespace creation); the patch's own nftables tests run.
-    echo "== go test -race (root, netfilter, firewall/nftables, statistics, netlink)"
-    go test -count=1 -race . ./netfilter ./firewall/nftables ./statistics ./netlink
+    echo "== go test -race -v ./netfilter (skipping privileged upstream netfilter tests: $UPSTREAM_NETFILTER_PRIVILEGED)"
+    go test -count=1 -race -v -skip "$UPSTREAM_NETFILTER_PRIVILEGED" ./netfilter > /work/netfilter-race.log 2>&1 || {
+        tail -n 60 /work/netfilter-race.log >&2
+        exit 1
+    }
+    tail -n 1 /work/netfilter-race.log
+    assert_netfilter_tests_ran /work/netfilter-race.log
+    echo "== go test -race (root, firewall/nftables, statistics, netlink)"
+    go test -count=1 -race . ./firewall/nftables ./statistics ./netlink
     echo "== go test -race ./procmon (skipping upstream race failures: $UPSTREAM_PROCMON_RACE_FAILURES)"
     go test -count=1 -race -skip "$UPSTREAM_PROCMON_RACE_FAILURES" ./procmon
     echo "== go test -race ./rule (skipping upstream timing flake: $UPSTREAM_RULE_RACE_FLAKES)"
     go test -count=1 -race -skip "$UPSTREAM_RULE_RACE_FLAKES" ./rule
     echo "== go test -race ./ui (skipping upstream race failures: $UPSTREAM_UI_RACE_FAILURES)"
     go test -count=1 -race -skip "$UPSTREAM_UI_RACE_FAILURES" ./ui
-    echo "== go test (no -race; includes the skipped ui tests)"
-    go test -count=1 . ./netfilter ./firewall/nftables ./statistics ./ui ./rule ./netlink ./procmon
+    echo "== go test (no -race; not the privileged netfilter ones; the upstream ui config tests run next, one process each)"
+    go test -count=1 -skip "$UPSTREAM_NETFILTER_PRIVILEGED|$UPSTREAM_UI_RACE_FAILURES" \
+        . ./netfilter ./firewall/nftables ./statistics ./ui ./rule ./netlink ./procmon
+    # Each upstream NewClient starts a monitorConfigWorker that never exits
+    # and watches the package-level configFile. In one process, every leaked
+    # worker reloads at once when a later test writes that file, so
+    # firewall.Init runs concurrently; it publishes a typed-nil *Iptables
+    # (iptables is absent here) before falling back to nftables, and a
+    # concurrent firewall.Stop panics on it (CI run 43721745341). One client
+    # per process means one worker and no concurrent reload.
+    local name
+    for name in ${UPSTREAM_UI_CONFIG_TESTS//|/ }; do
+        echo "== go test ./ui -run ^$name\$ (own process)"
+        go test -count=1 -run "^$name\$" ./ui
+    done
     echo "PASS: OpenSnitch patch tests"
 }
 

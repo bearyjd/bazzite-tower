@@ -57,7 +57,7 @@ for name in first second; do
     python3 "$factory/snitchwatch-system-daemon-stage.py" check-source --pins "$pins" --source "$src" --patch "$factory/snitchwatch-system-daemon-shutdown.patch" --patched
     export GOCACHE="$work/cache-$name"
     (cd "$src/daemon"; go build -mod=readonly -trimpath -o "$work/opensnitchd-$name" .) 2>&1 | tee "$work/build-$name.log"
-    [[ "$(timeout 5 "$work/opensnitchd-$name" -version)" == 1.8.0 ]]
+    [[ "$(timeout 5 "$work/opensnitchd-$name" -version)" == 1.9.0 ]]
     ldd "$work/opensnitchd-$name" | tee "$work/ldd-$name.txt"
     if grep -q 'not found' "$work/ldd-$name.txt"; then
         echo 'Native daemon has an unresolved shared library; refusing.' >&2

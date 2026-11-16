@@ -34,7 +34,7 @@ Snitchwatch config; disabled **Portmaster** VM spike behind
 `build_files/build.d/95-firewall.sh` pins and SHA-256 verifies the upstream
 OpenSnitch 1.8.0 RPM before extraction. It installs `libnetfilter_queue` and
 `nftables` explicitly; extraction neither resolves dependencies nor registers
-the daemon in the RPM database. The default user bridge and both GUI profiles remain per-user installs. The opt-in system candidate adds a pinned native bridge and immutable source/toolchain/license provenance. It separately compiles the reviewed upstream OpenSnitch 1.8.0 plus a downstream queue-lifetime/NFT-ownership repair, retaining module locks, generated protocol hashes, Go/protoc/RPM inventory and license payloads. Default legacy builds retain the RPM binary and do not compile either native component.
+the daemon in the RPM database. The default user bridge and both GUI profiles remain per-user installs. The opt-in system candidate adds a pinned native bridge and immutable source/toolchain/license provenance. It separately compiles the reviewed upstream OpenSnitch a1353848 (1.9.0; legacy keeps the 1.8.0 RPM) plus a downstream queue-lifetime/NFT-ownership repair, retaining module locks, generated protocol hashes, Go/protoc/RPM inventory and license payloads. Default legacy builds retain the RPM binary and do not compile either native component.
 
 October 4 VM tests used Snitchwatch `1def745`. October 5 follow-up used base
 `2690109` plus reviewed uncommitted changes, source snapshot `851f3a`. Its clean

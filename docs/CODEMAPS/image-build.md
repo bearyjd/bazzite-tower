@@ -172,8 +172,12 @@ verified binary/licenses and stages system units from that same source; its
 separate installed-overlay manifest hashes immutable files and records their
 identity. No legacy release-install/global-user-enable script runs.
 
-The system candidate also builds the pinned OpenSnitch 1.8.0 source with its
-reviewed downstream repair. The same single patch (58 files) carries CPU fixes:
+The system candidate also builds the pinned OpenSnitch source (upstream a1353848,
+version 1.9.0, `daemonSource` in the policy, which must equal the bridge pins'
+`submoduleCommit`) with its reviewed downstream repair, rebased onto a1353848.
+It stays `allow`/`proc`: no `ModulesPath`, no kernel-devel/clang in the builder,
+no module build; the RPM's v1.8.0 BPF objects are not a matched pair with this
+daemon. The same single patch (59 files) carries CPU fixes:
 one process build per exec (ancestry is upstream's full walk), an exact
 sock_diag lookup for connected TCP with the dump as fallback, names-only
 `/proc/<pid>/fd` listing (the `/proc` pid order is upstream's), and GOMAXPROCS 4 unless `GOMAXPROCS` is set (`-workers` stays 16,

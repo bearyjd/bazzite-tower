@@ -76,7 +76,7 @@ and auth directories use `/run/snitchwatch` and `/run/snitchwatch-auth`; no GUI
 user membership is baked in. Licensing lives under
 `/usr/share/licenses/snitchwatch-bridge`; installed artifact/overlay provenance
 lives under `/usr/share/snitchwatch`. A separate
-`system-daemon-manifest.json` records the source-built OpenSnitch 1.8.0 repair;
+`system-daemon-manifest.json` records the source-built OpenSnitch 1.9.0 (a1353848) repair;
 `/usr/libexec/snitchwatch/verify-system-daemon.py` validates its source, patch,
 module/protocol/toolchain/license inventory and installed `/usr/bin/opensnitchd`.
 The retained candidate executable and patch live under

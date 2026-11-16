@@ -25,13 +25,15 @@ pieces fit together read [docs/CODEMAPS/](./CODEMAPS/architecture.md).
 | `just build-snitchwatch-system-vm` | Same candidate plus the disposable SSH gate (`VM_GATE_SSH`); never the ordinary candidate |
 | `just build-portmaster-spike` | Build the disabled Portmaster VM-spike image; never a default/host image |
 | `just smoke` | Offline-assert the built image — **the exact CI gate** (`tests/smoke.sh`) |
+| `just build-cloison <parent_image@sha256:…>` | Build the Cloison M1 scaffold variant locally (`Containerfile.cloison`); refuses a non-digest parent; no CI, no publish |
+| `just smoke-cloison` | Offline-assert the built Cloison image (`tests/smoke-cloison.sh`, M1-specific) — not a CI gate |
 | `just build-qcow2` | Turn the image into a bootable qcow2 via bootc-image-builder |
 | `just run-vm-qcow2` | Boot the qcow2 in qemu; browser console at `localhost:8006` |
 | `just spawn-vm` | Boot via `systemd-vmspawn` instead (no browser console) |
 | `just run-vm-ssh` | Boot a login/SSH-capable VM (e.g. the Portmaster spike gate) — prints the `ssh` command, no console needed |
 | `just build-iso-live` | Build the `installer/` payload + titanoboa live/installer ISO → `./output/` |
 | `just lint` | `shellcheck` every `*.sh` |
-| `just lint-containerfile` | `hadolint` the `Containerfile` in seconds, no image build — not a CI gate |
+| `just lint-containerfile [file]` | `hadolint` the `Containerfile` (or the given file) in seconds, no image build — not a CI gate |
 | `just format` | `shfmt --write` every `*.sh` — **not** a required gate, see "Code style" |
 | `just check` / `just fix` | Check / auto-format Just syntax |
 | `just test-ci` | Fixture-based offline tests for `ci/base-diff.py`, `ci/base-bump.sh`, `ci/base-blast-diff.sh` and `ci/base-bump-guard.py` (no live upstream or registry needed) |

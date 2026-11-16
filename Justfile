@@ -144,6 +144,31 @@ smoke $target_image=image_name $tag=default_tag:
     set -euo pipefail
     podman run --rm -i "${target_image}:${tag}" bash -s < tests/smoke.sh
 
+# Build the Cloison M1 scaffold variant, local only (no publish). parent_image
+# must be a digest reference of the daily image, e.g. ghcr.io/bearyjd/bazzite-tower@sha256:<64 hex>.
+[group('Build')]
+build-cloison parent_image parent_source_commit="unknown" parent_profile="unknown" $target_image=("localhost/" + image_name + "-cloison") $tag="m1-scaffold":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if ! [[ "{{ parent_image }}" =~ @sha256:[0-9a-f]{64}$ ]]; then
+        echo "build-cloison: parent_image must be a digest reference <repo>@sha256:<64 hex>, got '{{ parent_image }}'" >&2
+        exit 1
+    fi
+    podman build \
+        --build-arg "PARENT_IMAGE={{ parent_image }}" \
+        --build-arg "PARENT_SOURCE_COMMIT={{ parent_source_commit }}" \
+        --build-arg "PARENT_PROFILE={{ parent_profile }}" \
+        --tag "${target_image}:${tag}" \
+        -f Containerfile.cloison \
+        .
+
+# Smoke-test a built Cloison image offline (M1-specific assertions, tests/smoke-cloison.sh)
+[group('Build')]
+smoke-cloison $target_image=("localhost/" + image_name + "-cloison") $tag="m1-scaffold":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    podman run --rm -i "${target_image}:${tag}" bash -s < tests/smoke-cloison.sh
+
 # Command: _rootful_load_image
 # Description: This script checks if the current user is root or running under sudo. If not, it attempts to resolve the image tag using podman inspect.
 #              If the image is found, it loads it into rootful podman. If the image is not found, it pulls it from the repository.
@@ -544,7 +569,7 @@ lint:
 # change. See .agent_native/agent_roadmap.md item 5.
 
 # Static-lints the Containerfile in seconds, without building the image
-lint-containerfile:
+lint-containerfile containerfile="Containerfile":
     #!/usr/bin/env bash
     set -euo pipefail
     if ! command -v podman &> /dev/null; then
@@ -554,11 +579,11 @@ lint-containerfile:
     hadolint_image="${HADOLINT_IMAGE:-docker.io/hadolint/hadolint@sha256:27086352fd5e1907ea2b934eb1023f217c5ae087992eb59fde121dce9c9ff21e}"
     workdir="$(mktemp -d)"
     trap 'rm -rf "${workdir}"' EXIT
-    cp Containerfile "${workdir}/Containerfile"
-    echo "Linting Containerfile with ${hadolint_image}"
+    cp "{{ containerfile }}" "${workdir}/Containerfile"
+    echo "Linting {{ containerfile }} with ${hadolint_image}"
     podman run --rm -v "${workdir}:/lint:z" -w /lint "${hadolint_image}" \
         hadolint Containerfile
-    echo "Containerfile: no findings"
+    echo "{{ containerfile }}: no findings"
 
 # Runs shfmt on all Bash scripts.
 #

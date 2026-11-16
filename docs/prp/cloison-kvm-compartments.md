@@ -663,6 +663,8 @@ renovate.json: guest Fedora digests, cloud-hypervisor pin
 9. **D9:** whether host Konsole may attach to `dev` (`cloison exec`), or VM-side terminals only.
 10. **D10:** the M14 slim host: in scope at all, and whether removing the NVIDIA module from the host is acceptable (it depends on verifying HDMI wiring).
 
+**Owner decisions recorded 2026-11-16:** D1 = separate repository `ghcr.io/bearyjd/bazzite-tower-cloison` (add a `registries.d` entry and `policy.json` scope with the first publish). D5 = local builds only until M3: no CI publish leg and no GHCR push until M3 and explicit release authorisation. M0 started: `scripts/cloison-hw-report.sh` and `docs/research/iommu-groups-p1g7-2026-11-16.md` (preliminary, non-root).
+
 ## 13. Prior art
 
 - **Qubes OS:** qrexec (policy v5 format, the control/data split), the GUI daemon (dom0 composition, trusted borders and title prefixes, explicit clipboard), `sys-net`/`sys-firewall`/`sys-usb`, disposables, TemplateVMs.

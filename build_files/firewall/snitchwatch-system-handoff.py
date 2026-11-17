@@ -18,7 +18,8 @@ Subcommands (each failure prints one distinct `handoff:` line and exits 1):
 
 COPY --from is not a trust boundary by itself; `check` is.  KINDs: scanner,
 bridge, bridge-rebuild (the tarball only), daemon (the daemon allowlist is the
-trusted verifier's REQUIRED set), ebpf-kernel (header tarball + facts), ebpf and
+trusted verifier's REQUIRED set), ebpf-kernel (header tarball + facts),
+ebpf-kernel-facts (the facts alone, read by assembly straight from ebpf-kernel), ebpf and
 ebpf-rebuild (the objects named by the eBPF pins, facts, build info; ebpf adds the log).
 """
 import argparse
@@ -54,6 +55,9 @@ MAX_LISTED = 20
 EBPF_KERNEL_FILES = ('kernel-facts.json', 'kernel-headers.tar')
 EBPF_SHARED = ('kernel-facts.json', 'build-info.json')
 MAX_EBPF_FILE = 16 * 1024 * 1024
+# Size bounds checked on the receiving side for the eBPF kinds (the real header tar is ~125 MiB).
+MAX_EBPF_HEADERS = 512 * 1024 * 1024
+EBPF_KINDS = ('ebpf-kernel', 'ebpf-kernel-facts', 'ebpf', 'ebpf-rebuild')
 
 
 class Refusal(Exception):
@@ -75,6 +79,8 @@ def allowlist(kind, pins=None, daemon_verifier=None):
         return {bridge_tarball(pins): 0o644}
     if kind == 'ebpf-kernel':
         return {name: 0o644 for name in EBPF_KERNEL_FILES}
+    if kind == 'ebpf-kernel-facts':
+        return {'kernel-facts.json': 0o644}
     if kind in ('ebpf', 'ebpf-rebuild'):
         if pins is None:
             raise Refusal('eBPF handoff needs --pins')
@@ -139,6 +145,9 @@ def check(kind, root, pins=None, daemon_verifier=None, owner=(0, 0)):
                 raise Refusal('%s handoff file %s has mode %o, want %o' % (kind, rel, mode, expected[rel]))
             if info.st_nlink != 1:
                 raise Refusal('%s handoff file %s is hard-linked (%d links)' % (kind, rel, info.st_nlink))
+            limit = MAX_EBPF_HEADERS if rel == 'kernel-headers.tar' else MAX_EBPF_FILE
+            if kind in EBPF_KINDS and info.st_size > limit:
+                raise Refusal('%s handoff file %s is %d bytes, over the %d byte bound' % (kind, rel, info.st_size, limit))
             found.add(rel)
         else:
             raise Refusal('%s handoff entry %s is a symlink or special file' % (kind, rel))
@@ -364,7 +373,7 @@ def main(argv=None):
     probe.add_argument('expect', choices=('online', 'offline'))
     for name in ('export', 'check'):
         command = sub.add_parser(name)
-        command.add_argument('kind', choices=('scanner', 'bridge', 'bridge-rebuild', 'daemon', 'ebpf-kernel', 'ebpf', 'ebpf-rebuild'))
+        command.add_argument('kind', choices=('scanner', 'bridge', 'bridge-rebuild', 'daemon', *EBPF_KINDS))
         command.add_argument('--pins', type=Path)
         command.add_argument('--daemon-verifier', type=Path)
         command.add_argument('paths', nargs=2 if name == 'export' else 1, type=Path)

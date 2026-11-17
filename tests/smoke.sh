@@ -450,19 +450,25 @@ system)
     # kernel, from the daemon's own OpenSnitch commit. Asserted here with jq and
     # sha256sum, independently of the ebpf-check helper run above.
     ebpf_manifest=/usr/share/bazzite-tower/ebpf-manifest.json
+    shopt -s nullglob
     ebpf_kernels=(/usr/lib/modules/*/)
-    ebpf_kernel="$(basename "${ebpf_kernels[0]}")"
+    shopt -u nullglob
+    ebpf_kernel=""
+    [[ ${#ebpf_kernels[@]} -eq 1 ]] && ebpf_kernel="$(basename "${ebpf_kernels[0]}")"
     check "system eBPF build manifest present and valid JSON" jq -e . "${ebpf_manifest}"
     check "system image ships exactly one kernel" test "${#ebpf_kernels[@]}" -eq 1
     check "system eBPF manifest kernelRelease is the image kernel" \
-        jq -e --arg k "${ebpf_kernel}" ".kernelRelease == \$k" "${ebpf_manifest}"
+        jq -e --arg k "${ebpf_kernel}" ".kernelRelease == \$k and (\$k | length > 0)" "${ebpf_manifest}"
+    check "system eBPF manifest kernel config matches the image kernel's config" \
+        jq -e --arg h "$(sha256sum < "/usr/lib/modules/${ebpf_kernel}/config" | cut -d' ' -f1)" \
+            ".kernelConfigSha256 == \$h and (\$h | test(\"^[0-9a-f]{64}\$\"))" "${ebpf_manifest}"
     check "system eBPF manifest commit is the daemon's source commit" \
-        test "$(jq -r .opensnitchCommit "${ebpf_manifest}")" = \
-            "$(jq -r .source.commit /usr/share/snitchwatch/system-daemon-manifest.json)"
+        jq -e --arg c "$(jq -r .source.commit /usr/share/snitchwatch/system-daemon-manifest.json)" \
+            ".opensnitchCommit == \$c and (\$c | test(\"^[0-9a-f]{40}\$\"))" "${ebpf_manifest}"
     for ebpf_object in opensnitch.o opensnitch-procs.o opensnitch-dns.o; do
         check "system eBPF ${ebpf_object} sha256 matches the build manifest" \
-            test "$(sha256sum < "/usr/lib/opensnitchd/ebpf/${ebpf_object}" | cut -d' ' -f1)" = \
-                "$(jq -r --arg o "${ebpf_object}" '.objects[$o]' "${ebpf_manifest}")"
+            jq -e --arg o "${ebpf_object}" --arg h "$(sha256sum < "/usr/lib/opensnitchd/ebpf/${ebpf_object}" | cut -d' ' -f1)" \
+                ".objects[\$o] == \$h and (\$h | test(\"^[0-9a-f]{64}\$\"))" "${ebpf_manifest}"
     done
     check "system eBPF staging copy was removed after install" \
         test ! -e /usr/share/bazzite-tower/opensnitch-ebpf

@@ -12,11 +12,11 @@ import json
 import os
 from pathlib import Path
 import runpy
-import shutil
 import subprocess
 import tarfile
 import tempfile
 import unittest
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 FACTORY = ROOT / 'build_files/firewall'
@@ -162,6 +162,24 @@ class KernelGuard(unittest.TestCase):
                      src=('7.2.15-ogc1.1.fc45.aarch64',), modules=('7.2.15-ogc1.1.fc45.aarch64',))
         self.refused(core=(0, '../x.x86_64\n'), devel=(0, '../x.x86_64\n'), src=('../x.x86_64',), modules=('../x.x86_64',))
 
+    def config_root(self, core=b'CONFIG_BPF=y\n', devel=b'CONFIG_BPF=y\n'):
+        tmp = tempfile.TemporaryDirectory(prefix='sw-ebpf-config.')
+        self.addCleanup(tmp.cleanup)
+        root = Path(tmp.name)
+        for path, data in ((root / 'usr/lib/modules' / R72 / 'config', core), (root / 'usr/src/kernels' / R72 / '.config', devel)):
+            path.parent.mkdir(parents=True)
+            if data is not None:
+                path.write_bytes(data)
+        return root
+
+    def test_kernel_config_must_be_identical_in_core_and_devel(self):
+        self.assertEqual(self.e['kernel_config_sha256'](self.config_root(), R72), hashlib.sha256(b'CONFIG_BPF=y\n').hexdigest())
+        with self.assertRaises(self.e['Refusal']) as caught:
+            self.e['kernel_config_sha256'](self.config_root(devel=b'CONFIG_BPF=n\n'), R72)
+        self.assertIn('differs', str(caught.exception))
+        with self.assertRaises((self.e['Refusal'], OSError)):
+            self.e['kernel_config_sha256'](self.config_root(core=None), R72)
+
     def test_cli_fixture_fails_loudly_without_kernel_devel(self):
         with tempfile.TemporaryDirectory() as tmp:
             root, bin_dir = Path(tmp) / 'root', Path(tmp) / 'bin'
@@ -256,7 +274,8 @@ class TreeAndHeaders(Workdir):
         handoff.mkdir()
         self.e['pack_tree'](tree, handoff / 'kernel-headers.tar')
         facts = {'schemaVersion': 1, 'kernelRelease': R72, 'kernelCore': R72, 'kernelDevel': R72,
-                 'headersTarSha256': hashlib.sha256((handoff / 'kernel-headers.tar').read_bytes()).hexdigest()}
+                 'headersTarSha256': hashlib.sha256((handoff / 'kernel-headers.tar').read_bytes()).hexdigest(),
+                 'kernelConfigSha256': 'c' * 64}
         (handoff / 'kernel-facts.json').write_text(json.dumps(facts))
         self.assertEqual(self.e['kernel_unpack'](handoff, self.root / 'h1')['kernelRelease'], R72)
         (handoff / 'kernel-facts.json').write_text(json.dumps({**facts, 'headersTarSha256': '0' * 64}))
@@ -278,12 +297,18 @@ class EbpfHandoff(Workdir):
         root.mkdir()
         for name in self.pins['objects']:
             (root / name).write_bytes(BPF_HEADER + name.encode() + content)
-        facts = {'schemaVersion': 1, 'kernelRelease': R72, 'kernelCore': R72, 'kernelDevel': R72, 'headersTarSha256': 'a' * 64}
+        facts = {'schemaVersion': 1, 'kernelRelease': R72, 'kernelCore': R72, 'kernelDevel': R72, 'headersTarSha256': 'a' * 64,
+                 'kernelConfigSha256': 'c' * 64}
         (root / 'kernel-facts.json').write_text(json.dumps(facts, sort_keys=True))
+        direct = self.root / ('direct-' + root.name)
+        direct.mkdir()
+        (direct / 'kernel-facts.json').write_text(json.dumps(facts, sort_keys=True))
+        self.direct = direct / 'kernel-facts.json'
         (root / 'build-info.json').write_text(json.dumps({
             'clang': 'clang version 21.1.8 (Fedora 21.1.8-10.fc45)', 'kernelRelease': R72,
             'opensnitchCommit': self.pins['profiles']['system']['opensnitchCommit'],
-            'ebpfProgTreeSha256': self.pins['profiles']['system']['ebpfProgTreeSha256']}, sort_keys=True))
+            'ebpfProgTreeSha256': self.pins['profiles']['system']['ebpfProgTreeSha256'], 'rpmInventorySha256': 'd' * 64},
+            sort_keys=True))
         if log:
             (root / 'build.log').write_text('log\n')
         for path in root.iterdir():
@@ -333,7 +358,7 @@ class EbpfHandoff(Workdir):
     def test_assembly_manifest_is_computed_from_pins_facts_and_its_own_hashes(self):
         handoff = self.write_stage(self.root / 'ebpf')
         out = self.root / 'overlay'
-        manifest = self.e['stage_overlay'](EBPF_PINS_PATH, 'system', DAEMON_PINS, PINS, handoff, out)
+        manifest = self.e['stage_overlay'](EBPF_PINS_PATH, 'system', DAEMON_PINS, PINS, handoff, out, self.direct)
         staged = out / 'usr/share/bazzite-tower'
         on_disk = json.loads((staged / 'ebpf-manifest.json').read_text())
         self.assertEqual(manifest, on_disk)
@@ -342,6 +367,8 @@ class EbpfHandoff(Workdir):
         self.assertEqual(on_disk['clangVersion'], '21.1.8')
         self.assertEqual(on_disk['objectsDir'], '/usr/lib/opensnitchd/ebpf')
         self.assertEqual(on_disk['ebpfPinsSha256'], hashlib.sha256(EBPF_PINS_PATH.read_bytes()).hexdigest())
+        self.assertEqual(on_disk['kernelConfigSha256'], 'c' * 64)
+        self.assertEqual(on_disk['compileRpmInventorySha256'], 'd' * 64)
         for name in self.pins['objects']:
             data = (staged / 'opensnitch-ebpf' / name).read_bytes()
             self.assertEqual(on_disk['objects'][name], hashlib.sha256(data).hexdigest())
@@ -349,13 +376,175 @@ class EbpfHandoff(Workdir):
 
     def test_assembly_manifest_refuses_inconsistent_build_info(self):
         for key, value in (('kernelRelease', R73), ('clang', 'clang version 23.1.5'),
-                           ('opensnitchCommit', 'f' * 40), ('ebpfProgTreeSha256', '0' * 64)):
+                           ('opensnitchCommit', 'f' * 40), ('ebpfProgTreeSha256', '0' * 64), ('rpmInventorySha256', '')):
             with self.subTest(key):
                 handoff = self.write_stage(self.root / ('ebpf-' + key))
                 info = json.loads((handoff / 'build-info.json').read_text())
                 (handoff / 'build-info.json').write_text(json.dumps({**info, key: value}))
                 with self.assertRaises(self.e['Refusal']):
-                    self.e['stage_overlay'](EBPF_PINS_PATH, 'system', DAEMON_PINS, PINS, handoff, self.root / ('out-' + key))
+                    self.e['stage_overlay'](EBPF_PINS_PATH, 'system', DAEMON_PINS, PINS, handoff, self.root / ('out-' + key),
+                                            self.direct)
+
+
+    def test_assembly_refuses_compile_facts_that_differ_from_the_kernel_stage(self):
+        handoff = self.write_stage(self.root / 'ebpf')
+        facts = json.loads(self.direct.read_text())
+        self.direct.write_text(json.dumps({**facts, 'kernelConfigSha256': 'e' * 64}, sort_keys=True))
+        with self.assertRaises(self.e['Refusal']) as caught:
+            self.e['stage_overlay'](EBPF_PINS_PATH, 'system', DAEMON_PINS, PINS, handoff, self.root / 'out', self.direct)
+        self.assertIn('differ from the ebpf-kernel stage facts', str(caught.exception))
+
+    def test_ebpf_handoff_check_bounds_file_sizes(self):
+        src = self.write_stage(self.root / 'src')
+        dest = self.root / 'dest'
+        self.h['export']('ebpf', src, dest, self.pins)
+        with open(dest / 'opensnitch.o', 'ab') as grow:
+            grow.truncate(self.h['MAX_EBPF_FILE'] + 1)
+        with self.assertRaises(self.h['Refusal']) as caught:
+            self.h['check']('ebpf', dest, self.pins, owner=self.owner)
+        self.assertIn('bound', str(caught.exception))
+        kernel = self.root / 'kernel'
+        kernel.mkdir()
+        (kernel / 'kernel-facts.json').write_text('{}')
+        with open(kernel / 'kernel-headers.tar', 'wb') as big:
+            big.truncate(self.h['MAX_EBPF_HEADERS'] + 1)
+        for path in kernel.iterdir():
+            path.chmod(0o644)
+        with self.assertRaises(self.h['Refusal']):
+            self.h['check']('ebpf-kernel', kernel, owner=self.owner)
+        (kernel / 'kernel-headers.tar').unlink()
+        with open(kernel / 'kernel-headers.tar', 'wb') as fits:
+            fits.truncate(130 * 1024 * 1024)
+        (kernel / 'kernel-headers.tar').chmod(0o644)
+        self.h['check']('ebpf-kernel', kernel, owner=self.owner)
+
+
+class Guards(Workdir):
+    """Each refusal below goes red if its guard is deleted (mutation-checked)."""
+
+    def git_repo(self, files, modes=None):
+        repo = self.root / 'repo'
+        (repo / 'ebpf_prog').mkdir(parents=True)
+        for name, data in files.items():
+            path = repo / 'ebpf_prog' / name
+            if isinstance(data, Path):
+                path.symlink_to(data)
+            else:
+                path.write_text(data)
+            if modes and name in modes:
+                path.chmod(modes[name])
+        env = {**os.environ, 'GIT_CONFIG_GLOBAL': '/dev/null', 'GIT_AUTHOR_NAME': 't', 'GIT_AUTHOR_EMAIL': 't@t',
+               'GIT_COMMITTER_NAME': 't', 'GIT_COMMITTER_EMAIL': 't@t'}
+        for args in (['init', '-q'], ['config', 'core.fileMode', 'true'], ['add', '.'], ['commit', '-qm', 'x']):
+            subprocess.run(['git', '-C', str(repo), *args], env=env, check=True)
+        head = subprocess.run(['git', '-C', str(repo), 'rev-parse', 'HEAD'], capture_output=True, text=True, check=True)
+        return repo, head.stdout.strip()
+
+    def test_load_pins_refuses_a_tampered_copy(self):
+        tampered = self.root / 'pins.json'
+        tampered.write_bytes(EBPF_PINS_PATH.read_bytes().replace(b'21.1.8', b'23.1.5', 1))
+        with self.assertRaises(self.e['Refusal']):
+            self.e['load_pins'](tampered)
+        self.e['load_pins'](EBPF_PINS_PATH)
+        result = subprocess.run(['python3', '-B', str(EBPF), 'check-pins', str(tampered)], capture_output=True, text=True)
+        self.assertNotEqual(result.returncode, 0)
+
+    def test_extract_raw_refuses_executable_blobs(self):
+        repo, head = self.git_repo({'a.c': 'x\n', 'run.sh': 'y\n'}, modes={'run.sh': 0o755})
+        with self.assertRaises(self.e['Refusal']) as caught:
+            self.e['extract_raw'](repo, head, self.root / 'out')
+        self.assertIn('100755', str(caught.exception))
+
+    def test_extract_raw_refuses_symlink_blobs(self):
+        repo, head = self.git_repo({'a.c': 'x\n', 'link.h': Path('/etc/passwd')})
+        with self.assertRaises(self.e['Refusal']) as caught:
+            self.e['extract_raw'](repo, head, self.root / 'out')
+        self.assertIn('120000', str(caught.exception))
+
+    def test_tree_hash_refuses_non_regular_files(self):
+        tree = self.root / 'tree'
+        tree.mkdir()
+        (tree / 'a.c').write_text('x')
+        (tree / 'b.c').symlink_to('a.c')
+        with self.assertRaises(self.e['Refusal']):
+            self.e['tree_sha256'](tree)
+
+    def fake_tools(self, owner='clang21-0:21.1.8-10.fc45.x86_64', version='21.1.8', verify_out=''):
+        bin_dir = self.root / ('bin-%d' % len(list(self.root.iterdir())))
+        bin_dir.mkdir()
+        pins = json.loads(EBPF_PINS_PATH.read_text())
+        llvm = 'llvm21-0:21.1.8-10.fc45.x86_64'
+        for key, banner in (('cc', 'clang version %s (Fedora)' % version), ('llc', '  LLVM version %s' % version),
+                            ('strip', '  LLVM version %s' % version)):
+            path = bin_dir / key
+            path.write_text('#!/bin/sh\necho "%s"\n' % banner)
+            path.chmod(0o755)
+            pins['tools'][key]['path'] = str(path)
+        (bin_dir / 'rpm').write_text('#!/bin/sh\n'
+                                     'if [ "$1" = -V ]; then printf "%%s" "%s"; exit 0; fi\n'
+                                     'for a; do last=$a; done\n'
+                                     'case "$last" in */cc) printf "%%s" "%s";; *) printf "%%s" "%s";; esac\n'
+                                     % (verify_out, owner, llvm))
+        (bin_dir / 'rpm').chmod(0o755)
+        return pins, {**self.e['SAFE_ENV'], 'PATH': '%s:/usr/bin:/bin' % bin_dir}
+
+    def test_check_tools_accepts_the_pinned_owner_and_version(self):
+        pins, env = self.fake_tools()
+        with mock.patch.dict(self.e['check_tools'].__globals__, {'SAFE_ENV': env}):
+            self.assertEqual(self.e['check_tools'](pins), 'clang version 21.1.8 (Fedora)')
+
+    def test_check_tools_refuses_a_foreign_owner_wrong_version_or_modified_files(self):
+        for kwargs, needle in (({'owner': 'clang-0:23.1.5-1.fc45.x86_64'}, 'not owned'),
+                               ({'version': '23.1.5'}, 'does not report'),
+                               ({'verify_out': 'S.5....T.  /usr/bin/clang-21'}, 'rpm -V')):
+            with self.subTest(needle):
+                pins, env = self.fake_tools(**kwargs)
+                with mock.patch.dict(self.e['check_tools'].__globals__, {'SAFE_ENV': env}):
+                    with self.assertRaises(self.e['Refusal']) as caught:
+                        self.e['check_tools'](pins)
+                self.assertIn(needle, str(caught.exception))
+
+    def build_fixture(self, made):
+        repo, head = self.git_repo({'opensnitch.c': 'int x;\n', 'Makefile': 'all:\n'})
+        pins = json.loads(EBPF_PINS_PATH.read_text())
+        probe = self.root / 'tree-probe'
+        self.e['extract_raw'](repo, head, probe)
+        pins['profiles']['system'] = {'opensnitchCommit': head, 'ebpfProgTreeSha256': self.e['tree_sha256'](probe / 'ebpf_prog')}
+        kernel, headers = self.root / 'kernel', self.root / 'headers'
+        (headers / 'include').mkdir(parents=True)
+        kernel.mkdir()
+        self.e['pack_tree'](headers, kernel / 'kernel-headers.tar')
+        (kernel / 'kernel-facts.json').write_text(json.dumps({
+            'schemaVersion': 1, 'kernelRelease': R72, 'kernelCore': R72, 'kernelDevel': R72, 'kernelConfigSha256': 'c' * 64,
+            'headersTarSha256': hashlib.sha256((kernel / 'kernel-headers.tar').read_bytes()).hexdigest()}))
+        bin_dir = self.root / 'fakebin'
+        bin_dir.mkdir()
+        touches = ' '.join('"$dir/%s"' % name for name in made)
+        (bin_dir / 'make').write_text('#!/bin/sh\nfor a; do case "$prev" in -C) dir=$a;; esac; prev=$a; done\n'
+                                      'touch %s\n' % touches)
+        (bin_dir / 'make').chmod(0o755)
+        inventory = self.root / 'inventory.txt'
+        inventory.write_text('x\n')
+        env = {**self.e['SAFE_ENV'], 'PATH': '%s:/usr/bin:/bin' % bin_dir}
+        return pins, {**DAEMON_PINS, 'sourceCommit': head}, {**PINS, 'submoduleCommit': head}, repo, kernel, inventory, env
+
+    def run_build(self, pins, daemon, native, repo, kernel, inventory, env):
+        patched = {'SAFE_ENV': env, 'check_tools': lambda pins: 'clang version 21.1.8 (Fedora)'}
+        with mock.patch.dict(self.e['build'].__globals__, patched):
+            return self.e['build'](pins, 'system', daemon, native, repo, kernel, self.root / 'work', self.root / 'out', inventory)
+
+    def test_build_refuses_a_tree_that_differs_from_the_pin(self):
+        pins, *rest = self.build_fixture(['opensnitch.o', 'opensnitch-procs.o', 'opensnitch-dns.o'])
+        pins['profiles']['system']['ebpfProgTreeSha256'] = '0' * 64
+        with self.assertRaises(self.e['Refusal']) as caught:
+            self.run_build(pins, *rest)
+        self.assertIn('differs from the pin', str(caught.exception))
+
+    def test_build_refuses_a_wrong_object_set(self):
+        fixture = self.build_fixture(['opensnitch.o', 'opensnitch-dns.o'])
+        with self.assertRaises(self.e['Refusal']) as caught:
+            self.run_build(*fixture)
+        self.assertIn('want exactly', str(caught.exception))
 
 
 class ImageCheck(Workdir):
@@ -374,6 +563,7 @@ class ImageCheck(Workdir):
             hashes[name] = hashlib.sha256(data).hexdigest()
         for release in modules:
             (root / 'usr/lib/modules' / release).mkdir(parents=True)
+            (root / 'usr/lib/modules' / release / 'config').write_bytes(b'CONFIG_BPF=y\n')
         share = root / 'usr/share/bazzite-tower'
         share.mkdir(parents=True)
         (share / 'snitchwatch-bridge-profile').write_text(profile + '\n')
@@ -381,7 +571,7 @@ class ImageCheck(Workdir):
             (share / 'ebpf-manifest.json').write_text(json.dumps({
                 'schemaVersion': 1, 'profile': 'system', 'kernelRelease': kernel, 'objects': hashes,
                 'objectsDir': '/usr/lib/opensnitchd/ebpf', 'opensnitchCommit': 'a' * 40, 'ebpfProgTreeSha256': 'b' * 64,
-                'clangVersion': '21.1.8'}))
+                'clangVersion': '21.1.8', 'kernelConfigSha256': hashlib.sha256(b'CONFIG_BPF=y\n').hexdigest()}))
         return root
 
     def run_check(self, root):
@@ -397,6 +587,13 @@ class ImageCheck(Workdir):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn(R73, result.stderr)
         self.assertIn(R72, result.stderr)
+
+    def test_manifest_kernel_config_must_be_the_image_kernel_config(self):
+        root = self.image()
+        (root / 'usr/lib/modules' / R72 / 'config').write_bytes(b'CONFIG_BPF=n\n')
+        result = self.run_check(root)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('kernel config', result.stderr)
 
     def test_image_must_ship_exactly_one_kernel(self):
         self.assertNotEqual(self.run_check(self.image(modules=(R72, R73))).returncode, 0)
@@ -436,6 +633,17 @@ class Wiring(unittest.TestCase):
         check = text.index('python3 /usr/libexec/bazzite-tower-opensnitch-ebpf-check')
         self.assertLess(cpio, install)
         self.assertLess(install, check)
+
+    def test_object_names_agree_across_firewall_step_check_pins_and_smoke(self):
+        text = (ROOT / 'build_files/build.d/95-firewall.sh').read_text()
+        loop = next(line for line in text.splitlines() if line.strip().startswith('for object in '))
+        names = loop.strip()[len('for object in '):].split(';')[0].split()
+        pins = json.loads(EBPF_PINS_PATH.read_text())
+        self.assertEqual(sorted(names), sorted(load(CHECK)['OBJECTS']))
+        self.assertEqual(sorted(names), sorted(pins['objects']))
+        smoke = (ROOT / 'tests/smoke.sh').read_text()
+        smoke_loop = next(line for line in smoke.splitlines() if line.strip().startswith('for ebpf_object in '))
+        self.assertEqual(sorted(smoke_loop.strip()[len('for ebpf_object in '):].split(';')[0].split()), sorted(names))
 
     def test_smoke_asserts_the_manifest_independently(self):
         smoke = (ROOT / 'tests/smoke.sh').read_text()

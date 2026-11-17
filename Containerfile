@@ -105,6 +105,7 @@ COPY --from=snitchwatch-scanner /handoff/scanner/ /handoff/scanner/
 COPY --from=snitchwatch-bridge /handoff/bridge/ /handoff/bridge/
 COPY --from=snitchwatch-bridge-rebuild /handoff/bridge-rebuild/ /handoff/bridge-rebuild/
 COPY --from=snitchwatch-daemon /handoff/daemon/ /handoff/daemon/
+COPY --from=ebpf-kernel /handoff/ebpf-kernel/kernel-facts.json /handoff/ebpf-kernel/kernel-facts.json
 COPY --from=snitchwatch-ebpf /handoff/ebpf/ /handoff/ebpf/
 COPY --from=snitchwatch-ebpf-rebuild /handoff/ebpf-rebuild/ /handoff/ebpf-rebuild/
 RUN --network=none SNITCHWATCH_BRIDGE=system FIREWALL_DAEMON="${FIREWALL_DAEMON}" bash /tools/snitchwatch-system-assemble.sh /work/native /handoff /out

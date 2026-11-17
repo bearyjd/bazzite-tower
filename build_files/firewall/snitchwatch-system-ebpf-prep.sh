@@ -18,6 +18,8 @@ work=$1
 # Positive control: the same probe must fail in both --network=none compile stages.
 python3 "$factory/snitchwatch-system-handoff.py" probe-network online
 mkdir -p "$work"
+# The pins digest anchor (EXPECTED_EBPF_PINS_SHA256) is enforced before any RPM is fetched.
+python3 -B "$factory/snitchwatch-system-ebpf.py" check-pins "$factory/snitchwatch-system-ebpf-pins.json"
 bash "$factory/snitchwatch-system-toolchain.sh" install "$factory/snitchwatch-system-ebpf-pins.json" "$work/toolchain" make
 # The installed headers are re-checked against the verified files; the RPMs themselves are not needed later.
 rm -r -- "$work/toolchain"

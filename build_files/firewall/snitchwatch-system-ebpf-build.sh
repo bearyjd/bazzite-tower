@@ -28,5 +28,6 @@ ebpf_pins="$factory/snitchwatch-system-ebpf-pins.json"
 python3 "$factory/snitchwatch-system-handoff.py" check ebpf-kernel "$kernel"
 python3 -B "$factory/snitchwatch-system-ebpf.py" build --pins "$ebpf_pins" \
     --daemon-pins "$factory/snitchwatch-system-daemon-pins.json" --native-pins "$factory/snitchwatch-system-pins.json" \
-    --profile system --repo /work/native/source/vendor/opensnitch --kernel "$kernel" --work "$work/compile" --out "$work/out"
+    --profile system --repo /work/native/source/vendor/opensnitch --kernel "$kernel" --work "$work/compile" --out "$work/out" \
+    --rpm-inventory "$work/rpm-inventory.txt"
 python3 "$factory/snitchwatch-system-handoff.py" export "$kind" --pins "$ebpf_pins" "$work/out" "$dest"

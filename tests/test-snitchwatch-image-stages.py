@@ -249,6 +249,7 @@ class ContainerfileStages(unittest.TestCase):
                                    '--from=snitchwatch-bridge /handoff/bridge/ /handoff/bridge/',
                                    '--from=snitchwatch-bridge-rebuild /handoff/bridge-rebuild/ /handoff/bridge-rebuild/',
                                    '--from=snitchwatch-daemon /handoff/daemon/ /handoff/daemon/',
+                                   '--from=ebpf-kernel /handoff/ebpf-kernel/kernel-facts.json /handoff/ebpf-kernel/kernel-facts.json',
                                    '--from=snitchwatch-ebpf /handoff/ebpf/ /handoff/ebpf/',
                                    '--from=snitchwatch-ebpf-rebuild /handoff/ebpf-rebuild/ /handoff/ebpf-rebuild/'],
         }
@@ -275,7 +276,7 @@ class ContainerfileStages(unittest.TestCase):
         # The handoffs are checked before anything reads them, and merged last.
         order = ['probe-network offline', 'cmp - "$work/rpm-inventory.txt"', "p['sourceFiles'].items()",
                  '"$guard" check scanner', '"$guard" check bridge ', '"$guard" check bridge-rebuild', '"$guard" check daemon',
-                 '"$guard" compare-bridge', '"$guard" check ebpf ', '"$guard" check ebpf-rebuild', '"$guard" compare-ebpf',
+                 '"$guard" compare-bridge', '"$guard" check ebpf-kernel-facts', '"$guard" check ebpf ', '"$guard" check ebpf-rebuild', '"$guard" compare-ebpf',
                  'bridge_artifact.py" verify', 'snitchwatch-system-stage.py"', '"$guard" check daemon', '"$guard" merge',
                  'snitchwatch-system-ebpf.py" stage', '"$guard" merge "$work/assembly/ebpf-overlay" "$out"',
                  '"$daemon_verifier" --stage-only --root "$out"', 'snitchwatch-system-verify.py" --root "$out" --image-tree']
@@ -663,7 +664,10 @@ class EbpfStages(unittest.TestCase):
                     for needle in BRIDGE_ONLY:
                         self.assertNotIn(needle, script_text(run), (name, ancestor, needle))
         readers = sorted(n for n, s in self.stages.items() if 'ebpf-kernel' in copy_sources(s))
-        self.assertEqual(readers, sorted(EBPF_COMPILES))
+        self.assertEqual(readers, sorted((*EBPF_COMPILES, 'snitchwatch-system')))
+        # Assembly reads only the facts from ebpf-kernel (M2), never the header tree.
+        facts = [rest for keyword, rest in self.stages['snitchwatch-system']['body'] if keyword == 'COPY' and 'ebpf-kernel' in rest]
+        self.assertEqual(facts, ['--from=ebpf-kernel /handoff/ebpf-kernel/kernel-facts.json /handoff/ebpf-kernel/kernel-facts.json'])
         self.assertEqual([n for n, s in self.stages.items() if s['from'] == 'ebpf-kernel'], [])
         # The compiler stays out of the scanner/bridge/daemon/assembly ancestry.
         for name in ('snitchwatch-scanner', 'snitchwatch-bridge', 'snitchwatch-bridge-rebuild', 'snitchwatch-daemon', 'snitchwatch-system'):

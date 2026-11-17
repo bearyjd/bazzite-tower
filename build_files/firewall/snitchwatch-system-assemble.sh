@@ -63,6 +63,7 @@ version=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["bridg
 python3 "$guard" compare-bridge --pins "$pins" "$handoff/bridge" "$handoff/bridge-rebuild" || {
     echo 'assembly: the sibling bridge rebuild is not byte-identical to the first bridge build; refusing.' >&2; exit 1;
 }
+python3 "$guard" check ebpf-kernel-facts "$handoff/ebpf-kernel"
 python3 "$guard" check ebpf --pins "$ebpf_pins" "$handoff/ebpf"
 python3 "$guard" check ebpf-rebuild --pins "$ebpf_pins" "$handoff/ebpf-rebuild"
 python3 "$guard" compare-ebpf --pins "$ebpf_pins" "$handoff/ebpf" "$handoff/ebpf-rebuild" || {
@@ -85,7 +86,8 @@ python3 -B "$factory/snitchwatch-system-stage.py" \
 python3 "$guard" check daemon --daemon-verifier "$daemon_verifier" "$handoff/daemon"
 python3 "$guard" merge "$handoff/daemon" "$out"
 python3 -B "$factory/snitchwatch-system-ebpf.py" stage --pins "$ebpf_pins" --daemon-pins "$factory/snitchwatch-system-daemon-pins.json" \
-    --native-pins "$pins" --profile system "$handoff/ebpf" "$work/assembly/ebpf-overlay"
+    --native-pins "$pins" --profile system --kernel-facts "$handoff/ebpf-kernel/kernel-facts.json" \
+    "$handoff/ebpf" "$work/assembly/ebpf-overlay"
 python3 "$guard" merge "$work/assembly/ebpf-overlay" "$out"
 python3 -B "$daemon_verifier" --stage-only --root "$out"
 python3 -B "$factory/snitchwatch-system-verify.py" --root "$out" --image-tree

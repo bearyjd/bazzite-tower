@@ -7,15 +7,20 @@ Subcommands (each refusal prints one `ebpf:` line and exits 1):
         kernel-core, rpm kernel-devel, the one /usr/src/kernels/<r> and the one
         /usr/lib/modules/<r> agree; then write a deterministic tarball of the
         header tree plus kernel-facts.json. Never a Fedora-header fallback.
+        The headers' .config must be byte-identical to /usr/lib/modules/<r>/config.
+  check-pins PINS
+        refuse unless the eBPF pins match EXPECTED_EBPF_PINS_SHA256 (ebpf-prep runs
+        this before installing anything; build and stage re-check it).
   build --pins P --daemon-pins D --native-pins N --profile system --repo OPENSNITCH
         --kernel HANDOFF --work NEW-DIR --out NEW-OUT
         stages snitchwatch-ebpf and snitchwatch-ebpf-rebuild (offline): unpack the
         checked headers, extract ebpf_prog as raw git blobs from the already
         verified prep checkout, check its tree sha256 and the pinned toolchain,
         compile with the upstream Makefile, strip, and write the objects.
-  stage --pins P --daemon-pins D --native-pins N --profile system HANDOFF NEW-OUT
+  stage --pins P --daemon-pins D --native-pins N --profile system --kernel-facts F HANDOFF NEW-OUT
         assembly (offline): build the image overlay and ebpf-manifest.json from
-        the pins, the kernel facts and hashes computed here.
+        the pins, the kernel facts (F, copied straight from ebpf-kernel, must be
+        byte-identical to the compile handoff's copy) and hashes computed here.
 
 The running kernel inside a build container is the build host's; nothing here asks for it.
 """
@@ -40,7 +45,7 @@ OBJECTS_DIR = '/usr/lib/opensnitchd/ebpf'
 STAGED = 'usr/share/bazzite-tower'
 BUILT_PROFILES = ('system',)
 # Bounds for the header handoff (the 7.2/7.3 trees are ~125 MiB, ~21.5k files).
-MAX_HEADERS = 1 << 30
+MAX_HEADERS = 512 * 1024 * 1024
 SAFE_ENV = {'PATH': '/usr/bin:/bin', 'LC_ALL': 'C', 'TZ': 'UTC', 'SOURCE_DATE_EPOCH': '0'}
 
 
@@ -161,17 +166,31 @@ def unpack_tree(tar_path, dest):
         tar.extractall(dest, filter='data')
 
 
+def kernel_config_sha256(root, release):
+    """sha256 of the kernel config, which must be the same bytes in kernel-core and kernel-devel."""
+    core = Path(root) / 'usr/lib/modules' / release / 'config'
+    devel = Path(root) / 'usr/src/kernels' / release / '.config'
+    for path in (core, devel):
+        if not stat.S_ISREG(os.lstat(path).st_mode):
+            raise Refusal('%s is not a regular file' % path)
+    if core.read_bytes() != devel.read_bytes():
+        raise Refusal('kernel-devel config %s (sha256 %s) differs from kernel-core config %s (sha256 %s)'
+                      % (devel, sha256(devel.read_bytes()), core, sha256(core.read_bytes())))
+    return sha256(core.read_bytes())
+
+
 def kernel_export(out, root='/'):
     out = Path(out)
     if os.path.lexists(out):
         raise Refusal('kernel handoff destination already exists: %s' % out)
     release = kernel_release(query_rpm('kernel-core'), query_rpm('kernel-devel'),
                              listing(os.path.join(root, 'usr/src/kernels')), listing(os.path.join(root, 'usr/lib/modules')))
+    config = kernel_config_sha256(root, release)
     out.mkdir(parents=True, mode=0o755)
     tar_path = out / 'kernel-headers.tar'
     pack_tree(os.path.join(root, 'usr/src/kernels', release), tar_path)
     facts = {'schemaVersion': 1, 'kernelRelease': release, 'kernelCore': release, 'kernelDevel': release,
-             'headersTarSha256': sha256(tar_path.read_bytes())}
+             'headersTarSha256': sha256(tar_path.read_bytes()), 'kernelConfigSha256': config}
     (out / 'kernel-facts.json').write_text(json.dumps(facts, indent=2, sort_keys=True) + '\n')
     for path in out.iterdir():
         path.chmod(0o644)
@@ -182,7 +201,8 @@ def valid_facts(facts):
     release = facts.get('kernelRelease', '')
     if (facts.get('schemaVersion') != 1 or not isinstance(release, str) or not RELEASE.fullmatch(release) or '..' in release
             or facts.get('kernelCore') != release or facts.get('kernelDevel') != release
-            or not HEX64.fullmatch(str(facts.get('headersTarSha256', '')))):
+            or not HEX64.fullmatch(str(facts.get('headersTarSha256', '')))
+            or not HEX64.fullmatch(str(facts.get('kernelConfigSha256', '')))):
         raise Refusal('kernel facts are malformed or disagree: %s' % json.dumps(facts, sort_keys=True))
     return facts
 
@@ -265,10 +285,14 @@ def check_tools(pins):
         if version.returncode or not any(want in line for line in lines):
             raise Refusal('%s does not report %r' % (tool['path'], want.strip()))
         banners[key] = next(line.strip() for line in lines if want in line)
+    for name in sorted({tool['rpm'] for tool in pins['tools'].values()}):
+        verified = subprocess.run(['rpm', '-V', name], capture_output=True, text=True, env=SAFE_ENV)
+        if verified.returncode or verified.stdout.strip():
+            raise Refusal('installed %s files differ from its RPM (rpm -V): %s' % (name, (verified.stdout + verified.stderr).strip()))
     return banners['cc']
 
 
-def build(pins, profile, daemon_pins, native_pins, repo, kernel, work, out):
+def build(pins, profile, daemon_pins, native_pins, repo, kernel, work, out, rpm_inventory):
     commit = check_pairing(pins, profile, daemon_pins, native_pins)
     expected_tree = pins['profiles'][profile]['ebpfProgTreeSha256']
     for path in (work, out):
@@ -298,7 +322,7 @@ def build(pins, profile, daemon_pins, native_pins, repo, kernel, work, out):
         if stripped.returncode:
             raise Refusal('llvm-strip failed for %s: %s' % (name, stripped.stderr.strip()))
     info = {'clang': clang, 'kernelRelease': facts['kernelRelease'], 'make': argv, 'opensnitchCommit': commit,
-            'ebpfProgTreeSha256': actual_tree}
+            'ebpfProgTreeSha256': actual_tree, 'rpmInventorySha256': sha256(Path(rpm_inventory).read_bytes())}
     (out / 'build-info.json').write_text(json.dumps(info, indent=2, sort_keys=True) + '\n')
     (out / 'kernel-facts.json').write_bytes((Path(kernel) / 'kernel-facts.json').read_bytes())
     (out / 'build.log').write_text(log)
@@ -307,19 +331,24 @@ def build(pins, profile, daemon_pins, native_pins, repo, kernel, work, out):
     return info
 
 
-def stage_overlay(pins_path, profile, daemon_pins, native_pins, handoff, out):
+def stage_overlay(pins_path, profile, daemon_pins, native_pins, handoff, out, kernel_facts):
     """Image overlay: the objects under the staging dir and a manifest built from what this stage can check."""
     raw = Path(pins_path).read_bytes()
     pins = json.loads(raw)
     commit = check_pairing(pins, profile, daemon_pins, native_pins)
     tree = pins['profiles'][profile]['ebpfProgTreeSha256']
     handoff = Path(handoff)
-    facts = valid_facts(json.loads((handoff / 'kernel-facts.json').read_text()))
+    direct = Path(kernel_facts).read_bytes()
+    if direct != (handoff / 'kernel-facts.json').read_bytes():
+        raise Refusal('the compile handoff kernel facts differ from the ebpf-kernel stage facts %s' % kernel_facts)
+    facts = valid_facts(json.loads(direct))
     info = json.loads((handoff / 'build-info.json').read_text())
     expected = {'kernelRelease': facts['kernelRelease'], 'opensnitchCommit': commit, 'ebpfProgTreeSha256': tree}
     for key, value in expected.items():
         if info.get(key) != value:
             raise Refusal('build-info %s %r differs from %r' % (key, info.get(key), value))
+    if not HEX64.fullmatch(str(info.get('rpmInventorySha256', ''))):
+        raise Refusal('build-info lacks the compile stage RPM inventory sha256')
     if not str(info.get('clang', '')).startswith('clang version %s ' % pins['clangVersion']):
         raise Refusal('build-info clang %r is not the pinned %s' % (info.get('clang'), pins['clangVersion']))
     out = Path(out)
@@ -337,7 +366,8 @@ def stage_overlay(pins_path, profile, daemon_pins, native_pins, handoff, out):
         (objects_dir / name).chmod(0o644)
     manifest = {'schemaVersion': 1, 'profile': profile, 'opensnitchCommit': commit, 'ebpfProgTreeSha256': tree,
                 'kernelRelease': facts['kernelRelease'], 'kernelCore': facts['kernelCore'], 'kernelDevel': facts['kernelDevel'],
-                'kernelHeadersTarSha256': facts['headersTarSha256'], 'clangVersion': pins['clangVersion'], 'clang': info['clang'],
+                'kernelHeadersTarSha256': facts['headersTarSha256'], 'kernelConfigSha256': facts['kernelConfigSha256'],
+                'compileRpmInventorySha256': info['rpmInventorySha256'], 'clangVersion': pins['clangVersion'], 'clang': info['clang'],
                 'toolchainRpms': sorted(r['nevra'] for r in pins['toolchainRpms']), 'ebpfPinsSha256': sha256(raw),
                 'objectsDir': OBJECTS_DIR, 'objects': objects}
     (out / STAGED / 'ebpf-manifest.json').write_text(json.dumps(manifest, indent=2, sort_keys=True) + '\n')
@@ -358,27 +388,33 @@ def main(argv=None):
     export = sub.add_parser('kernel-export')
     export.add_argument('--root', default='/')
     export.add_argument('out', type=Path)
+    pins_check = sub.add_parser('check-pins')
+    pins_check.add_argument('pins', type=Path)
     for name in ('build', 'stage'):
         command = sub.add_parser(name)
         for flag in ('--pins', '--daemon-pins', '--native-pins'):
             command.add_argument(flag, type=Path, required=True)
         command.add_argument('--profile', required=True)
         if name == 'build':
-            for flag in ('--repo', '--kernel', '--work', '--out'):
+            for flag in ('--repo', '--kernel', '--work', '--out', '--rpm-inventory'):
                 command.add_argument(flag, type=Path, required=True)
         else:
+            command.add_argument('--kernel-facts', type=Path, required=True)
             command.add_argument('paths', nargs=2, type=Path)
     args = parser.parse_args(argv)
     try:
         if args.command == 'kernel-export':
             result = kernel_export(args.out, args.root)
+        elif args.command == 'check-pins':
+            load_pins(args.pins)
+            result = {'pinsSha256': EXPECTED_EBPF_PINS_SHA256}
         else:
             pins = load_pins(args.pins)
             daemon, native = (json.loads(path.read_text()) for path in (args.daemon_pins, args.native_pins))
             if args.command == 'build':
-                result = build(pins, args.profile, daemon, native, args.repo, args.kernel, args.work, args.out)
+                result = build(pins, args.profile, daemon, native, args.repo, args.kernel, args.work, args.out, args.rpm_inventory)
             else:
-                result = stage_overlay(args.pins, args.profile, daemon, native, *args.paths)
+                result = stage_overlay(args.pins, args.profile, daemon, native, *args.paths, args.kernel_facts)
     except (Refusal, OSError, KeyError, ValueError, tarfile.TarError) as error:
         print('ebpf: %s: %s' % (args.command, error), file=sys.stderr)
         return 1

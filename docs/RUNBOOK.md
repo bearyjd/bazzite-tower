@@ -554,6 +554,14 @@ build, SELinux behavior of TCP 514 on this host, and any live flow to Vigie.
 > b404c4c6, the commit its RPM daemon is built from; manifest-checked, runtime-
 > unverified). The procedure below applies only to the legacy profile (RPM daemon
 > and objects, both v1.8.0).
+>
+> Build failure mode: legacy images (`:latest`, `:latest-kernel`, safe-pin) now
+> FAIL the build when the base image lacks a `kernel-devel` matching its
+> `kernel-core` (deliberate, fail-closed; no degrade path). The weekly
+> `base-bump.yml` PRs are exposed to this, so expect base-bump to fail loudly
+> there; do not merge a red one. A `FIREWALL_DAEMON=portmaster` build also builds
+> the modules and then discards them (it needs that `kernel-devel` and a GitHub
+> fetch it does not otherwise use).
 
 This is an optional **owner-operated** test on the candidate, after its initial
 `allow`/`proc` boot passes `sudo ujust snitchwatch-system-readiness` and the full

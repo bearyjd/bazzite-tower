@@ -28,7 +28,8 @@ DAEMON_PINS = json.loads((FACTORY / 'snitchwatch-system-daemon-pins.json').read_
 CHECK = ROOT / 'system_files/usr/libexec/bazzite-tower-opensnitch-ebpf-check'
 HANDOFF = FACTORY / 'snitchwatch-system-handoff.py'
 LEGACY_COMMIT = 'b404c4c6316760fa7bc415509d3f8d747f7dc9cc'
-LEGACY_RPM = {'name': 'opensnitch', 'version': '1.8.0', 'release': '1', 'tag': 'v1.8.0', 'sha256': 'e' * 64}
+LEGACY_PIN = json.loads(EBPF_PINS_PATH.read_text())['profiles']['legacy']
+LEGACY_RPM = {**{k: LEGACY_PIN['daemonRpm'][k] for k in ('name', 'version', 'release', 'sha256')}, 'tag': LEGACY_PIN['tag']}
 R72 = '7.2.15-ogc1.1.fc45.x86_64'
 R73 = '7.3.4-ogc6.1.fc45.x86_64'
 BPF_HEADER = b'\x7fELF\x02\x01\x01' + bytes(9) + (1).to_bytes(2, 'little') + (247).to_bytes(2, 'little') \
@@ -91,86 +92,11 @@ class Pins(unittest.TestCase):
                 self.e['check_pairing'](self.pins, 'system', daemon, native)
             self.assertIn('same opensnitch commit', str(caught.exception))
 
-    def legacy_pins(self, **changes):
-        pins = json.loads(self.raw)
-        legacy = pins['profiles']['legacy']
-        rpm_changes = changes.pop('daemonRpm', {})
-        legacy.update(changes)
-        legacy['daemonRpm'] = {**legacy['daemonRpm'], **rpm_changes}
-        return pins
-
-    def test_legacy_pairs_with_the_v180_rpm_daemon_and_needs_no_system_pins(self):
-        legacy = self.pins['profiles']['legacy']
-        self.assertEqual(self.e['check_pairing'](self.pins, 'legacy'), 'b404c4c6316760fa7bc415509d3f8d747f7dc9cc')
-        self.assertEqual(self.e['LEGACY_RPM_COMMITS'], {'1.8.0': legacy['opensnitchCommit']})
-        self.assertEqual(legacy['tag'], 'v1.8.0')
-        self.assertEqual({k: legacy['daemonRpm'][k] for k in ('name', 'version', 'release')},
-                         {'name': 'opensnitch', 'version': '1.8.0', 'release': '1'})
-        self.assertEqual(legacy['sourceRepository'], DAEMON_PINS['sourceRepository'])
-
-    def test_legacy_refuses_an_rpm_version_with_no_reviewed_commit(self):
-        # An RPM bump must fail loudly: even with the tag edited to match, the reviewed table has no commit for it.
-        pins = self.legacy_pins(tag='v1.9.0', daemonRpm={'version': '1.9.0'})
-        with self.assertRaises(self.e['Refusal']) as caught:
-            self.e['check_pairing'](pins, 'legacy')
-        self.assertIn('no reviewed opensnitch commit', str(caught.exception))
-
-    def test_legacy_refuses_modules_from_a_different_commit(self):
-        for commit in (DAEMON_PINS['sourceCommit'], 'f' * 40):
-            with self.subTest(commit):
-                with self.assertRaises(self.e['Refusal']) as caught:
-                    self.e['check_pairing'](self.legacy_pins(opensnitchCommit=commit), 'legacy')
-                self.assertIn('same opensnitch commit', str(caught.exception))
-
-    def test_legacy_refuses_a_source_tag_that_is_not_the_rpm_release(self):
-        with self.assertRaises(self.e['Refusal']) as caught:
-            self.e['check_pairing'](self.legacy_pins(tag='v1.9.0'), 'legacy')
-        self.assertIn('source tag', str(caught.exception))
-
-    def test_legacy_refuses_an_installed_rpm_that_is_not_the_pinned_one(self):
-        good = {'name': 'opensnitch', 'version': '1.8.0', 'release': '1', 'sha256': self.pins['profiles']['legacy']['daemonRpm']['sha256']}
-        self.assertEqual(self.e['check_pairing'](self.pins, 'legacy', rpm=good), 'b404c4c6316760fa7bc415509d3f8d747f7dc9cc')
-        for key, value in (('version', '1.9.0'), ('release', '2'), ('name', 'opensnitch-ui'), ('sha256', 'f' * 64)):
-            with self.subTest(key):
-                with self.assertRaises(self.e['Refusal']) as caught:
-                    self.e['check_pairing'](self.pins, 'legacy', rpm={**good, key: value})
-                self.assertIn(key, str(caught.exception))
-
     def test_system_pairing_needs_its_daemon_pins_and_unknown_profiles_are_refused(self):
         with self.assertRaises(self.e['Refusal']):
             self.e['check_pairing'](self.pins, 'system')
         with self.assertRaises(self.e['Refusal']):
             self.e['check_pairing'](self.pins, 'other')
-
-    def test_source_pin_names_the_one_commit_to_fetch(self):
-        self.assertEqual(self.e['source_pin'](self.pins), {
-            'repository': 'https://github.com/evilsocket/opensnitch.git', 'commit': 'b404c4c6316760fa7bc415509d3f8d747f7dc9cc'})
-        result = subprocess.run(['python3', '-B', str(EBPF), 'source-pin', str(EBPF_PINS_PATH)], capture_output=True, text=True)
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(json.loads(result.stdout)['commit'], 'b404c4c6316760fa7bc415509d3f8d747f7dc9cc')
-
-    def test_check_rpm_accepts_only_the_pinned_rpm_file(self):
-        rpm = EBPF_PINS_PATH.parent / 'nonexistent.rpm'
-        data = b'rpm bytes'
-        pins = self.legacy_pins(daemonRpm={'sha256': hashlib.sha256(data).hexdigest()})
-        with tempfile.TemporaryDirectory(prefix='sw-rpm.') as tmp:
-            rpm = Path(tmp) / 'opensnitch-1.8.0-1.x86_64.rpm'
-            rpm.write_bytes(data)
-            globals_ = self.e['check_rpm'].__globals__
-            with mock.patch.dict(globals_, {'query_rpm_file': lambda path: (0, 'opensnitch 1.8.0 1\n')}):
-                self.assertEqual(self.e['check_rpm'](pins, rpm)['version'], '1.8.0')
-            for answer, needle in (((0, 'opensnitch 1.9.0 1\n'), 'version'), ((0, 'opensnitch 1.8.0 2\n'), 'release'),
-                                   ((1, ''), 'cannot read'), ((0, 'garbage\n'), 'cannot read')):
-                with self.subTest(answer):
-                    with mock.patch.dict(globals_, {'query_rpm_file': lambda path, answer=answer: answer}):
-                        with self.assertRaises(self.e['Refusal']) as caught:
-                            self.e['check_rpm'](pins, rpm)
-                    self.assertIn(needle, str(caught.exception))
-            rpm.write_bytes(b'a different rpm')
-            with mock.patch.dict(globals_, {'query_rpm_file': lambda path: (0, 'opensnitch 1.8.0 1\n')}):
-                with self.assertRaises(self.e['Refusal']) as caught:
-                    self.e['check_rpm'](pins, rpm)
-            self.assertIn('sha256', str(caught.exception))
 
     def test_objects_are_the_three_the_daemon_loads(self):
         check = load(CHECK)
@@ -688,7 +614,7 @@ class ImageCheck(Workdir):
         if manifest:
             (share / 'ebpf-manifest.json').write_text(json.dumps({
                 'schemaVersion': 1, 'profile': profile, 'kernelRelease': kernel, 'objects': hashes,
-                'objectsDir': '/usr/lib/opensnitchd/ebpf', 'ebpfProgTreeSha256': 'b' * 64,
+                'objectsDir': '/usr/lib/opensnitchd/ebpf', 'ebpfProgTreeSha256': LEGACY_PIN['ebpfProgTreeSha256'] if profile == 'legacy' else 'b' * 64,
                 'opensnitchCommit': commit or (LEGACY_COMMIT if profile == 'legacy' else 'a' * 40),
                 'clangVersion': '21.1.8', 'kernelConfigSha256': hashlib.sha256(b'CONFIG_BPF=y\n').hexdigest(),
                 **({'daemonRpm': LEGACY_RPM if rpm == 'default' else rpm} if profile == 'legacy' and rpm is not None else {})}))
@@ -733,35 +659,6 @@ class ImageCheck(Workdir):
         self.assertNotEqual(missing.returncode, 0)
         self.assertIn('ebpf-manifest.json', missing.stderr)
 
-    def test_legacy_image_with_a_matching_v180_manifest_passes(self):
-        result = self.run_check(self.image(profile='legacy'))
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn('legacy', result.stdout)
-        self.assertIn(R72, result.stdout)
-        self.assertIn('v1.8.0', result.stdout)
-
-    def test_legacy_manifest_must_be_for_the_v180_commit(self):
-        for commit in ('a' * 40, 'a1353848ba1b660320e90cefea782c3fba272c00'):
-            result = self.run_check(self.image(profile='legacy', commit=commit))
-            self.assertNotEqual(result.returncode, 0, commit)
-            self.assertIn('v1.8.0 commit', result.stderr)
-
-    def test_legacy_manifest_must_record_the_v180_rpm(self):
-        for rpm in (None, {**LEGACY_RPM, 'version': '1.9.0'}, {**LEGACY_RPM, 'name': 'opensnitch-ui'}, {**LEGACY_RPM, 'tag': 'v1.9.0'},
-                    {**LEGACY_RPM, 'sha256': 'xyz'}, 'not a dict'):
-            with self.subTest(rpm):
-                result = self.run_check(self.image(profile='legacy', rpm=rpm))
-                self.assertNotEqual(result.returncode, 0)
-                self.assertIn('daemon RPM', result.stderr)
-
-    def test_legacy_still_checks_kernel_config_and_object_hashes(self):
-        self.assertNotEqual(self.run_check(self.image(profile='legacy', kernel=R73)).returncode, 0)
-        root = self.image(profile='legacy')
-        (root / 'usr/lib/opensnitchd/ebpf/opensnitch-dns.o').write_bytes(BPF_HEADER + b'rpm copy')
-        result = self.run_check(root)
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn('opensnitch-dns.o', result.stderr)
-
     def test_a_manifest_for_the_other_profile_is_refused(self):
         root = self.image(profile='legacy')
         (root / 'usr/share/bazzite-tower/snitchwatch-bridge-profile').write_text('system\n')
@@ -799,50 +696,6 @@ class Wiring(unittest.TestCase):
         self.assertTrue(before[-2].lstrip().startswith('for object in '), before[-2:])
         self.assertNotIn('== system', before[-1])
         self.assertNotIn('== system', before[-2])
-
-    def test_firewall_step_refuses_a_legacy_rpm_that_is_not_the_pinned_one_before_extracting_it(self):
-        text = self.firewall_text()
-        check = text.index('snitchwatch-system-ebpf.py" check-rpm')
-        self.assertLess(text.index('sha256sum -c -'), check)
-        self.assertLess(check, text.index('rpm2cpio "/tmp'))
-        gate = [line for line in text[:check].splitlines() if line.lstrip().startswith('if ')][-1]
-        self.assertIn('== legacy', gate)
-        self.assertIn('"/tmp/${opensnitch_rpm}"', text[check:check + 400])
-
-    def test_firewall_rpm_constants_equal_the_pinned_legacy_daemon_rpm(self):
-        # A half-landed RPM bump (95-firewall.sh moved, pins not) goes red here.
-        text = self.firewall_text()
-        version = re.search(r'^\s*opensnitch_version="([^"]+)"', text, re.M).group(1)
-        sha = re.search(r'^\s*opensnitch_sha256="([0-9a-f]{64})"', text, re.M).group(1)
-        rpm = json.loads(EBPF_PINS_PATH.read_text())['profiles']['legacy']['daemonRpm']
-        self.assertEqual((version, sha), (rpm['version'], rpm['sha256']))
-        self.assertIn('opensnitch_rpm="opensnitch-${opensnitch_version}-%s.x86_64.rpm"' % rpm['release'], text)
-        self.assertEqual(rpm['file'], 'opensnitch-%s-%s.x86_64.rpm' % (rpm['version'], rpm['release']))
-
-    def test_portmaster_variant_drops_the_staged_modules(self):
-        text = self.firewall_text()
-        branch = text[text.index('    portmaster)'):text.index('source "$(dirname')]
-        self.assertIn('/usr/share/bazzite-tower/opensnitch-ebpf', branch)
-        self.assertIn('/usr/share/bazzite-tower/ebpf-manifest.json', branch)
-        smoke = (ROOT / 'tests/smoke.sh').read_text()
-        portmaster = smoke[smoke.index('\nportmaster)'):]
-        self.assertIn('/usr/share/bazzite-tower/ebpf-manifest.json', portmaster)
-
-    def test_pinned_legacy_identity_is_the_same_in_pins_check_helper_and_smoke(self):
-        legacy = json.loads(EBPF_PINS_PATH.read_text())['profiles']['legacy']
-        check = load(CHECK)
-        self.assertEqual(check['LEGACY_OPENSNITCH_COMMIT'], legacy['opensnitchCommit'])
-        self.assertEqual(check['LEGACY_RPM_VERSION'], legacy['daemonRpm']['version'])
-        smoke = (ROOT / 'tests/smoke.sh').read_text()
-        legacy_branch = smoke[smoke.index('\nlegacy)\n'):smoke.index('\nsystem)\n')]
-        self.assertIn(legacy['opensnitchCommit'], legacy_branch)
-        self.assertIn('.daemonRpm.version == "%s"' % legacy['daemonRpm']['version'], legacy_branch)
-        self.assertIn('/usr/share/bazzite-tower/ebpf-manifest.json', legacy_branch)
-        self.assertNotIn('check "legacy image has no eBPF build manifest"', legacy_branch)
-        self.assertEqual(self.e_commits(), {legacy['daemonRpm']['version']: legacy['opensnitchCommit']})
-
-    def e_commits(self):
-        return load(EBPF)['LEGACY_RPM_COMMITS']
 
     def test_object_names_agree_across_firewall_step_check_pins_and_smoke(self):
         text = (ROOT / 'build_files/build.d/95-firewall.sh').read_text()

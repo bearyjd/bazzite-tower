@@ -43,7 +43,7 @@ import sys
 import tarfile
 
 # Bump together with snitchwatch-system-ebpf-pins.json (tests/test-snitchwatch-ebpf.py).
-EXPECTED_EBPF_PINS_SHA256 = '9294eecd2245ecebc83d6c690f7916fc6887d37bc83f2cdd914c0a69a83f9b72'
+EXPECTED_EBPF_PINS_SHA256 = '5a6b413b68367977778b730c3bf55906dc491c1ae2791a98dbf8a2c1344faf2b'
 RELEASE = re.compile(r'[0-9][0-9A-Za-z._+~-]*\.x86_64')
 HEX40 = re.compile('[0-9a-f]{40}')
 HEX64 = re.compile('[0-9a-f]{64}')

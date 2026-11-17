@@ -36,12 +36,16 @@ bash "$factory/snitchwatch-system-toolchain.sh" install "$factory/snitchwatch-sy
 # The installed headers are re-checked against the verified files; the RPMs themselves are not needed later.
 rm -r -- "$work/toolchain"
 if [[ "$profile" == legacy ]]; then
-    readarray -t pin < <(python3 -B "$factory/snitchwatch-system-ebpf.py" source-pin "$factory/snitchwatch-system-ebpf-pins.json" |
-        python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["repository"]); print(d["commit"])')
+    # Plain command substitutions: set -e sees source-pin's refusal (a process substitution would swallow it).
+    pin_json=$(python3 -B "$factory/snitchwatch-system-ebpf.py" source-pin "$factory/snitchwatch-system-ebpf-pins.json")
+    repo=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["repository"])' <<< "$pin_json")
+    commit=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["commit"])' <<< "$pin_json")
+    [[ "$commit" =~ ^[0-9a-f]{40}$ ]] || { echo 'ebpf prep: source-pin commit is not a full sha1' >&2; exit 1; }
+    [[ "$repo" =~ ^https://github\.com/ ]] || { echo 'ebpf prep: source-pin repository is not on github.com over https' >&2; exit 1; }
     # Fetch by commit (verified by git's own object hash): not the tag, which could be moved.
     git init "$work/source"
-    git -C "$work/source" remote add origin "${pin[0]}"
-    git -C "$work/source" fetch --depth=1 origin "${pin[1]}"
-    [[ "$(git -C "$work/source" rev-parse FETCH_HEAD)" == "${pin[1]}" ]] || { echo 'ebpf prep: fetched commit is not the pin' >&2; exit 1; }
+    git -C "$work/source" remote add origin "$repo"
+    timeout 240 git -C "$work/source" fetch --depth=1 origin "$commit"
+    [[ "$(git -C "$work/source" rev-parse FETCH_HEAD)" == "$commit" ]] || { echo 'ebpf prep: fetched commit is not the pin' >&2; exit 1; }
 fi
 rpm -qa --qf '%{NAME}-%{EPOCHNUM}:%{VERSION}-%{RELEASE}.%{ARCH}\n' | LC_ALL=C sort > "$work/rpm-inventory.txt"

@@ -23,8 +23,7 @@
       "ebpfProgTreeSha256": "39512718023e91e3d48bdaa6f0c958a5457ebb8df560dbd53d348f55551c6fd6",
       "opensnitchCommit": "b404c4c6316760fa7bc415509d3f8d747f7dc9cc",
       "sourceRepository": "https://github.com/evilsocket/opensnitch.git",
-      "tag": "v1.8.0",
-      "tagObject": "d757f06116094d1d460e843c546ae1d31999bf18"
+      "tag": "v1.8.0"
     },
     "system": {
       "ebpfProgTreeSha256": "c37c309a548ec5518aec25bd4602d7c5672fb8e94ab9430893615aeafe0e4537",

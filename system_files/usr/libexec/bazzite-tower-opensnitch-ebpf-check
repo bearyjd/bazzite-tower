@@ -29,6 +29,9 @@ PROFILE = 'usr/share/bazzite-tower/snitchwatch-bridge-profile'
 # Must agree with snitchwatch-system-ebpf-pins.json (tests/test-snitchwatch-ebpf.py).
 LEGACY_OPENSNITCH_COMMIT = 'b404c4c6316760fa7bc415509d3f8d747f7dc9cc'
 LEGACY_RPM_VERSION = '1.8.0'
+LEGACY_RPM_RELEASE = '1'
+LEGACY_RPM_SHA256 = 'e06e9119daf764e56455b61c319e496274c0274bb53bb94a0ff1ab72967fea7d'
+LEGACY_TREE_SHA256 = '39512718023e91e3d48bdaa6f0c958a5457ebb8df560dbd53d348f55551c6fd6'
 
 
 def read_object(path):
@@ -89,14 +92,21 @@ def verify_manifest(root, profile):
 
 
 def verify_legacy_pairing(manifest):
+    """Check the manifest against the pins and files; this does NOT verify the RPM.
+
+    The manifest only records the daemon RPM the modules were paired with. That the installed
+    daemon is that RPM is bound at build time by `ebpf.py check-rpm` in 95-firewall.sh."""
     rpm = manifest.get('daemonRpm')
     if manifest.get('opensnitchCommit') != LEGACY_OPENSNITCH_COMMIT:
         raise ValueError(f'{MANIFEST}: legacy modules were built from {manifest.get("opensnitchCommit")!r}, '
                          f'not the v1.8.0 commit {LEGACY_OPENSNITCH_COMMIT} of the RPM daemon')
     if (not isinstance(rpm, dict) or rpm.get('name') != 'opensnitch' or rpm.get('version') != LEGACY_RPM_VERSION
-            or rpm.get('tag') != 'v' + LEGACY_RPM_VERSION or not re.fullmatch('[0-9a-f]{64}', str(rpm.get('sha256', '')))):
-        raise ValueError(f'{MANIFEST}: legacy manifest must record the opensnitch {LEGACY_RPM_VERSION} daemon RPM it is paired with, '
+            or rpm.get('tag') != 'v' + LEGACY_RPM_VERSION or rpm.get('release') != LEGACY_RPM_RELEASE
+            or rpm.get('sha256') != LEGACY_RPM_SHA256):
+        raise ValueError(f'{MANIFEST}: legacy manifest must record the pinned opensnitch {LEGACY_RPM_VERSION} daemon RPM it is paired with, '
                          f'found {rpm!r}')
+    if manifest.get('ebpfProgTreeSha256') != LEGACY_TREE_SHA256:
+        raise ValueError(f'{MANIFEST}: legacy ebpf_prog tree {manifest.get("ebpfProgTreeSha256")!r} is not the pinned {LEGACY_TREE_SHA256}')
 
 
 def verify_image(root):

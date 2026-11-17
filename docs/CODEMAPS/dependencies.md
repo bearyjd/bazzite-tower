@@ -70,7 +70,7 @@ and `ebpf_prog` tree sha256 in `build_files/firewall/snitchwatch-system-ebpf-pin
 `kernel-devel` (digest-pinned base), never Fedora's. Move
 `EXPECTED_EBPF_PINS_SHA256` in `snitchwatch-system-ebpf.py` with that file; the
 system commit must equal the daemon `sourceCommit` and the bridge `submoduleCommit`
-(`tests/test-snitchwatch-ebpf.py`).
+(`tests/test-snitchwatch-ebpf.py`, `tests/test-snitchwatch-ebpf-legacy.py`).
 
 The r15 bridge candidate source is pinned at
 `bfc76e6607574b354e1d3b1494798e7ea78d1685` (tree

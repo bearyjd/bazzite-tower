@@ -218,11 +218,21 @@ toolchain NEVRAs, compile-stage RPM inventory sha256 (compile-stage-reported, in
 missing/nonregular/non-BPF object and, for system, unless the manifest kernel is
 the image's single `/usr/lib/modules/*` release, its config sha256 matches that
 kernel's `config`, and every on-disk object hash matches (legacy: also unless the manifest commit is the pinned v1.8.0
-commit and it records the 1.8.0 daemon RPM); smoke repeats these with `jq`/`sha256sum`. The portmaster VM spike has
+commit and it records the pinned 1.8.0 daemon RPM (name, version, release, sha256) and the pinned tree sha; the helper does not verify the RPM itself, `check-rpm` at build time is the binding); smoke repeats these with `jq`/`sha256sum`. The portmaster VM spike has
 no OpenSnitch, so `95-firewall.sh` drops the staged modules and manifest there. This is not proof that probes load on the running
 kernel; `ProcMonitorMethod` stays `proc` and the readiness contract is unchanged.
-Offline tests: `tests/test-snitchwatch-ebpf.py` (guard fixtures, pins/pairing,
-tree hash, header tar, handoff/compare, manifest, image check) and
+Failure modes (deliberate, fail-closed; there is no degrade path): every legacy
+image (`:latest`, `:latest-kernel`, safe-pin) now FAILS the build when its base
+lacks a `kernel-devel` matching its `kernel-core` (the `ebpf-kernel` stage
+refuses), so the weekly `base-bump.yml` PRs are exposed to this and a base-bump
+build is expected to fail loudly there rather than ship stale objects. A
+`FIREWALL_DAEMON=portmaster` build still runs the `ebpf-legacy-*` stages (it needs
+that `kernel-devel` and a GitHub fetch of the pinned OpenSnitch commit) and then
+discards the modules, which the portmaster spike does not use.
+Offline tests: `tests/test-snitchwatch-ebpf.py` (guard fixtures, pins, tree hash,
+header tar, handoff/compare, manifest, image check) and
+`tests/test-snitchwatch-ebpf-legacy.py` (legacy pins/pairing, RPM pin and query
+format, prep source-pin, assembly output shape, wiring), and
 `tests/test-snitchwatch-resources.py` (ELF fixtures, interval accounting).
 
 Only the system candidate changes the image-intent OpenSnitch address to

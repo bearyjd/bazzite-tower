@@ -34,3 +34,12 @@ python3 "$guard" compare-ebpf --pins "$ebpf_pins" "$handoff/ebpf" "$handoff/ebpf
 python3 -B "$factory/snitchwatch-system-ebpf.py" stage --pins "$ebpf_pins" --profile legacy \
     --kernel-facts "$handoff/ebpf-kernel/kernel-facts.json" "$handoff/ebpf" "$out"
 install -m 0644 "$factory/snitchwatch-system-legacy-marker" "$out/usr/share/bazzite-tower/snitchwatch-bridge-profile"
+# Final output shape: exactly the profile marker, the three objects and the manifest (and their
+# directories); no other entry and no symlink or special file, so nothing else rides into the image.
+bridge=usr/share/bazzite-tower
+expected=$(printf '%s\n' usr usr/share "$bridge" "$bridge/opensnitch-ebpf" "$bridge/snitchwatch-bridge-profile" \
+    "$bridge/ebpf-manifest.json" "$bridge/opensnitch-ebpf/opensnitch.o" "$bridge/opensnitch-ebpf/opensnitch-procs.o" \
+    "$bridge/opensnitch-ebpf/opensnitch-dns.o" | LC_ALL=C sort)
+actual=$(cd -- "$out" && find . -mindepth 1 -printf '%P\n' | LC_ALL=C sort)
+[[ "$actual" == "$expected" ]] || { echo 'ebpf legacy assembly: output is not exactly the marker, objects and manifest; refusing.' >&2; exit 1; }
+[[ -z "$(find "$out" -mindepth 1 ! -type d ! -type f -print -quit)" ]] || { echo 'ebpf legacy assembly: output holds a symlink or special file; refusing.' >&2; exit 1; }

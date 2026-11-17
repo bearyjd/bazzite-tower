@@ -774,7 +774,15 @@ class LegacyEbpfStages(unittest.TestCase):
     def test_legacy_prep_fetches_only_the_pinned_commit_before_the_inventory(self):
         prep = (FACTORY / 'snitchwatch-system-ebpf-prep.sh').read_text()
         self.assertIn('source-pin', prep)
-        self.assertIn('fetch --depth=1 origin "${pin[1]}"', prep)
+        self.assertIn('timeout 240 git -C "$work/source" fetch --depth=1 origin "$commit"', prep)
+        # The refusal status of source-pin must reach set -e (a process substitution swallows it) and the
+        # answer is shape-checked before it is handed to git.
+        self.assertNotIn('readarray', prep)
+        self.assertIn('pin_json=$(python3 -B', prep)
+        self.assertIn('[[ "$commit" =~ ^[0-9a-f]{40}$ ]]', prep)
+        self.assertIn('[[ "$repo" =~ ^https://github\\.com/ ]]', prep)
+        self.assertLess(prep.index('pin_json=$(python3'), prep.index('[[ "$commit" =~'))
+        self.assertLess(prep.index('[[ "$repo" =~'), prep.index('remote add'))
         self.assertNotIn('--filter', prep)  # the offline compile reads blobs with cat-file: no lazy fetch possible
         self.assertLess(prep.index('toolchain.sh" install'), prep.index('fetch --depth=1'))
         self.assertLess(prep.index('fetch --depth=1'), prep.index('rpm-inventory.txt'))

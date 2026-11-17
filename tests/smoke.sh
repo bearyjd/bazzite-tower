@@ -451,7 +451,9 @@ legacy)
         jq -e '.profile == "legacy" and .opensnitchCommit == "b404c4c6316760fa7bc415509d3f8d747f7dc9cc"' "${ebpf_manifest}"
     check "legacy eBPF manifest records the paired opensnitch 1.8.0 RPM" \
         jq -e '.daemonRpm.name == "opensnitch" and .daemonRpm.version == "1.8.0" and .daemonRpm.tag == "v1.8.0"
-               and (.daemonRpm.sha256 | test("^[0-9a-f]{64}$"))' "${ebpf_manifest}"
+               and .daemonRpm.release == "1"
+               and .daemonRpm.sha256 == "e06e9119daf764e56455b61c319e496274c0274bb53bb94a0ff1ab72967fea7d"
+               and .ebpfProgTreeSha256 == "39512718023e91e3d48bdaa6f0c958a5457ebb8df560dbd53d348f55551c6fd6"' "${ebpf_manifest}"
     for ebpf_object in opensnitch.o opensnitch-procs.o opensnitch-dns.o; do
         check "legacy eBPF ${ebpf_object} sha256 matches the build manifest" \
             jq -e --arg o "${ebpf_object}" --arg h "$(sha256sum < "/usr/lib/opensnitchd/ebpf/${ebpf_object}" | cut -d' ' -f1)" \

@@ -28,18 +28,28 @@ FACTORY = ROOT / 'build_files/firewall'
 CONTAINERFILE = ROOT / 'Containerfile'
 PINS = json.loads((FACTORY / 'snitchwatch-system-pins.json').read_text())
 BUILD_STAGES = ('snitchwatch-prep', 'snitchwatch-scanner', 'snitchwatch-bridge', 'snitchwatch-bridge-rebuild', 'snitchwatch-daemon',
-                'ebpf-kernel', 'snitchwatch-ebpf-prep', 'snitchwatch-ebpf', 'snitchwatch-ebpf-rebuild', 'snitchwatch-system')
+                'ebpf-kernel', 'snitchwatch-ebpf-prep', 'snitchwatch-ebpf', 'snitchwatch-ebpf-rebuild',
+                'ebpf-legacy-base', 'ebpf-legacy-prep', 'ebpf-legacy', 'ebpf-legacy-rebuild', 'ebpf-legacy-assembly',
+                'snitchwatch-legacy', 'snitchwatch-system')
 # Track A: the base image's kernel headers, the toolchain stage, and the two sibling offline compiles.
 EBPF_FROM = {'ebpf-kernel': '${BASE_IMAGE}', 'snitchwatch-ebpf-prep': 'snitchwatch-prep',
-             'snitchwatch-ebpf': 'snitchwatch-ebpf-prep', 'snitchwatch-ebpf-rebuild': 'snitchwatch-ebpf-prep'}
+             'snitchwatch-ebpf': 'snitchwatch-ebpf-prep', 'snitchwatch-ebpf-rebuild': 'snitchwatch-ebpf-prep',
+             'ebpf-legacy-base': PINS['builderImage'], 'ebpf-legacy-prep': 'ebpf-legacy-base', 'ebpf-legacy': 'ebpf-legacy-prep',
+             'ebpf-legacy-rebuild': 'ebpf-legacy-prep', 'ebpf-legacy-assembly': 'ebpf-legacy-base', 'snitchwatch-legacy': 'scratch'}
 EBPF_COMPILES = ('snitchwatch-ebpf', 'snitchwatch-ebpf-rebuild')
+# Legacy profile: the same per-kernel compile for the v1.8.0 RPM daemon, with no snitchwatch-prep in its ancestry.
+LEGACY_STAGES = ('ebpf-legacy-base', 'ebpf-legacy-prep', 'ebpf-legacy', 'ebpf-legacy-rebuild', 'ebpf-legacy-assembly', 'snitchwatch-legacy')
+LEGACY_COMPILES = ('ebpf-legacy', 'ebpf-legacy-rebuild')
+# Stages with no RUN of their own (COPY only).
+COPY_ONLY_STAGES = ('snitchwatch-legacy',)
 # The two sibling bridge builds (M1 step 2): each runs ~660 crates' build code, neither is an ancestor of anything.
 BRIDGE_STAGES = ('snitchwatch-bridge', 'snitchwatch-bridge-rebuild')
 OFFLINE_STAGES = ('snitchwatch-scanner', 'snitchwatch-bridge', 'snitchwatch-bridge-rebuild', 'ebpf-kernel', 'snitchwatch-ebpf',
-                  'snitchwatch-ebpf-rebuild', 'snitchwatch-system')
-ONLINE_STAGES = ('snitchwatch-prep', 'snitchwatch-daemon', 'snitchwatch-ebpf-prep')
+                  'snitchwatch-ebpf-rebuild', 'ebpf-legacy', 'ebpf-legacy-rebuild', 'ebpf-legacy-assembly', 'snitchwatch-system')
+ONLINE_STAGES = ('snitchwatch-prep', 'snitchwatch-daemon', 'snitchwatch-ebpf-prep', 'ebpf-legacy-base', 'ebpf-legacy-prep')
 OFFLINE_SCRIPTS = ('snitchwatch-system-scanner-stage.sh', 'snitchwatch-system-bridge-build.sh', 'snitchwatch-system-bridge-rebuild.sh',
-                   'snitchwatch-system-ebpf-build.sh', 'snitchwatch-system-assemble.sh')
+                   'snitchwatch-system-ebpf-build.sh', 'snitchwatch-system-ebpf-legacy-assemble.sh', 'snitchwatch-system-assemble.sh')
+GUARD_SCRIPTS = ('snitchwatch-system-assemble.sh', 'snitchwatch-system-ebpf-legacy-assemble.sh')
 BRIDGE_SCRIPT = FACTORY / 'snitchwatch-system-bridge-build.sh'
 REBUILD_SCRIPT = FACTORY / 'snitchwatch-system-bridge-rebuild.sh'
 BRIDGE_SCRIPTS = (BRIDGE_SCRIPT, REBUILD_SCRIPT)
@@ -80,7 +90,7 @@ TEST = r'\[\[ (?:(?!\]\]|\$\(|`).)+ \]\]'
 GUARD = TEST + r'(?: && ' + TEST + r")* \|\| \{(?: echo '[^']*' >&2; exit 1; \})?"
 PRE_PROBE = re.compile(r'(set -euo pipefail|factory=\$\(cd -- "\$\(dirname -- "\$\{BASH_SOURCE\[0\]\}"\)" && pwd\)'
                        r'|bash "\$factory/snitchwatch-system-mode\.sh"|' + GUARD + r"|echo '[^']*' >&2; exit 1;|\}"
-                       r'|(?:[a-z_]+=(?:\$\d|"\$factory/[\w.-]+")\s*)+)')
+                       r'|(?:[a-z_]+=(?:\$\d|"\$factory/[\w.-]+")\s*)+|profile=\$\{SNITCHWATCH_BRIDGE:-legacy\})')
 
 
 def pre_probe_line_ok(line):
@@ -149,7 +159,7 @@ class ContainerfileStages(unittest.TestCase):
 
     def test_stage_names_order_and_from_chain(self):
         names = [name for name in self.stages if not name.startswith('<final')]
-        self.assertEqual(names, ['ctx', 'snitchwatch-legacy', *BUILD_STAGES, 'snitchwatch-selected'])
+        self.assertEqual(names, ['ctx', *BUILD_STAGES, 'snitchwatch-selected'])
         builder = PINS['builderImage']
         self.assertEqual(self.stages['snitchwatch-prep']['from'], builder)
         daemon_pins = json.loads((FACTORY / 'snitchwatch-system-daemon-pins.json').read_text())
@@ -203,7 +213,7 @@ class ContainerfileStages(unittest.TestCase):
 
     def test_network_none_is_on_every_offline_run_and_confined_to_those_stages(self):
         # M1 step 1 replaced `count('--network=') == 2` with exact stage sets.
-        self.assertEqual(set(OFFLINE_STAGES) | set(ONLINE_STAGES), set(BUILD_STAGES))
+        self.assertEqual(set(OFFLINE_STAGES) | set(ONLINE_STAGES) | set(COPY_ONLY_STAGES), set(BUILD_STAGES))
         self.assertFalse(set(OFFLINE_STAGES) & set(ONLINE_STAGES))
         offline = set()
         for name, stage in self.stages.items():
@@ -229,7 +239,7 @@ class ContainerfileStages(unittest.TestCase):
             lines = [line.strip() for line in (FACTORY / script).read_text().splitlines()[1:]
                      if line.strip() and not line.lstrip().startswith('#')]
             probe = lines.index('python3 "$factory/snitchwatch-system-handoff.py" probe-network offline'
-                                if script != 'snitchwatch-system-assemble.sh' else 'python3 "$guard" probe-network offline')
+                                if script not in GUARD_SCRIPTS else 'python3 "$guard" probe-network offline')
             for line in lines[:probe]:
                 self.assertTrue(pre_probe_line_ok(line), (script, line))
             for later in ('rpm -qa', 'cargo', 'build-bridge.sh', 'repro-check.sh', 'readarray', 'scanner-build.py'):
@@ -244,6 +254,13 @@ class ContainerfileStages(unittest.TestCase):
             'ebpf-kernel': ['--from=ctx /firewall/snitchwatch-system-ebpf.py /factory/'],
             'snitchwatch-ebpf': ['--from=ebpf-kernel /handoff/ebpf-kernel/ /handoff/ebpf-kernel/'],
             'snitchwatch-ebpf-rebuild': ['--from=ebpf-kernel /handoff/ebpf-kernel/ /handoff/ebpf-kernel/'],
+            'ebpf-legacy-base': ['--from=ctx /firewall/snitchwatch-system* /factory/'],
+            'ebpf-legacy': ['--from=ebpf-kernel /handoff/ebpf-kernel/ /handoff/ebpf-kernel/'],
+            'ebpf-legacy-rebuild': ['--from=ebpf-kernel /handoff/ebpf-kernel/ /handoff/ebpf-kernel/'],
+            'ebpf-legacy-assembly': ['--from=ebpf-kernel /handoff/ebpf-kernel/kernel-facts.json /handoff/ebpf-kernel/kernel-facts.json',
+                                     '--from=ebpf-legacy /handoff/ebpf/ /handoff/ebpf/',
+                                     '--from=ebpf-legacy-rebuild /handoff/ebpf-rebuild/ /handoff/ebpf-rebuild/'],
+            'snitchwatch-legacy': ['--from=ebpf-legacy-assembly /out/ /out/'],
             'snitchwatch-system': ['--from=ctx /firewall/snitchwatch-system* /tools/',
                                    '--from=snitchwatch-scanner /handoff/scanner/ /handoff/scanner/',
                                    '--from=snitchwatch-bridge /handoff/bridge/ /handoff/bridge/',
@@ -664,7 +681,7 @@ class EbpfStages(unittest.TestCase):
                     for needle in BRIDGE_ONLY:
                         self.assertNotIn(needle, script_text(run), (name, ancestor, needle))
         readers = sorted(n for n, s in self.stages.items() if 'ebpf-kernel' in copy_sources(s))
-        self.assertEqual(readers, sorted((*EBPF_COMPILES, 'snitchwatch-system')))
+        self.assertEqual(readers, sorted((*EBPF_COMPILES, *LEGACY_COMPILES, 'snitchwatch-system', 'ebpf-legacy-assembly')))
         # Assembly reads only the facts from ebpf-kernel (M2), never the header tree.
         facts = [rest for keyword, rest in self.stages['snitchwatch-system']['body'] if keyword == 'COPY' and 'ebpf-kernel' in rest]
         self.assertEqual(facts, ['--from=ebpf-kernel /handoff/ebpf-kernel/kernel-facts.json /handoff/ebpf-kernel/kernel-facts.json'])
@@ -701,6 +718,86 @@ class EbpfStages(unittest.TestCase):
         self.assertLess(build.index('snitchwatch-system-ebpf.py" build'), build.index('export "$kind"'))
         for needle in ('dnf', 'curl', 'git fetch', 'git clone', 'toolchain.sh'):
             self.assertNotIn(needle, build)
+
+
+class LegacyEbpfStages(unittest.TestCase):
+    """The legacy profile builds its per-kernel modules without any native snitchwatch stage."""
+
+    def setUp(self):
+        self.stages = stages()
+
+    def test_legacy_ancestry_never_touches_the_system_build(self):
+        system_only = {n for n in BUILD_STAGES if n not in LEGACY_STAGES and n != 'ebpf-kernel'}
+        for name in LEGACY_STAGES:
+            chain = from_chain(self.stages, name)
+            self.assertFalse(system_only & set(chain), (name, chain))
+            for stage_name in chain:
+                for run in runs(self.stages[stage_name]):
+                    text = script_text(run)
+                    self.assertNotIn('/work/native', run, (name, stage_name))  # the shared build script names it in its system branch only
+                    for needle in (*BRIDGE_ONLY, 'snitchwatch-system-prep.sh', 'scanner-stage', 'daemon-build.sh'):
+                        self.assertNotIn(needle, text, (name, stage_name, needle))
+        for name in system_only:
+            self.assertFalse(set(LEGACY_STAGES) & set(from_chain(self.stages, name)), name)
+        # The one stage legacy shares with system is the base-image header export.
+        self.assertEqual(from_chain(self.stages, 'ebpf-kernel'), ['ebpf-kernel'])
+
+    def test_legacy_selected_stage_only_carries_the_assembled_overlay(self):
+        self.assertEqual(self.stages['snitchwatch-legacy']['from'], 'scratch')
+        self.assertEqual(self.stages['snitchwatch-legacy']['body'], [('COPY', '--from=ebpf-legacy-assembly /out/ /out/')])
+
+    def test_legacy_compiles_are_ancestors_of_nothing_and_assembly_reads_only_data(self):
+        for name in LEGACY_COMPILES:
+            self.assertEqual([n for n, s in self.stages.items() if s['from'] == name], [], name)
+            self.assertEqual([n for n, s in self.stages.items() if name in copy_sources(s)], ['ebpf-legacy-assembly'], name)
+            self.assertEqual(copy_sources(self.stages[name]), ['ebpf-kernel'], name)
+        # Assembly descends from the base: no compiler, toolchain or checkout in its ancestry.
+        self.assertEqual(from_chain(self.stages, 'ebpf-legacy-assembly')[:2], ['ebpf-legacy-assembly', 'ebpf-legacy-base'])
+        self.assertNotIn('ebpf-legacy-prep', from_chain(self.stages, 'ebpf-legacy-assembly'))
+        facts = [rest for keyword, rest in self.stages['ebpf-legacy-assembly']['body'] if keyword == 'COPY' and 'ebpf-kernel' in rest]
+        self.assertEqual(facts, ['--from=ebpf-kernel /handoff/ebpf-kernel/kernel-facts.json /handoff/ebpf-kernel/kernel-facts.json'])
+
+    def test_legacy_compiles_run_the_same_script_at_the_same_paths(self):
+        first, second = (runs(self.stages[name]) for name in LEGACY_COMPILES)
+        self.assertEqual(len(first), 1)
+        self.assertEqual(len(second), 1)
+        self.assertTrue(first[0].endswith('SNITCHWATCH_BRIDGE=legacy bash /factory/snitchwatch-system-ebpf-build.sh '
+                                          '/work/ebpf /handoff/ebpf-kernel /handoff/ebpf ebpf'))
+        self.assertEqual(first[0].replace('/handoff/ebpf ebpf', '/handoff/ebpf-rebuild ebpf-rebuild'), second[0])
+
+    def test_legacy_base_and_prep_run_online_with_the_legacy_profile(self):
+        self.assertEqual(runs(self.stages['ebpf-legacy-base']), ['SNITCHWATCH_BRIDGE=legacy bash /factory/snitchwatch-system-ebpf-legacy-base.sh'])
+        self.assertEqual(runs(self.stages['ebpf-legacy-prep']), ['SNITCHWATCH_BRIDGE=legacy bash /factory/snitchwatch-system-ebpf-prep.sh /work/ebpf'])
+        assembly = runs(self.stages['ebpf-legacy-assembly'])
+        self.assertEqual(assembly, ['--network=none SNITCHWATCH_BRIDGE=legacy bash /factory/snitchwatch-system-ebpf-legacy-assemble.sh /handoff /out'])
+
+    def test_legacy_prep_fetches_only_the_pinned_commit_before_the_inventory(self):
+        prep = (FACTORY / 'snitchwatch-system-ebpf-prep.sh').read_text()
+        self.assertIn('source-pin', prep)
+        self.assertIn('fetch --depth=1 origin "${pin[1]}"', prep)
+        self.assertNotIn('--filter', prep)  # the offline compile reads blobs with cat-file: no lazy fetch possible
+        self.assertLess(prep.index('toolchain.sh" install'), prep.index('fetch --depth=1'))
+        self.assertLess(prep.index('fetch --depth=1'), prep.index('rpm-inventory.txt'))
+        self.assertIn('make git-core', prep)
+
+    def test_legacy_build_reads_the_fetched_checkout_not_the_snitchwatch_one(self):
+        build = (FACTORY / 'snitchwatch-system-ebpf-build.sh').read_text()
+        self.assertIn('repo="$work/source"', build)
+        self.assertIn('repo=/work/native/source/vendor/opensnitch', build)
+        self.assertIn('--profile "$profile"', build)
+
+    def test_legacy_assembly_checks_compares_then_stages(self):
+        text = (FACTORY / 'snitchwatch-system-ebpf-legacy-assemble.sh').read_text()
+        body = '\n'.join(line for line in text.splitlines() if not line.lstrip().startswith('#'))
+        order = ['probe-network offline', '"$guard" check ebpf-kernel-facts', '"$guard" check ebpf ', '"$guard" check ebpf-rebuild',
+                 '"$guard" compare-ebpf', 'snitchwatch-system-ebpf.py" stage', 'snitchwatch-system-legacy-marker']
+        position = 0
+        for needle in order:
+            self.assertGreater(body.index(needle, position), position - 1, needle)
+            position = body.index(needle, position)
+        for needle in ('dnf', 'curl', 'git ', 'clang', 'make '):
+            self.assertNotIn(needle, body)
+        self.assertIn('--profile legacy', body)
 
 
 class WorkflowCacheSettings(unittest.TestCase):

@@ -34,7 +34,7 @@ Snitchwatch config; disabled **Portmaster** VM spike behind
 `build_files/build.d/95-firewall.sh` pins and SHA-256 verifies the upstream
 OpenSnitch 1.8.0 RPM before extraction. It installs `libnetfilter_queue` and
 `nftables` explicitly; extraction neither resolves dependencies nor registers
-the daemon in the RPM database. The default user bridge and both GUI profiles remain per-user installs. The opt-in system candidate adds a pinned native bridge and immutable source/toolchain/license provenance. It separately compiles the reviewed upstream OpenSnitch a1353848 (1.9.0; legacy keeps the 1.8.0 RPM) plus a downstream queue-lifetime/NFT-ownership repair, retaining module locks, generated protocol hashes, Go/protoc/RPM inventory and license payloads. Default legacy builds retain the RPM binary and do not compile either native component.
+the daemon in the RPM database. The default user bridge and both GUI profiles remain per-user installs. The opt-in system candidate adds a pinned native bridge and immutable source/toolchain/license provenance. It separately compiles the reviewed upstream OpenSnitch a1353848 (1.9.0; legacy keeps the 1.8.0 RPM) plus a downstream queue-lifetime/NFT-ownership repair, retaining module locks, generated protocol hashes, Go/protoc/RPM inventory and license payloads. Default legacy builds retain the RPM binary and do not compile either native component; they do compile the per-kernel eBPF modules from OpenSnitch v1.8.0 (b404c4c6, the RPM release's commit).
 
 October 4 VM tests used Snitchwatch `1def745`. October 5 follow-up used base
 `2690109` plus reviewed uncommitted changes, source snapshot `851f3a`. Its clean
@@ -62,7 +62,7 @@ Re-pin `EXPECTED_PINS_SHA256` in the respective bridge
 `snitchwatch-system-verify.py` or daemon `snitchwatch-system-daemon-verify.py`
 whenever its pins manifest changes, and rerun relevant tests.
 
-eBPF module toolchain (Track A, system profile): six signed Koji RPMs from srpm
+eBPF module toolchain (Track A, system and legacy profiles; legacy also fetches the one pinned OpenSnitch v1.8.0 commit from GitHub in `ebpf-legacy-prep`): six signed Koji RPMs from srpm
 `llvm21` 21.1.8-10.fc45 (clang21, clang21-libs, clang21-resource-filesystem,
 llvm21, llvm21-libs, llvm21-filesystem) plus the per-profile OpenSnitch commit
 and `ebpf_prog` tree sha256 in `build_files/firewall/snitchwatch-system-ebpf-pins.json`;

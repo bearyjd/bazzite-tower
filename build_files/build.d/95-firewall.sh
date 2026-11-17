@@ -15,6 +15,9 @@ printf '%s\n' "${SNITCHWATCH_BRIDGE:-legacy}" > /usr/share/bazzite-tower/snitchw
 case "${FIREWALL_DAEMON:-opensnitch}" in
     opensnitch) ;;
     portmaster)
+        # The legacy overlay stages OpenSnitch eBPF modules and their manifest; this
+        # variant has no OpenSnitch to load them, so none may remain in the image.
+        rm -rf -- /usr/share/bazzite-tower/opensnitch-ebpf /usr/share/bazzite-tower/ebpf-manifest.json
         # shellcheck disable=SC1091 # Build-time path is relative to this file.
         source "$(dirname "${BASH_SOURCE[0]}")/../firewall/portmaster.sh"
         ;;
@@ -51,6 +54,15 @@ if [[ "${FIREWALL_DAEMON:-opensnitch}" == "opensnitch" ]]; then
     curl -fsSL -o "/tmp/${opensnitch_rpm}" \
         "https://github.com/evilsocket/opensnitch/releases/download/v${opensnitch_version}/${opensnitch_rpm}"
     echo "${opensnitch_sha256}  /tmp/${opensnitch_rpm}" | sha256sum -c -
+    # Legacy: the eBPF modules staged by the Containerfile were built from the
+    # OpenSnitch commit of the v1.8.0 release. Refuse unless this file is exactly
+    # the RPM they are pinned to (name, version, release and sha256), so an RPM
+    # bump without re-pinning the modules fails here instead of pairing wrong
+    # modules with the daemon. The upstream RPM is unsigned: `rpm -qp` may warn.
+    if [[ "${SNITCHWATCH_BRIDGE:-legacy}" == legacy ]]; then
+        python3 -B "$(dirname "${BASH_SOURCE[0]}")/../firewall/snitchwatch-system-ebpf.py" check-rpm \
+            --pins "$(dirname "${BASH_SOURCE[0]}")/../firewall/snitchwatch-system-ebpf-pins.json" "/tmp/${opensnitch_rpm}"
+    fi
     # Extract with rpm2cpio|cpio instead of `dnf install`/`rpm -i`, for two
     # reasons found the hard way:
     #   1. The RPM's %post calls systemctl in a way that expects a live systemd
@@ -68,24 +80,23 @@ if [[ "${FIREWALL_DAEMON:-opensnitch}" == "opensnitch" ]]; then
     #      find it — smoke.sh checks for the binary instead.
     ( cd / && rpm2cpio "/tmp/${opensnitch_rpm}" | cpio -idm )
     rm -f "/tmp/${opensnitch_rpm}"
-    # eBPF objects. The legacy profile keeps the v1.8.0 RPM payload (matched to
-    # the v1.8.0 RPM daemon, built against fixed headers, not this kernel). The
-    # system profile overwrites them with objects compiled at image build
-    # (Track A, Containerfile stages ebpf-kernel / snitchwatch-ebpf[-rebuild])
-    # from the same OpenSnitch commit as its source-built daemon (a1353848),
-    # against this BASE_IMAGE's own kernel-devel headers. They were staged under
-    # /usr/share because cpio's overwrite of an existing file depends on mtime;
-    # install here, after the extraction, is the deterministic order. The
-    # manifest records kernel, commit, toolchain and per-object sha256; the check
-    # below binds it to the one /usr/lib/modules/* release and the bytes on disk.
+    # eBPF objects. Both profiles overwrite the RPM payload (built against fixed
+    # headers, not this kernel) with objects compiled at image build (Track A,
+    # Containerfile stages ebpf-kernel and snitchwatch-ebpf[-rebuild] / ebpf-legacy
+    # [-rebuild]) against this BASE_IMAGE's own kernel-devel headers, from the
+    # same OpenSnitch commit as the daemon that loads them: system a1353848 (its
+    # source-built daemon), legacy b404c4c6 (v1.8.0, the RPM daemon, checked above).
+    # They were staged under /usr/share because cpio's overwrite of an existing
+    # file depends on mtime; install here, after the extraction, is the
+    # deterministic order. The manifest records kernel, commit, toolchain and
+    # per-object sha256; the check below binds it to the one /usr/lib/modules/*
+    # release and the bytes on disk.
     # Packaging proof only: ProcMonitorMethod stays "proc" and successful
     # loading still needs a runtime test (separate enable change).
-    if [[ "${SNITCHWATCH_BRIDGE:-legacy}" == system ]]; then
-        for object in opensnitch.o opensnitch-procs.o opensnitch-dns.o; do
-            install -m 0644 "/usr/share/bazzite-tower/opensnitch-ebpf/${object}" "/usr/lib/opensnitchd/ebpf/${object}"
-        done
-        rm -r /usr/share/bazzite-tower/opensnitch-ebpf
-    fi
+    for object in opensnitch.o opensnitch-procs.o opensnitch-dns.o; do
+        install -m 0644 "/usr/share/bazzite-tower/opensnitch-ebpf/${object}" "/usr/lib/opensnitchd/ebpf/${object}"
+    done
+    rm -r /usr/share/bazzite-tower/opensnitch-ebpf
     python3 /usr/libexec/bazzite-tower-opensnitch-ebpf-check
 
     # Overwrite the RPM's default-config.json with the Snitchwatch-tuned one. This
@@ -109,8 +120,8 @@ if [[ "${FIREWALL_DAEMON:-opensnitch}" == "opensnitch" ]]; then
     #     (a per-user service that is NOT part of this image) rather than upstream
     #     opensnitch-ui's unix:///tmp/osui.sock.
     #   ProcMonitorMethod "proc"       — tested baseline. A past module-load
-    #     failure is not proof of a kernel incompatibility. The pinned RPM
-    #     supplies all three BPF objects; owner-only eBPF A/B testing is in
+    #     failure is not proof of a kernel incompatibility. The image
+    #     supplies all three BPF objects (built per kernel); owner-only eBPF A/B testing is in
     #     docs/RUNBOOK.md, without changing the image/readiness baseline.
     #   DefaultAction "allow"          — permanent default for both profiles;
     #     deny enforcement always requires explicit operator opt-in. Without a

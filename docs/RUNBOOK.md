@@ -550,17 +550,20 @@ build, SELinux behavior of TCP 514 on this host, and any live flow to Vigie.
 > kernel, commit and hashes; `bazzite-tower-opensnitch-ebpf-check` binds it to the
 > image kernel). They are a matched pair on paper only: loading and attribution
 > are runtime-unverified, and the image stays `allow`/`proc` with no `ModulesPath`.
-> The procedure below applies only to the legacy profile (RPM daemon and RPM
-> objects, both v1.8.0).
+> Legacy now ships per-kernel BPF objects too (built from OpenSnitch v1.8.0,
+> b404c4c6, the commit its RPM daemon is built from; manifest-checked, runtime-
+> unverified). The procedure below applies only to the legacy profile (RPM daemon
+> and objects, both v1.8.0).
 
 This is an optional **owner-operated** test on the candidate, after its initial
 `allow`/`proc` boot passes `sudo ujust snitchwatch-system-readiness` and the full
 `tests/boot-check.sh` gate. Agents do not edit host configuration, invoke sudo,
 restart services or reboot. No kernel, security or probe workarounds belong in
 this experiment. A past `unable to load eBPF module` message does not identify
-its cause. The RPM supplies `/usr/lib/opensnitchd/ebpf/opensnitch.o`,
-`opensnitch-procs.o` and `opensnitch-dns.o`; build/smoke verifies their ELF BPF
-headers, while the native daemon executable itself does not embed them.
+its cause. The image supplies `/usr/lib/opensnitchd/ebpf/opensnitch.o`,
+`opensnitch-procs.o` and `opensnitch-dns.o` (built per kernel; the RPM's copies
+are overwritten); build/smoke verifies their ELF BPF
+headers and manifest, while the native daemon executable itself does not embed them.
 
 Use the exact same candidate digest, workload, GUI, power state and observation
 lengths in each mode. Record digest, kernel, daemon identity and backend startup

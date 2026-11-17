@@ -12,10 +12,14 @@ Subcommands (each failure prints one distinct `handoff:` line and exits 1):
                                 the two sibling bridge builds' tarballs must be
                                 byte-identical (M1 step 2); a mismatch names both
                                 digests and the differing tar members, then refuses
+  compare-ebpf --pins P FIRST REBUILD
+                                the two sibling eBPF compiles must hand over
+                                byte-identical objects, kernel facts and build info
 
 COPY --from is not a trust boundary by itself; `check` is.  KINDs: scanner,
 bridge, bridge-rebuild (the tarball only), daemon (the daemon allowlist is the
-trusted verifier's REQUIRED set).
+trusted verifier's REQUIRED set), ebpf-kernel (header tarball + facts), ebpf and
+ebpf-rebuild (the objects named by the eBPF pins, facts, build info; ebpf adds the log).
 """
 import argparse
 import errno
@@ -47,6 +51,9 @@ PROBE_TIMEOUT = 5
 MAX_TARBALL = 64 * 1024 * 1024
 MAX_TAR = 256 * 1024 * 1024
 MAX_LISTED = 20
+EBPF_KERNEL_FILES = ('kernel-facts.json', 'kernel-headers.tar')
+EBPF_SHARED = ('kernel-facts.json', 'build-info.json')
+MAX_EBPF_FILE = 16 * 1024 * 1024
 
 
 class Refusal(Exception):
@@ -66,6 +73,13 @@ def allowlist(kind, pins=None, daemon_verifier=None):
         return {tarball: 0o644, tarball + '.sha256': 0o644, 'build.log': 0o644, 'repro.log': 0o644}
     if kind == 'bridge-rebuild':
         return {bridge_tarball(pins): 0o644}
+    if kind == 'ebpf-kernel':
+        return {name: 0o644 for name in EBPF_KERNEL_FILES}
+    if kind in ('ebpf', 'ebpf-rebuild'):
+        if pins is None:
+            raise Refusal('eBPF handoff needs --pins')
+        names = (*pins['objects'], *EBPF_SHARED, *(('build.log',) if kind == 'ebpf' else ()))
+        return {name: 0o644 for name in names}
     if kind == 'daemon':
         if daemon_verifier is None:
             raise Refusal('daemon allowlist needs the trusted daemon verifier')
@@ -274,6 +288,25 @@ def compare_bridge(first_root, rebuild_root, pins):
     raise Refusal('bridge rebuild differs from the first bridge build: ' + detail)
 
 
+def compare_ebpf(first_root, rebuild_root, pins):
+    """Refuse unless the sibling eBPF compile handed over byte-identical objects, facts and build info."""
+    differing, digests = [], {}
+    for name in (*sorted(pins['objects']), *EBPF_SHARED):
+        first, first_id = read_tarball(Path(first_root) / name, 'first')
+        second, second_id = read_tarball(Path(rebuild_root) / name, 'rebuild')
+        if first_id == second_id:
+            raise Refusal('compare: both %s are the same file; that is not a second build' % name)
+        if len(first) > MAX_EBPF_FILE or len(second) > MAX_EBPF_FILE:
+            raise Refusal('compare: %s is larger than %d bytes' % (name, MAX_EBPF_FILE))
+        a, b = hashlib.sha256(first).hexdigest(), hashlib.sha256(second).hexdigest()
+        if a != b:
+            differing.append('%s (first sha256 %s, rebuild sha256 %s)' % (name, a, b))
+        digests[name] = a
+    if differing:
+        raise Refusal('eBPF rebuild differs from the first eBPF build: ' + '; '.join(differing))
+    return {'identical': True, 'sha256': digests}
+
+
 def interfaces(dev='/proc/net/dev'):
     """Interfaces of this process's network namespace (/proc/net follows the netns; /sys may not)."""
     lines = Path(dev).read_text().splitlines()[2:]
@@ -331,15 +364,16 @@ def main(argv=None):
     probe.add_argument('expect', choices=('online', 'offline'))
     for name in ('export', 'check'):
         command = sub.add_parser(name)
-        command.add_argument('kind', choices=('scanner', 'bridge', 'bridge-rebuild', 'daemon'))
+        command.add_argument('kind', choices=('scanner', 'bridge', 'bridge-rebuild', 'daemon', 'ebpf-kernel', 'ebpf', 'ebpf-rebuild'))
         command.add_argument('--pins', type=Path)
         command.add_argument('--daemon-verifier', type=Path)
         command.add_argument('paths', nargs=2 if name == 'export' else 1, type=Path)
     merging = sub.add_parser('merge')
     merging.add_argument('paths', nargs=2, type=Path)
-    comparing = sub.add_parser('compare-bridge')
-    comparing.add_argument('--pins', type=Path, required=True)
-    comparing.add_argument('paths', nargs=2, type=Path)
+    for name in ('compare-bridge', 'compare-ebpf'):
+        comparing = sub.add_parser(name)
+        comparing.add_argument('--pins', type=Path, required=True)
+        comparing.add_argument('paths', nargs=2, type=Path)
     args = parser.parse_args(argv)
     try:
         if args.command == 'probe-network':
@@ -348,10 +382,14 @@ def main(argv=None):
             result = {'merged': len(merge(*args.paths))}
         elif args.command == 'compare-bridge':
             result = compare_bridge(*args.paths, json.loads(args.pins.read_text()))
+        elif args.command == 'compare-ebpf':
+            result = compare_ebpf(*args.paths, json.loads(args.pins.read_text()))
         else:
             pins = json.loads(args.pins.read_text()) if args.pins else None
             if args.kind in ('bridge', 'bridge-rebuild') and pins is None:
                 raise Refusal('bridge handoff needs --pins')
+            if args.kind in ('ebpf', 'ebpf-rebuild') and pins is None:
+                raise Refusal('eBPF handoff needs --pins')
             if args.command == 'export':
                 result = {'exported': export(args.kind, args.paths[0], args.paths[1], pins, args.daemon_verifier)}
             else:

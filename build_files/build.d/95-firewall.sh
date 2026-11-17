@@ -68,11 +68,24 @@ if [[ "${FIREWALL_DAEMON:-opensnitch}" == "opensnitch" ]]; then
     #      find it — smoke.sh checks for the binary instead.
     ( cd / && rpm2cpio "/tmp/${opensnitch_rpm}" | cpio -idm )
     rm -f "/tmp/${opensnitch_rpm}"
-    # The native Go build does not embed BPF objects; retain the RPM payload.
-    # Packaging proof only: successful loading still needs an owner runtime test.
-    # These objects are v1.8.0. The system profile's source-built 1.9.0 daemon
-    # (OpenSnitch a1353848) is NOT a matched pair with them, so that profile is
-    # proc-only until matching modules ship (see docs/RUNBOOK.md eBPF section).
+    # eBPF objects. The legacy profile keeps the v1.8.0 RPM payload (matched to
+    # the v1.8.0 RPM daemon, built against fixed headers, not this kernel). The
+    # system profile overwrites them with objects compiled at image build
+    # (Track A, Containerfile stages ebpf-kernel / snitchwatch-ebpf[-rebuild])
+    # from the same OpenSnitch commit as its source-built daemon (a1353848),
+    # against this BASE_IMAGE's own kernel-devel headers. They were staged under
+    # /usr/share because cpio's overwrite of an existing file depends on mtime;
+    # install here, after the extraction, is the deterministic order. The
+    # manifest records kernel, commit, toolchain and per-object sha256; the check
+    # below binds it to the one /usr/lib/modules/* release and the bytes on disk.
+    # Packaging proof only: ProcMonitorMethod stays "proc" and successful
+    # loading still needs a runtime test (separate enable change).
+    if [[ "${SNITCHWATCH_BRIDGE:-legacy}" == system ]]; then
+        for object in opensnitch.o opensnitch-procs.o opensnitch-dns.o; do
+            install -m 0644 "/usr/share/bazzite-tower/opensnitch-ebpf/${object}" "/usr/lib/opensnitchd/ebpf/${object}"
+        done
+        rm -r /usr/share/bazzite-tower/opensnitch-ebpf
+    fi
     python3 /usr/libexec/bazzite-tower-opensnitch-ebpf-check
 
     # Overwrite the RPM's default-config.json with the Snitchwatch-tuned one. This

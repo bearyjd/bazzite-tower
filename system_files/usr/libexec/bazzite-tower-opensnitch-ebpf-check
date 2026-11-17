@@ -1,41 +1,103 @@
 #!/usr/bin/env python3
-"""Check RPM-supplied eBPF object packaging; this cannot prove kernel loading."""
+"""Check the packaged OpenSnitch eBPF objects; this cannot prove kernel loading.
+
+Every profile: the three objects are ELF64 BPF relocatable files.
+system: the objects were built at image build for this image's kernel
+(Track A): /usr/share/bazzite-tower/ebpf-manifest.json must name the one
+/usr/lib/modules/* release and the sha256 of every object on disk.
+legacy: the objects are the v1.8.0 RPM payload and no build manifest exists.
+"""
 import argparse
+import hashlib
+import json
 import os
 from pathlib import Path
+import re
 import stat
 import struct
 import sys
 
 OBJECTS = ('opensnitch.o', 'opensnitch-procs.o', 'opensnitch-dns.o')
+OBJECTS_DIR = 'usr/lib/opensnitchd/ebpf'
+MANIFEST = 'usr/share/bazzite-tower/ebpf-manifest.json'
+PROFILE = 'usr/share/bazzite-tower/snitchwatch-bridge-profile'
+
+
+def read_object(path):
+    if not stat.S_ISREG(path.lstat().st_mode):
+        raise ValueError(f'{path}: expected a regular file, not a symlink')
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    with os.fdopen(fd, 'rb') as source:
+        if not stat.S_ISREG(os.fstat(source.fileno()).st_mode):
+            raise ValueError(f'{path}: expected a regular file')
+        return source.read()
 
 
 def verify(root):
     for name in OBJECTS:
-        path = Path(root) / 'usr/lib/opensnitchd/ebpf' / name
-        if not stat.S_ISREG(path.lstat().st_mode):
-            raise ValueError(f'{path}: expected a regular file, not a symlink')
-        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
-        with os.fdopen(fd, 'rb') as source:
-            if not stat.S_ISREG(os.fstat(source.fileno()).st_mode):
-                raise ValueError(f'{path}: expected a regular file')
-            header = source.read(64)
+        path = Path(root) / OBJECTS_DIR / name
+        header = read_object(path)[:64]
         if (len(header) != 64 or header[:7] != b'\x7fELF\x02\x01\x01'
                 or struct.unpack_from('<HHI', header, 16) != (1, 247, 1)
                 or struct.unpack_from('<H', header, 52)[0] != 64):
             raise ValueError(f'{path}: expected a nonempty ELF64 little-endian relocatable BPF object')
 
 
+def image_kernel(root):
+    modules = Path(root) / 'usr/lib/modules'
+    releases = sorted(entry.name for entry in modules.iterdir() if entry.is_dir()) if modules.is_dir() else []
+    if len(releases) != 1:
+        raise ValueError(f'{modules}: expected exactly one kernel, found {releases}')
+    return releases[0]
+
+
+def verify_manifest(root, profile):
+    manifest = json.loads((Path(root) / MANIFEST).read_text())
+    if manifest.get('schemaVersion') != 1 or manifest.get('profile') != profile:
+        raise ValueError(f'{MANIFEST}: unsupported schema or profile {manifest.get("profile")!r}')
+    if (manifest.get('objectsDir') != '/' + OBJECTS_DIR
+            or not re.fullmatch('[0-9a-f]{40}', str(manifest.get('opensnitchCommit', '')))
+            or not re.fullmatch('[0-9a-f]{64}', str(manifest.get('ebpfProgTreeSha256', '')))):
+        raise ValueError(f'{MANIFEST}: malformed source identity or objects directory')
+    kernel = image_kernel(root)
+    if manifest.get('kernelRelease') != kernel:
+        raise ValueError(f'eBPF objects were built for kernel {manifest.get("kernelRelease")!r}, '
+                         f'but the image kernel is {kernel}')
+    objects = manifest.get('objects')
+    if not isinstance(objects, dict) or set(objects) != set(OBJECTS):
+        raise ValueError(f'{MANIFEST}: expected exactly the objects {sorted(OBJECTS)}')
+    for name in OBJECTS:
+        actual = hashlib.sha256(read_object(Path(root) / OBJECTS_DIR / name)).hexdigest()
+        if actual != objects[name]:
+            raise ValueError(f'{OBJECTS_DIR}/{name}: sha256 {actual} differs from the build manifest {objects[name]}')
+    return manifest
+
+
+def verify_image(root):
+    verify(root)
+    profile = (Path(root) / PROFILE).read_text().strip()
+    has_manifest = os.path.lexists(Path(root) / MANIFEST)
+    if profile == 'system':
+        manifest = verify_manifest(root, profile)
+        return (f'built for kernel {manifest["kernelRelease"]} from OpenSnitch {manifest["opensnitchCommit"][:12]}, '
+                f'hashes match the build manifest')
+    if profile == 'legacy':
+        if has_manifest:
+            raise ValueError(f'{MANIFEST}: the legacy profile ships the RPM objects and must not carry a build manifest')
+        return 'legacy profile: v1.8.0 RPM objects, no per-kernel build manifest'
+    raise ValueError(f'{PROFILE}: unknown bridge profile {profile!r}')
+
+
 def main():
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--root', default='/')
     args = parser.parse_args()
     try:
-        verify(args.root)
+        detail = verify_image(args.root)
     except (OSError, ValueError) as error:
         print(f'FAIL: {error}', file=sys.stderr)
         return 1
-    print('PASS: all three OpenSnitch eBPF objects have ELF BPF headers (runtime unverified)')
+    print(f'PASS: all three OpenSnitch eBPF objects have ELF BPF headers; {detail} (runtime unverified)')
     return 0
 
 

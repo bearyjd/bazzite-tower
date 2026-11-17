@@ -5,7 +5,9 @@
 # checkout (re-hashed against the pins first). The scanner, bridge, bridge
 # rebuild and daemon stage outputs are DATA: allowlist-checked, hash-checked,
 # never executed as root (the bridge binary runs only as uid 65534 inside
-# stage.py). The two sibling bridge tarballs must be byte-identical (M1 step 2).
+# stage.py). The two sibling bridge tarballs must be byte-identical (M1 step 2),
+# and so must the two sibling eBPF compiles (Track A); the eBPF manifest is
+# computed here from the pins, the kernel facts and hashes taken here.
 # Usage: WORK HANDOFF NEW-OUT
 set -euo pipefail
 factory=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
@@ -19,6 +21,7 @@ work=$1 handoff=$2 out=$3
 pins="$factory/snitchwatch-system-pins.json"
 guard="$factory/snitchwatch-system-handoff.py"
 daemon_verifier="$factory/snitchwatch-system-daemon-verify.py"
+ebpf_pins="$factory/snitchwatch-system-ebpf-pins.json"
 python3 "$guard" probe-network offline
 rpm -qa --qf '%{NAME}-%{EPOCHNUM}:%{VERSION}-%{RELEASE}.%{ARCH}\n' | LC_ALL=C sort | cmp - "$work/rpm-inventory.txt" || {
     echo 'assembly: RPM set differs from the snitchwatch-prep inventory; refusing.' >&2; exit 1;
@@ -60,6 +63,11 @@ version=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["bridg
 python3 "$guard" compare-bridge --pins "$pins" "$handoff/bridge" "$handoff/bridge-rebuild" || {
     echo 'assembly: the sibling bridge rebuild is not byte-identical to the first bridge build; refusing.' >&2; exit 1;
 }
+python3 "$guard" check ebpf --pins "$ebpf_pins" "$handoff/ebpf"
+python3 "$guard" check ebpf-rebuild --pins "$ebpf_pins" "$handoff/ebpf-rebuild"
+python3 "$guard" compare-ebpf --pins "$ebpf_pins" "$handoff/ebpf" "$handoff/ebpf-rebuild" || {
+    echo 'assembly: the sibling eBPF rebuild is not byte-identical to the first eBPF build; refusing.' >&2; exit 1;
+}
 # Without the ldd/run options this verify executes nothing (those ran in the
 # bridge stage). The expected digest is the sibling build's, not the checked file's own.
 mkdir -p "$work/assembly"
@@ -76,5 +84,8 @@ python3 -B "$factory/snitchwatch-system-stage.py" \
 # Re-check after the uid 65534 runs inside stage.py, immediately before the merge reads it.
 python3 "$guard" check daemon --daemon-verifier "$daemon_verifier" "$handoff/daemon"
 python3 "$guard" merge "$handoff/daemon" "$out"
+python3 -B "$factory/snitchwatch-system-ebpf.py" stage --pins "$ebpf_pins" --daemon-pins "$factory/snitchwatch-system-daemon-pins.json" \
+    --native-pins "$pins" --profile system "$handoff/ebpf" "$work/assembly/ebpf-overlay"
+python3 "$guard" merge "$work/assembly/ebpf-overlay" "$out"
 python3 -B "$daemon_verifier" --stage-only --root "$out"
 python3 -B "$factory/snitchwatch-system-verify.py" --root "$out" --image-tree

@@ -693,6 +693,8 @@ class EbpfStages(unittest.TestCase):
         self.assertIn('snitchwatch-system-toolchain.sh" install "$factory/snitchwatch-system-ebpf-pins.json"', prep)
         self.assertIn('probe-network online', prep)
         self.assertTrue(prep.rstrip().endswith('> "$work/rpm-inventory.txt"'))
+        self.assertIn('snitchwatch-system-ebpf.py" check-pins', prep)
+        self.assertLess(prep.index('check-pins'), prep.index('toolchain.sh'))
         build = (FACTORY / 'snitchwatch-system-ebpf-build.sh').read_text()
         self.assertIn("rpm -qa --qf '%{NAME}-%{EPOCHNUM}:%{VERSION}-%{RELEASE}.%{ARCH}\\n' | LC_ALL=C sort | cmp - \"$work/rpm-inventory.txt\"", build)
         self.assertLess(build.index('check ebpf-kernel'), build.index('snitchwatch-system-ebpf.py" build'))

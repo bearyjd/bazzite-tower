@@ -469,7 +469,7 @@ class Guards(Workdir):
         with self.assertRaises(self.e['Refusal']):
             self.e['tree_sha256'](tree)
 
-    def fake_tools(self, owner='clang21-0:21.1.8-10.fc45.x86_64', version='21.1.8', verify_out=''):
+    def fake_tools(self, owner='clang21-0:21.1.8-10.fc45.x86_64', version='21.1.8', verify_out='', verify_only=None):
         bin_dir = self.root / ('bin-%d' % len(list(self.root.iterdir())))
         bin_dir.mkdir()
         pins = json.loads(EBPF_PINS_PATH.read_text())
@@ -481,10 +481,10 @@ class Guards(Workdir):
             path.chmod(0o755)
             pins['tools'][key]['path'] = str(path)
         (bin_dir / 'rpm').write_text('#!/bin/sh\n'
-                                     'if [ "$1" = -V ]; then printf "%%s" "%s"; exit 0; fi\n'
+                                     'if [ "$1" = -V ]; then case "$2" in %s) printf "%%s" "%s";; esac; exit 0; fi\n'
                                      'for a; do last=$a; done\n'
                                      'case "$last" in */cc) printf "%%s" "%s";; *) printf "%%s" "%s";; esac\n'
-                                     % (verify_out, owner, llvm))
+                                     % (verify_only or '*', verify_out, owner, llvm))
         (bin_dir / 'rpm').chmod(0o755)
         return pins, {**self.e['SAFE_ENV'], 'PATH': '%s:/usr/bin:/bin' % bin_dir}
 
@@ -496,7 +496,8 @@ class Guards(Workdir):
     def test_check_tools_refuses_a_foreign_owner_wrong_version_or_modified_files(self):
         for kwargs, needle in (({'owner': 'clang-0:23.1.5-1.fc45.x86_64'}, 'not owned'),
                                ({'version': '23.1.5'}, 'does not report'),
-                               ({'verify_out': 'S.5....T.  /usr/bin/clang-21'}, 'rpm -V')):
+                               ({'verify_out': 'S.5....T.  /usr/bin/clang-21'}, 'rpm -V'),
+                               ({'verify_out': 'S.5....T.  /usr/lib64/libclang-cpp.so.21', 'verify_only': 'clang21-libs|llvm21-libs'}, 'rpm -V')):
             with self.subTest(needle):
                 pins, env = self.fake_tools(**kwargs)
                 with mock.patch.dict(self.e['check_tools'].__globals__, {'SAFE_ENV': env}):

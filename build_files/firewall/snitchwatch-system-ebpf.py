@@ -285,7 +285,7 @@ def check_tools(pins):
         if version.returncode or not any(want in line for line in lines):
             raise Refusal('%s does not report %r' % (tool['path'], want.strip()))
         banners[key] = next(line.strip() for line in lines if want in line)
-    for name in sorted({tool['rpm'] for tool in pins['tools'].values()}):
+    for name in sorted(nevras):
         verified = subprocess.run(['rpm', '-V', name], capture_output=True, text=True, env=SAFE_ENV)
         if verified.returncode or verified.stdout.strip():
             raise Refusal('installed %s files differ from its RPM (rpm -V): %s' % (name, (verified.stdout + verified.stderr).strip()))
@@ -364,6 +364,7 @@ def stage_overlay(pins_path, profile, daemon_pins, native_pins, handoff, out, ke
         objects[name] = sha256(data)
         (objects_dir / name).write_bytes(data)
         (objects_dir / name).chmod(0o644)
+    # compileRpmInventorySha256 is reported by the compile stage and cannot be independently checked here: informational, not verified provenance.
     manifest = {'schemaVersion': 1, 'profile': profile, 'opensnitchCommit': commit, 'ebpfProgTreeSha256': tree,
                 'kernelRelease': facts['kernelRelease'], 'kernelCore': facts['kernelCore'], 'kernelDevel': facts['kernelDevel'],
                 'kernelHeadersTarSha256': facts['headersTarSha256'], 'kernelConfigSha256': facts['kernelConfigSha256'],

@@ -397,7 +397,7 @@ check "opensnitch config is valid JSON" \
 # Both profiles permanently default to allow; deny requires explicit operator
 # opt-in. Assert the selected image policy in each dispatch branch.
 # Keep the shipped proc baseline; owner eBPF experiments are local overrides.
-# Check all three RPM-supplied ELF BPF objects independently of selected mode.
+# Check all three ELF BPF objects (image-built) independently of selected mode.
 check "opensnitch eBPF objects packaged as ELF BPF" \
     python3 /usr/libexec/bazzite-tower-opensnitch-ebpf-check
 check "opensnitch ProcMonitorMethod is proc (shipped baseline)" \

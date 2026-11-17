@@ -80,7 +80,7 @@ RUN SNITCHWATCH_BRIDGE=system FIREWALL_DAEMON="${FIREWALL_DAEMON}" bash /factory
 # Fedora-header fallback, never the build host's running kernel). The toolchain
 # (pinned Koji clang21/llvm21) is installed once with network; both compiles are
 # offline siblings, ancestors of nothing, and assembly refuses unless their
-# objects are byte-identical. Podman skips these stages for the legacy profile.
+# objects are byte-identical. Shared by both profiles; legacy has its own ebpf-legacy-* compile stages below.
 FROM ${BASE_IMAGE} AS ebpf-kernel
 COPY --from=ctx /firewall/snitchwatch-system-ebpf.py /factory/
 RUN --network=none python3 -B /factory/snitchwatch-system-ebpf.py kernel-export /handoff/ebpf-kernel

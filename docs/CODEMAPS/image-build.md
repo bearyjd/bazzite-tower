@@ -198,7 +198,7 @@ NFQUEUE is available. Rootless container checks cannot replace the VM gate.
 Legacy builds retain upstream RPM extraction of the daemon and incur no native snitchwatch compilation (no scanner, bridge, daemon or snitchwatch checkout); only the per-kernel eBPF modules are built.
 eBPF objects (`opensnitch.o`, `opensnitch-procs.o`, `opensnitch-dns.o`; the
 native Go executable does not embed them): both profiles ship objects compiled at
-image build. Legacy (all three variants) builds them from OpenSnitch v1.8.0
+image build. Legacy (the safe-pin and latest-kernel variants) builds them from OpenSnitch v1.8.0
 (b404c4c6, `ebpf_prog` tree sha256 39512718…, fetched by the `ebpf-legacy-*` stages) because
 its daemon is the upstream v1.8.0 release RPM: pairing is enforced by a reviewed
 version-to-commit table in `snitchwatch-system-ebpf.py` plus the RPM pin in the pins

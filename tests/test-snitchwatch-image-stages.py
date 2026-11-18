@@ -713,7 +713,10 @@ class EbpfStages(unittest.TestCase):
         self.assertIn('snitchwatch-system-ebpf.py" check-pins', prep)
         self.assertLess(prep.index('check-pins'), prep.index('toolchain.sh'))
         build = (FACTORY / 'snitchwatch-system-ebpf-build.sh').read_text()
-        self.assertIn("rpm -qa --qf '%{NAME}-%{EPOCHNUM}:%{VERSION}-%{RELEASE}.%{ARCH}\\n' | LC_ALL=C sort | cmp - \"$work/rpm-inventory.txt\"", build)
+        # Same strictness as the former `| cmp -` pipeline (any difference refuses), now with the tool checked first.
+        self.assertIn("rpm -qa --qf '%{NAME}-%{EPOCHNUM}:%{VERSION}-%{RELEASE}.%{ARCH}\\n' | LC_ALL=C sort > \"$work/rpm-inventory.live\"", build)
+        self.assertIn('cmp -s "$work/rpm-inventory.live" "$work/rpm-inventory.txt" ||', build)
+        self.assertLess(build.index('command -v cmp'), build.index('rpm-inventory.live'))
         self.assertLess(build.index('check ebpf-kernel'), build.index('snitchwatch-system-ebpf.py" build'))
         self.assertLess(build.index('snitchwatch-system-ebpf.py" build'), build.index('export "$kind"'))
         for needle in ('dnf', 'curl', 'git fetch', 'git clone', 'toolchain.sh'):

@@ -308,5 +308,114 @@ class LegacyReviewFixes(base.Workdir):
                 self.assertIn('ebpf legacy assembly', refused.stderr)
 
 
+class LegacyBuilderTools(base.Workdir):
+    """The legacy builder is bare fedora:45 + python3 (ebpf-legacy-base) + the prep stage's installs.
+
+    First CI run failed on `cmp: command not found` (diffutils is not in the bare image). Probed on the
+    pinned image: cmp, diff, git, make and python3 are absent; everything else below ships in it.
+    Probe (podman run, bash --noprofile --norc, command -v) covered every name in PROVIDER.
+    """
+    # Every external command the legacy chain's scripts and helpers use, and what provides it.
+    # 'bare' = in the pinned fedora:45 image as probed; otherwise the package that must be installed.
+    PROVIDER = {
+        'bash': 'bare', 'timeout': 'bare', 'dnf': 'bare', 'rpm': 'bare', 'sort': 'bare', 'stat': 'bare', 'find': 'bare',
+        'install': 'bare', 'sha256sum': 'bare', 'cut': 'bare', 'tail': 'bare', 'mktemp': 'bare', 'mkdir': 'bare',
+        'rm': 'bare', 'dirname': 'bare', 'curl': 'bare', 'python3': 'python3', 'cmp': 'diffutils', 'git': 'git-core', 'make': 'make',
+    }
+    # Names a script could plausibly shell out to; a hit that PROVIDER does not list is unaudited.
+    VOCABULARY = ('cmp', 'diff', 'git', 'make', 'curl', 'tar', 'cpio', 'rpm2cpio', 'patch', 'sed', 'awk', 'grep', 'xxd', 'which',
+                  'unzip', 'gzip', 'xz', 'jq', 'wget', 'gcc', 'ld', 'readlink', 'realpath', 'dirname', 'basename', 'tee',
+                  'sha256sum', 'sort', 'stat', 'find', 'install', 'timeout', 'mktemp', 'cut', 'tail', 'head', 'tr', 'cp',
+                  'mv', 'ln', 'chmod', 'chown', 'uname', 'rpm', 'dnf', 'python3')
+    SCRIPTS = ('snitchwatch-system-ebpf-legacy-base.sh', 'snitchwatch-system-ebpf-prep.sh', 'snitchwatch-system-ebpf-build.sh',
+               'snitchwatch-system-ebpf-legacy-assemble.sh', 'snitchwatch-system-toolchain.sh', 'snitchwatch-system-mode.sh')
+
+    def code(self, name):
+        text = (FACTORY / name).read_text()
+        text = re.sub(r'(?m)^\s*#.*$', '', text)
+        return re.sub(r"<<'PY'.*?\nPY\n", '', text, flags=re.S)
+
+    def used(self, name):
+        text = self.code(name)
+        found = {c for c in self.VOCABULARY if re.search(r'(?<![\w./$-])%s(?![\w.-])' % re.escape(c), text)}
+        # Python helpers shell out through subprocess; make is the one non-literal argv[0].
+        return found
+
+    def installed(self):
+        base_text = self.code('snitchwatch-system-ebpf-legacy-base.sh')
+        installed = set(re.findall(r'install_weak_deps=False install ([\w-]+)\s*$', base_text, flags=re.M))
+        prep = (FACTORY / 'snitchwatch-system-ebpf-prep.sh').read_text()
+        extras = re.search(r'if \[\[ "\$profile" == legacy \]\]; then\n(?:\s*#.*\n)*\s*command -v curl.*\n\s*extras=\(([^)]*)\)', prep)
+        self.assertIsNotNone(extras, 'legacy extras array not found in the prep script')
+        return installed | set(extras.group(1).split())
+
+    def test_every_command_the_legacy_chain_uses_is_audited_and_provided(self):
+        installed = self.installed()
+        self.assertIn('python3', installed)
+        for name in self.SCRIPTS:
+            for cmd in self.used(name):
+                with self.subTest(script=name, command=cmd):
+                    self.assertIn(cmd, self.PROVIDER, 'unaudited command %s in %s' % (cmd, name))
+                    provider = self.PROVIDER[cmd]
+                    self.assertTrue(provider == 'bare' or provider in installed,
+                                    '%s (%s) is not in the bare builder image nor installed by the legacy stages' % (cmd, name))
+        for helper in ('snitchwatch-system-ebpf.py', 'snitchwatch-system-handoff.py'):
+            text = (FACTORY / helper).read_text()
+            for cmd in set(re.findall(r"subprocess\.run\(\[\s*'([\w-]+)'", text)) | ({'make'} if "['make'," in text else set()):
+                with self.subTest(helper=helper, command=cmd):
+                    self.assertIn(cmd, self.PROVIDER)
+                    self.assertTrue(self.PROVIDER[cmd] == 'bare' or self.PROVIDER[cmd] in installed)
+
+    def test_cmp_needs_diffutils_in_the_legacy_stages(self):
+        # Mutation target: dropping diffutils from the legacy extras must turn this red.
+        self.assertIn('diffutils', self.installed())
+        self.assertIn('cmp', self.used('snitchwatch-system-ebpf-build.sh'))
+
+    def inventory_check(self):
+        text = (FACTORY / 'snitchwatch-system-ebpf-build.sh').read_text()
+        start = text.index("command -v cmp")
+        return text[start:text.index('ebpf_pins=')]
+
+    def run_inventory_check(self, bins, live, recorded):
+        work = self.root / 'work'
+        work.mkdir()
+        (work / 'rpm-inventory.txt').write_text(recorded)
+        tools = self.root / 'bin'
+        tools.mkdir()
+        rpm = tools / 'rpm'
+        rpm.write_text('#!/bin/bash\nprintf %s "$LIVE_INVENTORY"\n')
+        rpm.chmod(0o755)
+        for name in bins:
+            (tools / name).symlink_to(subprocess.run(['bash', '-c', 'command -v ' + name], capture_output=True, text=True).stdout.strip())
+        return subprocess.run(['/usr/bin/bash', '--noprofile', '--norc', '-c', 'set -euo pipefail\nwork=$1\n' + self.inventory_check() + 'echo OK', 'x', str(work)],
+                              capture_output=True, text=True, env={'PATH': str(tools), 'LIVE_INVENTORY': live})
+
+    def test_inventory_check_reports_a_missing_cmp_distinctly_and_never_as_a_difference(self):
+        result = self.run_inventory_check(['sort', 'bash'], 'a\n', 'a\n')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('cmp (diffutils) is missing', result.stderr)
+        self.assertNotIn('RPM set differs', result.stderr)
+        self.assertNotIn('command not found', result.stderr)
+
+    def test_inventory_check_still_refuses_any_difference_and_accepts_equal_sets(self):
+        tools = ['sort', 'cmp', 'bash']
+        for live in ('a\nb\n', 'b\n', ''):
+            with self.subTest(live=live):
+                self.setUp()
+                refused = self.run_inventory_check(tools, live, 'a\n')
+                self.assertNotEqual(refused.returncode, 0)
+                self.assertIn('RPM set differs', refused.stderr)
+        self.setUp()
+        ok = self.run_inventory_check(tools, 'a\n', 'a\n')
+        self.assertEqual(ok.returncode, 0, ok.stderr)
+        self.assertIn('OK', ok.stdout)
+
+    def test_no_legacy_script_compares_with_a_bare_cmp_pipeline(self):
+        # A `| cmp - file ||` pattern cannot tell a missing cmp from a difference.
+        for name in self.SCRIPTS:
+            with self.subTest(name):
+                self.assertNotRegex(self.code(name), r'\|\s*cmp\b')
+
+
 if __name__ == '__main__':
     unittest.main()

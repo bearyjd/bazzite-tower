@@ -28,9 +28,10 @@ mkdir -p "$work"
 python3 -B "$factory/snitchwatch-system-ebpf.py" check-pins "$factory/snitchwatch-system-ebpf-pins.json"
 extras=(make)
 if [[ "$profile" == legacy ]]; then
-    # The toolchain helper downloads with curl; git-core is the compile stage's blob reader.
+    # The toolchain helper downloads with curl; git-core is the compile stage's blob reader; diffutils
+    # provides the cmp the offline stages compare the RPM inventory with (absent from the bare image).
     command -v curl > /dev/null || timeout 240 dnf -y --setopt=install_weak_deps=False install curl
-    extras=(make git-core)
+    extras=(make git-core diffutils)
 fi
 bash "$factory/snitchwatch-system-toolchain.sh" install "$factory/snitchwatch-system-ebpf-pins.json" "$work/toolchain" "${extras[@]}"
 # The installed headers are re-checked against the verified files; the RPMs themselves are not needed later.

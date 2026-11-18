@@ -24,7 +24,13 @@ profile=${SNITCHWATCH_BRIDGE:-legacy}
 }
 work=$1 kernel=$2 dest=$3 kind=$4
 python3 "$factory/snitchwatch-system-handoff.py" probe-network offline
-rpm -qa --qf '%{NAME}-%{EPOCHNUM}:%{VERSION}-%{RELEASE}.%{ARCH}\n' | LC_ALL=C sort | cmp - "$work/rpm-inventory.txt" || {
+# The comparison tool is checked first and the live inventory goes to a file, so a missing tool
+# is reported as such and never as an RPM-set difference (cmp's exit status alone cannot tell them apart).
+command -v cmp > /dev/null || { echo 'ebpf stage: cmp (diffutils) is missing from the builder image; refusing.' >&2; exit 1; }
+rpm -qa --qf '%{NAME}-%{EPOCHNUM}:%{VERSION}-%{RELEASE}.%{ARCH}\n' | LC_ALL=C sort > "$work/rpm-inventory.live" || {
+    echo 'ebpf stage: cannot list the installed RPMs; refusing.' >&2; exit 1;
+}
+cmp -s "$work/rpm-inventory.live" "$work/rpm-inventory.txt" || {
     echo 'ebpf stage: RPM set differs from the ebpf prep inventory; refusing.' >&2; exit 1;
 }
 ebpf_pins="$factory/snitchwatch-system-ebpf-pins.json"

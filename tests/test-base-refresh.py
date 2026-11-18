@@ -191,6 +191,30 @@ class RefreshTests(unittest.TestCase):
         newer = copy.deepcopy(self.proof); newer['kernel'] = '7.3.0-ogc1.1.fc45'; newer['baseVersion'] = '45.20261106'
         r.monotonic(self.policy, newer, self.proof)
 
+    def previous_and_new(self, previous, new):
+        a = copy.deepcopy(self.proof); a['baseVersion'] = previous
+        b = copy.deepcopy(self.proof); b['baseVersion'] = new
+        return a, b
+
+    def test_monotonic_orders_revision_suffixed_versions(self):
+        a, b = self.previous_and_new('45.20261115', '45.20261117.1')
+        r.monotonic(self.policy, b, a)
+        a, b = self.previous_and_new('45.20261117.1', '45.20261117.2')
+        r.monotonic(self.policy, b, a)
+        a, b = self.previous_and_new('45.20261117.1', '45.20261117')
+        with self.assertRaisesRegex(ValueError, 'below signed channel baseline'): r.monotonic(self.policy, b, a)
+
+    def test_policy_and_evidence_accept_a_revision_floor(self):
+        policy = copy.deepcopy(self.policy); policy['minimumBaseVersion'] = '45.20261105.1'
+        write(self.path, policy)
+        self.assertEqual(r.policy(self.root)['minimumBaseVersion'], '45.20261105.1')
+        args = (self.base, None, self.proof['image'], self.proof['sbomSha256'], self.proof['kernel'])
+        r.evidence(policy, 'legacy', self.base, '45.20261105.1', *args[2:])
+        r.evidence(policy, 'legacy', self.base, '45.20261117.1', *args[2:])
+        for low in ['45.20261105', '45.20261104.9']:
+            with self.subTest(low=low), self.assertRaisesRegex(ValueError, 'below accepted floor'):
+                r.evidence(policy, 'legacy', self.base, low, *args[2:])
+
     def test_unsafe_artifact_inventory_and_symlink_refused(self):
         extra = self.data / 'extra'; extra.write_text('bad')
         with self.assertRaises(ValueError): self.valid()
@@ -541,21 +565,30 @@ class BaseVersionGrammar(unittest.TestCase):
         self.assertGreaterEqual(r.base_version('45.20261117.1'), r.base_version('45.20261117'))
         self.assertLess(r.base_version('45.20261117'), r.base_version('45.20261117.1'))
 
-    def test_resolve_accepts_revision_label(self):
+    def test_resolve_uses_the_digest_pinned_inspect_version(self):
         # Previously raised ValueError('invalid Bazzite version') in the scheduled `resolve` job.
-        policy = json.loads((ROOT / '.github/base-refresh-policy.json').read_bytes())
+        # The :stable inspect and the @sha256: inspect disagree; the pinned one is authoritative.
+        # A private policy copy with a low floor keeps this independent of the live floor.
         digest = 'sha256:' + 'c' * 64
-        info = {'Digest': digest, 'Labels': {'org.opencontainers.image.version': '45.20261117.1'}}
+        tag_info = {'Digest': digest, 'Labels': {'org.opencontainers.image.version': '45.20261101'}}
+        pinned_info = {'Digest': digest, 'Labels': {'org.opencontainers.image.version': '45.20261117.1'}}
+        def skopeo(*argv):
+            return json.dumps(pinned_info if '@sha256:' in argv[-1] else tag_info)
         with tempfile.TemporaryDirectory() as tmp:
+            control = Path(tmp) / 'control'; (control / '.github').mkdir(parents=True)
+            policy = json.loads((ROOT / '.github/base-refresh-policy.json').read_bytes())
+            policy['minimumBaseVersion'] = '45.20261001'
+            write(control / '.github/base-refresh-policy.json', policy)
             out = Path(tmp) / 'out'
-            env = {'CONTROL': str(ROOT), 'GITHUB_OUTPUT': str(out), 'GITHUB_REPOSITORY': 'bearyjd/bazzite-tower', 'GITHUB_REF': 'refs/heads/main',
+            env = {'CONTROL': str(control), 'GITHUB_OUTPUT': str(out), 'GITHUB_REPOSITORY': 'bearyjd/bazzite-tower', 'GITHUB_REF': 'refs/heads/main',
                    'GITHUB_EVENT_NAME': 'schedule', 'GITHUB_SHA': 'a' * 40, 'GITHUB_RUN_ID': '17', 'GITHUB_RUN_NUMBER': '2', 'GITHUB_RUN_ATTEMPT': '1',
                    'GITHUB_WORKFLOW_REF': 'bearyjd/bazzite-tower/.github/workflows/base-refresh.yml@refs/heads/main'}
-            with patch.dict(os.environ, env), patch.object(r, 'command', return_value=json.dumps(info)), \
-                    patch.object(sys, 'argv', ['base-refresh.py', 'resolve', '--control', str(ROOT)]):
+            with patch.dict(os.environ, env), patch.object(r, 'command', side_effect=skopeo), \
+                    patch.object(sys, 'argv', ['base-refresh.py', 'resolve', '--control', str(control)]):
                 r.main()
             lines = out.read_text().splitlines()
         self.assertIn('version=45.20261117.1', lines)
+        self.assertNotIn('version=45.20261101', lines)
         self.assertIn('base=' + policy['upstream'] + '@' + digest, lines)
 
 

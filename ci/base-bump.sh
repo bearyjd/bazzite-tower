@@ -23,9 +23,11 @@ fi
 
 info=$(skopeo inspect --retry-times 4 "docker://${repo}:${tag}")
 latest=$(jq -r '.Digest' <<< "${info}")
-version=$(jq -r '.Labels["org.opencontainers.image.version"] // "unknown"' <<< "${info}")
+raw_version=$(jq -r '.Labels["org.opencontainers.image.version"] // "unknown"' <<< "${info}")
 # Upstream-controlled label: keep it to a safe charset before it reaches $GITHUB_OUTPUT.
-version=$(tr -cd '0-9A-Za-z._-' <<< "${version}")
+version=$(tr -cd '0-9A-Za-z._-' <<< "${raw_version}")
+# Fail closed: stripping characters must not turn an invalid label (e.g. "45.20261117 .1") into a valid one.
+[[ "${version}" == "${raw_version}" ]] || version=unknown
 version=${version:-unknown}
 # Kernel as recorded by ostree/bootc in the image labels; sanitized like version.
 kernel=$(jq -r '.Labels["ostree.linux"] // ""' <<< "${info}" | tr -cd '0-9A-Za-z._-')
@@ -52,7 +54,9 @@ if ! cur_info=$(skopeo inspect --retry-times 4 "docker://${repo}@${current}" 2> 
     echo "::notice::guard: skopeo lookup of the CURRENT pin ${repo}@${current} failed; automerge=false" >&2
     cur_info=
 fi
-cur_version=$(jq -r '.Labels["org.opencontainers.image.version"] // ""' <<< "${cur_info}" 2> /dev/null | tr -cd '0-9A-Za-z._-' || true)
+cur_raw_version=$(jq -r '.Labels["org.opencontainers.image.version"] // ""' <<< "${cur_info}" 2> /dev/null || true)
+cur_version=$(tr -cd '0-9A-Za-z._-' <<< "${cur_raw_version}" || true)
+[[ "${cur_version}" == "${cur_raw_version}" ]] || cur_version= # fail closed, as for the new label
 cur_kernel=$(jq -r '.Labels["ostree.linux"] // ""' <<< "${cur_info}" 2> /dev/null | tr -cd '0-9A-Za-z._-' || true)
 cur_kernel=${cur_kernel%.x86_64}
 # Blast-radius package diff (pulls both digests); failure => no report => guard says false.

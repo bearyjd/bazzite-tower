@@ -1,9 +1,8 @@
 # System-bridge Flatpak deployment profile — Snitchwatch GUI shell.
 #
-# This has the same app-id as the legacy profile and is an alternative
-# deployment profile, not a coinstallable second application. Select it only
-# with the socket-activated system bridge; the released primary manifest keeps
-# the existing per-user bridge contract.
+# This is the only shipped Flatpak profile (the per-user profile was retired
+# with the per-user bridge, #35). It keeps the same app-id as earlier releases.
+# Use it with the socket-activated system bridge.
 #
 # Scope: this Flatpak contains the GUI shell ONLY. The bridge
 # (snitchwatch-bridge-cli) and its gRPC connection to the privileged

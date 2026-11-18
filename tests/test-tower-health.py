@@ -149,6 +149,10 @@ class Diagnostics(unittest.TestCase):
                 self.assertIn("    RESULT: %s: fixture reason" % verdict, output)
                 self.assertNotIn("detail line that must not be shown", output)
 
+    def test_ebpf_runtime_hang_is_unknown_at_the_timeout(self):
+        output = self.health_with_ebpf_check("import time\ntime.sleep(60)\n", "0")
+        self.assertIn("UNKNOWN (no RESULT line; status=124)", output)
+
     def test_ebpf_runtime_without_a_result_line_is_unknown(self):
         output = self.health_with_ebpf_check("print('garbage')\nsys.exit(3)\n", "0")
         self.assertIn("UNKNOWN (no RESULT line; status=3)", output)

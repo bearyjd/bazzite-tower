@@ -44,7 +44,7 @@ printf 'LISTEN 0 128 127.0.0.1:50051 0.0.0.0:* users:(("bridge",pid=%s,fd=3))\n'
 """)
         self.write_command("id","#!/bin/sh\nprintf '%s\\n' \"${FAKE_UID:-1000}\"\n")
         self.ebpf=self.root/"usr/libexec/bazzite-tower-opensnitch-ebpf-check";self.ebpf.parent.mkdir(parents=True)
-        self.ebpf.write_text('#!/bin/sh\nprintf "%s\\n" "$*" >> "$COMMAND_LOG"\nprintf "detail line\\n"\nprintf "%s\\n" "$EBPF_RESULT"\nexit "${EBPF_RC:-0}"\n');self.ebpf.chmod(0o755)
+        self.ebpf.write_text('#!/bin/sh\nprintf "%s\\n" "$*" >> "$COMMAND_LOG"\nprintf "detail line\\n"\n[ -z "$EBPF_HANG" ] || exec sleep 30\nprintf "%s\\n" "$EBPF_RESULT"\nexit "${EBPF_RC:-0}"\n');self.ebpf.chmod(0o755)
         system=self.root/"usr/libexec/bazzite-tower-snitchwatch-readiness"
         system.write_text('#!/bin/sh\nprintf "fixture-system-dispatch:%s\\n" "$*"\nexit 42\n');system.chmod(0o755)
         self.profile=self.root/"usr/share/bazzite-tower/snitchwatch-bridge-profile"
@@ -90,6 +90,12 @@ printf 'LISTEN 0 128 127.0.0.1:50051 0.0.0.0:* users:(("bridge",pid=%s,fd=3))\n'
                 self.env["EBPF_RESULT"]=result_line;self.env["EBPF_RC"]=code
                 result=self.run_check();self.assertEqual(result.returncode,1,result.stdout)
                 self.assertIn("NOT READY: eBPF runtime check",result.stderr);self.assertNotIn("Local prerequisites pass",result.stdout)
+
+    def test_runtime_check_hang_fails_readiness_at_the_timeout(self):
+        self.env["FAKE_UID"]="0";self.env["EBPF_HANG"]="1"
+        self.script.write_text(self.script.read_text().replace("timeout 30s","timeout 1s"))
+        result=self.run_check();self.assertEqual(result.returncode,1,result.stdout)
+        self.assertIn("NOT READY: eBPF runtime check timed out",result.stderr);self.assertNotIn("Local prerequisites pass",result.stdout)
 
     def test_explicit_legacy_same_behavior(self):
         self.profile.write_text("legacy\n");self.assertEqual(self.run_check().returncode,0)

@@ -198,7 +198,7 @@ class Refusals(DenyBase):
 
     def test_wrong_current_action_or_proc_method(self):
         for changes, text in (({"DefaultAction": "deny"}, "allow"), ({"DefaultAction": "ask"}, "allow"),
-                              ({"ProcMonitorMethod": "audit"}, "ebpf or proc")):
+                              ({"ProcMonitorMethod": "audit"}, "ProcMonitorMethod drift")):
             with self.subTest(changes=changes):
                 self.edit_config(**changes)
                 self.refused("on", text=text)
@@ -209,7 +209,7 @@ class Refusals(DenyBase):
         raw = json.loads(self.config_path.read_text())
         del raw["ProcMonitorMethod"]
         self.config_path.write_text(json.dumps(raw))
-        self.refused("on", text="ebpf or proc")
+        self.refused("on", text="ProcMonitorMethod drift")
         self.assertFalse(self.status()["canEnable"])
 
     def test_ebpf_and_proc_methods_both_allow_opt_in(self):
@@ -217,6 +217,48 @@ class Refusals(DenyBase):
             with self.subTest(method=method):
                 self.edit_config(DefaultAction="allow", ProcMonitorMethod=method)
                 self.assertTrue(self.status()["canEnable"], self.status()["blockers"])
+
+    def runtime_checks(self):
+        return [cmd for cmd in self.ctx.commands if cmd == [common.EBPF_CHECK, "--runtime"]]
+
+    def test_modules_path_drift_blocks_opt_in_for_both_methods(self):
+        for method in ("ebpf", "proc"):
+            for modules in (None, "/usr/local/lib/opensnitchd/ebpf"):
+                with self.subTest(method=method, modules=modules):
+                    ebpf = dict(json.loads(self.config_path.read_text())["Ebpf"])
+                    ebpf.pop("ModulesPath", None)
+                    if modules:
+                        ebpf["ModulesPath"] = modules
+                    self.edit_config(ProcMonitorMethod=method, Ebpf=ebpf)
+                    self.refused("on", text="ModulesPath")
+                    self.assert_untouched()
+                    self.assertFalse(self.status()["canEnable"])
+                    self.assertEqual(self.runtime_checks(), [])
+
+    def test_ebpf_opt_in_runs_the_runtime_check_and_refuses_fail_and_partial_warn(self):
+        self.edit_config(ProcMonitorMethod="ebpf")
+        for result, text in ((("FAIL", "silent /proc fallback: pid 501 holds no anon_inode:bpf-prog fd", 1), "eBPF runtime check FAIL"),
+                             (("WARN", common.EBPF_PARTIAL_REASON+" (no exec events); rebuild/repair opensnitch-procs.o", 0), "partial")):
+            with self.subTest(result=result[0]):
+                self.ctx.ebpf_runtime = result
+                self.refused("on", text=text)
+                self.assert_untouched()
+        self.ctx.ebpf_hang = True
+        self.refused("on", text="timed out")
+        self.assert_untouched()
+
+    def test_ebpf_opt_in_allowed_on_pass_or_other_warn_and_proc_skips_the_runtime_check(self):
+        self.edit_config(ProcMonitorMethod="ebpf")
+        self.ctx.ebpf_runtime = ("WARN", "only 1 anon_inode:bpf-prog fds, below the calibrated floor 9", 0)
+        self.ok("on")
+        self.assertEqual(len(self.runtime_checks()), 1)
+        self.ok("off")
+        self.setUp_clean()
+        self.edit_config(ProcMonitorMethod="proc")
+        self.ctx.commands.clear()
+        self.ctx.ebpf_runtime = ("FAIL", "would refuse if it ran", 1)
+        self.ok("on")
+        self.assertEqual(self.runtime_checks(), [])
 
     def test_already_pending_is_refused_and_changes_nothing_more(self):
         self.ok("on")

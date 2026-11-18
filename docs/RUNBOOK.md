@@ -582,17 +582,21 @@ to the `/proc` monitor. Exactly one key changes; every other key is preserved.
 Agents do not edit host configuration, invoke sudo or restart services.
 
 ```bash
-sudo flock -n /run/lock/bazzite-tower-snitchwatch-migration.lock sh -c 'f=/etc/opensnitchd/default-config.json; jq ".ProcMonitorMethod=\"proc\"" "$f" >"$f.new" && chmod 0644 "$f.new" && mv "$f.new" "$f"' && sudo systemctl restart opensnitch.service
+sudo sh -c 'umask 077; exec flock -n /run/lock/bazzite-tower-snitchwatch-migration.lock sh -c "$1"' sh 'f=/etc/opensnitchd/default-config.json; trap "rm -f -- \$f.new" EXIT; jq ".ProcMonitorMethod=\"proc\"" "$f" >"$f.new" && chmod 0644 "$f.new" && mv "$f.new" "$f" && if command -v restorecon >/dev/null; then restorecon -- "$f"; fi' && sudo systemctl restart opensnitch.service
 sudo /usr/libexec/bazzite-tower-opensnitch-ebpf-check --runtime   # expect RESULT: WARN: ... proc fallback
 ```
 
 The migration lock (`/run/lock/bazzite-tower-snitchwatch-migration.lock`, held
 by the migration helper; `flock -n` refuses instead of waiting) serializes this
 edit against the helper: Linux filesystem exchange cannot conditionally replace
-a file against arbitrary uncoordinated root writers. To go back to eBPF, set the
-key to `"ebpf"` the same way (and restore `Ebpf.ModulesPath` if it was removed),
-restart, and run the runtime check. With `proc` the readiness contract still
-passes and reports a `WARN`: that is by design, not drift. A locally modified
+a file against arbitrary uncoordinated root writers. `umask 077` makes a lock
+created here root-owned mode 0600, which is what the helpers demand of it; the
+inner shell removes a half-written `.new` file if `jq` fails and restores the
+SELinux label after the move. To go back to eBPF, set the
+key to `"ebpf"` the same way, restart, and run the runtime check. The pinned
+`Ebpf.ModulesPath` is part of the contract for both methods (never remove it);
+with `proc` the readiness contract and `migrate` still pass and readiness
+reports a `WARN`: that is by design, not drift. A locally modified
 `/etc/opensnitchd/default-config.json` stops tracking the image through the
 bootc `/etc` 3-way merge, so a config kept at `proc` stays at `proc` after an
 upgrade (readiness `WARN` until you switch it back). Compare with

@@ -101,7 +101,8 @@ printf 'ok: %s owns %s\n' "${bridge_unit}" "${bridge_address}"
 ebpf_check=/usr/libexec/bazzite-tower-opensnitch-ebpf-check
 if [[ "$(id -u)" == 0 ]]; then
     ebpf_rc=0
-    ebpf_output=$("${ebpf_check}" --runtime 2>&1) || ebpf_rc=$?
+    ebpf_output=$(timeout 30s "${ebpf_check}" --runtime 2>&1) || ebpf_rc=$?
+    [[ "${ebpf_rc}" != 124 ]] || fail "eBPF runtime check timed out after 30s"
     ebpf_result=$(printf '%s\n' "${ebpf_output}" | tail -n 1)
     case "${ebpf_result}" in
         'RESULT: PASS: '*) [[ "${ebpf_rc}" == 0 ]] || fail "eBPF runtime check exited ${ebpf_rc}: ${ebpf_result}"

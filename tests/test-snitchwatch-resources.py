@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import runpy
+import shutil
 import struct
 import subprocess
 import tempfile
@@ -153,51 +154,76 @@ class BpfPackagingTests(unittest.TestCase):
 
 
 class ProcFallbackRecipeTests(unittest.TestCase):
-    """Run the RUNBOOK's one-key proc fallback `sh -c` body against fixture configs."""
+    """Run the RUNBOOK's real one-key proc fallback command (sans sudo/restart) against fixture configs."""
 
     SHIPPED = {'ProcMonitorMethod': 'ebpf', 'DefaultAction': 'allow', 'LogLevel': 2, 'MaxEvents': 150,
                'InterceptUnknown': False, 'Server': {'Address': 'unix:opensnitchd.sock'},
                'Ebpf': {'EventsWorkers': 8, 'QueueEventsSize': 0, 'ModulesPath': '/usr/lib/opensnitchd/ebpf'}}
+    LOCK = '/run/lock/bazzite-tower-snitchwatch-migration.lock'
 
     @classmethod
     def setUpClass(cls):
         runbook = (ROOT / 'docs/RUNBOOK.md').read_text()
-        line = next(item for item in runbook.splitlines() if item.startswith('sudo flock -n /run/lock/bazzite-tower-snitchwatch-migration.lock sh -c '))
-        cls.line = line
-        cls.script = line.split(" sh -c '", 1)[1].split("' && sudo systemctl restart opensnitch.service", 1)[0]
+        cls.line = next(item for item in runbook.splitlines() if item.startswith("sudo sh -c 'umask 077; exec flock -n " + cls.LOCK))
+        cls.command = cls.line.split(' && sudo systemctl restart opensnitch.service', 1)[0]
 
-    def run_recipe(self, config):
+    def run_recipe(self, text, path_after=None, env=None):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / 'default-config.json'
-            path.write_text(json.dumps(config))
+            path.write_text(text)
             path.chmod(0o600)
-            script = self.script.replace('/etc/opensnitchd/default-config.json', str(path))
-            result = subprocess.run(['sh', '-c', script], capture_output=True, text=True, timeout=10)
-            return result, json.loads(path.read_text()), path.stat().st_mode & 0o7777, sorted(p.name for p in Path(directory).iterdir())
+            lock = Path(directory) / 'lock'
+            command = self.command.removeprefix('sudo ').replace('/etc/opensnitchd/default-config.json', str(path)).replace(self.LOCK, str(lock))
+            result = subprocess.run(['sh', '-c', command], capture_output=True, text=True, timeout=10, env=env)
+            lock_mode = lock.stat().st_mode & 0o7777 if lock.exists() else None
+            return result, path.read_text(), path.stat().st_mode & 0o7777, sorted(p.name for p in Path(directory).iterdir()), lock_mode
 
     def test_recipe_changes_exactly_one_key_and_restarts_under_the_migration_lock(self):
         self.assertIn('&& sudo systemctl restart opensnitch.service', self.line)
-        result, after, mode, names = self.run_recipe(self.SHIPPED)
+        result, text, mode, names, _ = self.run_recipe(json.dumps(self.SHIPPED))
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(after, {**self.SHIPPED, 'ProcMonitorMethod': 'proc'})
+        self.assertEqual(json.loads(text), {**self.SHIPPED, 'ProcMonitorMethod': 'proc'})
         self.assertEqual(mode, 0o644)
-        self.assertEqual(names, ['default-config.json'])  # no leftover .new
+        self.assertEqual(names, ['default-config.json', 'lock'])  # no leftover .new
+
+    def test_a_freshly_created_lock_has_the_mode_the_helpers_require(self):
+        _, _, _, _, lock_mode = self.run_recipe(json.dumps(self.SHIPPED))
+        self.assertEqual(lock_mode, 0o600)
+        for helper in ('bazzite-tower-snitchwatch-migrate', 'bazzite-tower-snitchwatch-deny'):
+            self.assertIn('0o600', (ROOT / 'system_files/usr/libexec' / helper).read_text())
 
     def test_recipe_preserves_types_and_nested_keys(self):
-        result, after, _, _ = self.run_recipe(self.SHIPPED)
-        self.assertEqual(json.dumps(after, sort_keys=True),
-                         json.dumps({**self.SHIPPED, 'ProcMonitorMethod': 'proc'}, sort_keys=True))
+        _, text, _, _, _ = self.run_recipe(json.dumps(self.SHIPPED))
+        after = json.loads(text)
+        self.assertEqual(json.dumps(after, sort_keys=True), json.dumps({**self.SHIPPED, 'ProcMonitorMethod': 'proc'}, sort_keys=True))
         self.assertIs(after['InterceptUnknown'], False)
         self.assertEqual(after['Ebpf']['ModulesPath'], '/usr/lib/opensnitchd/ebpf')
 
-    def test_unparseable_config_is_left_untouched(self):
+    def test_unparseable_config_is_left_untouched_and_leaves_no_new_file(self):
+        result, text, mode, names, _ = self.run_recipe('{not json')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(text, '{not json')
+        self.assertEqual(mode, 0o600)
+        self.assertNotIn('default-config.json.new', names)
+
+    def test_recipe_restores_the_label_when_restorecon_exists_and_works_without_it(self):
         with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / 'default-config.json'
-            path.write_text('{not json')
-            script = self.script.replace('/etc/opensnitchd/default-config.json', str(path))
-            result = subprocess.run(['sh', '-c', script], capture_output=True, text=True, timeout=10)
-            self.assertNotEqual(result.returncode, 0)
-            self.assertEqual(path.read_text(), '{not json')
+            bin_dir = Path(directory) / 'bin'
+            bin_dir.mkdir()
+            log = Path(directory) / 'restorecon.log'
+            fake = bin_dir / 'restorecon'
+            fake.write_text('#!/bin/sh\nprintf "%s\\n" "$*" >> ' + str(log) + '\n')
+            fake.chmod(0o755)
+            env = {'PATH': str(bin_dir) + ':' + os.environ['PATH']}
+            result, _, _, _, _ = self.run_recipe(json.dumps(self.SHIPPED), env=env)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertRegex(log.read_text(), r'^-- .*default-config\.json\n$')
+        with tempfile.TemporaryDirectory() as directory:  # a PATH holding only the recipe's tools: no restorecon
+            for tool in ('sh', 'jq', 'flock', 'chmod', 'mv', 'rm'):
+                (Path(directory) / tool).symlink_to(shutil.which(tool))
+            result, text, _, _, _ = self.run_recipe(json.dumps(self.SHIPPED), env={'PATH': directory})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(text)['ProcMonitorMethod'], 'proc')
 
 
 class ShippedConfigTests(unittest.TestCase):

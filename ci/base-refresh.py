@@ -68,8 +68,16 @@ def context():
 
 
 def base_version(value):
-    require(isinstance(value, str) and re.fullmatch(r'[0-9]{2}\.[0-9]{8}', value), 'invalid Bazzite version')
-    return tuple(map(int, value.split('.')))
+    # Accepted grammar: NN.NNNNNNNN or NN.NNNNNNNN.N (ASCII digits only). The optional
+    # .N is a same-day upstream rebuild revision: positive, no leading zero, <= 4 digits.
+    # Added 2026-11-17 when ghcr.io/ublue-os/bazzite-nvidia-open:stable became
+    # 45.20261117.1 (earlier: 45.20261115, 45.20261112). Like kernel_version this stays
+    # strict: any other new scheme fails closed. Absent revision orders as 0, so
+    # 45.20261117 < 45.20261117.1 < 45.20261117.2 < 45.20261118.
+    match = isinstance(value, str) and re.fullmatch(r'([0-9]{2})\.([0-9]{8})(?:\.([1-9][0-9]{0,3}))?', value)
+    require(match, 'invalid Bazzite version')
+    major, date, revision = match.groups()
+    return int(major), int(date), int(revision or 0)
 
 
 def kernel_version(value):

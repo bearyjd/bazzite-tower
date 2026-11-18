@@ -33,7 +33,7 @@ The candidate `Containerfile` default pin is the digest in `ARG BASE_IMAGE` (rea
 there; this map deliberately does not copy it, it changes with every bump).
 Weekly `base-bump.yml` PRs maintain this default; automatic refresh independently
 resolves its base. Neither path changes hardware tuning or proves host eBPF
-compatibility. Both profiles retain allow/proc defaults.
+compatibility. Both profiles default to allow + ebpf (pinned `Ebpf.ModulesPath`); `proc` is the documented one-key fallback. Not shipping before owner gates A (VM load test) and C (laptop day-run).
 
 ## Containerfile stages
 
@@ -183,10 +183,10 @@ identity. No legacy release-install/global-user-enable script runs.
 The system candidate also builds the pinned OpenSnitch source (upstream a1353848,
 version 1.9.0, `daemonSource` in the policy, which must equal the bridge pins'
 `submoduleCommit`) with its reviewed downstream repair, rebased onto a1353848.
-It stays `allow`/`proc` (no `ModulesPath`). Its BPF objects are compiled at image
+It ships `allow`/`ebpf` with `Ebpf.ModulesPath` `/usr/lib/opensnitchd/ebpf`. Its BPF objects are compiled at image
 build from the same a1353848 commit against BASE_IMAGE's kernel-devel (Track A
 stages above; the RPM's v1.8.0 objects are overwritten); loading is
-runtime-unverified until the separate enable change. The same single patch (59 files) carries CPU fixes:
+runtime-unverified until owner gates A and C (`bazzite-tower-opensnitch-ebpf-check --runtime` decides on the host). The same single patch (59 files) carries CPU fixes:
 one process build per exec (ancestry is upstream's full walk), an exact
 sock_diag lookup for connected TCP with the dump as fallback, names-only
 `/proc/<pid>/fd` listing (the `/proc` pid order is upstream's), and GOMAXPROCS 4 unless `GOMAXPROCS` is set (`-workers` stays 16,
@@ -220,7 +220,7 @@ the image's single `/usr/lib/modules/*` release, its config sha256 matches that
 kernel's `config`, and every on-disk object hash matches (legacy: also unless the manifest commit is the pinned v1.8.0
 commit and it records the pinned 1.8.0 daemon RPM (name, version, release, sha256) and the pinned tree sha; the helper does not verify the RPM itself, `check-rpm` at build time is the binding); smoke repeats these with `jq`/`sha256sum`. The portmaster VM spike has
 no OpenSnitch, so `95-firewall.sh` drops the staged modules and manifest there. This is not proof that probes load on the running
-kernel; `ProcMonitorMethod` stays `proc` and the readiness contract is unchanged.
+kernel; the daemon falls back to `/proc` silently, so `ProcMonitorMethod: ebpf` is judged by `bazzite-tower-opensnitch-ebpf-check --runtime` (in readiness and `tower-health`).
 Failure modes (deliberate, fail-closed; there is no degrade path): every legacy
 image (`:latest`, `:latest-kernel`, safe-pin) now FAILS the build when its base
 lacks a `kernel-devel` matching its `kernel-core` (the `ebpf-kernel` stage
@@ -237,11 +237,11 @@ format, prep source-pin, assembly output shape, wiring), and
 
 Only the system candidate changes the image-intent OpenSnitch address to
 `unix:opensnitchd.sock`; both profiles permanently retain `DefaultAction: allow`
-and `ProcMonitorMethod: proc`. Deny enforcement requires explicit operator opt-in. Upstream `stage.sh` installs the
+and `ProcMonitorMethod: ebpf` with `Ebpf.ModulesPath` pinned (`proc` is the documented fallback; stage/verify require ebpf + the pin, readiness accepts either and WARNs on proc). Deny enforcement requires explicit operator opt-in. Upstream `stage.sh` installs the
 `opensnitch.service.d/snitchwatch-system-bridge.conf` drop-in (`Wants=`/`After=`
 the gRPC socket, `WorkingDirectory=-/run/snitchwatch`), pinned by hash; it also
 stages upstream's `ebpf` daemon config, which `snitchwatch-system-stage.py`
-removes from the overlay (unit-tested); `95-firewall.sh` installs the tower's `allow`/`proc`
+removes from the overlay (unit-tested); `95-firewall.sh` installs the tower's `allow`/`ebpf`
 candidate after the RPM extraction. `snitchwatch-system-stage.py` also stages the
 tower's always-on OS-update rules (`snitchwatch-system-os-update-rule.json` ->
 `/etc/opensnitchd/rules/000-snitchwatch-tower-os-update.json`, `snitchwatch-system-resolved-dns-rule.json`

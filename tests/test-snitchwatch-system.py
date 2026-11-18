@@ -39,6 +39,24 @@ REAL_READLINK = os.readlink
 VENDOR_CONTENT = '# This file is part of the systemd package.\n# See https://fedoraproject.org/wiki/Changes/Shorter_Shutdown_Timer.\n#\n# To facilitate debugging when a service fails to stop cleanly,\n# TimeoutStopFailureMode=abort is set to "crash" services that fail to stop in\n# the time allotted. This will cause the service to be terminated with SIGABRT\n# and a coredump to be generated.\n#\n# To undo this configuration change, create a mask file:\n#   sudo mkdir -p /etc/systemd/system/service.d\n#   sudo ln -sv /dev/null /etc/systemd/system/service.d/10-timeout-abort.conf\n\n[Service]\nTimeoutStopFailureMode=abort\n'
 
 
+ZERO_FD = ("FAIL", "silent /proc fallback: ProcMonitorMethod is ebpf but pid 501 holds no anon_inode:bpf-prog fd; eBPF did not load, check /var/log/opensnitchd.log and the module manifest", 1)
+EXPLICIT_FALLBACK = ("FAIL", "silent /proc fallback: the daemon logged 'error starting ebpf monitor method' since @1 (0 anon_inode:bpf-prog fds); check the module build", 1)
+PASS_RUNTIME = ("PASS", "fixture: daemon holds eBPF programs", 0)
+
+
+class FakeClock:
+    def __init__(self):
+        self.now = 0.0
+        self.slept = []
+
+    def __call__(self):
+        return self.now
+
+    def sleep(self, seconds):
+        self.slept.append(seconds)
+        self.now += seconds
+
+
 class Fixture(common.Context):
     def __init__(self, root):
         super().__init__(root, self.run)
@@ -54,6 +72,9 @@ class Fixture(common.Context):
         self.daemon_version = "1.9.0"
         self.daemon_process_path = common.DAEMON
         self.socket_types = {}
+        self.ebpf_runtime = ("PASS", "fixture: daemon holds eBPF programs", 0)
+        self.ebpf_script = []
+        self.ebpf_hang = False
         self.states = {unit: dict(enabled="enabled" if unit in common.SOCKETS or unit == "opensnitch.service" else "static", active="active" if unit in common.SOCKETS or unit == "opensnitch.service" else "inactive") for unit in common.UNITS}
         self.properties = {
             common.SERVICE: dict(User="snitchwatch", Group="snitchwatch", NoNewPrivileges="yes", CapabilityBoundingSet="", AmbientCapabilities="",
@@ -179,6 +200,11 @@ org.kde.StatusNotifierWatcher=talk
             out = json.dumps(self.daemon_proof)+"\n"
             if self.daemon_proof_failure:
                 code=1;error="installed daemon provenance mismatch"
+        elif argv == [common.EBPF_CHECK, "--runtime"]:
+            if self.ebpf_hang:
+                raise subprocess.TimeoutExpired(argv, 30)
+            verdict, reason, code = self.ebpf_script.pop(0) if self.ebpf_script else self.ebpf_runtime
+            out = "ignored detail line\nRESULT: %s: %s\n" % (verdict, reason)
         elif argv == [common.DAEMON, "-version"]:
             out = self.daemon_version+"\n"
         elif argv == ["flatpak", "--installations"]:
@@ -509,6 +535,37 @@ class SystemBehavior(unittest.TestCase):
         self.assertEqual(report["defaultAction"], "allow")
         self.assertFalse(any(cmd[:2] in (["systemctl","start"], ["systemctl","stop"]) for cmd in self.ctx.commands))
 
+    def test_live_proc_is_a_readiness_warn_not_a_failure(self):
+        self.ctx.system_config();self.ctx.flatpak()
+        config=json.loads(self.ctx.path(common.REFERENCE).read_text());config["ProcMonitorMethod"]="proc";self.ctx.write(common.CONFIG,json.dumps(config))
+        self.ctx.ebpf_runtime=("WARN","ProcMonitorMethod is proc: the documented /proc fallback",0)
+        report=common.runtime_readiness(self.ctx)
+        self.assertEqual(report["procMonitorMethod"],"proc");self.assertTrue(report["ebpfRuntime"].startswith("WARN: "))
+        output=io.StringIO()
+        with mock.patch.object(readiness.sys,"argv",["bazzite-tower-snitchwatch-readiness"]),mock.patch.object(readiness.os,"geteuid",return_value=0),\
+             mock.patch.object(common,"Context",return_value=self.ctx),contextlib.redirect_stdout(output):
+            readiness.main()
+        self.assertIn("WARNING: eBPF process monitoring is not in effect",output.getvalue())
+
+    def test_runtime_pass_is_reported_and_helper_is_read_only(self):
+        self.ctx.system_config();self.ctx.flatpak()
+        report=common.runtime_readiness(self.ctx)
+        self.assertEqual(report["procMonitorMethod"],"ebpf");self.assertEqual(report["ebpfRuntime"],"PASS: fixture: daemon holds eBPF programs")
+        self.assertIn([common.EBPF_CHECK,"--runtime"],self.ctx.commands)
+
+    def test_runtime_fail_refuses_readiness(self):
+        self.ctx.system_config();self.ctx.flatpak()
+        self.ctx.ebpf_runtime=("FAIL","silent /proc fallback",1)
+        self.refuse_readiness("eBPF runtime check FAIL")
+        self.ctx.ebpf_runtime=("PASS","contradictory exit",1)
+        with mock.patch.object(self.ctx,"runner",side_effect=lambda argv,**k:subprocess.CompletedProcess(argv,1,"RESULT: PASS: x\n","") if argv[0]==common.EBPF_CHECK else self.ctx.run(argv,**k)):
+            self.refuse_readiness("eBPF runtime check PASS")
+
+    def test_runtime_without_result_line_refuses_readiness(self):
+        self.ctx.system_config();self.ctx.flatpak()
+        with mock.patch.object(self.ctx,"runner",side_effect=lambda argv,**k:subprocess.CompletedProcess(argv,0,"no result here\n","") if argv[0]==common.EBPF_CHECK else self.ctx.run(argv,**k)):
+            self.refuse_readiness("no RESULT line")
+
     def test_readiness_cli_reports_the_validated_allow_policy(self):
         self.ctx.system_config();self.ctx.flatpak()
         output = io.StringIO()
@@ -577,9 +634,26 @@ class SystemBehavior(unittest.TestCase):
 
     def test_config_address_and_policy_drift(self):
         self.ctx.system_config()
-        for key,value in (("DefaultAction","deny"),("ProcMonitorMethod","ebpf")):
-            config=json.loads(self.ctx.path(common.REFERENCE).read_text());config[key]=value;self.ctx.write(common.CONFIG,json.dumps(config))
-            self.refuse_readiness("drift")
+        config=json.loads(self.ctx.path(common.REFERENCE).read_text());config["DefaultAction"]="deny";self.ctx.write(common.CONFIG,json.dumps(config))
+        self.refuse_readiness("drift")
+        for method in ("audit",None):
+            config=json.loads(self.ctx.path(common.REFERENCE).read_text())
+            if method is None:del config["ProcMonitorMethod"]
+            else:config["ProcMonitorMethod"]=method
+            self.ctx.write(common.CONFIG,json.dumps(config))
+            self.refuse_readiness("ProcMonitorMethod drift")
+        config=json.loads(self.ctx.path(common.REFERENCE).read_text());del config["Ebpf"]["ModulesPath"];self.ctx.write(common.CONFIG,json.dumps(config))
+        self.refuse_readiness("Ebpf.ModulesPath drift")
+        config=json.loads(self.ctx.path(common.REFERENCE).read_text());config["Ebpf"]["ModulesPath"]="/usr/local/lib/opensnitchd/ebpf";self.ctx.write(common.CONFIG,json.dumps(config))
+        self.refuse_readiness("Ebpf.ModulesPath drift")
+        for method in ("ebpf", "proc"):
+            for modules in (None, "/usr/local/lib/opensnitchd/ebpf"):
+                config=json.loads(self.ctx.path(common.REFERENCE).read_text());config["ProcMonitorMethod"]=method
+                if modules is None:del config["Ebpf"]["ModulesPath"]
+                else:config["Ebpf"]["ModulesPath"]=modules
+                self.ctx.write(common.CONFIG,json.dumps(config))
+                with self.subTest(method=method,modules=modules):
+                    self.refuse_readiness("Ebpf.ModulesPath drift")
         self.ctx.write(common.CONFIG,self.ctx.path(common.LEGACY_REFERENCE).read_text())
         self.refuse_readiness("Server.Address drift")
 
@@ -1163,13 +1237,156 @@ class SystemBehavior(unittest.TestCase):
         applied=operator.apply()
         self.assertEqual(applied["status"],"applied")
         self.assertEqual(json.loads(self.ctx.path(common.CONFIG).read_text())["DefaultAction"],"allow")
-        self.assertEqual(json.loads(self.ctx.path(common.CONFIG).read_text())["ProcMonitorMethod"],"proc")
+        self.assertEqual(json.loads(self.ctx.path(common.CONFIG).read_text())["ProcMonitorMethod"],"ebpf")
         self.assertEqual(json.loads(self.ctx.path(common.CONFIG).read_text()), json.loads(self.ctx.path(common.REFERENCE).read_text()))
         rolled=operator.rollback();self.assertEqual(rolled["status"],"rolled-back")
         self.assertEqual(self.ctx.path(common.CONFIG).read_bytes(), original)
         self.assertEqual(self.ctx.states, states)
         self.assertEqual(stat.S_IMODE(operator.current.stat().st_mode),0o600)
         self.assertFalse(any(cmd[0] in ("usermod","groupmod","systemd-sysusers") for cmd in self.ctx.commands))
+
+    def test_unupgraded_proc_references_still_migrate_and_other_methods_do_not(self):
+        legacy=json.loads(self.ctx.path(common.LEGACY_REFERENCE).read_text())
+        legacy["ProcMonitorMethod"]="proc";del legacy["Ebpf"]["ModulesPath"]
+        self.ctx.write(common.CONFIG,json.dumps(legacy))
+        operator=migration.Migration(self.ctx)
+        self.assertEqual(operator.apply()["status"],"applied")
+        self.assertEqual(json.loads(self.ctx.path(common.CONFIG).read_text())["ProcMonitorMethod"],"proc")  # the operator's method is preserved
+        self.assertEqual(json.loads(self.ctx.path(common.CONFIG).read_text())["Ebpf"]["ModulesPath"],common.EBPF_MODULES_PATH)
+        operator.rollback()
+        for method in ("audit","ebpf"):
+            drifted=dict(legacy,ProcMonitorMethod=method)  # ebpf without ModulesPath is not a reference
+            self.ctx.write(common.CONFIG,json.dumps(drifted))
+            with self.assertRaisesRegex(common.Refusal,"unexpected live config"):
+                migration.Migration(self.ctx).check()
+
+    def legacy_config(self, **changes):
+        config=json.loads(self.ctx.path(common.LEGACY_REFERENCE).read_text());config.update(changes)
+        return config
+
+    def test_proc_fallback_state_with_modules_path_migrates_and_keeps_proc(self):
+        self.ctx.write(common.CONFIG,json.dumps(self.legacy_config(ProcMonitorMethod="proc")))
+        operator=migration.Migration(self.ctx)
+        operator.check()
+        self.assertEqual(operator.apply()["status"],"applied")
+        applied=json.loads(self.ctx.path(common.CONFIG).read_text())
+        self.assertEqual((applied["ProcMonitorMethod"],applied["Ebpf"]["ModulesPath"]),("proc",common.EBPF_MODULES_PATH))
+        self.assertEqual(operator.rollback()["status"],"rolled-back")
+
+    def test_unupgraded_proc_without_modules_path_migrates_and_gains_the_pinned_path(self):
+        legacy=self.legacy_config(ProcMonitorMethod="proc");del legacy["Ebpf"]["ModulesPath"]
+        self.ctx.write(common.CONFIG,json.dumps(legacy))
+        self.assertEqual(migration.Migration(self.ctx).apply()["status"],"applied")
+        applied=json.loads(self.ctx.path(common.CONFIG).read_text())
+        self.assertEqual((applied["ProcMonitorMethod"],applied["Ebpf"]["ModulesPath"]),("proc",common.EBPF_MODULES_PATH))
+
+    def test_migration_still_refuses_modules_path_method_and_garbage_drift(self):
+        cases=dict(ebpf_other_path=lambda c:c["Ebpf"].update(ModulesPath="/usr/local/lib/opensnitchd/ebpf"),
+                   ebpf_missing_path=lambda c:c["Ebpf"].pop("ModulesPath"),
+                   proc_other_path=lambda c:c.update(ProcMonitorMethod="proc",Ebpf=dict(c["Ebpf"],ModulesPath="/x")),
+                   audit=lambda c:c.update(ProcMonitorMethod="audit"),
+                   missing_method=lambda c:c.pop("ProcMonitorMethod"),
+                   garbage=lambda c:c.update(ProcMonitorMethod=["proc"]))
+        for name,mutate in cases.items():
+            with self.subTest(case=name):
+                config=self.legacy_config();mutate(config)
+                self.ctx.write(common.CONFIG,json.dumps(config))
+                with self.assertRaisesRegex(common.Refusal,"unexpected live config|policy required"):
+                    migration.Migration(self.ctx).check()
+                with self.assertRaises(common.Refusal):
+                    migration.Migration(self.ctx).apply()
+                self.assertFalse(self.ctx.path(migration.STATE).exists())
+
+    def migrate_with_script(self, script):
+        self.ctx.ebpf_script=list(script)
+        clock=FakeClock()
+        operator=migration.Migration(self.ctx)
+        operator.pause,operator.clock=clock.sleep,clock
+        return operator,clock
+
+    def helper_calls(self):
+        return [cmd for cmd in self.ctx.commands if cmd==[common.EBPF_CHECK,"--runtime"]]
+
+    def test_apply_settles_while_the_daemon_has_not_loaded_its_modules_yet(self):
+        operator,clock=self.migrate_with_script([ZERO_FD,ZERO_FD,ZERO_FD,PASS_RUNTIME])
+        record=operator.apply()
+        self.assertEqual(record["status"],"applied")
+        self.assertEqual(len(self.helper_calls()),5);self.assertEqual(clock.slept,[1,1,1,common.EBPF_CONFIRM_SECONDS])
+        self.assertIn("provisional",record["ebpfRuntime"]);self.assertIn("gate A",record["ebpfRuntime"])
+
+    def settled(self, script):
+        self.ctx.ebpf_script=list(script);clock=FakeClock()
+        return common.ebpf_runtime(self.ctx,common.EBPF_SETTLE_SECONDS,clock.sleep,clock),clock
+
+    def test_a_good_verdict_after_zero_fd_needs_a_confirming_second_run(self):
+        result,clock=self.settled([ZERO_FD,PASS_RUNTIME,PASS_RUNTIME])
+        self.assertTrue(result.startswith("PASS: "));self.assertEqual(len(self.helper_calls()),3);self.assertEqual(clock.slept,[1,common.EBPF_CONFIRM_SECONDS])
+
+    def test_a_worse_confirming_run_wins(self):
+        with self.assertRaisesRegex(common.Refusal,"eBPF runtime check FAIL.*proc fallback"):
+            self.settled([ZERO_FD,PASS_RUNTIME,EXPLICIT_FALLBACK])
+        partial=("WARN",common.EBPF_PARTIAL_LOG+" partial",0)
+        result,_=self.settled([ZERO_FD,PASS_RUNTIME,partial])
+        self.assertTrue(result.startswith("WARN: "));self.assertIn(common.EBPF_PARTIAL_LOG,result)
+
+    def test_a_zero_fd_confirming_run_keeps_polling_and_needs_a_new_confirmation(self):
+        result,clock=self.settled([ZERO_FD,PASS_RUNTIME,ZERO_FD,PASS_RUNTIME,PASS_RUNTIME])
+        self.assertTrue(result.startswith("PASS: "));self.assertEqual(len(self.helper_calls()),5)
+
+    def test_a_first_run_pass_with_no_zero_fd_seen_is_not_confirmed(self):
+        result,clock=self.settled([PASS_RUNTIME])
+        self.assertTrue(result.startswith("PASS: "));self.assertEqual(len(self.helper_calls()),1);self.assertEqual(clock.slept,[])
+
+    def test_apply_rolls_back_immediately_on_an_explicit_fallback_warning(self):
+        original=self.ctx.path(common.CONFIG).read_bytes()
+        operator,clock=self.migrate_with_script([ZERO_FD,EXPLICIT_FALLBACK,PASS_RUNTIME])
+        with self.assertRaisesRegex(common.Refusal,"failed-restored"):
+            operator.apply()
+        self.assertEqual(len(self.helper_calls()),2);self.assertEqual(self.ctx.path(common.CONFIG).read_bytes(),original)
+
+    def test_apply_rolls_back_on_any_other_fail_without_polling(self):
+        operator,clock=self.migrate_with_script([("FAIL","daemon pid changed during the check; re-run it",1),PASS_RUNTIME])
+        with self.assertRaisesRegex(common.Refusal,"failed-restored"):
+            operator.apply()
+        self.assertEqual(len(self.helper_calls()),1);self.assertEqual(clock.slept,[])
+
+    def test_apply_rolls_back_when_zero_fd_persists_past_the_settle_window(self):
+        original=self.ctx.path(common.CONFIG).read_bytes()
+        operator,clock=self.migrate_with_script([])
+        self.ctx.ebpf_runtime=ZERO_FD
+        with self.assertRaisesRegex(common.Refusal,"failed-restored.*holds no"):
+            operator.apply()
+        self.assertGreaterEqual(sum(clock.slept),common.EBPF_SETTLE_SECONDS);self.assertLess(sum(clock.slept),common.EBPF_SETTLE_SECONDS+5)
+        self.assertEqual(self.ctx.path(common.CONFIG).read_bytes(),original)
+
+    def test_readiness_never_polls_and_the_final_verdict_decides(self):
+        self.ctx.system_config();self.ctx.flatpak()
+        self.ctx.ebpf_script=[ZERO_FD,PASS_RUNTIME]
+        self.refuse_readiness("holds no")
+        self.assertEqual(len(self.helper_calls()),1)
+
+    def test_specific_daemon_state_is_reported_before_the_ebpf_verdict(self):
+        self.ctx.system_config();self.ctx.flatpak()
+        self.ctx.ebpf_runtime=("FAIL","silent /proc fallback: MainPID 0",1)
+        self.ctx.properties["opensnitch.service"]["MainPID"]="0"
+        self.refuse_readiness("patched daemon not active")
+        self.assertEqual(self.helper_calls(),[])
+
+    def test_runtime_check_timeout_is_a_refusal(self):
+        self.ctx.system_config();self.ctx.flatpak()
+        self.ctx.ebpf_hang=True
+        self.refuse_readiness("timed out")
+
+    def test_helper_reason_constants_match_the_helper_script(self):
+        helper=load("ebpf_check_constants",LIBEXEC/"bazzite-tower-opensnitch-ebpf-check")
+        self.assertEqual(common.EBPF_PARTIAL_LOG,helper.PARTIAL_LOG)
+        self.assertIn(common.EBPF_PROG_LINK,common.EBPF_NO_PROGRAMS);self.assertEqual(common.EBPF_PROG_LINK,helper.BPF_PROG_LINK)
+        verdict,reason=helper.decide(method="ebpf",config="c",log="l",pid=1,problem=None,count=0,fallback=0,partial=0,log_readable=True,covered=True,started_label="x",programs=[],floor=1)
+        self.assertEqual(verdict,"FAIL");self.assertIn(common.EBPF_NO_PROGRAMS,reason)
+        verdict,reason=helper.decide(method="ebpf",config="c",log="l",pid=1,problem=None,count=3,fallback=0,partial=1,log_readable=True,covered=True,started_label="x",programs=[],floor=1)
+        self.assertEqual(verdict,"WARN");self.assertIn(repr(common.EBPF_PARTIAL_LOG),reason)
+        verdict,reason=helper.decide(method="ebpf",config="c",log="l",pid=1,problem=None,count=0,fallback=1,partial=0,log_readable=True,covered=True,started_label="x",programs=[],floor=1)
+        self.assertNotIn(common.EBPF_NO_PROGRAMS,reason)
 
     def test_read_only_migration_check_no_journal_or_unit_mutation(self):
         migration.Migration(self.ctx).check()

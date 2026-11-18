@@ -94,6 +94,27 @@ ss -H -ltnp 'sport = :50051' 2>/dev/null \
     || fail "${bridge_unit} MainPID is not listening at ${bridge_address}"
 printf 'ok: %s owns %s\n' "${bridge_unit}" "${bridge_address}"
 
+# The daemon falls back to /proc silently when the eBPF modules fail to load, so
+# the configured method proves nothing: ask the read-only runtime check. It reads
+# /proc/<pid>/fd of a root daemon, so this unprivileged preflight can only skip.
+# PASS/WARN (documented proc fallback) pass readiness; FAIL does not.
+ebpf_check=/usr/libexec/bazzite-tower-opensnitch-ebpf-check
+if [[ "$(id -u)" == 0 ]]; then
+    ebpf_rc=0
+    ebpf_output=$(timeout -k 5s 30s "${ebpf_check}" --runtime 2>&1) || ebpf_rc=$?
+    [[ "${ebpf_rc}" != 124 && "${ebpf_rc}" != 137 ]] || fail "eBPF runtime check timed out after 30s"
+    ebpf_result=$(printf '%s\n' "${ebpf_output}" | tail -n 1)
+    case "${ebpf_result}" in
+        'RESULT: PASS: '*) [[ "${ebpf_rc}" == 0 ]] || fail "eBPF runtime check exited ${ebpf_rc}: ${ebpf_result}"
+            printf 'ok: eBPF runtime %s\n' "${ebpf_result#RESULT: }" ;;
+        'RESULT: WARN: '*) [[ "${ebpf_rc}" == 0 ]] || fail "eBPF runtime check exited ${ebpf_rc}: ${ebpf_result}"
+            printf 'warn: eBPF runtime %s (readiness still passes)\n' "${ebpf_result#RESULT: }" ;;
+        *) fail "eBPF runtime check: ${ebpf_result:-no output}" ;;
+    esac
+else
+    printf '%s\n' 'skip: eBPF runtime check needs root; run: sudo /usr/libexec/bazzite-tower-opensnitch-ebpf-check --runtime'
+fi
+
 cat <<'EOF'
 
 Local prerequisites pass. This did not verify that a graphical Snitchwatch

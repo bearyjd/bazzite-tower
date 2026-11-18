@@ -243,8 +243,9 @@ def main():
     expected_config = json.loads(json.dumps(legacy))
     expected_config['Server']['Address'] = 'unix:opensnitchd.sock'
     expected_config['DefaultAction'] = 'allow'
-    if candidate != expected_config or candidate['DefaultAction'] != 'allow' or candidate['ProcMonitorMethod'] != 'proc':
-        raise ValueError('candidate config must retain the allow/proc defaults and change only the daemon address')
+    if (candidate != expected_config or candidate['DefaultAction'] != 'allow' or candidate['ProcMonitorMethod'] != 'ebpf'
+            or candidate.get('Ebpf', {}).get('ModulesPath') != '/usr/lib/opensnitchd/ebpf'):
+        raise ValueError('candidate config must retain the allow/ebpf defaults with Ebpf.ModulesPath /usr/lib/opensnitchd/ebpf and change only the daemon address')
     binary = args.artifact.resolve() / 'usr/bin/snitchwatch-bridge-cli'
     require_not_writable_by(binary, UNPRIVILEGED if os.geteuid() == 0 else None)
     binary_sha = sha(binary)

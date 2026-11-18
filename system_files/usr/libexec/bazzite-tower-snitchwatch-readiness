@@ -23,6 +23,8 @@ def main():
         policy = "DefaultAction is allow; deny enforcement requires explicit operator opt-in."
     else:
         policy = "DefaultAction is "+result["defaultAction"]+"; undo with: ujust snitchwatch-deny off."
+    if result["ebpfRuntime"].startswith("WARN"):
+        print("WARNING: eBPF process monitoring is not in effect ("+result["ebpfRuntime"]+"); readiness still passes.")
     print("Local system prerequisites pass; graphical prompt/decision behavior is not checked. "+policy+" No state changed and no GUI user enrolled.")
 
 

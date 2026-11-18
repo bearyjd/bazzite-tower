@@ -98,6 +98,32 @@ except (ValueError, KeyError, TypeError, AttributeError):
 '
 }
 
+# The OpenSnitch daemon falls back to /proc silently when its eBPF modules fail to
+# load, so the configured method is not evidence. The runtime check reads
+# /proc/<pid>/fd of a root daemon: unprivileged health reports UNKNOWN, never a
+# guess. Only its final RESULT line is shown.
+ebpf_check=/usr/libexec/bazzite-tower-opensnitch-ebpf-check
+ebpf_runtime() {
+    local output rc result
+    echo "  OpenSnitch eBPF runtime (is the daemon really using eBPF):"
+    if [[ "$(id -u 2>/dev/null)" != 0 ]]; then
+        echo "    UNKNOWN (needs root; run $ebpf_check --runtime as root)"
+        return
+    fi
+    if ! available "$ebpf_check" || ! available timeout; then
+        echo "    UNKNOWN (tool unavailable)"
+        return
+    fi
+    output=$(timeout 8s "$ebpf_check" --runtime 2>&1)
+    rc=$?
+    result=$(printf '%s\n' "$output" | tail -n 1 | tr -d '\000-\010\013-\037\177' | cut -c1-240)
+    if [[ "$result" == "RESULT: "* ]]; then
+        printf '    %s\n' "$result"
+    else
+        printf '    UNKNOWN (no RESULT line; status=%s)\n' "$rc"
+    fi
+}
+
 label_status() {
     local path="$1"
     probe "$path current label (no contents)" ls -Zd -- "$path"
@@ -127,6 +153,7 @@ echo "== Monitoring and failed services =="
 for unit in smartd.service rasdaemon.service bazzite-tower-power-tuning.service logrotate.service; do
     unit_status "$unit"
 done
+ebpf_runtime
 probe "Failed system services (up to 20 displayed)" systemctl --failed --type=service --no-legend --plain --no-pager
 
 echo

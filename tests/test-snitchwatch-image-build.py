@@ -441,13 +441,14 @@ class ImageBuildContracts(unittest.TestCase):
         + ['crates/scanner-privileged/' + n for n in (
             'Cargo.toml', 'src/checks/kargs.rs', 'src/checks/lockdown.rs', 'src/checks/mod.rs', 'src/checks/modules.rs',
             'src/checks/rootkit.rs', 'src/command.rs', 'src/command/tests/exit_tests.rs', 'src/containment.rs',
+            'src/containment/subtree.rs', 'src/containment/subtree/tests.rs', 'src/containment/subtree/tests/sweep_tests.rs',
             'src/containment/test_fixtures/forked_tree.rs', 'src/containment/test_fixtures/marked_sleeps.rs', 'src/containment/test_fixtures/mod.rs', 'src/containment/test_fixtures/reaped.rs', 'src/containment/test_fixtures/scanner_fixture.rs', 'src/containment/test_fixtures/signal.rs', 'src/containment/test_fixtures/signal/tests.rs',
             'src/error.rs', 'src/facts.rs', 'src/lib.rs', 'src/main.rs',
             'src/model.rs', 'src/scan.rs', 'src/store.rs', 'tests/end_to_end.rs')]))
 
     def test_every_built_scanner_source_file_is_hash_pinned(self):
         pinned = sorted(name for name in self.pins['sourceFiles'] if name.startswith('crates/scanner-'))
-        self.assertEqual(len(self.SCANNER_SOURCES), 27)
+        self.assertEqual(len(self.SCANNER_SOURCES), 30)
         self.assertEqual(pinned, list(self.SCANNER_SOURCES))
         for name in pinned:
             self.assertRegex(self.pins['sourceFiles'][name], '^[0-9a-f]{64}$')
@@ -792,7 +793,14 @@ class ImageBuildContracts(unittest.TestCase):
             self.assertEqual(rpm['nevra'], f'{name}-0:1.99.1-2.fc45.x86_64')
             self.assertEqual(rpm['kojiPath'], 'rust/1.99.1/2.fc45/data/signed/f577861e/x86_64/' + filename)
         installer = (FACTORY / 'snitchwatch-system-install-deps.sh').read_bytes()
-        self.assertEqual(sha(installer), '247a396c0f3d504023f001c33bb1211f5f0f9bfd2c6685077d4bd312ac95f8cb')
+        self.assertEqual(sha(installer), 'bcd389f859882d25bb53baee7fde167f144f311d315ee0f39dc456793cd486eb')
+
+    def test_vendored_installer_matches_the_pinned_upstream_hash(self):
+        # prep.sh and assemble.sh `cmp` this copy against the upstream file, so a repin that changes
+        # packaging/release/install-deps.sh must update the vendored copy in the same change.
+        pins = json.loads((FACTORY / 'snitchwatch-system-pins.json').read_text())
+        installer = (FACTORY / 'snitchwatch-system-install-deps.sh').read_bytes()
+        self.assertEqual(sha(installer), pins['sourceFiles']['packaging/release/install-deps.sh'])
 
     def test_rust_install_precedes_version_gate(self):
         # Execute the actual prep-stage setup fragment (snitchwatch-system-prep.sh,

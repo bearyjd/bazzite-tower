@@ -12,17 +12,16 @@
 # and the feasibility research in
 # docs/superpowers/specs/2026-07-04-flatpak-feasibility-research.md.
 #
-# GUI shell: snitchwatch-kirigami (Qt6/QML + Kirigami, cxx-qt), NOT
-# snitchwatch-tauri. Per the settled architecture decision (see this repo's
-# CLAUDE.md "Settled architecture decisions" #4 and
+# GUI shell: snitchwatch-kirigami (Qt6/QML + Kirigami, cxx-qt), the only
+# shell (the former Tauri shell was removed in #379). Per the settled
+# architecture decision (see this repo's CLAUDE.md "Settled architecture
+# decisions" #4 and
 # docs/superpowers/plans/2026-07-04-kirigami-shell-rewrite.md), Kirigami is
 # the shell going forward — it's a native match for Bazzite's default KDE
-# Plasma desktop, has reached feature parity with the old Tauri+web shell,
+# Plasma desktop, it reached feature parity with the old Tauri+web shell,
 # and passed its Task 7 fullscreen-focus safety verification
-# (2026-07-11). `crates/snitchwatch-tauri/` and `web/` still exist in the
-# repo (kept until this Flatpak's first real packaged release ships — see
-# the kirigami-shell-rewrite plan's status note), but they are intentionally
-# NOT what this manifest packages.
+# (2026-07-11). The vendored `web/` frontend was removed in #379; the
+# icon now lives in `packaging/icons/`.
 #
 # Why no --share=network:
 #   A Flatpak's default sandbox has its own private, isolated network
@@ -131,11 +130,9 @@ modules:
           /app/share/applications/org.snitchwatch.Snitchwatch.desktop
       - install -Dm644 packaging/flatpak/org.snitchwatch.Snitchwatch.metainfo.xml
           /app/share/metainfo/org.snitchwatch.Snitchwatch.metainfo.xml
-      - install -Dm644 web/icons/snitchwatch.svg /app/share/icons/hicolor/scalable/apps/org.snitchwatch.Snitchwatch.svg
-      # No web/ install step: the Kirigami shell compiles its QML in via a
-      # qrc resource (see crates/snitchwatch-kirigami/build.rs's QmlModule),
-      # it does not serve web/ over HTTP into a webview the way
-      # snitchwatch-tauri did.
+      - install -Dm644 packaging/icons/snitchwatch.svg /app/share/icons/hicolor/scalable/apps/org.snitchwatch.Snitchwatch.svg
+      # No QML install step: the Kirigami shell compiles its QML in via a
+      # qrc resource (see crates/snitchwatch-kirigami/build.rs's QmlModule).
     sources:
       - type: dir
         path: ../..

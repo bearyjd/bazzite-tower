@@ -145,6 +145,7 @@ jobs:
           python3 tests/test-snitchwatch-ebpf-legacy.py
           python3 tests/test-opensnitch-ebpf-runtime.py
           python3 tests/test-snitchwatch-resources.py
+          python3 tests/test-smoke-motd-tag.py
           tests/test-container-templates.sh
           tests/test-docker-libvirt-forwarding.sh
           tests/test-docker-libvirt-forwarding-hooks.sh
@@ -271,6 +272,7 @@ jobs:
           python3 tests/test-snitchwatch-ebpf-legacy.py
           python3 tests/test-opensnitch-ebpf-runtime.py
           python3 tests/test-snitchwatch-resources.py
+          python3 tests/test-smoke-motd-tag.py
           tests/test-container-templates.sh
           tests/test-docker-libvirt-forwarding.sh
           tests/test-docker-libvirt-forwarding-hooks.sh

@@ -2,11 +2,14 @@
 """Check the packaged OpenSnitch eBPF objects; this cannot prove kernel loading.
 
 Every profile: the three objects are ELF64 BPF relocatable files.
-system: the objects were built at image build for this image's kernel
-(Track A): /usr/share/bazzite-tower/ebpf-manifest.json must name the one
+system and legacy: the objects were built at image build for this image's
+kernel (Track A): /usr/share/bazzite-tower/ebpf-manifest.json must name the one
 /usr/lib/modules/* release, that kernel's config sha256 (the headers' .config
 was byte-identical to it at build) and the sha256 of every object on disk.
-legacy: the objects are the v1.8.0 RPM payload and no build manifest exists.
+legacy additionally: the manifest must be for OpenSnitch v1.8.0 (the commit
+below), the commit the upstream RPM daemon of this profile is built from, and
+record that RPM version. (Before the legacy build existed, legacy carried the
+RPM objects and had to have no manifest; that assertion is now inverted.)
 """
 import argparse
 import hashlib
@@ -22,6 +25,13 @@ OBJECTS = ('opensnitch.o', 'opensnitch-procs.o', 'opensnitch-dns.o')
 OBJECTS_DIR = 'usr/lib/opensnitchd/ebpf'
 MANIFEST = 'usr/share/bazzite-tower/ebpf-manifest.json'
 PROFILE = 'usr/share/bazzite-tower/snitchwatch-bridge-profile'
+# Legacy daemon = the upstream v1.8.0 release RPM (95-firewall.sh); its tag peels to this commit.
+# Must agree with snitchwatch-system-ebpf-pins.json (tests/test-snitchwatch-ebpf.py).
+LEGACY_OPENSNITCH_COMMIT = 'b404c4c6316760fa7bc415509d3f8d747f7dc9cc'
+LEGACY_RPM_VERSION = '1.8.0'
+LEGACY_RPM_RELEASE = '1'
+LEGACY_RPM_SHA256 = 'e06e9119daf764e56455b61c319e496274c0274bb53bb94a0ff1ab72967fea7d'
+LEGACY_TREE_SHA256 = '39512718023e91e3d48bdaa6f0c958a5457ebb8df560dbd53d348f55551c6fd6'
 
 
 def read_object(path):
@@ -81,18 +91,36 @@ def verify_manifest(root, profile):
     return manifest
 
 
+def verify_legacy_pairing(manifest):
+    """Check the manifest against the pins and files; this does NOT verify the RPM.
+
+    The manifest only records the daemon RPM the modules were paired with. That the installed
+    daemon is that RPM is bound at build time by `ebpf.py check-rpm` in 95-firewall.sh."""
+    rpm = manifest.get('daemonRpm')
+    if manifest.get('opensnitchCommit') != LEGACY_OPENSNITCH_COMMIT:
+        raise ValueError(f'{MANIFEST}: legacy modules were built from {manifest.get("opensnitchCommit")!r}, '
+                         f'not the v1.8.0 commit {LEGACY_OPENSNITCH_COMMIT} of the RPM daemon')
+    if (not isinstance(rpm, dict) or rpm.get('name') != 'opensnitch' or rpm.get('version') != LEGACY_RPM_VERSION
+            or rpm.get('tag') != 'v' + LEGACY_RPM_VERSION or rpm.get('release') != LEGACY_RPM_RELEASE
+            or rpm.get('sha256') != LEGACY_RPM_SHA256):
+        raise ValueError(f'{MANIFEST}: legacy manifest must record the pinned opensnitch {LEGACY_RPM_VERSION} daemon RPM it is paired with, '
+                         f'found {rpm!r}')
+    if manifest.get('ebpfProgTreeSha256') != LEGACY_TREE_SHA256:
+        raise ValueError(f'{MANIFEST}: legacy ebpf_prog tree {manifest.get("ebpfProgTreeSha256")!r} is not the pinned {LEGACY_TREE_SHA256}')
+
+
 def verify_image(root):
     verify(root)
     profile = (Path(root) / PROFILE).read_text().strip()
-    has_manifest = os.path.lexists(Path(root) / MANIFEST)
     if profile == 'system':
         manifest = verify_manifest(root, profile)
         return (f'built for kernel {manifest["kernelRelease"]} from OpenSnitch {manifest["opensnitchCommit"][:12]}, '
                 f'hashes match the build manifest')
     if profile == 'legacy':
-        if has_manifest:
-            raise ValueError(f'{MANIFEST}: the legacy profile ships the RPM objects and must not carry a build manifest')
-        return 'legacy profile: v1.8.0 RPM objects, no per-kernel build manifest'
+        manifest = verify_manifest(root, profile)
+        verify_legacy_pairing(manifest)
+        return (f'legacy profile: built for kernel {manifest["kernelRelease"]} from OpenSnitch v{LEGACY_RPM_VERSION} '
+                f'{manifest["opensnitchCommit"][:12]} (paired with the RPM daemon), hashes match the build manifest')
     raise ValueError(f'{PROFILE}: unknown bridge profile {profile!r}')
 
 

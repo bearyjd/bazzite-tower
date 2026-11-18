@@ -13,8 +13,17 @@
   ],
   "profiles": {
     "legacy": {
+      "daemonRpm": {
+        "file": "opensnitch-1.8.0-1.x86_64.rpm",
+        "name": "opensnitch",
+        "release": "1",
+        "sha256": "e06e9119daf764e56455b61c319e496274c0274bb53bb94a0ff1ab72967fea7d",
+        "version": "1.8.0"
+      },
       "ebpfProgTreeSha256": "39512718023e91e3d48bdaa6f0c958a5457ebb8df560dbd53d348f55551c6fd6",
-      "opensnitchCommit": "b404c4c6316760fa7bc415509d3f8d747f7dc9cc"
+      "opensnitchCommit": "b404c4c6316760fa7bc415509d3f8d747f7dc9cc",
+      "sourceRepository": "https://github.com/evilsocket/opensnitch.git",
+      "tag": "v1.8.0"
     },
     "system": {
       "ebpfProgTreeSha256": "c37c309a548ec5518aec25bd4602d7c5672fb8e94ab9430893615aeafe0e4537",

@@ -11,8 +11,14 @@ Subcommands (each refusal prints one `ebpf:` line and exits 1):
   check-pins PINS
         refuse unless the eBPF pins match EXPECTED_EBPF_PINS_SHA256 (ebpf-prep runs
         this before installing anything; build and stage re-check it).
-  build --pins P --daemon-pins D --native-pins N --profile system --repo OPENSNITCH
+  check-rpm --pins P RPM
+        95-firewall.sh, legacy only: refuse unless the downloaded daemon RPM (name, version,
+        release, sha256) is the pinned v1.8.0 release the modules are built from.
+  source-pin PINS
+        legacy prep: print the pinned source repository and commit (after the pairing check).
+  build --pins P [--daemon-pins D --native-pins N] --profile system|legacy --repo OPENSNITCH
         --kernel HANDOFF --work NEW-DIR --out NEW-OUT
+        (legacy pairs with the upstream daemon RPM pinned in P instead of D and N)
         stages snitchwatch-ebpf and snitchwatch-ebpf-rebuild (offline): unpack the
         checked headers, extract ebpf_prog as raw git blobs from the already
         verified prep checkout, check its tree sha256 and the pinned toolchain,
@@ -37,13 +43,16 @@ import sys
 import tarfile
 
 # Bump together with snitchwatch-system-ebpf-pins.json (tests/test-snitchwatch-ebpf.py).
-EXPECTED_EBPF_PINS_SHA256 = '2047c7475441f72f6c9ee18eb4f67d4e6c75b4abdfa0b4da8d4cf1054a91c113'
+EXPECTED_EBPF_PINS_SHA256 = '5a6b413b68367977778b730c3bf55906dc491c1ae2791a98dbf8a2c1344faf2b'
 RELEASE = re.compile(r'[0-9][0-9A-Za-z._+~-]*\.x86_64')
 HEX40 = re.compile('[0-9a-f]{40}')
 HEX64 = re.compile('[0-9a-f]{64}')
 OBJECTS_DIR = '/usr/lib/opensnitchd/ebpf'
 STAGED = 'usr/share/bazzite-tower'
-BUILT_PROFILES = ('system',)
+BUILT_PROFILES = ('system', 'legacy')
+# The legacy daemon is the upstream release RPM (95-firewall.sh), not a source build. Its modules may only be
+# built from the commit its release tag peels to; this table is reviewed code, so editing the pins alone cannot re-pair.
+LEGACY_RPM_COMMITS = {'1.8.0': 'b404c4c6316760fa7bc415509d3f8d747f7dc9cc'}
 # Bounds for the header handoff (the 7.2/7.3 trees are ~125 MiB, ~21.5k files).
 MAX_HEADERS = 512 * 1024 * 1024
 SAFE_ENV = {'PATH': '/usr/bin:/bin', 'LC_ALL': 'C', 'TZ': 'UTC', 'SOURCE_DATE_EPOCH': '0'}
@@ -217,15 +226,66 @@ def kernel_unpack(handoff, dest):
     return facts
 
 
-def check_pairing(pins, profile, daemon_pins, native_pins):
+def check_legacy_pairing(pins, rpm):
+    """Legacy: the modules must come from the commit of the release the daemon RPM is.
+
+    RPM is None while building (no RPM exists yet: only the pinned identity is checked) or the facts read
+    from the downloaded file: name, version, release, sha256 (all must equal the pinned RPM)."""
+    legacy = pins['profiles']['legacy']
+    daemon = legacy['daemonRpm']
+    mapped = LEGACY_RPM_COMMITS.get(daemon['version'])
+    if mapped is None:
+        raise Refusal('legacy daemon RPM %s has no reviewed opensnitch commit (reviewed: %s); refusing to pair modules with it'
+                      % (daemon['version'], ', '.join(sorted(LEGACY_RPM_COMMITS))))
+    if legacy['opensnitchCommit'] != mapped:
+        raise Refusal('modules and daemon must come from the same opensnitch commit: ebpf %s, daemon RPM %s is %s'
+                      % (legacy['opensnitchCommit'], daemon['version'], mapped))
+    if legacy['tag'] != 'v' + daemon['version']:
+        raise Refusal('legacy source tag %s is not the daemon RPM release v%s' % (legacy['tag'], daemon['version']))
+    if rpm is not None:
+        for key in ('name', 'version', 'release', 'sha256'):
+            if rpm.get(key) != daemon[key]:
+                raise Refusal('installed daemon RPM %s %r differs from the pinned %r the modules were built for'
+                              % (key, rpm.get(key), daemon[key]))
+    return mapped
+
+
+def check_pairing(pins, profile, daemon_pins=None, native_pins=None, rpm=None):
     """The modules must come from the same opensnitch commit as the daemon that loads them."""
     if profile not in BUILT_PROFILES:
         raise Refusal('profile %s has pinned sources but no eBPF build stage yet' % profile)
+    if profile == 'legacy':
+        return check_legacy_pairing(pins, rpm)
+    if daemon_pins is None or native_pins is None:
+        raise Refusal('the system profile pairs with the daemon and snitchwatch pins, which were not given')
     commit = pins['profiles'][profile]['opensnitchCommit']
     if not (commit == daemon_pins['sourceCommit'] == native_pins['submoduleCommit']):
         raise Refusal('modules and daemon must come from the same opensnitch commit: ebpf %s, daemon %s, snitchwatch submodule %s'
                       % (commit, daemon_pins['sourceCommit'], native_pins['submoduleCommit']))
     return commit
+
+
+def query_rpm_file(path):
+    result = subprocess.run(['rpm', '-qp', '--nosignature', '--qf', '%{NAME} %{VERSION} %{RELEASE}\\n', str(path)],
+                            capture_output=True, text=True, env=SAFE_ENV)
+    return result.returncode, result.stdout
+
+
+def check_rpm(pins, path):
+    """95-firewall.sh, legacy: the downloaded daemon RPM is the pinned one the modules were built for."""
+    code, out = query_rpm_file(path)
+    fields = out.split()
+    if code != 0 or len(fields) != 3:
+        raise Refusal('cannot read name, version and release from the daemon RPM %s' % path)
+    rpm = {'name': fields[0], 'version': fields[1], 'release': fields[2], 'sha256': sha256(Path(path).read_bytes())}
+    check_pairing(pins, 'legacy', rpm=rpm)
+    return rpm
+
+
+def source_pin(pins):
+    """Legacy: where prep fetches the module source (repository, commit), after the pairing check."""
+    commit = check_pairing(pins, 'legacy')
+    return {'repository': pins['profiles']['legacy']['sourceRepository'], 'commit': commit}
 
 
 def git(repo, *args):
@@ -371,6 +431,9 @@ def stage_overlay(pins_path, profile, daemon_pins, native_pins, handoff, out, ke
                 'compileRpmInventorySha256': info['rpmInventorySha256'], 'clangVersion': pins['clangVersion'], 'clang': info['clang'],
                 'toolchainRpms': sorted(r['nevra'] for r in pins['toolchainRpms']), 'ebpfPinsSha256': sha256(raw),
                 'objectsDir': OBJECTS_DIR, 'objects': objects}
+    if profile == 'legacy':
+        # Recorded so the image can show which RPM the modules were paired with; 95-firewall.sh checks the real file against it.
+        manifest['daemonRpm'] = {**pins['profiles']['legacy']['daemonRpm'], 'tag': pins['profiles']['legacy']['tag']}
     (out / STAGED / 'ebpf-manifest.json').write_text(json.dumps(manifest, indent=2, sort_keys=True) + '\n')
     (out / STAGED / 'ebpf-manifest.json').chmod(0o644)
     return manifest
@@ -391,10 +454,16 @@ def main(argv=None):
     export.add_argument('out', type=Path)
     pins_check = sub.add_parser('check-pins')
     pins_check.add_argument('pins', type=Path)
+    rpm_check = sub.add_parser('check-rpm')
+    rpm_check.add_argument('--pins', type=Path, required=True)
+    rpm_check.add_argument('rpm', type=Path)
+    source = sub.add_parser('source-pin')
+    source.add_argument('pins', type=Path)
     for name in ('build', 'stage'):
         command = sub.add_parser(name)
-        for flag in ('--pins', '--daemon-pins', '--native-pins'):
-            command.add_argument(flag, type=Path, required=True)
+        command.add_argument('--pins', type=Path, required=True)
+        for flag in ('--daemon-pins', '--native-pins'):  # system only: legacy pairs with the daemon RPM pin instead
+            command.add_argument(flag, type=Path)
         command.add_argument('--profile', required=True)
         if name == 'build':
             for flag in ('--repo', '--kernel', '--work', '--out', '--rpm-inventory'):
@@ -409,9 +478,13 @@ def main(argv=None):
         elif args.command == 'check-pins':
             load_pins(args.pins)
             result = {'pinsSha256': EXPECTED_EBPF_PINS_SHA256}
+        elif args.command == 'check-rpm':
+            result = check_rpm(load_pins(args.pins), args.rpm)
+        elif args.command == 'source-pin':
+            result = source_pin(load_pins(args.pins))
         else:
             pins = load_pins(args.pins)
-            daemon, native = (json.loads(path.read_text()) for path in (args.daemon_pins, args.native_pins))
+            daemon, native = (json.loads(path.read_text()) if path else None for path in (args.daemon_pins, args.native_pins))
             if args.command == 'build':
                 result = build(pins, args.profile, daemon, native, args.repo, args.kernel, args.work, args.out, args.rpm_inventory)
             else:

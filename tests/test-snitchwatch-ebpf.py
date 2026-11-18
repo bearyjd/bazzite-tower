@@ -11,6 +11,7 @@ import io
 import json
 import os
 from pathlib import Path
+import re
 import runpy
 import subprocess
 import tarfile
@@ -26,6 +27,9 @@ PINS = json.loads((FACTORY / 'snitchwatch-system-pins.json').read_text())
 DAEMON_PINS = json.loads((FACTORY / 'snitchwatch-system-daemon-pins.json').read_text())
 CHECK = ROOT / 'system_files/usr/libexec/bazzite-tower-opensnitch-ebpf-check'
 HANDOFF = FACTORY / 'snitchwatch-system-handoff.py'
+LEGACY_COMMIT = 'b404c4c6316760fa7bc415509d3f8d747f7dc9cc'
+LEGACY_PIN = json.loads(EBPF_PINS_PATH.read_text())['profiles']['legacy']
+LEGACY_RPM = {**{k: LEGACY_PIN['daemonRpm'][k] for k in ('name', 'version', 'release', 'sha256')}, 'tag': LEGACY_PIN['tag']}
 R72 = '7.2.15-ogc1.1.fc45.x86_64'
 R73 = '7.3.4-ogc6.1.fc45.x86_64'
 BPF_HEADER = b'\x7fELF\x02\x01\x01' + bytes(9) + (1).to_bytes(2, 'little') + (247).to_bytes(2, 'little') \
@@ -88,10 +92,11 @@ class Pins(unittest.TestCase):
                 self.e['check_pairing'](self.pins, 'system', daemon, native)
             self.assertIn('same opensnitch commit', str(caught.exception))
 
-    def test_legacy_profile_is_not_built_yet(self):
-        # Legacy pins are recorded, but nothing builds them yet: refused, not silently accepted.
+    def test_system_pairing_needs_its_daemon_pins_and_unknown_profiles_are_refused(self):
         with self.assertRaises(self.e['Refusal']):
-            self.e['check_pairing'](self.pins, 'legacy', DAEMON_PINS, PINS)
+            self.e['check_pairing'](self.pins, 'system')
+        with self.assertRaises(self.e['Refusal']):
+            self.e['check_pairing'](self.pins, 'other')
 
     def test_objects_are_the_three_the_daemon_loads(self):
         check = load(CHECK)
@@ -374,6 +379,44 @@ class EbpfHandoff(Workdir):
             self.assertEqual(on_disk['objects'][name], hashlib.sha256(data).hexdigest())
             self.assertEqual(os.stat(staged / 'opensnitch-ebpf' / name).st_mode & 0o7777, 0o644)
 
+    def test_legacy_assembly_manifest_pairs_with_the_rpm_and_needs_no_system_pins(self):
+        legacy = self.pins['profiles']['legacy']
+        handoff = self.write_stage(self.root / 'ebpf')
+        info = json.loads((handoff / 'build-info.json').read_text())
+        (handoff / 'build-info.json').write_text(json.dumps({**info, 'opensnitchCommit': legacy['opensnitchCommit'],
+                                                             'ebpfProgTreeSha256': legacy['ebpfProgTreeSha256']}))
+        manifest = self.e['stage_overlay'](EBPF_PINS_PATH, 'legacy', None, None, handoff, self.root / 'overlay', self.direct)
+        self.assertEqual(manifest['profile'], 'legacy')
+        self.assertEqual(manifest['opensnitchCommit'], 'b404c4c6316760fa7bc415509d3f8d747f7dc9cc')
+        self.assertEqual(manifest['ebpfProgTreeSha256'], '39512718023e91e3d48bdaa6f0c958a5457ebb8df560dbd53d348f55551c6fd6')
+        self.assertEqual(manifest['daemonRpm'], {**legacy['daemonRpm'], 'tag': 'v1.8.0'})
+        self.assertEqual(manifest['objectsDir'], '/usr/lib/opensnitchd/ebpf')
+        self.assertTrue((self.root / 'overlay/usr/share/bazzite-tower/opensnitch-ebpf/opensnitch.o').is_file())
+        # The system manifest gains no RPM field (system behaviour is unchanged).
+        system = self.e['stage_overlay'](EBPF_PINS_PATH, 'system', DAEMON_PINS, PINS, self.write_stage(self.root / 'ebpf2'),
+                                         self.root / 'overlay2', self.direct)
+        self.assertNotIn('daemonRpm', system)
+
+    def test_legacy_assembly_refuses_modules_built_from_the_system_commit(self):
+        handoff = self.write_stage(self.root / 'ebpf')  # build-info names the system commit
+        with self.assertRaises(self.e['Refusal']) as caught:
+            self.e['stage_overlay'](EBPF_PINS_PATH, 'legacy', None, None, handoff, self.root / 'overlay', self.direct)
+        self.assertIn('opensnitchCommit', str(caught.exception))
+
+    def test_stage_cli_needs_system_pins_only_for_the_system_profile(self):
+        legacy = self.pins['profiles']['legacy']
+        handoff = self.write_stage(self.root / 'ebpf')
+        info = json.loads((handoff / 'build-info.json').read_text())
+        (handoff / 'build-info.json').write_text(json.dumps({**info, 'opensnitchCommit': legacy['opensnitchCommit'],
+                                                             'ebpfProgTreeSha256': legacy['ebpfProgTreeSha256']}))
+        base = ['python3', '-B', str(EBPF), 'stage', '--pins', str(EBPF_PINS_PATH), '--kernel-facts', str(self.direct)]
+        ok = subprocess.run([*base, '--profile', 'legacy', str(handoff), str(self.root / 'out-legacy')], capture_output=True, text=True)
+        self.assertEqual(ok.returncode, 0, ok.stderr)
+        refused = subprocess.run([*base, '--profile', 'system', str(handoff), str(self.root / 'out-system')], capture_output=True, text=True)
+        self.assertEqual(refused.returncode, 1)
+        self.assertIn('ebpf: stage:', refused.stderr)
+        self.assertIn('daemon and snitchwatch pins', refused.stderr)
+
     def test_assembly_manifest_refuses_inconsistent_build_info(self):
         for key, value in (('kernelRelease', R73), ('clang', 'clang version 23.1.5'),
                            ('opensnitchCommit', 'f' * 40), ('ebpfProgTreeSha256', '0' * 64), ('rpmInventorySha256', '')):
@@ -553,7 +596,7 @@ class ImageCheck(Workdir):
         super().setUp()
         self.c = load(CHECK)
 
-    def image(self, profile='system', modules=(R72,), manifest=True, kernel=R72):
+    def image(self, profile='system', modules=(R72,), manifest=True, kernel=R72, commit=None, rpm='default'):
         root = self.root / ('img-%d' % len(list(self.root.iterdir())))
         objects = root / 'usr/lib/opensnitchd/ebpf'
         objects.mkdir(parents=True)
@@ -570,9 +613,11 @@ class ImageCheck(Workdir):
         (share / 'snitchwatch-bridge-profile').write_text(profile + '\n')
         if manifest:
             (share / 'ebpf-manifest.json').write_text(json.dumps({
-                'schemaVersion': 1, 'profile': 'system', 'kernelRelease': kernel, 'objects': hashes,
-                'objectsDir': '/usr/lib/opensnitchd/ebpf', 'opensnitchCommit': 'a' * 40, 'ebpfProgTreeSha256': 'b' * 64,
-                'clangVersion': '21.1.8', 'kernelConfigSha256': hashlib.sha256(b'CONFIG_BPF=y\n').hexdigest()}))
+                'schemaVersion': 1, 'profile': profile, 'kernelRelease': kernel, 'objects': hashes,
+                'objectsDir': '/usr/lib/opensnitchd/ebpf', 'ebpfProgTreeSha256': LEGACY_PIN['ebpfProgTreeSha256'] if profile == 'legacy' else 'b' * 64,
+                'opensnitchCommit': commit or (LEGACY_COMMIT if profile == 'legacy' else 'a' * 40),
+                'clangVersion': '21.1.8', 'kernelConfigSha256': hashlib.sha256(b'CONFIG_BPF=y\n').hexdigest(),
+                **({'daemonRpm': LEGACY_RPM if rpm == 'default' else rpm} if profile == 'legacy' and rpm is not None else {})}))
         return root
 
     def run_check(self, root):
@@ -607,12 +652,17 @@ class ImageCheck(Workdir):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn('opensnitch-dns.o', result.stderr)
 
-    def test_system_requires_the_manifest_and_legacy_must_not_have_one(self):
+    def test_system_and_legacy_both_require_the_manifest(self):
+        # INTENT CHANGE: legacy used to be required to carry NO manifest (RPM objects); it is now built like system.
         self.assertNotEqual(self.run_check(self.image(manifest=False)).returncode, 0)
-        self.assertNotEqual(self.run_check(self.image(profile='legacy')).returncode, 0)
-        legacy = self.run_check(self.image(profile='legacy', manifest=False))
-        self.assertEqual(legacy.returncode, 0, legacy.stderr)
-        self.assertIn('legacy', legacy.stdout)
+        missing = self.run_check(self.image(profile='legacy', manifest=False))
+        self.assertNotEqual(missing.returncode, 0)
+        self.assertIn('ebpf-manifest.json', missing.stderr)
+
+    def test_a_manifest_for_the_other_profile_is_refused(self):
+        root = self.image(profile='legacy')
+        (root / 'usr/share/bazzite-tower/snitchwatch-bridge-profile').write_text('system\n')
+        self.assertNotEqual(self.run_check(root).returncode, 0)
 
     def test_unknown_or_missing_profile_is_refused(self):
         root = self.image(profile='other')
@@ -634,6 +684,18 @@ class Wiring(unittest.TestCase):
         check = text.index('python3 /usr/libexec/bazzite-tower-opensnitch-ebpf-check')
         self.assertLess(cpio, install)
         self.assertLess(install, check)
+
+    def firewall_text(self):
+        return (ROOT / 'build_files/build.d/95-firewall.sh').read_text()
+
+    def test_firewall_step_installs_the_built_objects_for_both_profiles(self):
+        text = self.firewall_text()
+        install = text.index('/usr/share/bazzite-tower/opensnitch-ebpf/')
+        # The loop is no longer inside an `if system` block: the preceding non-comment line must not gate on the bridge.
+        before = [line for line in text[:install].splitlines() if line.strip() and not line.lstrip().startswith('#')]
+        self.assertTrue(before[-2].lstrip().startswith('for object in '), before[-2:])
+        self.assertNotIn('== system', before[-1])
+        self.assertNotIn('== system', before[-2])
 
     def test_object_names_agree_across_firewall_step_check_pins_and_smoke(self):
         text = (ROOT / 'build_files/build.d/95-firewall.sh').read_text()

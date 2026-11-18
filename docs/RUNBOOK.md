@@ -816,6 +816,38 @@ Operating the system candidate:
   profiles; deny requires explicit operator opt-in). To block, open the row and
   Deny with "Until quit" or "Forever" (verified on the r5 VM).
 
+### Runtime check: is the daemon really using eBPF?
+
+The daemon falls back to `/proc` silently when the eBPF modules fail to load,
+and the packaging check cannot see that. Read-only runtime check (root, to read
+`/proc/<pid>/fd`; writes nothing, never signals the daemon):
+
+```bash
+sudo /usr/libexec/bazzite-tower-opensnitch-ebpf-check --runtime [--detail]
+```
+
+It reads `ProcMonitorMethod` from `/etc/opensnitchd/default-config.json`,
+counts `anon_inode:bpf-prog` fds of the `opensnitch.service` MainPID and scans
+`/var/log/opensnitchd.log` from the unit's start. The last line is
+`RESULT: PASS|WARN|FAIL: <reason>`; exit 0 for PASS/WARN, 1 for FAIL, 2 usage.
+
+- PASS: method `ebpf`, at least the floor of bpf-prog fds, no fallback warning.
+- WARN: method `proc` (the documented fallback, shipped today); or
+  `opensnitch-procs.o not available` (partial eBPF, no exec events); or fds
+  below the floor; or the log is unreadable.
+- FAIL: `silent /proc fallback` (method `ebpf` but zero bpf-prog fds, or
+  `error starting ebpf monitor method` logged since start); daemon not running;
+  method not `ebpf`/`proc`; config or `/proc/<pid>/fd` unreadable.
+
+`--detail` prints the raw calibration data (fd count by link type, `bpftool`
+program names for the daemon pid when bpftool exists, config value, MainPID,
+unit start time, matching log lines) for owner gate A to paste back.
+
+Not verified: the `anon_inode:bpf-prog` link name on the real kernel, the log
+strings (from v1.8.0, unchecked at a1353848) and the fd floor
+(`EBPF_PROG_FD_FLOOR = 1` until gate A calibrates it). Nothing calls this check
+yet; readiness, health and boot-check wiring come with the enable change.
+
 ### r15.1 transition from an existing deny deployment
 
 r15.1 restores the permanent allow default for both profiles. An existing locally

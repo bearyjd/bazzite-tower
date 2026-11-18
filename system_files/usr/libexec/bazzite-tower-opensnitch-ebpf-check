@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/python3 -I
 """Check the packaged OpenSnitch eBPF objects; this cannot prove kernel loading.
 
 Every profile: the three objects are ELF64 BPF relocatable files.
@@ -15,7 +15,8 @@ RPM objects and had to have no manifest; that assertion is now inverted.)
 running daemon really uses eBPF, since it falls back to /proc silently when the
 modules fail to load. PASS/WARN exit 0, FAIL exit 1, usage error exit 2; the
 last line is `RESULT: PASS|WARN|FAIL: <reason>`. --detail adds the raw
-calibration data. Test overrides: --config, --log, --proc-root.
+calibration data. Test-only overrides (--config, --log, --proc-root, --systemctl, --bpftool) are
+refused as root unless BAZZITE_TOWER_EBPF_CHECK_TESTING=1.
 """
 import argparse
 import collections
@@ -25,7 +26,6 @@ import json
 import os
 from pathlib import Path
 import re
-import shutil
 import stat
 import struct
 import subprocess
@@ -55,8 +55,13 @@ PARTIAL_LOG = 'opensnitch-procs.o not available'
 # observed ebpf fd count minus optional kprobes and the evidence path (fd-ebpf-L1.txt).
 EBPF_PROG_FD_FLOOR = 1
 LOG_TAIL_BYTES = 8 * 1024 * 1024
+LOG_START_SLACK_SECONDS = 2  # the daemon's first log line may trail the unit start by a moment (stamps are whole seconds)
 LOG_TIME = re.compile(r'^\[(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d)\]')
-UNIT_TIME = re.compile(r'(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d)')
+SYSTEMCTL = '/usr/bin/systemctl'
+BPFTOOL = '/usr/bin/bpftool'  # /usr/sbin is a symlink to /usr/bin on Fedora 42+
+CHILD_ENV = {'PATH': '/usr/bin:/usr/sbin', 'LC_ALL': 'C'}
+TESTING_ENV = 'BAZZITE_TOWER_EBPF_CHECK_TESTING'
+LogScan = collections.namedtuple('LogScan', 'fallback partial covered')
 
 
 def read_object(path):
@@ -150,137 +155,233 @@ def verify_image(root):
 
 
 def run_text(argv):
-    result = subprocess.run(argv, capture_output=True, text=True, timeout=30, check=False)
+    result = subprocess.run(argv, capture_output=True, text=True, timeout=30, check=False, env=CHILD_ENV)
     if result.returncode != 0:
         raise OSError(f'{argv[0]} exited {result.returncode}')
     return result.stdout.strip()
 
 
-def unit_property(name):
-    return run_text(['systemctl', 'show', '-p', name, '--value', SERVICE])
+def unit_property(systemctl, name):
+    # --timestamp=unix (systemd 251+) prints `@<epoch>`: independent of the timezone and its abbreviation.
+    stamp = ['--timestamp=unix'] if name == 'ActiveEnterTimestamp' else []
+    return run_text([systemctl, 'show', *stamp, '-p', name, '--value', SERVICE])
 
 
-def parse_time(text):
-    match = UNIT_TIME.search(text)
-    return datetime.datetime.strptime(match.group(1), '%Y-%m-%d %H:%M:%S') if match else None
-
-
-def config_method(path):
+def unit_start(systemctl):
+    """(epoch seconds, label) of the unit's last activation; (None, None) when unknown."""
     try:
-        value = json.loads(Path(path).read_text()).get('ProcMonitorMethod')
+        match = re.fullmatch(r'@(\d+)', unit_property(systemctl, 'ActiveEnterTimestamp'))
+    except (OSError, subprocess.SubprocessError):
+        return None, None
+    if not match or int(match.group(1)) == 0:
+        return None, None
+    epoch = int(match.group(1))
+    try:
+        return epoch, datetime.datetime.fromtimestamp(epoch, datetime.timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')
+    except (ValueError, OverflowError, OSError):
+        return None, None
+
+
+def escape(text):
+    return str(text).encode('unicode_escape').decode('ascii')
+
+
+def config_settings(path):
+    """(ProcMonitorMethod, LogUTC) of the on-disk config (not what the running daemon loaded)."""
+    try:
+        config = json.loads(Path(path).read_text())
+        method, log_utc = config.get('ProcMonitorMethod'), config.get('LogUTC')
     except (OSError, ValueError, AttributeError) as error:
         raise ValueError(f'cannot read ProcMonitorMethod from {path} ({error}); restore the config') from error
-    return value if isinstance(value, str) else None
+    return (method if isinstance(method, str) else None), log_utc is True
 
 
 def fd_links(proc_root, pid):
+    """Link targets of the pid's fds; an fd or the pid vanishing mid-scan is skipped, an unlistable directory is fatal."""
     fd_dir = Path(proc_root) / str(pid) / 'fd'
     try:
-        return [os.readlink(entry) for entry in sorted(fd_dir.iterdir())]
+        entries = sorted(fd_dir.iterdir())
+        links = []
+        for entry in entries:
+            try:
+                links.append(os.readlink(entry))
+            except (FileNotFoundError, ProcessLookupError):
+                continue
+        return links
     except OSError as error:
         raise ValueError(f'cannot read {fd_dir} ({error}); run as root while {SERVICE} is running') from error
 
 
-def log_matches(path, started):
-    """(fallback lines, partial lines) at or after `started`; None if the log is unreadable.
-
-    A line without a timestamp inherits the previous one; with no known start every line counts."""
+def daemon_problem(proc_root, pid):
+    """Reason string when the pid is not the opensnitchd binary, else None."""
+    exe = Path(proc_root) / str(pid) / 'exe'
     try:
-        with open(path, 'rb') as source:
-            size = os.fstat(source.fileno()).st_size
-            source.seek(max(0, size - LOG_TAIL_BYTES))
-            lines = source.read().decode('utf-8', 'replace').splitlines()
+        target = os.readlink(exe)
+    except OSError as error:
+        return f'cannot read {exe} ({error}); cannot confirm pid {pid} is opensnitchd'
+    if not target.removesuffix(' (deleted)').endswith('/opensnitchd'):
+        return f'pid {pid} is {escape(target)!r}, not opensnitchd; is {SERVICE} the real daemon?'
+    return None
+
+
+def read_tail(path):
+    """Last LOG_TAIL_BYTES of a regular file, or None if it is not one / unreadable (never blocks, never reads past the cap)."""
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW)
     except OSError:
         return None
-    fallback, partial, current = [], [], None
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode):
+            return None
+        offset = max(0, info.st_size - LOG_TAIL_BYTES)
+        os.lseek(fd, offset, os.SEEK_SET)
+        data = b''
+        while len(data) < LOG_TAIL_BYTES:
+            chunk = os.read(fd, LOG_TAIL_BYTES - len(data))
+            if not chunk:
+                break
+            data += chunk
+    except OSError:
+        return None
+    finally:
+        os.close(fd)
+    lines = data.decode('utf-8', 'replace').splitlines()
+    return lines[1:] if offset else lines
+
+
+def log_epoch(text, utc):
+    naive = datetime.datetime.strptime(text, '%Y-%m-%d %H:%M:%S')
+    return (naive.replace(tzinfo=datetime.timezone.utc) if utc else naive).timestamp()
+
+
+def log_matches(path, started, utc):
+    """LogScan of the log tail since `started` (epoch); None if the log is unreadable.
+
+    A line without a (valid) timestamp inherits the previous one; with no known start every line counts."""
+    lines = read_tail(path)
+    if lines is None:
+        return None
+    fallback, partial, current, first = [], [], None, None
     for line in lines:
         stamp = LOG_TIME.match(line)
         if stamp:
-            current = datetime.datetime.strptime(stamp.group(1), '%Y-%m-%d %H:%M:%S')
+            try:
+                current = log_epoch(stamp.group(1), utc)
+            except (ValueError, OverflowError, OSError):
+                pass
+            else:
+                first = current if first is None else first
         if started is not None and current is not None and current < started:
             continue
         if FALLBACK_LOG in line:
             fallback.append(line)
         elif PARTIAL_LOG in line:
             partial.append(line)
-    return fallback, partial
+    covered = started is None or first is None or first <= started + LOG_START_SLACK_SECONDS
+    return LogScan(fallback, partial, covered)
 
 
-def bpftool_programs(pid):
-    if shutil.which('bpftool') is None:
+def bpftool_programs(bpftool, pid):
+    if not (os.path.isfile(bpftool) and os.access(bpftool, os.X_OK)):
         return 'bpftool not installed'
     try:
-        programs = json.loads(run_text(['bpftool', 'prog', 'show', '--json']))
+        programs = json.loads(run_text([bpftool, 'prog', 'show', '--json']))
     except (OSError, ValueError, subprocess.SubprocessError) as error:
         return f'bpftool failed ({error})'
-    return [f'{p.get("type")} {p.get("name")}' for p in programs
-            if any(isinstance(q, dict) and q.get('pid') == pid for q in p.get('pids', []))]
+    if not isinstance(programs, list):
+        return 'bpftool output not understood'
+    owned = []
+    for program in programs:
+        pids = program.get('pids') if isinstance(program, dict) else None
+        if isinstance(pids, list) and any(isinstance(entry, dict) and entry.get('pid') == pid for entry in pids):
+            owned.append(f'{program.get("type")} {program.get("name")}')
+    return owned
 
 
 def link_kind(link):
     return re.sub(r'\[\d+\]', '[*]', link) if re.match(r'(socket|pipe):', link) else link
 
 
-def print_detail(pid, started_text, method, links, matched):
-    print(f'detail: MainPID={pid} ActiveEnterTimestamp={started_text!r} ProcMonitorMethod={method!r}')
+def print_detail(pid, started, label, method, links, scan, programs):
+    print(f'detail: MainPID={pid} ActiveEnterTimestamp={"unknown" if started is None else f"@{started} ({label})"} '
+          f'ProcMonitorMethod={escape(method)!r}')
     counts = collections.Counter(link_kind(link) for link in links or [])
     print(f'detail: fd total={sum(counts.values())} {BPF_PROG_LINK}={counts.get(BPF_PROG_LINK, 0)}')
     for kind, count in counts.most_common():
-        print(f'detail: fd {count:6d} {kind}')
-    programs = bpftool_programs(pid)
-    print(f'detail: bpftool {programs}' if isinstance(programs, str) else f'detail: bpftool programs of pid {pid}: {programs}')
-    for line in matched:
-        print(f'detail: log {line}')
+        print(f'detail: fd {count:6d} {escape(kind)}')
+    print(f'detail: bpftool {escape(programs)}' if isinstance(programs, str) else f'detail: bpftool programs of pid {pid}: {escape(programs)}')
+    for line in (scan.fallback + scan.partial) if scan else []:
+        print(f'detail: log {escape(line)}')
 
 
-def evaluate(args):
-    """Return (verdict, reason); print calibration data when --detail."""
-    try:
-        pid = int(unit_property('MainPID') or 0)
-    except (OSError, ValueError, subprocess.SubprocessError) as error:
-        return 'FAIL', f'cannot query systemd for {SERVICE} MainPID ({error}); is systemd running?'
-    try:
-        started_text = unit_property('ActiveEnterTimestamp')
-    except (OSError, subprocess.SubprocessError):
-        started_text = ''
-    if pid <= 0:
-        return 'FAIL', f'{SERVICE} has no running daemon (MainPID {pid}); start it: systemctl start {SERVICE}'
-    try:
-        method = config_method(args.config)
-    except ValueError as error:
-        return 'FAIL', str(error)
-    found = log_matches(args.log, parse_time(started_text))
-    links, problem = None, None
-    if method == 'ebpf':
-        try:
-            links = fd_links(args.proc_root, pid)
-        except ValueError as error:
-            problem = str(error)
-    if args.detail:
-        print_detail(pid, started_text, method, links, (found[0] + found[1]) if found else [])
+def decide(*, method, config, log, pid, problem, count, fallback, partial, log_readable, covered, started_label, programs, floor):
+    """Pure decision table: (level, reason) from already-gathered facts."""
+    names = f' (bpf programs: {", ".join(programs)})' if programs else ''
     if problem:
         return 'FAIL', problem
     if method == 'proc':
         return 'WARN', 'ProcMonitorMethod is proc: the documented /proc fallback is in effect, eBPF is not in use'
     if method != 'ebpf':
-        return 'FAIL', f'ProcMonitorMethod is {method!r}, expected ebpf (or the documented proc); fix {args.config}'
-    count = links.count(BPF_PROG_LINK)
-    if found and found[0]:
-        return 'FAIL', (f'silent /proc fallback: the daemon logged {FALLBACK_LOG!r} since {started_text or "start"} '
+        return 'FAIL', f'ProcMonitorMethod is {method!r}, expected ebpf (or the documented proc); fix {config}'
+    if fallback:
+        since = f'since {started_label}' if started_label else ('in the log (start time unknown: log not time-bounded, may be stale; '
+                                                                'restart the daemon and re-run)')
+        return 'FAIL', (f'silent /proc fallback: the daemon logged {FALLBACK_LOG!r} {since} '
                         f'({count} {BPF_PROG_LINK} fds); check the module build and `journalctl -u {SERVICE}`')
     if count == 0:
         return 'FAIL', (f'silent /proc fallback: ProcMonitorMethod is ebpf but pid {pid} holds no {BPF_PROG_LINK} fd; '
-                        f'eBPF did not load, check {args.log} and the module manifest')
-    if found and found[1]:
-        return 'WARN', f'partial eBPF: the daemon logged {PARTIAL_LOG!r} (no exec events); rebuild/repair opensnitch-procs.o'
-    if count < EBPF_PROG_FD_FLOOR:
-        return 'WARN', f'only {count} {BPF_PROG_LINK} fds, below the calibrated floor {EBPF_PROG_FD_FLOOR}; eBPF may be partial'
-    if found is None:
-        return 'WARN', f'{count} {BPF_PROG_LINK} fds but {args.log} is unreadable, partial mode cannot be ruled out'
-    return 'PASS', f'ProcMonitorMethod ebpf, pid {pid} holds {count} {BPF_PROG_LINK} fds, no fallback warning since start'
+                        f'eBPF did not load, check {log} and the module manifest')
+    if partial:
+        return 'WARN', f'partial eBPF: the daemon logged {PARTIAL_LOG!r} (no exec events); rebuild/repair opensnitch-procs.o{names}'
+    if not covered:
+        return 'WARN', f'{count} {BPF_PROG_LINK} fds but the log does not cover the unit start (rotated?); fallback warnings cannot be ruled out{names}'
+    if count < floor:
+        return 'WARN', f'only {count} {BPF_PROG_LINK} fds, below the calibrated floor {floor}; eBPF may be partial{names}'
+    if not log_readable:
+        return 'WARN', f'{count} {BPF_PROG_LINK} fds but {log} is unreadable, partial mode cannot be ruled out{names}'
+    note = ' (fd floor UNCALIBRATED: gate A pending)' if floor == 1 else ''
+    return 'PASS', (f'ProcMonitorMethod ebpf, pid {pid} holds {count} {BPF_PROG_LINK} fds, no fallback warning since start{note}{names}')
 
 
-def main():
+def evaluate(args):
+    """Gather the facts (I/O), print calibration data when --detail, and return decide(...)."""
+    try:
+        pid = int(unit_property(args.systemctl, 'MainPID') or 0)
+    except (OSError, ValueError, subprocess.SubprocessError) as error:
+        return 'FAIL', f'cannot query systemd for {SERVICE} MainPID ({error}); is systemd running?'
+    started, label = unit_start(args.systemctl)
+    if pid <= 0:
+        return 'FAIL', f'{SERVICE} has no running daemon (MainPID {pid}); start it: systemctl start {SERVICE}'
+    try:
+        method, log_utc = config_settings(args.config)
+    except ValueError as error:
+        return 'FAIL', str(error)
+    scan = log_matches(args.log, started, log_utc)
+    links, problem, found = None, None, 'skipped'
+    if method == 'ebpf':
+        try:
+            links = fd_links(args.proc_root, pid)
+            problem = daemon_problem(args.proc_root, pid)
+        except ValueError as error:
+            problem = str(error)
+        try:
+            again = int(unit_property(args.systemctl, 'MainPID') or 0)
+        except (OSError, ValueError, subprocess.SubprocessError):
+            again = None
+        if problem is None and again != pid:
+            problem = 'daemon pid changed during the check; re-run it'
+        found = bpftool_programs(args.bpftool, pid)
+    if args.detail:
+        print_detail(pid, started, label, method, links, scan, found)
+    return decide(method=method, config=args.config, log=args.log, pid=pid, problem=problem,
+                  count=(links or []).count(BPF_PROG_LINK), fallback=len(scan.fallback) if scan else 0,
+                  partial=len(scan.partial) if scan else 0, log_readable=scan is not None, covered=scan.covered if scan else True,
+                  started_label=label,
+                  programs=[escape(name.split(' ', 1)[-1]) for name in found] if isinstance(found, list) else [], floor=EBPF_PROG_FD_FLOOR)
+
+
+def parse_args(argv):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--root')
     parser.add_argument('--runtime', action='store_true', help='read-only check that the running daemon really uses eBPF')
@@ -288,15 +389,32 @@ def main():
     parser.add_argument('--config', default=CONFIG_PATH, help='--runtime: daemon config (test override)')
     parser.add_argument('--log', default=LOG_PATH, help='--runtime: daemon log (test override)')
     parser.add_argument('--proc-root', default='/proc', help='--runtime: procfs root (test override)')
-    args = parser.parse_args()
+    parser.add_argument('--systemctl', default=SYSTEMCTL, help='--runtime: systemctl binary (test override)')
+    parser.add_argument('--bpftool', default=BPFTOOL, help='--runtime: bpftool binary (test override)')
+    args = parser.parse_args(argv)
     if args.runtime and args.root is not None:
         parser.error('--runtime does not take --root')
     if args.detail and not args.runtime:
         parser.error('--detail requires --runtime')
-    if args.runtime:
+    overridden = (args.config, args.log, args.proc_root, args.systemctl, args.bpftool) != (CONFIG_PATH, LOG_PATH, '/proc', SYSTEMCTL, BPFTOOL)
+    if args.runtime and overridden and os.geteuid() == 0 and os.environ.get(TESTING_ENV) != '1':
+        parser.error(f'--config/--log/--proc-root/--systemctl/--bpftool are test-only and refused as root unless {TESTING_ENV}=1')
+    return args
+
+
+def runtime(args):
+    try:
         verdict, reason = evaluate(args)
-        print(f'RESULT: {verdict}: {reason}')
-        return 1 if verdict == 'FAIL' else 0
+    except Exception as error:  # every exit path must end in a RESULT line
+        verdict, reason = 'FAIL', f'internal error ({type(error).__name__})'
+    print(f'RESULT: {verdict}: {escape(reason)}')
+    return 1 if verdict == 'FAIL' else 0
+
+
+def main(argv=None):
+    args = parse_args(argv)
+    if args.runtime:
+        return runtime(args)
     args.root = args.root or '/'
     try:
         detail = verify_image(args.root)

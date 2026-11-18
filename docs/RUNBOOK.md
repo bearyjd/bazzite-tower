@@ -828,16 +828,39 @@ sudo /usr/libexec/bazzite-tower-opensnitch-ebpf-check --runtime [--detail]
 
 It reads `ProcMonitorMethod` from `/etc/opensnitchd/default-config.json`,
 counts `anon_inode:bpf-prog` fds of the `opensnitch.service` MainPID and scans
-`/var/log/opensnitchd.log` from the unit's start. The last line is
+`/var/log/opensnitchd.log` from the unit's start (taken from systemd as an epoch,
+so timezone-independent; log stamps are read as UTC when the config says
+`"LogUTC": true`, else as local time). The last line is
 `RESULT: PASS|WARN|FAIL: <reason>`; exit 0 for PASS/WARN, 1 for FAIL, 2 usage.
+Every exit path of `--runtime` ends in such a line (an unexpected error is
+`RESULT: FAIL: internal error (<type>)`). Wrappers must parse ONLY the final
+anchored line `^RESULT: `; `--detail` lines (escaped, but still log-derived) are
+for humans.
 
-- PASS: method `ebpf`, at least the floor of bpf-prog fds, no fallback warning.
+- PASS: method `ebpf`, at least the floor of bpf-prog fds, no fallback warning,
+  the log reaches back to the unit start. While the floor is the uncalibrated
+  placeholder the reason says `(fd floor UNCALIBRATED: gate A pending)`: one
+  bpf-prog fd is not proof of full eBPF. `bpftool` program names of the daemon
+  pid (when bpftool exists) are listed in the reason; not required yet.
 - WARN: method `proc` (the documented fallback, shipped today); or
   `opensnitch-procs.o not available` (partial eBPF, no exec events); or fds
-  below the floor; or the log is unreadable.
+  below the floor; or the log is unreadable (not a regular file, a symlink, or
+  missing); or `log does not cover the unit start (rotated?)` (the first stamp
+  in the readable 8 MiB log tail is later than the unit start: log rotated or
+  truncated, so a fallback warning could be missing; re-run after the daemon
+  logged again or inspect `journalctl -u opensnitch.service`).
 - FAIL: `silent /proc fallback` (method `ebpf` but zero bpf-prog fds, or
   `error starting ebpf monitor method` logged since start); daemon not running;
-  method not `ebpf`/`proc`; config or `/proc/<pid>/fd` unreadable.
+  method not `ebpf`/`proc`; config or `/proc/<pid>/fd` unreadable; the MainPID
+  is not `opensnitchd` or changed during the check. When the unit start time is
+  unknown, every fallback line in the log counts and the FAIL says `(start time
+  unknown: log not time-bounded, may be stale; restart the daemon and re-run)`:
+  fail-closed, restart `opensnitch.service` and re-run.
+
+The check reads the on-disk config, not what the daemon loaded: after editing
+`/etc/opensnitchd/default-config.json` restart the daemon before trusting the
+result. The test-only flags `--config/--log/--proc-root/--systemctl/--bpftool`
+are refused as root unless `BAZZITE_TOWER_EBPF_CHECK_TESTING=1`.
 
 `--detail` prints the raw calibration data (fd count by link type, `bpftool`
 program names for the daemon pid when bpftool exists, config value, MainPID,

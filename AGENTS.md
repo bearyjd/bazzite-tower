@@ -15,7 +15,7 @@ Full detail lives in `CLAUDE.md` (same rules, longer), `README.md`, `docs/RUNBOO
 - `just token-report [--since YYYY-MM-DD] [--project substring] [--json]` (read-only Claude/Codex local usage aggregates; last seven days by default, text <=40 lines, no message content)
 - `just smoke` (asserts a BUILT image; the CI gate) — needs `just build` first
 - `just test-snitchwatch-daemon-patch` (patch + Go/C tests in throwaway containers, minutes, needs network)
-- Offline tests: `bash tests/test-snitchwatch-toolchain.sh`, `python3 tests/test-snitchwatch-image-build-daemon.py`, `python3 tests/test-snitchwatch-image-stages.py`, `python3 tests/test-snitchwatch-image-build.py`, `tests/test-snitchwatch-system.sh`, `tests/check-supply-chain.sh`
+- Offline tests: `bash tests/test-snitchwatch-toolchain.sh`, `python3 tests/test-snitchwatch-image-build-daemon.py`, `python3 tests/test-snitchwatch-image-stages.py`, `python3 tests/test-snitchwatch-ebpf.py`, `python3 tests/test-snitchwatch-ebpf-legacy.py`, `python3 tests/test-snitchwatch-image-build.py`, `tests/test-snitchwatch-system.sh`, `tests/check-supply-chain.sh`
 - Do NOT run `just build*`, `podman build`, or VM/ISO builds unless the task truly requires them. Prefer static checks, then CI.
 
 ## Hard rules

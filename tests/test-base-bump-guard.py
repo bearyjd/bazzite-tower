@@ -52,6 +52,21 @@ class Guard(unittest.TestCase):
         self.assertEqual(decision, 'automerge=false')
         self.assertIn('base version downgrade', reason)
 
+    def test_revision_suffix_is_not_a_downgrade(self):
+        # 2026-11-17: upstream began labelling 45.YYYYMMDD.N
+        cur = ('44.20261104', CUR[1])
+        self.assertEqual(guard(cur=cur, new=('44.20261104.1', CUR[1]))[0], 'automerge=true')
+        self.assertEqual(guard(cur=('44.20261104.1', CUR[1]), new=('44.20261104.2', CUR[1]))[0], 'automerge=true')
+        self.assertEqual(guard(cur=('44.20261104.1', CUR[1]), new=('44.20261105', CUR[1]))[0], 'automerge=true')
+
+    def test_revision_downgrade_is_refused(self):
+        decision, reason = guard(cur=('44.20261104.1', CUR[1]), new=('44.20261104', CUR[1]))
+        self.assertEqual(decision, 'automerge=false')
+        self.assertIn('base version downgrade', reason)
+
+    def test_revision_above_policy_floor(self):
+        self.assertEqual(guard(cur=('44.20261023.1', CUR[1]), new=('44.20261104.1', CUR[1]))[0], 'automerge=true')
+
     def test_below_policy_floor(self):
         # Older than the policy minimumKernel (7.2.9-ogc3.1.fc44) but not older than the current pin.
         decision, reason = guard(cur=('44.20261001', '7.2.1-ogc1.1.fc44'), new=('44.20261104', '7.2.5-ogc1.1.fc44'))

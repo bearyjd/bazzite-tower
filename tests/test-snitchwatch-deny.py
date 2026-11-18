@@ -235,30 +235,38 @@ class Refusals(DenyBase):
                     self.assertFalse(self.status()["canEnable"])
                     self.assertEqual(self.runtime_checks(), [])
 
-    def test_ebpf_opt_in_runs_the_runtime_check_and_refuses_fail_and_partial_warn(self):
+    def test_ebpf_opt_in_refuses_everything_but_a_clean_runtime_pass(self):
         self.edit_config(ProcMonitorMethod="ebpf")
-        for result, text in ((("FAIL", "silent /proc fallback: pid 501 holds no anon_inode:bpf-prog fd", 1), "eBPF runtime check FAIL"),
-                             (("WARN", common.EBPF_PARTIAL_REASON+" (no exec events); rebuild/repair opensnitch-procs.o", 0), "partial")):
-            with self.subTest(result=result[0]):
+        refused = (("FAIL", "silent /proc fallback: pid 501 holds no anon_inode:bpf-prog fd", 1),
+                   ("WARN", "partial eBPF: the daemon logged 'opensnitch-procs.o not available' (no exec events)", 0),
+                   ("WARN", "the log does not cover the unit start; fallback cannot be ruled out", 0),
+                   ("WARN", "log unreadable: fallback cannot be ruled out", 0),
+                   ("WARN", "only 1 anon_inode:bpf-prog fds, below the calibrated floor 9", 0),
+                   ("PASS", "contradictory exit", 1))
+        for result in refused:
+            with self.subTest(result=result):
                 self.ctx.ebpf_runtime = result
-                self.refused("on", text=text)
+                self.refused("on", text="cannot enable deny: .*"+re.escape(result[1][:20]) if result[2] == 0 else "cannot enable deny")
                 self.assert_untouched()
         self.ctx.ebpf_hang = True
         self.refused("on", text="timed out")
         self.assert_untouched()
 
-    def test_ebpf_opt_in_allowed_on_pass_or_other_warn_and_proc_skips_the_runtime_check(self):
+    def test_ebpf_opt_in_allowed_on_a_runtime_pass(self):
         self.edit_config(ProcMonitorMethod="ebpf")
-        self.ctx.ebpf_runtime = ("WARN", "only 1 anon_inode:bpf-prog fds, below the calibrated floor 9", 0)
+        self.ctx.ebpf_runtime = ("PASS", "fixture: daemon holds eBPF programs", 0)
         self.ok("on")
         self.assertEqual(len(self.runtime_checks()), 1)
-        self.ok("off")
-        self.setUp_clean()
+
+    def test_proc_opt_in_skips_the_runtime_check(self):
         self.edit_config(ProcMonitorMethod="proc")
         self.ctx.commands.clear()
         self.ctx.ebpf_runtime = ("FAIL", "would refuse if it ran", 1)
         self.ok("on")
         self.assertEqual(self.runtime_checks(), [])
+
+    def test_policy_lock_wait_outlasts_the_runtime_check_bound(self):
+        self.assertGreater(load("deny_constants", HELPER).LOCK_TIMEOUT, common.EBPF_RUNTIME_TIMEOUT+10)
 
     def test_already_pending_is_refused_and_changes_nothing_more(self):
         self.ok("on")

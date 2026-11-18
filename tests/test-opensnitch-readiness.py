@@ -3,6 +3,7 @@
 import hashlib
 import os
 import subprocess
+import time
 import tempfile
 import unittest
 from pathlib import Path
@@ -44,7 +45,7 @@ printf 'LISTEN 0 128 127.0.0.1:50051 0.0.0.0:* users:(("bridge",pid=%s,fd=3))\n'
 """)
         self.write_command("id","#!/bin/sh\nprintf '%s\\n' \"${FAKE_UID:-1000}\"\n")
         self.ebpf=self.root/"usr/libexec/bazzite-tower-opensnitch-ebpf-check";self.ebpf.parent.mkdir(parents=True)
-        self.ebpf.write_text('#!/bin/sh\nprintf "%s\\n" "$*" >> "$COMMAND_LOG"\nprintf "detail line\\n"\n[ -z "$EBPF_HANG" ] || exec sleep 30\nprintf "%s\\n" "$EBPF_RESULT"\nexit "${EBPF_RC:-0}"\n');self.ebpf.chmod(0o755)
+        self.ebpf.write_text('#!/bin/sh\nprintf "%s\\n" "$*" >> "$COMMAND_LOG"\nprintf "detail line\\n"\n[ -z "$EBPF_HANG" ] || { trap "" TERM; sleep 30; }\nprintf "%s\\n" "$EBPF_RESULT"\nexit "${EBPF_RC:-0}"\n');self.ebpf.chmod(0o755)
         system=self.root/"usr/libexec/bazzite-tower-snitchwatch-readiness"
         system.write_text('#!/bin/sh\nprintf "fixture-system-dispatch:%s\\n" "$*"\nexit 42\n');system.chmod(0o755)
         self.profile=self.root/"usr/share/bazzite-tower/snitchwatch-bridge-profile"
@@ -93,8 +94,10 @@ printf 'LISTEN 0 128 127.0.0.1:50051 0.0.0.0:* users:(("bridge",pid=%s,fd=3))\n'
 
     def test_runtime_check_hang_fails_readiness_at_the_timeout(self):
         self.env["FAKE_UID"]="0";self.env["EBPF_HANG"]="1"
-        self.script.write_text(self.script.read_text().replace("timeout 30s","timeout 1s"))
-        result=self.run_check();self.assertEqual(result.returncode,1,result.stdout)
+        # The fake helper ignores SIGTERM, so only the -k escalation can end it within run_check's 3 s bound.
+        original=self.script.read_text();self.assertIn("timeout -k 5s 30s",original)
+        self.script.write_text(original.replace("timeout -k 5s 30s","timeout -k 1s 1s"))
+        started=time.monotonic();result=self.run_check();self.assertLess(time.monotonic()-started,3);self.assertEqual(result.returncode,1,result.stdout)
         self.assertIn("NOT READY: eBPF runtime check timed out",result.stderr);self.assertNotIn("Local prerequisites pass",result.stdout)
 
     def test_explicit_legacy_same_behavior(self):

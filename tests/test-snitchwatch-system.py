@@ -1311,8 +1311,31 @@ class SystemBehavior(unittest.TestCase):
         operator,clock=self.migrate_with_script([ZERO_FD,ZERO_FD,ZERO_FD,PASS_RUNTIME])
         record=operator.apply()
         self.assertEqual(record["status"],"applied")
-        self.assertEqual(len(self.helper_calls()),4);self.assertEqual(len(clock.slept),3)
+        self.assertEqual(len(self.helper_calls()),5);self.assertEqual(clock.slept,[1,1,1,common.EBPF_CONFIRM_SECONDS])
         self.assertIn("provisional",record["ebpfRuntime"]);self.assertIn("gate A",record["ebpfRuntime"])
+
+    def settled(self, script):
+        self.ctx.ebpf_script=list(script);clock=FakeClock()
+        return common.ebpf_runtime(self.ctx,common.EBPF_SETTLE_SECONDS,clock.sleep,clock),clock
+
+    def test_a_good_verdict_after_zero_fd_needs_a_confirming_second_run(self):
+        result,clock=self.settled([ZERO_FD,PASS_RUNTIME,PASS_RUNTIME])
+        self.assertTrue(result.startswith("PASS: "));self.assertEqual(len(self.helper_calls()),3);self.assertEqual(clock.slept,[1,common.EBPF_CONFIRM_SECONDS])
+
+    def test_a_worse_confirming_run_wins(self):
+        with self.assertRaisesRegex(common.Refusal,"eBPF runtime check FAIL.*proc fallback"):
+            self.settled([ZERO_FD,PASS_RUNTIME,EXPLICIT_FALLBACK])
+        partial=("WARN",common.EBPF_PARTIAL_LOG+" partial",0)
+        result,_=self.settled([ZERO_FD,PASS_RUNTIME,partial])
+        self.assertTrue(result.startswith("WARN: "));self.assertIn(common.EBPF_PARTIAL_LOG,result)
+
+    def test_a_zero_fd_confirming_run_keeps_polling_and_needs_a_new_confirmation(self):
+        result,clock=self.settled([ZERO_FD,PASS_RUNTIME,ZERO_FD,PASS_RUNTIME,PASS_RUNTIME])
+        self.assertTrue(result.startswith("PASS: "));self.assertEqual(len(self.helper_calls()),5)
+
+    def test_a_first_run_pass_with_no_zero_fd_seen_is_not_confirmed(self):
+        result,clock=self.settled([PASS_RUNTIME])
+        self.assertTrue(result.startswith("PASS: "));self.assertEqual(len(self.helper_calls()),1);self.assertEqual(clock.slept,[])
 
     def test_apply_rolls_back_immediately_on_an_explicit_fallback_warning(self):
         original=self.ctx.path(common.CONFIG).read_bytes()
@@ -1361,7 +1384,7 @@ class SystemBehavior(unittest.TestCase):
         verdict,reason=helper.decide(method="ebpf",config="c",log="l",pid=1,problem=None,count=0,fallback=0,partial=0,log_readable=True,covered=True,started_label="x",programs=[],floor=1)
         self.assertEqual(verdict,"FAIL");self.assertIn(common.EBPF_NO_PROGRAMS,reason)
         verdict,reason=helper.decide(method="ebpf",config="c",log="l",pid=1,problem=None,count=3,fallback=0,partial=1,log_readable=True,covered=True,started_label="x",programs=[],floor=1)
-        self.assertEqual(verdict,"WARN");self.assertIn(common.EBPF_PARTIAL_REASON,reason)
+        self.assertEqual(verdict,"WARN");self.assertIn(repr(common.EBPF_PARTIAL_LOG),reason)
         verdict,reason=helper.decide(method="ebpf",config="c",log="l",pid=1,problem=None,count=0,fallback=1,partial=0,log_readable=True,covered=True,started_label="x",programs=[],floor=1)
         self.assertNotIn(common.EBPF_NO_PROGRAMS,reason)
 

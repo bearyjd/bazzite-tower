@@ -54,9 +54,10 @@ EBPF_CHECK = "/usr/libexec/bazzite-tower-opensnitch-ebpf-check"
 EBPF_PROG_LINK = "anon_inode:bpf-prog"
 EBPF_NO_PROGRAMS = "holds no "+EBPF_PROG_LINK+" fd"  # eBPF not (yet) loaded, no fallback line: may just be startup
 EBPF_PARTIAL_LOG = "opensnitch-procs.o not available"
-EBPF_PARTIAL_REASON = "partial eBPF: the daemon logged "+repr(EBPF_PARTIAL_LOG)
 EBPF_SETTLE_SECONDS = 15  # PROVISIONAL until owner gate A calibrates the fd floor/startup timing
+EBPF_CONFIRM_SECONDS = 2  # pause before the confirming run that must follow a settled verdict
 EBPF_RUNTIME_TIMEOUT = 30
+EBPF_RANK = {"PASS": 0, "WARN": 1, "FAIL": 2}
 
 # Single table of every helper the privileged tools may run, by absolute path
 # (all verified in /usr/bin on the Bazzite host; /bin and /usr/sbin are symlinks
@@ -348,26 +349,45 @@ def proc_method_contract(config):
     return method
 
 
+def ebpf_run(ctx):
+    try:
+        result = ctx.command([EBPF_CHECK, "--runtime"], okay=(0, 1), timeout=EBPF_RUNTIME_TIMEOUT)
+    except subprocess.TimeoutExpired as error:
+        raise Refusal("eBPF runtime check timed out after "+str(EBPF_RUNTIME_TIMEOUT)+" s") from error
+    lines = result.stdout.strip().splitlines()
+    match = re.fullmatch(r"RESULT: (PASS|WARN|FAIL): (.*)", lines[-1]) if lines else None
+    require(match is not None, "eBPF runtime check produced no RESULT line")
+    verdict, reason = match.groups()
+    return ("FAIL" if result.returncode != 0 else verdict), verdict, reason
+
+
 def ebpf_runtime(ctx, settle=0, pause=time.sleep, clock=time.monotonic):
     # PASS/WARN (proc fallback is a WARN, not drift) are reported; FAIL (silent /proc fallback,
     # daemon down, wrong method) refuses readiness. Needs root, as does all of runtime_readiness.
     # settle>0 (right after a daemon start) re-polls only the "no bpf-prog fd, no fallback line" FAIL,
-    # which a daemon that has not loaded its modules yet also shows; any other verdict is final.
+    # which a daemon that has not loaded its modules yet also shows; any other verdict is final, except
+    # that a good verdict after such a FAIL must be confirmed by a second, not-worse run (a daemon still
+    # starting can look good once). The confirming run, if worse, is the verdict.
     deadline = clock()+settle
+    effective, verdict, reason = ebpf_run(ctx)
+    seen_zero = False
     while True:
-        try:
-            result = ctx.command([EBPF_CHECK, "--runtime"], okay=(0, 1), timeout=EBPF_RUNTIME_TIMEOUT)
-        except subprocess.TimeoutExpired as error:
-            raise Refusal("eBPF runtime check timed out after "+str(EBPF_RUNTIME_TIMEOUT)+" s") from error
-        lines = result.stdout.strip().splitlines()
-        match = re.fullmatch(r"RESULT: (PASS|WARN|FAIL): (.*)", lines[-1]) if lines else None
-        require(match is not None, "eBPF runtime check produced no RESULT line")
-        verdict, reason = match.groups()
         if verdict == "FAIL" and EBPF_NO_PROGRAMS in reason and clock() < deadline:
+            seen_zero = True
             pause(1)
+            effective, verdict, reason = ebpf_run(ctx)
             continue
-        require(verdict != "FAIL" and result.returncode == 0, "eBPF runtime check "+verdict+": "+reason)
-        return verdict+": "+reason
+        if seen_zero and effective != "FAIL":
+            seen_zero = False
+            pause(EBPF_CONFIRM_SECONDS)
+            confirm = ebpf_run(ctx)
+            first = effective
+            effective, verdict, reason = confirm
+            if EBPF_RANK[effective] > EBPF_RANK[first]:
+                continue
+        break
+    require(effective != "FAIL", "eBPF runtime check "+verdict+": "+reason)
+    return verdict+": "+reason
 
 
 def inert_dropin_directory(ctx, name):

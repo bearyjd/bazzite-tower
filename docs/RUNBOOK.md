@@ -738,6 +738,14 @@ for humans.
   unknown: log not time-bounded, may be stale; restart the daemon and re-run)`:
   fail-closed, restart `opensnitch.service` and re-run.
 
+Deny opt-in (`bazzite-tower-snitchwatch-deny on`) under `ebpf` requires a clean
+runtime `PASS`: every WARN (partial eBPF, log not covering the unit start,
+unreadable log, below the fd floor) and every FAIL or timeout refuses it, since
+each leaves a silent fallback unruled out. Until gate A calibrates the fd floor,
+a below-floor WARN therefore also blocks it. The `proc` fallback may still opt in.
+After a restart, a settled good verdict (one that followed a startup "no bpf-prog
+fd" FAIL) is confirmed by a second run 2 s later; a worse confirming run wins.
+
 The check reads the on-disk config, not what the daemon loaded: after editing
 `/etc/opensnitchd/default-config.json` restart the daemon before trusting the
 result. The test-only flags `--config/--log/--proc-root/--systemctl/--bpftool`

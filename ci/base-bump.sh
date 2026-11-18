@@ -27,6 +27,8 @@ raw_version=$(jq -r '.Labels["org.opencontainers.image.version"] // "unknown"' <
 # Upstream-controlled label: keep it to a safe charset before it reaches $GITHUB_OUTPUT.
 version=$(tr -cd '0-9A-Za-z._-' <<< "${raw_version}")
 # Fail closed: stripping characters must not turn an invalid label (e.g. "45.20261117 .1") into a valid one.
+# (Command substitution already drops TRAILING newlines before this comparison; that is tolerated on purpose:
+# only [0-9A-Za-z._-] ever reaches $GITHUB_OUTPUT either way.)
 [[ "${version}" == "${raw_version}" ]] || version=unknown
 version=${version:-unknown}
 # Kernel as recorded by ostree/bootc in the image labels; sanitized like version.

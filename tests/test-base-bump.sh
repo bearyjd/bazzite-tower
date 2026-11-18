@@ -11,13 +11,13 @@ new=$(printf 'a%.0s' {1..64})
 printf 'FROM scratch\nARG BASE_IMAGE=ghcr.io/ublue-os/bazzite-nvidia-open@sha256:%s\nARG OTHER=keep\n' "${old}" > "${work}/Containerfile"
 
 # $1 = digest the fake registry reports for :stable, $2 = its kernel label, $3 = its version label (default 45.20990101).
-# The pinned (old) digest always reports an older 45.x base with kernel 7.2.15.
+# The pinned (old) digest reports an older 45.x base (arg 4, default 45.20261106) with kernel 7.2.15.
 stub() {
     cat > "${work}/bin/skopeo" << EOS
 #!/usr/bin/env bash
 echo "\$*" >> "${work}/argv"
 case "\$*" in
-*@sha256:${old}) echo '{"Digest":"sha256:${old}","Labels":{"org.opencontainers.image.version":"45.20261106","ostree.linux":"7.2.15-ogc1.1.fc45.x86_64"}}' ;;
+*@sha256:${old}) echo '{"Digest":"sha256:${old}","Labels":{"org.opencontainers.image.version":"${4:-45.20261106}","ostree.linux":"7.2.15-ogc1.1.fc45.x86_64"}}' ;;
 *) echo '{"Digest":"sha256:$1","Labels":{"org.opencontainers.image.version":"${3:-45.20990101}","ostree.linux":"${2:-}"}}' ;;
 esac
 EOS
@@ -75,6 +75,8 @@ stub "${new}" "7.2.16-ogc1.1.fc45.x86_64"
 
 # 1b2. version label: a clean revision-suffixed label passes the guard; a label that only becomes valid
 # after the charset filter strips a space/newline fails closed (version=unknown, no automerge)
+# ('\n' stays a literal backslash-n in the shell; the stub's JSON string makes jq decode it to a real newline.
+# The clean case also depends on the live policy floor in .github/base-refresh-policy.json staying below 45.20261117.1.)
 for v in "45.20261117.1" "45.20261117 .1" '45.20261117\n.1'; do
     stub "${new}" "7.2.16-ogc1.1.fc45.x86_64" "${v}"
     printf 'FROM scratch\nARG BASE_IMAGE=ghcr.io/ublue-os/bazzite-nvidia-open@sha256:%s\n' "${old}" > "${work}/Containerfile"
@@ -89,6 +91,16 @@ for v in "45.20261117.1" "45.20261117 .1" '45.20261117\n.1'; do
         grep -q '^automerge=false$' "${work}/out" || fail "version '${v}': must not automerge"
     fi
 done
+
+# 1b3. the CURRENT pin's label is cleaned the same way: a label that only becomes valid after stripping a
+# space fails closed (empty current version => the guard refuses, no automerge) while the change is still reported
+stub "${new}" "7.2.16-ogc1.1.fc45.x86_64" "45.20990101" "45.2026 1106"
+printf 'FROM scratch\nARG BASE_IMAGE=ghcr.io/ublue-os/bazzite-nvidia-open@sha256:%s\n' "${old}" > "${work}/Containerfile"
+: > "${work}/out"
+run
+grep -q '^changed=true$' "${work}/out" || fail "dirty current-pin label: change not reported"
+grep -q '^automerge=false$' "${work}/out" || fail "dirty current-pin label: must not automerge"
+stub "${new}" "7.2.16-ogc1.1.fc45.x86_64"
 
 # 1c. lookup of the CURRENT pin fails => automerge=false (fail closed), PR still produced, cause reported
 cat > "${work}/bin/skopeo" << EOS

@@ -62,6 +62,16 @@ Re-pin `EXPECTED_PINS_SHA256` in the respective bridge
 `snitchwatch-system-verify.py` or daemon `snitchwatch-system-daemon-verify.py`
 whenever its pins manifest changes, and rerun relevant tests.
 
+eBPF module toolchain (Track A, system profile): six signed Koji RPMs from srpm
+`llvm21` 21.1.8-10.fc45 (clang21, clang21-libs, clang21-resource-filesystem,
+llvm21, llvm21-libs, llvm21-filesystem) plus the per-profile OpenSnitch commit
+and `ebpf_prog` tree sha256 in `build_files/firewall/snitchwatch-system-ebpf-pins.json`;
+`make` and the remaining libraries are live. Headers are BASE_IMAGE's own
+`kernel-devel` (digest-pinned base), never Fedora's. Move
+`EXPECTED_EBPF_PINS_SHA256` in `snitchwatch-system-ebpf.py` with that file; the
+system commit must equal the daemon `sourceCommit` and the bridge `submoduleCommit`
+(`tests/test-snitchwatch-ebpf.py`).
+
 The r15 bridge candidate source is pinned at
 `bfc76e6607574b354e1d3b1494798e7ea78d1685` (tree
 `be719d27d61f9a1a02567b8673d02dcd53548085`, unchanged OpenSnitch gitlink

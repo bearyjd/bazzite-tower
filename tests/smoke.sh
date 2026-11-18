@@ -428,6 +428,9 @@ legacy)
         test ! -e /usr/share/snitchwatch/system-daemon-manifest.json
     check "legacy image has no system bridge service" \
         test ! -e /usr/lib/systemd/system/snitchwatch-system-bridge.service
+    # Legacy keeps the v1.8.0 RPM eBPF objects (no per-kernel build yet).
+    check "legacy image has no eBPF build manifest" \
+        test ! -e /usr/share/bazzite-tower/ebpf-manifest.json
     check "legacy image has no endpoint-events files" \
         test ! -e /usr/share/snitchwatch/endpoint-events
     ;;
@@ -443,6 +446,32 @@ system)
         /usr/libexec/snitchwatch/verify-system-manifest.py --root / --image-tree
     check "downstream daemon source, patch, binary and licenses verify" \
         /usr/libexec/snitchwatch/verify-system-daemon.py --root /
+    # Track A: the eBPF objects were compiled at image build for this image's
+    # kernel, from the daemon's own OpenSnitch commit. Asserted here with jq and
+    # sha256sum, independently of the ebpf-check helper run above.
+    ebpf_manifest=/usr/share/bazzite-tower/ebpf-manifest.json
+    shopt -s nullglob
+    ebpf_kernels=(/usr/lib/modules/*/)
+    shopt -u nullglob
+    ebpf_kernel=""
+    [[ ${#ebpf_kernels[@]} -eq 1 ]] && ebpf_kernel="$(basename "${ebpf_kernels[0]}")"
+    check "system eBPF build manifest present and valid JSON" jq -e . "${ebpf_manifest}"
+    check "system image ships exactly one kernel" test "${#ebpf_kernels[@]}" -eq 1
+    check "system eBPF manifest kernelRelease is the image kernel" \
+        jq -e --arg k "${ebpf_kernel}" ".kernelRelease == \$k and (\$k | length > 0)" "${ebpf_manifest}"
+    check "system eBPF manifest kernel config matches the image kernel's config" \
+        jq -e --arg h "$(sha256sum < "/usr/lib/modules/${ebpf_kernel}/config" | cut -d' ' -f1)" \
+            ".kernelConfigSha256 == \$h and (\$h | test(\"^[0-9a-f]{64}\$\"))" "${ebpf_manifest}"
+    check "system eBPF manifest commit is the daemon's source commit" \
+        jq -e --arg c "$(jq -r .source.commit /usr/share/snitchwatch/system-daemon-manifest.json)" \
+            ".opensnitchCommit == \$c and (\$c | test(\"^[0-9a-f]{40}\$\"))" "${ebpf_manifest}"
+    for ebpf_object in opensnitch.o opensnitch-procs.o opensnitch-dns.o; do
+        check "system eBPF ${ebpf_object} sha256 matches the build manifest" \
+            jq -e --arg o "${ebpf_object}" --arg h "$(sha256sum < "/usr/lib/opensnitchd/ebpf/${ebpf_object}" | cut -d' ' -f1)" \
+                ".objects[\$o] == \$h and (\$h | test(\"^[0-9a-f]{64}\$\"))" "${ebpf_manifest}"
+    done
+    check "system eBPF staging copy was removed after install" \
+        test ! -e /usr/share/bazzite-tower/opensnitch-ebpf
     # The one opensnitchd rule Snitchwatch ships (its hash is pinned and
     # checked by the verifier above); the RPM's own rules dir stays 0755.
     # shellcheck disable=SC2016 # Expanded by the inner shell.

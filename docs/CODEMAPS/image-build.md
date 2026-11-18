@@ -56,7 +56,10 @@ bridge's third-party build scripts cannot reach anything trusted later (H1):
 | `snitchwatch-bridge` | prep | `--network=none` | `snitchwatch-system-bridge-build.sh`: offline probe, fresh `CARGO_HOME` from prep's cache (only `.crate` files matching the `Cargo.lock` sha256, plus the index; no config/bin/src), exported `CARGO_NET_OFFLINE=true`, `unpriv.py prepare` + `selfcheck`, then as uid 65534 (`unpriv.py run` → `bridge-unpriv.sh`): offline `cargo fetch` preflight, `build-bridge.sh` (~660 crates), `repro-check.sh`, executing `verify --check-ldd --run-flags`; root: inventory `cmp`, export | `/handoff/bridge`: tarball, `.sha256` sidecar, `build.log`, `repro.log` |
 | `snitchwatch-bridge-rebuild` | prep | `--network=none` | `snitchwatch-system-bridge-rebuild.sh` (M1 step 2): the same lines as the bridge stage from the probe to the one-tarball check (a test compares them), at the same `/work/native` paths and also as uid 65534, in a separate container; no repro-check, no `verify`, never runs the binary; inventory `cmp` | `/handoff/bridge-rebuild`: the tarball only |
 | `snitchwatch-daemon` | prep | yes | `snitchwatch-system-daemon-build.sh` (unchanged) into `/work/daemon-out`, then `handoff.py check daemon` (an extra file fails here) and `export daemon` | `/handoff/daemon`: the daemon verifier's `REQUIRED` + manifest |
-| `snitchwatch-system` | prep | `--network=none` | `/tools/snitchwatch-system-assemble.sh` (tools re-copied from scratch `ctx`): offline probe, inventory `cmp`, prep checkout re-hashed, `/handoff` root-owned and not g/o-writable, `handoff.py check` ×4, daemon verify, `handoff.py compare-bridge` (the two bridge tarballs must be byte-identical), non-executing `bridge_artifact.py verify --extract-to` against the sibling's sha256, `stage.py` (bridge `--version` and upstream `stage.sh`/`--help` as uid 65534 with `no_new_privs` (fails closed), empty env, `stage.sh` timeout 300 s; root adopts only the 9 `stage.sh` paths), daemon handoff re-checked, `merge` (refuses overlap), daemon + system verifiers | `/out` |
+| `ebpf-kernel` | `${BASE_IMAGE}` | `--network=none` | `snitchwatch-system-ebpf.py kernel-export` (Track A): refuses unless `rpm -q kernel-core`, `rpm -q kernel-devel`, the one `/usr/src/kernels/<r>` and the one `/usr/lib/modules/<r>` agree and `<r>/.config` is byte-identical to `/usr/lib/modules/<r>/config` (message names both versions; missing kernel-devel fails, never a Fedora-header fallback; the container's running kernel is never read); deterministic tar of the header tree (owner 0:0, mtime 0, in-tree symlinks only) | `/handoff/ebpf-kernel`: `kernel-headers.tar` + `kernel-facts.json` |
+| `snitchwatch-ebpf-prep` | prep | yes | `snitchwatch-system-ebpf-prep.sh`: online probe, `ebpf.py check-pins` (digest anchor, before any download), `toolchain.sh install snitchwatch-system-ebpf-pins.json` (clang21/clang21-libs/clang21-resource-filesystem/llvm21/llvm21-libs/llvm21-filesystem 21.1.8-10.fc45, signed Koji, size+sha256+sig+NEVRA+header digest; clang 23 cannot build these modules) + live `make`, `rpm -qa` inventory. Kept out of prep so scanner/bridge/daemon/assembly ancestry has no compiler | `/work/ebpf` (to the two compiles) |
+| `snitchwatch-ebpf` / `snitchwatch-ebpf-rebuild` | ebpf-prep | `--network=none` | one script, `snitchwatch-system-ebpf-build.sh`, same fixed `/work/ebpf` paths, differing only in handoff kind: offline probe, inventory `cmp`, `handoff.py check ebpf-kernel`, `ebpf.py build` (daemon/module pairing check, tools owned by the pinned RPMs, reporting 21.1.8 and clean under `rpm -V`, tarball digest vs facts, `ebpf_prog` extracted as raw git blobs from prep's verified `vendor/opensnitch` checkout and tree-sha256 checked, `make -B -R -r` with explicit `KERNEL_VER`/`KERNEL_DIR`/`KERNEL_HEADERS`/`KERNEL_ARCH`, `CC="clang-21 -DCC_USING_FENTRY -fms-extensions -Wno-microsoft-anon-tag"`, `LLC=llc-21`, `llvm-strip-21 -g`, mode 0644); both are ancestors of nothing; the compile runs as root (accepted deviation SEC L1: no uid-65534 drop; follow-up: `setpriv` uid 65534 + chown 0:0 at export) | `/handoff/ebpf`: 3 `.o`, `kernel-facts.json`, `build-info.json`, `build.log`; `/handoff/ebpf-rebuild`: the same minus the log |
+| `snitchwatch-system` | prep | `--network=none` | `/tools/snitchwatch-system-assemble.sh` (tools re-copied from scratch `ctx`): offline probe, inventory `cmp`, prep checkout re-hashed, `/handoff` root-owned and not g/o-writable, `handoff.py check` ×4, daemon verify, `handoff.py compare-bridge` (the two bridge tarballs must be byte-identical), `handoff.py check ebpf`/`ebpf-rebuild` + `compare-ebpf` (objects, facts and build info byte-identical), non-executing `bridge_artifact.py verify --extract-to` against the sibling's sha256, `stage.py` (bridge `--version` and upstream `stage.sh`/`--help` as uid 65534 with `no_new_privs` (fails closed), empty env, `stage.sh` timeout 300 s; root adopts only the 9 `stage.sh` paths), daemon handoff re-checked, `merge` (refuses overlap), `check ebpf-kernel-facts` + `ebpf.py stage` (refuses unless ebpf-kernel's own facts, COPYed directly, equal the compile handoff's; manifest from the pins, facts and hashes taken here) + `merge` of the eBPF overlay, daemon + system verifiers | `/out` |
 
 Trust argument: the FROM chain of scanner, daemon and assembly is prep only; both bridge stages are the base
 of nothing, neither reads the other, and each is read only through its allowlist. `snitchwatch-system-handoff.py check` refuses extra,
@@ -175,9 +178,10 @@ identity. No legacy release-install/global-user-enable script runs.
 The system candidate also builds the pinned OpenSnitch source (upstream a1353848,
 version 1.9.0, `daemonSource` in the policy, which must equal the bridge pins'
 `submoduleCommit`) with its reviewed downstream repair, rebased onto a1353848.
-It stays `allow`/`proc`: no `ModulesPath`, no kernel-devel/clang in the builder,
-no module build; the RPM's v1.8.0 BPF objects are not a matched pair with this
-daemon. The same single patch (59 files) carries CPU fixes:
+It stays `allow`/`proc` (no `ModulesPath`). Its BPF objects are compiled at image
+build from the same a1353848 commit against BASE_IMAGE's kernel-devel (Track A
+stages above; the RPM's v1.8.0 objects are overwritten); loading is
+runtime-unverified until the separate enable change. The same single patch (59 files) carries CPU fixes:
 one process build per exec (ancestry is upstream's full walk), an exact
 sock_diag lookup for connected TCP with the dump as fallback, names-only
 `/proc/<pid>/fd` listing (the `/proc` pid order is upstream's), and GOMAXPROCS 4 unless `GOMAXPROCS` is set (`-workers` stays 16,
@@ -187,14 +191,26 @@ and actual `/usr/bin/opensnitchd` hash. Both manifests are checked by smoke
 and boot tests; the boot check verifies the running daemon executable when
 NFQUEUE is available. Rootless container checks cannot replace the VM gate.
 Legacy builds retain upstream RPM extraction and incur no native compilation.
-Both profiles retain the RPM-supplied `/usr/lib/opensnitchd/ebpf/opensnitch.o`,
-`opensnitch-procs.o` and `opensnitch-dns.o`: the native Go executable does not
-embed them. `95-firewall.sh` fails closed through
-`bazzite-tower-opensnitch-ebpf-check` when any object is missing, nonregular or
-has an invalid ELF64 relocatable BPF header; smoke repeats the packaging check.
-This is not proof that probes load on the running kernel; the proc baseline
-and readiness contract remain unchanged. `tests/test-snitchwatch-resources.py`
-exercises invalid/missing object fixtures and interval resource accounting.
+eBPF objects (`opensnitch.o`, `opensnitch-procs.o`, `opensnitch-dns.o`; the
+native Go executable does not embed them): legacy keeps the v1.8.0 RPM payload
+and must carry no build manifest. The system profile ships objects compiled at
+image build (Track A stages above) from the daemon's own OpenSnitch commit
+(a1353848, pinned with its `ebpf_prog` tree sha256 in
+`snitchwatch-system-ebpf-pins.json`, digest-anchored by
+`EXPECTED_EBPF_PINS_SHA256` in `snitchwatch-system-ebpf.py`) against BASE_IMAGE's
+own kernel-devel. Assembly stages them at `/usr/share/bazzite-tower/opensnitch-ebpf/`;
+`95-firewall.sh` installs them over the RPM copies after the cpio extraction,
+removes the staging dir and keeps `/usr/share/bazzite-tower/ebpf-manifest.json`
+(commit, tree sha, kernel release, kernel config sha256, headers digest, clang,
+toolchain NEVRAs, compile-stage RPM inventory sha256 (compile-stage-reported, informational, not verified provenance), per-object sha256). `bazzite-tower-opensnitch-ebpf-check` fails closed on a
+missing/nonregular/non-BPF object and, for system, unless the manifest kernel is
+the image's single `/usr/lib/modules/*` release, its config sha256 matches that
+kernel's `config`, and every on-disk object hash matches; smoke repeats these with `jq`/`sha256sum`. The legacy b404c4c6 tree is
+pinned but not built yet. This is not proof that probes load on the running
+kernel; `ProcMonitorMethod` stays `proc` and the readiness contract is unchanged.
+Offline tests: `tests/test-snitchwatch-ebpf.py` (guard fixtures, pins/pairing,
+tree hash, header tar, handoff/compare, manifest, image check) and
+`tests/test-snitchwatch-resources.py` (ELF fixtures, interval accounting).
 
 Only the system candidate changes the image-intent OpenSnitch address to
 `unix:opensnitchd.sock`; both profiles permanently retain `DefaultAction: allow`

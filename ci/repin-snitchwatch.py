@@ -123,7 +123,8 @@ def plan_pins(tower, source, commit):
             out['%s/%s' % (FIXTURES, name)] = by_name[name]
     if sub != pins['submoduleCommit']:
         print('WARNING: submoduleCommit changed %s -> %s. policy daemonSource and the daemon pins '
-              '(snitchwatch-system-daemon-pins.json, daemon verify) are NOT edited by this tool and need a separate review.'
+              '(snitchwatch-system-daemon-pins.json, daemon verify) and the eBPF module pins (snitchwatch-system-ebpf-pins.json, '
+              'EXPECTED_EBPF_PINS_SHA256) are NOT edited by this tool and need a separate review.'
               % (pins['submoduleCommit'], sub))
     policy = set_native((tower / POLICY).read_text(), commit, tree, sub)
     out[POLICY] = policy.encode()

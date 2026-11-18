@@ -543,12 +543,15 @@ build, SELinux behavior of TCP 514 on this host, and any live flow to Vigie.
 
 ### OpenSnitch resource baseline and owner eBPF experiment
 
-> **INVALID for the system profile (OpenSnitch 1.9.0 daemon, a1353848).** The
-> BPF objects below come from the v1.8.0 RPM and do not match the source-built
-> 1.9.0 daemon, so an eBPF result there proves nothing and must not be run.
-> The system profile stays `allow`/`proc` (no `ModulesPath`, no kernel-devel or
-> clang in the builder) until matched daemon+module pairs ship from one commit.
-> The procedure below applies only to the legacy profile (RPM daemon 1.8.0).
+> **Do not run this on the system profile until the separate eBPF enable change
+> lands.** Since Track A the system profile (OpenSnitch 1.9.0 daemon, a1353848)
+> ships BPF objects compiled at image build from that same commit against the
+> image's own kernel-devel (`/usr/share/bazzite-tower/ebpf-manifest.json` records
+> kernel, commit and hashes; `bazzite-tower-opensnitch-ebpf-check` binds it to the
+> image kernel). They are a matched pair on paper only: loading and attribution
+> are runtime-unverified, and the image stays `allow`/`proc` with no `ModulesPath`.
+> The procedure below applies only to the legacy profile (RPM daemon and RPM
+> objects, both v1.8.0).
 
 This is an optional **owner-operated** test on the candidate, after its initial
 `allow`/`proc` boot passes `sudo ujust snitchwatch-system-readiness` and the full

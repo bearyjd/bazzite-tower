@@ -235,8 +235,8 @@ def inspect(ctx):
             blockers.append("unknown profile: Server.Address is "+repr(address)+"; only "+SYSTEM_ADDRESS+" is supported")
         if action != "allow":
             blockers.append("current DefaultAction is "+(action if action != "other" else "not allow/deny")+"; opt-in requires allow")
-        if json.loads(data).get("ProcMonitorMethod") != "proc":
-            blockers.append("ProcMonitorMethod is not proc; opt-in requires proc")
+        if json.loads(data).get("ProcMonitorMethod") not in ("ebpf", "proc"):
+            blockers.append("ProcMonitorMethod is not ebpf or proc; opt-in requires one of them")
     except (OSError, ValueError, AttributeError, common.Refusal) as error:
         blockers.append("config is not the expected root-owned file: "+str(error))
     if not service_active(ctx):

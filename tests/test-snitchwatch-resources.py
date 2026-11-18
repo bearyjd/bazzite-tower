@@ -152,150 +152,66 @@ class BpfPackagingTests(unittest.TestCase):
                 path.write_bytes(header)
 
 
-class OwnerRecoveryRecipeTests(unittest.TestCase):
-    def test_guarded_recipe_sequence_without_host_commands(self):
-        # Execute the RUNBOOK's actual preparation/trap/editor sequence with
-        # every privileged command replaced by a recording shell function.
-        runbook = (ROOT / 'docs/RUNBOOK.md').read_text()
-        recipe = runbook.split("<<'EBPF_EXPERIMENT'\n", 1)[1]
-        recipe = recipe.split("sudo python3 -", 1)[0]
-        # CI has no controlling terminal; the fake editor does not read input.
-        recipe = recipe.replace('</dev/tty', '</dev/null')
-        stubs = r'''
-sudo() {
-    local command="$1"; shift
-    printf '%s\n' "$command" >> "$events"
-    case "$command" in
-        mktemp) printf '/fixture\n' ;;
-        stat)
-            if [ "$*" = '-c %u:%g:%a /fixture' ]; then
-                printf '0:0:700\n'
-            else
-                printf '0:0:644:fixture_context\n'
-            fi ;;
-        cp)
-            local count=0
-            [ ! -f "$copies" ] || read -r count < "$copies"
-            count=$((count + 1)); printf '%s\n' "$count" > "$copies"
-            if [ "$scenario" = backup-failure ] && [ "$count" = 1 ]; then return 41; fi
-            if [ "$scenario" = restore-failure ] && [ "$count" = 2 ]; then return 43; fi ;;
-        cmp)
-            local count=0
-            read -r count < "$copies"
-            if [ "$scenario" = backup-validation-failure ] && [ "$count" = 1 ]; then return 44; fi
-            if [ "$scenario" = restore-validation-failure ] && [ "$count" = 2 ]; then return 45; fi ;;
-        jq|systemctl) ;;
-        mkdir) printf '%s\n' "$*" > "$events.mkdir"; ;;
-        ujust) [ "$scenario" != readiness-failure ] || return 46 ;;
-        *) return 99 ;;
-    esac
-}
-sudoedit() {
-    printf 'edit\n' >> "$events"
-    [ "$scenario" != editor-failure ] || return 42
-    case "$scenario" in
-        signal-HUP) kill -HUP "$$" ;;
-        signal-INT) kill -INT "$$" ;;
-        signal-TERM) kill -TERM "$$" ;;
-    esac
-}
-sleep() { printf 'recovery-wait\n' >> "$events"; }
-'''
-        cases = {'normal': 0, 'backup-failure': 41, 'backup-validation-failure': 44,
-                 'editor-failure': 42, 'readiness-failure': 0, 'restore-failure': 0, 'restore-validation-failure': 0,
-                 'signal-HUP': 129, 'signal-INT': 130, 'signal-TERM': 143}
-        for scenario, expected_status in cases.items():
-            with self.subTest(scenario=scenario), tempfile.TemporaryDirectory() as directory:
-                events = Path(directory) / 'events'
-                result = subprocess.run(['bash', '-c', stubs + recipe], text=True,
-                                        capture_output=True, timeout=5,
-                                        env={**os.environ, 'events': str(events),
-                                             'copies': str(Path(directory) / 'copies'),
-                                             'scenario': scenario})
-                sequence = events.read_text().splitlines()
-                self.assertEqual(result.returncode, expected_status, result.stderr)
-                # The protected parent directory must exist before mktemp -d uses it.
-                self.assertLess(sequence.index('mkdir'), sequence.index('mktemp'))
-                self.assertEqual((Path(str(events) + '.mkdir')).read_text().strip(),
-                                 '-p -m 0755 -- /var/lib/bazzite-tower')
-                if scenario.startswith('backup-'):
-                    self.assertNotIn('edit', sequence)
-                    self.assertNotIn('systemctl', sequence)
-                    continue
-                self.assertEqual(sequence.count('edit'), 1)
-                if scenario != 'readiness-failure':
-                    self.assertEqual(sequence[-6:], ['cp', 'cmp', 'stat', 'jq', 'systemctl', 'ujust'])
-                if scenario == 'normal':
-                    self.assertIn('Restored exact proc config, metadata and service readiness', result.stdout)
-                if scenario == 'readiness-failure':
-                    # Readiness is reported, but must not hold the recovery loop/lock.
-                    self.assertIn('READINESS NOT CONFIRMED', result.stderr)
-                    self.assertEqual(sequence.count('ujust'), 3)  # bounded retry
-                    steps = [e for e in sequence if e != 'recovery-wait']
-                    self.assertEqual(steps[-8:], ['cp', 'cmp', 'stat', 'jq', 'systemctl',
-                                                  'ujust', 'ujust', 'ujust'])
-                    self.assertEqual(sequence.count('recovery-wait'), 2)  # none after the last try
-                    self.assertNotIn('Restored exact proc config, metadata and service readiness',
-                                     result.stdout)
-                    self.assertNotIn('RECOVERY FAILED', result.stderr)
-                    self.assertEqual(sequence.count('cp'), 2)
-                if scenario.startswith('restore-'):
-                    self.assertIn('RECOVERY FAILED; migration lock retained', result.stderr)
-                    self.assertEqual(sequence.count('systemctl'), 1)
-                    self.assertEqual(sequence.count('cp'), 3)
+class ProcFallbackRecipeTests(unittest.TestCase):
+    """Run the RUNBOOK's one-key proc fallback `sh -c` body against fixture configs."""
 
-
-class EbpfConfigCheckTests(unittest.TestCase):
-    """Run the RUNBOOK's CHECK_CONFIG heredoc python against fixture configs."""
-
-    SHIPPED = {'ProcMonitorMethod': 'proc', 'DefaultAction': 'allow', 'LogLevel': 2,
-               'MaxEvents': 150, 'InterceptUnknown': False, 'Server': {'Address': 'unix:opensnitchd.sock'}}
+    SHIPPED = {'ProcMonitorMethod': 'ebpf', 'DefaultAction': 'allow', 'LogLevel': 2, 'MaxEvents': 150,
+               'InterceptUnknown': False, 'Server': {'Address': 'unix:opensnitchd.sock'},
+               'Ebpf': {'EventsWorkers': 8, 'QueueEventsSize': 0, 'ModulesPath': '/usr/lib/opensnitchd/ebpf'}}
 
     @classmethod
     def setUpClass(cls):
         runbook = (ROOT / 'docs/RUNBOOK.md').read_text()
-        body = runbook.split("<<'CHECK_CONFIG'\n", 1)[1]
-        cls.invocation = runbook.split("<<'CHECK_CONFIG'", 1)[0].splitlines()[-1]
-        cls.script = body.split("\nCHECK_CONFIG\n", 1)[0] + "\n"
+        line = next(item for item in runbook.splitlines() if item.startswith('sudo flock -n /run/lock/bazzite-tower-snitchwatch-migration.lock sh -c '))
+        cls.line = line
+        cls.script = line.split(" sh -c '", 1)[1].split("' && sudo systemctl restart opensnitch.service", 1)[0]
 
-    def run_check(self, **changes):
-        after = {**self.SHIPPED, **changes}
+    def run_recipe(self, config):
         with tempfile.TemporaryDirectory() as directory:
-            before_path, after_path = Path(directory) / 'proc.json', Path(directory) / 'after.json'
-            before_path.write_text(json.dumps(self.SHIPPED))
-            after_path.write_text(json.dumps(after))
-            return subprocess.run(['python3', '-', str(before_path), str(after_path)],
-                                  input=self.script, text=True, capture_output=True, timeout=10)
+            path = Path(directory) / 'default-config.json'
+            path.write_text(json.dumps(config))
+            path.chmod(0o600)
+            script = self.script.replace('/etc/opensnitchd/default-config.json', str(path))
+            result = subprocess.run(['sh', '-c', script], capture_output=True, text=True, timeout=10)
+            return result, json.loads(path.read_text()), path.stat().st_mode & 0o7777, sorted(p.name for p in Path(directory).iterdir())
 
-    def test_invocation_isolates_python_and_stays_detectable(self):
-        # -I keeps the owner's cwd (e.g. a planted json.py) off root's sys.path.
-        self.assertIn('sudo python3 -I -', self.invocation)
-
-    def test_ebpf_and_loglevel_one_passes(self):
-        result = self.run_check(ProcMonitorMethod='ebpf', LogLevel=1)
+    def test_recipe_changes_exactly_one_key_and_restarts_under_the_migration_lock(self):
+        self.assertIn('&& sudo systemctl restart opensnitch.service', self.line)
+        result, after, mode, names = self.run_recipe(self.SHIPPED)
         self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(after, {**self.SHIPPED, 'ProcMonitorMethod': 'proc'})
+        self.assertEqual(mode, 0o644)
+        self.assertEqual(names, ['default-config.json'])  # no leftover .new
 
-    def test_everything_else_fails(self):
-        cases = {
-            'ebpf with LogLevel left at 2': dict(ProcMonitorMethod='ebpf'),
-            'LogLevel 1 with proc': dict(LogLevel=1),
-            'LogLevel 0': dict(ProcMonitorMethod='ebpf', LogLevel=0),
-            'LogLevel 3': dict(ProcMonitorMethod='ebpf', LogLevel=3),
-            'LogLevel true': dict(ProcMonitorMethod='ebpf', LogLevel=True),
-            'method audit': dict(ProcMonitorMethod='audit', LogLevel=1),
-            'extra key changed': dict(ProcMonitorMethod='ebpf', LogLevel=1, DefaultAction='deny'),
-            'nested key changed': dict(ProcMonitorMethod='ebpf', LogLevel=1,
-                                       Server={'Address': 'tcp:evil'}),
-            'extra key added': dict(ProcMonitorMethod='ebpf', LogLevel=1, Extra=1),
-            'no change': {},
-            'int to float': dict(ProcMonitorMethod='ebpf', LogLevel=1, MaxEvents=150.0),
-            'bool to int': dict(ProcMonitorMethod='ebpf', LogLevel=1, InterceptUnknown=0),
-        }
-        for name, changes in cases.items():
-            with self.subTest(name):
-                result = self.run_check(**changes)
-                self.assertNotEqual(result.returncode, 0, name)
-                self.assertIn('may change', result.stderr)
+    def test_recipe_preserves_types_and_nested_keys(self):
+        result, after, _, _ = self.run_recipe(self.SHIPPED)
+        self.assertEqual(json.dumps(after, sort_keys=True),
+                         json.dumps({**self.SHIPPED, 'ProcMonitorMethod': 'proc'}, sort_keys=True))
+        self.assertIs(after['InterceptUnknown'], False)
+        self.assertEqual(after['Ebpf']['ModulesPath'], '/usr/lib/opensnitchd/ebpf')
+
+    def test_unparseable_config_is_left_untouched(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'default-config.json'
+            path.write_text('{not json')
+            script = self.script.replace('/etc/opensnitchd/default-config.json', str(path))
+            result = subprocess.run(['sh', '-c', script], capture_output=True, text=True, timeout=10)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertEqual(path.read_text(), '{not json')
+
+
+class ShippedConfigTests(unittest.TestCase):
+    def load(self, name):
+        return json.loads((ROOT / 'system_files/usr/share/bazzite-tower' / name).read_text())
+
+    def test_both_profiles_ship_ebpf_with_the_pinned_modules_path_and_are_otherwise_equal(self):
+        legacy, system = (self.load(name) for name in ('opensnitchd-default-config.json', 'opensnitchd-system-bridge-config.json'))
+        for config in (legacy, system):
+            self.assertEqual(config['ProcMonitorMethod'], 'ebpf')
+            self.assertEqual(config['Ebpf']['ModulesPath'], '/usr/lib/opensnitchd/ebpf')
+            self.assertEqual(config['DefaultAction'], 'allow')
+        legacy['Server']['Address'] = system['Server']['Address']
+        self.assertEqual(legacy, system)
 
 
 if __name__ == '__main__':

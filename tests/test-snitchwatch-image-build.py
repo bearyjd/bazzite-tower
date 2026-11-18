@@ -864,7 +864,28 @@ python3() {
         config = json.loads((self.root / name).read_text())
         config['DefaultAction'] = 'deny'
         self.write(name, json.dumps(config)); self.update_hash(name)
-        self.assertIn('system candidate must retain the allow/proc defaults', self.check().stderr)
+        self.assertIn('system candidate must retain the allow/ebpf defaults', self.check().stderr)
+
+    def both_configs(self, mutate):
+        """Mutate the legacy and system configs identically and re-pin, so only the ebpf/ModulesPath gate can object."""
+        for name in ('usr/share/bazzite-tower/opensnitchd-default-config.json', 'usr/share/bazzite-tower/opensnitchd-system-bridge-config.json'):
+            config = json.loads((self.root / name).read_text())
+            mutate(config)
+            self.write(name, json.dumps(config)); self.update_hash(name)
+        pins = dict(self.pins, legacyConfigSha256=sha((self.root / 'usr/share/bazzite-tower/opensnitchd-default-config.json').read_bytes()))
+        return self.check_with_pins(pins)
+
+    def test_verifier_refuses_proc_or_unpinned_modules_path_even_when_self_consistent(self):
+        self.assertEqual(self.both_configs(lambda c: None).returncode, 0)  # control: the identical re-pin path accepts the shipped configs
+        shutil.rmtree(self.root); self.root.mkdir(); self.make_fixture()
+        for label, mutate in (('proc', lambda c: c.update(ProcMonitorMethod='proc')),
+                              ('no ModulesPath', lambda c: c['Ebpf'].pop('ModulesPath')),
+                              ('other ModulesPath', lambda c: c['Ebpf'].update(ModulesPath='/usr/local/lib/opensnitchd/ebpf'))):
+            with self.subTest(label):
+                shutil.rmtree(self.root); self.root.mkdir(); self.make_fixture()
+                result = self.both_configs(mutate)
+                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                self.assertIn('incorrect system candidate policy/transport', result.stderr)
 
     def test_world_writable_token_parent_configuration(self):
         name = 'usr/lib/tmpfiles.d/snitchwatch.conf'
@@ -950,7 +971,7 @@ class StageOutputContracts(unittest.TestCase):
         path.chmod(mode)
         return path
 
-    def run_stage(self, stage_script, tamper=None, rebuild=b'artifact.tar.gz'):
+    def run_stage(self, stage_script, tamper=None, rebuild=b'artifact.tar.gz', legacy_config=None, candidate_config=None):
         source, artifact = self.tmp / 'source', self.tmp / 'artifact'
         upstream_config = b'{"DefaultAction": "deny", "ProcMonitorMethod": "ebpf"}\n'
         self.write(source / 'packaging/system/opensnitchd-default-config.json', upstream_config)
@@ -1009,8 +1030,8 @@ esac
         argv = ['python3', str(FACTORY / 'snitchwatch-system-stage.py'), '--source', str(source), '--artifact', str(artifact),
                 '--out', str(out), '--pins', str(pins_path), '--verifier', str(verifier),
                 '--scanner-artifact', str(scanner),
-                '--legacy-config', str(ROOT / 'system_files/usr/share/bazzite-tower/opensnitchd-default-config.json'),
-                '--candidate-config', str(ROOT / 'system_files/usr/share/bazzite-tower/opensnitchd-system-bridge-config.json'),
+                '--legacy-config', str(legacy_config or ROOT / 'system_files/usr/share/bazzite-tower/opensnitchd-default-config.json'),
+                '--candidate-config', str(candidate_config or ROOT / 'system_files/usr/share/bazzite-tower/opensnitchd-system-bridge-config.json'),
                 '--build-log', str(logs[0]), '--repro-log', str(logs[1]), '--rpm-inventory', str(logs[2]),
                 '--tarball', str(logs[3]), '--rebuild-tarball', str(rebuild_tarball), '--os-update-rule', str(OS_UPDATE_SOURCE), '--resolved-dns-rule', str(DNS_SOURCE)]
         env = {**os.environ, 'PATH': str(self.tmp / 'bin') + os.pathsep + os.environ['PATH']}
@@ -1018,7 +1039,7 @@ esac
 
     def test_upstream_ebpf_daemon_config_is_not_in_stage_output(self):
         # Review L-3: upstream's ebpf default-config.json must never reach the
-        # image overlay; 95-firewall.sh installs the reviewed deny+proc config.
+        # image overlay; 95-firewall.sh installs the reviewed allow+ebpf config.
         result, out = self.run_stage('mkdir -p "$1/etc/opensnitchd/rules"\n'
                                      'cp "$(dirname "$0")/opensnitchd-default-config.json" "$1/etc/opensnitchd/default-config.json"\n')
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
@@ -1075,6 +1096,24 @@ esac
                                    tamper='packaging/endpoint-events/snitchwatch-endpoint-events.nft')
         self.assertNotEqual(result.returncode, 0)
         self.assertIn('differs from pin', result.stderr)
+
+    def test_stage_refuses_proc_or_unpinned_modules_path_even_when_configs_agree(self):
+        stage_script = 'mkdir -p "$1/etc/opensnitchd"\ncp "$(dirname "$0")/opensnitchd-default-config.json" "$1/etc/opensnitchd/default-config.json"\n'
+        shared = ROOT / 'system_files/usr/share/bazzite-tower/'
+        for label, mutate in (('proc', lambda c: c.update(ProcMonitorMethod='proc')),
+                              ('no ModulesPath', lambda c: c['Ebpf'].pop('ModulesPath')),
+                              ('other ModulesPath', lambda c: c['Ebpf'].update(ModulesPath='/usr/local/lib/opensnitchd/ebpf'))):
+            with self.subTest(label):
+                shutil.rmtree(self.tmp)
+                self.tmp.mkdir()
+                configs = []
+                for name in ('opensnitchd-default-config.json', 'opensnitchd-system-bridge-config.json'):
+                    config = json.loads((shared / name).read_text())
+                    mutate(config)
+                    configs.append(self.write(self.tmp / 'cfg' / name, json.dumps(config)))
+                result, _ = self.run_stage(stage_script, legacy_config=configs[0], candidate_config=configs[1])
+                self.assertNotEqual(result.returncode, 0, result.stdout)
+                self.assertIn('candidate config must retain the allow/ebpf defaults', result.stderr)
 
     def test_stage_refuses_when_upstream_config_was_not_staged(self):
         result, _ = self.run_stage('mkdir -p "$1/etc/opensnitchd"\nprintf "{}" > "$1/etc/opensnitchd/default-config.json"\n')

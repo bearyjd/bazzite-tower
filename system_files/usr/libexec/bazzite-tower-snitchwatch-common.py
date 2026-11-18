@@ -47,6 +47,9 @@ VENDOR_DROPIN_SHA256 = "ae6b234f92bc22f1201a7572b59b454c9809f33c80d13f361b9674e1
 TYPED_EMPTY_PROPERTIES = {"EnvironmentFiles": "a(sb)", **{name: "a(sasbttttuii)" for name in ("ExecStartPre", "ExecStartPost", "ExecStop", "ExecStopPost", "ExecCondition")}}
 
 
+EBPF_MODULES_PATH = "/usr/lib/opensnitchd/ebpf"
+EBPF_CHECK = "/usr/libexec/bazzite-tower-opensnitch-ebpf-check"
+
 # Single table of every helper the privileged tools may run, by absolute path
 # (all verified in /usr/bin on the Bazzite host; /bin and /usr/sbin are symlinks
 # or empty merges there). Resolution never consults the caller's PATH.
@@ -324,8 +327,23 @@ def config_contract(ctx, address="unix:opensnitchd.sock"):
         require(deny_opt_in(ctx), "DefaultAction drift: deny is accepted only with a confirmed operator opt-in marker and no pending deny trial")
     else:
         require(action == "allow", "DefaultAction drift: system readiness requires allow; deny is an explicit local opt-in")
-    require(config.get("ProcMonitorMethod") == "proc", "ProcMonitorMethod drift: system profile requires proc")
+    method = config.get("ProcMonitorMethod")
+    require(method in ("ebpf", "proc"), "ProcMonitorMethod drift: system profile requires ebpf (default) or proc (documented fallback)")
+    if method == "ebpf":
+        require(config.get("Ebpf", {}).get("ModulesPath") == EBPF_MODULES_PATH, "Ebpf.ModulesPath drift: ebpf requires "+EBPF_MODULES_PATH)
     return config
+
+
+def ebpf_runtime(ctx):
+    # PASS/WARN (proc fallback is a WARN, not drift) are reported; FAIL (silent /proc fallback,
+    # daemon down, wrong method) refuses readiness. Needs root, as does all of runtime_readiness.
+    result = ctx.command([EBPF_CHECK, "--runtime"], okay=(0, 1), timeout=30)
+    lines = result.stdout.strip().splitlines()
+    match = re.fullmatch(r"RESULT: (PASS|WARN|FAIL): (.*)", lines[-1]) if lines else None
+    require(match is not None, "eBPF runtime check produced no RESULT line")
+    verdict, reason = match.groups()
+    require(verdict != "FAIL" and result.returncode == 0, "eBPF runtime check "+verdict+": "+reason)
+    return verdict+": "+reason
 
 
 def inert_dropin_directory(ctx, name):
@@ -536,6 +554,7 @@ def runtime_readiness(ctx):
     uid, gid, ui_gid, members = account_ids(ctx)
     actual = unit_contract(ctx)
     config = config_contract(ctx)
+    ebpf = ebpf_runtime(ctx)
     local_conflicts(ctx)
     flatpak_profiles(ctx)
     pid = int(actual["MainPID"])
@@ -570,4 +589,4 @@ def runtime_readiness(ctx):
         info = ctx.stat(path)
         require(kind(info.st_mode) and info.st_uid == owner and info.st_gid == group and stat.S_IMODE(info.st_mode) == mode, "runtime DAC/type mismatch: "+path)
         require(not {"system.posix_acl_access", "system.posix_acl_default"}&set(os.listxattr(ctx.path(path))), "unexpected runtime ACL grant: "+path)
-    return dict(profile="system", bridgePid=pid, daemonPid=daemon_pid, daemonPatchSha256=daemon["patch"]["sha256"], uiGroup="snitchwatch-ui", explicitUiMembers=members.split(",") if members else [], defaultAction="deny (operator opt-in)" if config["DefaultAction"] == "deny" else "allow", procMonitorMethod="proc", graphicalRoundTrip="not checked")
+    return dict(profile="system", bridgePid=pid, daemonPid=daemon_pid, daemonPatchSha256=daemon["patch"]["sha256"], uiGroup="snitchwatch-ui", explicitUiMembers=members.split(",") if members else [], defaultAction="deny (operator opt-in)" if config["DefaultAction"] == "deny" else "allow", procMonitorMethod=config["ProcMonitorMethod"], ebpfRuntime=ebpf, graphicalRoundTrip="not checked")

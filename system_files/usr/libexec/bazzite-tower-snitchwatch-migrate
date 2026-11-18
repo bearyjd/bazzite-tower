@@ -160,11 +160,17 @@ class Migration:
         config = json.loads(self.ctx.path(common.CONFIG).read_text())
         legacy = json.loads(self.ctx.path(common.LEGACY_REFERENCE).read_text())
         system = json.loads(self.ctx.path(common.REFERENCE).read_text())
-        common.require(config in (legacy, system), "unexpected live config/policy/address drift; operator review required, nothing overwritten")
-        # Both profiles permanently retain allow; deny requires explicit opt-in.
-        # proc either way: eBPF fails here (snitchwatch#6).
+        # An un-upgraded /etc still holds the previous (proc, no Ebpf.ModulesPath) references.
+        previous = []
+        for reference in (legacy, system):
+            old = json.loads(json.dumps(reference))
+            old["ProcMonitorMethod"] = "proc"
+            old.get("Ebpf", {}).pop("ModulesPath", None)
+            previous.append(old)
+        common.require(config in (legacy, system, *previous), "unexpected live config/policy/address drift; operator review required, nothing overwritten")
+        # Both profiles retain allow; deny requires explicit opt-in. ebpf is the default, proc the previous baseline.
         expected_action = "allow"
-        common.require(config["DefaultAction"] == expected_action and config["ProcMonitorMethod"] == "proc", expected_action+"/proc policy required")
+        common.require(config["DefaultAction"] == expected_action and config["ProcMonitorMethod"] in ("ebpf", "proc"), expected_action+"/ebpf-or-proc policy required")
         state = common.service_state(self.ctx)
         common.require(all(state[unit]["enabled"] == "enabled" for unit in common.SOCKETS), "candidate image system sockets must already be enabled; helper does not change enablement")
         return manifest, config, state

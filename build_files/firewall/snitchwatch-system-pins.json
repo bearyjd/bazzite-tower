@@ -22,7 +22,7 @@
   ],
   "flatpakRuntimeRef": "org.kde.Platform/x86_64/6.11",
   "kojiBase": "https://kojipkgs.fedoraproject.org/packages/",
-  "legacyConfigSha256": "4df22dca00a0c08d5b843946bbc50154f0e0529724840b12df623f565768fe3d",
+  "legacyConfigSha256": "b01ea4068dd58f2a52a1688f505582c0f20c7264d0f46fa3060f13586c9515fe",
   "protocVersion": "33.5",
   "rpmSigningKey": {
     "fingerprint": "4F50A6114CD5C6976A7F1179655A4B02F577861E",

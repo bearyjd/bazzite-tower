@@ -42,13 +42,16 @@ esac
         self.write_command("ss", """#!/bin/sh
 printf 'LISTEN 0 128 127.0.0.1:50051 0.0.0.0:* users:(("bridge",pid=%s,fd=3))\n' "${LISTENER_PID:-420}"
 """)
+        self.write_command("id","#!/bin/sh\nprintf '%s\\n' \"${FAKE_UID:-1000}\"\n")
+        self.ebpf=self.root/"usr/libexec/bazzite-tower-opensnitch-ebpf-check";self.ebpf.parent.mkdir(parents=True)
+        self.ebpf.write_text('#!/bin/sh\nprintf "%s\\n" "$*" >> "$COMMAND_LOG"\nprintf "detail line\\n"\nprintf "%s\\n" "$EBPF_RESULT"\nexit "${EBPF_RC:-0}"\n');self.ebpf.chmod(0o755)
         system=self.root/"usr/libexec/bazzite-tower-snitchwatch-readiness"
-        system.parent.mkdir(parents=True);system.write_text('#!/bin/sh\nprintf "fixture-system-dispatch:%s\\n" "$*"\nexit 42\n');system.chmod(0o755)
+        system.write_text('#!/bin/sh\nprintf "fixture-system-dispatch:%s\\n" "$*"\nexit 42\n');system.chmod(0o755)
         self.profile=self.root/"usr/share/bazzite-tower/snitchwatch-bridge-profile"
         self.profile.parent.mkdir(parents=True)
         original=(REPO/"system_files/usr/libexec/bazzite-tower-opensnitch-readiness").read_text()
         # Test-only fixed-root rewrite; production exposes no runtime override.
-        modified=original.replace("/etc/opensnitchd/",str(self.root/"etc/opensnitchd")+"/").replace("/usr/share/bazzite-tower/",str(self.root/"usr/share/bazzite-tower")+"/").replace("/usr/libexec/bazzite-tower-snitchwatch-readiness",str(system))
+        modified=original.replace("/etc/opensnitchd/",str(self.root/"etc/opensnitchd")+"/").replace("/usr/share/bazzite-tower/",str(self.root/"usr/share/bazzite-tower")+"/").replace("/usr/libexec/bazzite-tower-snitchwatch-readiness",str(system)).replace("/usr/libexec/bazzite-tower-opensnitch-ebpf-check",str(self.ebpf))
         self.script=self.root/"readiness";self.script.write_text(modified)
         self.env={**os.environ,"HOME":str(self.home),"PATH":str(self.bin)+":"+os.environ["PATH"],"EXPECTED_BINARY":str(binary),"COMMAND_LOG":str(self.log)}
 
@@ -65,6 +68,28 @@ printf 'LISTEN 0 128 127.0.0.1:50051 0.0.0.0:* users:(("bridge",pid=%s,fd=3))\n'
         result=self.run_check();self.assertEqual(result.returncode,0,result.stderr)
         self.assertIn("Local prerequisites pass",result.stdout)
         self.assertNotRegex(self.log.read_text(),r"^(start|stop|enable|disable|restart|reload)\b")
+
+    def test_runtime_check_is_skipped_with_a_note_when_unprivileged(self):
+        result=self.run_check();self.assertEqual(result.returncode,0,result.stderr)
+        self.assertIn("skip: eBPF runtime check needs root",result.stdout)
+        self.assertNotIn("--runtime",self.log.read_text())
+
+    def test_runtime_pass_and_warn_do_not_fail_readiness(self):
+        self.env["FAKE_UID"]="0"
+        for verdict,marker in (("PASS","ok: eBPF runtime PASS"),("WARN","warn: eBPF runtime WARN")):
+            with self.subTest(verdict=verdict):
+                self.env["EBPF_RESULT"]="RESULT: %s: fixture reason"%verdict
+                result=self.run_check();self.assertEqual(result.returncode,0,result.stderr)
+                self.assertIn(marker,result.stdout);self.assertIn("Local prerequisites pass",result.stdout)
+        self.assertIn("--runtime",self.log.read_text())
+
+    def test_runtime_fail_or_garbage_fails_readiness(self):
+        self.env["FAKE_UID"]="0"
+        for result_line,code in (("RESULT: FAIL: silent /proc fallback","1"),("RESULT: FAIL: x","0"),("no result line","0"),("RESULT: PASS: contradictory","1"),("","0")):
+            with self.subTest(result_line=result_line,code=code):
+                self.env["EBPF_RESULT"]=result_line;self.env["EBPF_RC"]=code
+                result=self.run_check();self.assertEqual(result.returncode,1,result.stdout)
+                self.assertIn("NOT READY: eBPF runtime check",result.stderr);self.assertNotIn("Local prerequisites pass",result.stdout)
 
     def test_explicit_legacy_same_behavior(self):
         self.profile.write_text("legacy\n");self.assertEqual(self.run_check().returncode,0)

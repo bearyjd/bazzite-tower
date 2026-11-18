@@ -198,13 +198,25 @@ class Refusals(DenyBase):
 
     def test_wrong_current_action_or_proc_method(self):
         for changes, text in (({"DefaultAction": "deny"}, "allow"), ({"DefaultAction": "ask"}, "allow"),
-                              ({"ProcMonitorMethod": "ebpf"}, "proc")):
+                              ({"ProcMonitorMethod": "audit"}, "ebpf or proc")):
             with self.subTest(changes=changes):
                 self.edit_config(**changes)
                 self.refused("on", text=text)
                 self.assert_untouched()
                 self.assertFalse(self.status()["canEnable"])
                 self.edit_config(DefaultAction="allow", ProcMonitorMethod="proc")
+        self.edit_config(DefaultAction="allow")
+        raw = json.loads(self.config_path.read_text())
+        del raw["ProcMonitorMethod"]
+        self.config_path.write_text(json.dumps(raw))
+        self.refused("on", text="ebpf or proc")
+        self.assertFalse(self.status()["canEnable"])
+
+    def test_ebpf_and_proc_methods_both_allow_opt_in(self):
+        for method in ("ebpf", "proc"):
+            with self.subTest(method=method):
+                self.edit_config(DefaultAction="allow", ProcMonitorMethod=method)
+                self.assertTrue(self.status()["canEnable"], self.status()["blockers"])
 
     def test_already_pending_is_refused_and_changes_nothing_more(self):
         self.ok("on")

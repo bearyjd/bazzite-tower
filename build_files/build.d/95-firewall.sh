@@ -91,8 +91,10 @@ if [[ "${FIREWALL_DAEMON:-opensnitch}" == "opensnitch" ]]; then
     # deterministic order. The manifest records kernel, commit, toolchain and
     # per-object sha256; the check below binds it to the one /usr/lib/modules/*
     # release and the bytes on disk.
-    # Packaging proof only: ProcMonitorMethod stays "proc" and successful
-    # loading still needs a runtime test (separate enable change).
+    # ProcMonitorMethod is "ebpf" with Ebpf.ModulesPath pinned to this directory
+    # (config below); these per-kernel matched objects are what it loads. Whether
+    # the daemon really loaded them is a runtime fact: the daemon falls back to
+    # /proc silently, so bazzite-tower-opensnitch-ebpf-check --runtime decides.
     for object in opensnitch.o opensnitch-procs.o opensnitch-dns.o; do
         install -m 0644 "/usr/share/bazzite-tower/opensnitch-ebpf/${object}" "/usr/lib/opensnitchd/ebpf/${object}"
     done
@@ -119,15 +121,17 @@ if [[ "${FIREWALL_DAEMON:-opensnitch}" == "opensnitch" ]]; then
     #   Server.Address 127.0.0.1:50051 — the Snitchwatch bridge's gRPC listener
     #     (a per-user service that is NOT part of this image) rather than upstream
     #     opensnitch-ui's unix:///tmp/osui.sock.
-    #   ProcMonitorMethod "proc"       — tested baseline. A past module-load
-    #     failure is not proof of a kernel incompatibility. The image
-    #     supplies all three BPF objects (built per kernel); owner-only eBPF A/B testing is in
-    #     docs/RUNBOOK.md, without changing the image/readiness baseline.
+    #   ProcMonitorMethod "ebpf"       — default. The image supplies all three BPF
+    #     objects built per kernel from the daemon's own commit, and
+    #     Ebpf.ModulesPath pins them (otherwise the daemon searches
+    #     /usr/local/lib/opensnitchd/ebpf first, where a stale object could
+    #     shadow them). "proc" is the documented one-key fallback
+    #     (docs/RUNBOOK.md); readiness reports it as a WARN, not drift.
     #   DefaultAction "allow"          — permanent default for both profiles;
     #     deny enforcement always requires explicit operator opt-in. Without a
     #     decision client, deny can block every new unruled outbound connection.
     #     The system profile below replaces only the address with the root-only
-    #     Unix socket, retaining allow/proc. Both profiles are asserted in
+    #     Unix socket, retaining allow/ebpf. Both profiles are asserted in
     #     tests/smoke.sh.
     install -D -m 0644 /usr/share/bazzite-tower/opensnitchd-default-config.json \
         /etc/opensnitchd/default-config.json

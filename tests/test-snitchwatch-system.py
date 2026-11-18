@@ -54,6 +54,7 @@ class Fixture(common.Context):
         self.daemon_version = "1.9.0"
         self.daemon_process_path = common.DAEMON
         self.socket_types = {}
+        self.ebpf_runtime = ("PASS", "fixture: daemon holds eBPF programs", 0)
         self.states = {unit: dict(enabled="enabled" if unit in common.SOCKETS or unit == "opensnitch.service" else "static", active="active" if unit in common.SOCKETS or unit == "opensnitch.service" else "inactive") for unit in common.UNITS}
         self.properties = {
             common.SERVICE: dict(User="snitchwatch", Group="snitchwatch", NoNewPrivileges="yes", CapabilityBoundingSet="", AmbientCapabilities="",
@@ -179,6 +180,9 @@ org.kde.StatusNotifierWatcher=talk
             out = json.dumps(self.daemon_proof)+"\n"
             if self.daemon_proof_failure:
                 code=1;error="installed daemon provenance mismatch"
+        elif argv == [common.EBPF_CHECK, "--runtime"]:
+            verdict, reason, code = self.ebpf_runtime
+            out = "ignored detail line\nRESULT: %s: %s\n" % (verdict, reason)
         elif argv == [common.DAEMON, "-version"]:
             out = self.daemon_version+"\n"
         elif argv == ["flatpak", "--installations"]:
@@ -509,6 +513,37 @@ class SystemBehavior(unittest.TestCase):
         self.assertEqual(report["defaultAction"], "allow")
         self.assertFalse(any(cmd[:2] in (["systemctl","start"], ["systemctl","stop"]) for cmd in self.ctx.commands))
 
+    def test_live_proc_is_a_readiness_warn_not_a_failure(self):
+        self.ctx.system_config();self.ctx.flatpak()
+        config=json.loads(self.ctx.path(common.REFERENCE).read_text());config["ProcMonitorMethod"]="proc";self.ctx.write(common.CONFIG,json.dumps(config))
+        self.ctx.ebpf_runtime=("WARN","ProcMonitorMethod is proc: the documented /proc fallback",0)
+        report=common.runtime_readiness(self.ctx)
+        self.assertEqual(report["procMonitorMethod"],"proc");self.assertTrue(report["ebpfRuntime"].startswith("WARN: "))
+        output=io.StringIO()
+        with mock.patch.object(readiness.sys,"argv",["bazzite-tower-snitchwatch-readiness"]),mock.patch.object(readiness.os,"geteuid",return_value=0),\
+             mock.patch.object(common,"Context",return_value=self.ctx),contextlib.redirect_stdout(output):
+            readiness.main()
+        self.assertIn("WARNING: eBPF process monitoring is not in effect",output.getvalue())
+
+    def test_runtime_pass_is_reported_and_helper_is_read_only(self):
+        self.ctx.system_config();self.ctx.flatpak()
+        report=common.runtime_readiness(self.ctx)
+        self.assertEqual(report["procMonitorMethod"],"ebpf");self.assertEqual(report["ebpfRuntime"],"PASS: fixture: daemon holds eBPF programs")
+        self.assertIn([common.EBPF_CHECK,"--runtime"],self.ctx.commands)
+
+    def test_runtime_fail_refuses_readiness(self):
+        self.ctx.system_config();self.ctx.flatpak()
+        self.ctx.ebpf_runtime=("FAIL","silent /proc fallback",1)
+        self.refuse_readiness("eBPF runtime check FAIL")
+        self.ctx.ebpf_runtime=("PASS","contradictory exit",1)
+        with mock.patch.object(self.ctx,"runner",side_effect=lambda argv,**k:subprocess.CompletedProcess(argv,1,"RESULT: PASS: x\n","") if argv[0]==common.EBPF_CHECK else self.ctx.run(argv,**k)):
+            self.refuse_readiness("eBPF runtime check PASS")
+
+    def test_runtime_without_result_line_refuses_readiness(self):
+        self.ctx.system_config();self.ctx.flatpak()
+        with mock.patch.object(self.ctx,"runner",side_effect=lambda argv,**k:subprocess.CompletedProcess(argv,0,"no result here\n","") if argv[0]==common.EBPF_CHECK else self.ctx.run(argv,**k)):
+            self.refuse_readiness("no RESULT line")
+
     def test_readiness_cli_reports_the_validated_allow_policy(self):
         self.ctx.system_config();self.ctx.flatpak()
         output = io.StringIO()
@@ -577,9 +612,18 @@ class SystemBehavior(unittest.TestCase):
 
     def test_config_address_and_policy_drift(self):
         self.ctx.system_config()
-        for key,value in (("DefaultAction","deny"),("ProcMonitorMethod","ebpf")):
-            config=json.loads(self.ctx.path(common.REFERENCE).read_text());config[key]=value;self.ctx.write(common.CONFIG,json.dumps(config))
-            self.refuse_readiness("drift")
+        config=json.loads(self.ctx.path(common.REFERENCE).read_text());config["DefaultAction"]="deny";self.ctx.write(common.CONFIG,json.dumps(config))
+        self.refuse_readiness("drift")
+        for method in ("audit",None):
+            config=json.loads(self.ctx.path(common.REFERENCE).read_text())
+            if method is None:del config["ProcMonitorMethod"]
+            else:config["ProcMonitorMethod"]=method
+            self.ctx.write(common.CONFIG,json.dumps(config))
+            self.refuse_readiness("ProcMonitorMethod drift")
+        config=json.loads(self.ctx.path(common.REFERENCE).read_text());del config["Ebpf"]["ModulesPath"];self.ctx.write(common.CONFIG,json.dumps(config))
+        self.refuse_readiness("Ebpf.ModulesPath drift")
+        config=json.loads(self.ctx.path(common.REFERENCE).read_text());config["Ebpf"]["ModulesPath"]="/usr/local/lib/opensnitchd/ebpf";self.ctx.write(common.CONFIG,json.dumps(config))
+        self.refuse_readiness("Ebpf.ModulesPath drift")
         self.ctx.write(common.CONFIG,self.ctx.path(common.LEGACY_REFERENCE).read_text())
         self.refuse_readiness("Server.Address drift")
 
@@ -1163,13 +1207,27 @@ class SystemBehavior(unittest.TestCase):
         applied=operator.apply()
         self.assertEqual(applied["status"],"applied")
         self.assertEqual(json.loads(self.ctx.path(common.CONFIG).read_text())["DefaultAction"],"allow")
-        self.assertEqual(json.loads(self.ctx.path(common.CONFIG).read_text())["ProcMonitorMethod"],"proc")
+        self.assertEqual(json.loads(self.ctx.path(common.CONFIG).read_text())["ProcMonitorMethod"],"ebpf")
         self.assertEqual(json.loads(self.ctx.path(common.CONFIG).read_text()), json.loads(self.ctx.path(common.REFERENCE).read_text()))
         rolled=operator.rollback();self.assertEqual(rolled["status"],"rolled-back")
         self.assertEqual(self.ctx.path(common.CONFIG).read_bytes(), original)
         self.assertEqual(self.ctx.states, states)
         self.assertEqual(stat.S_IMODE(operator.current.stat().st_mode),0o600)
         self.assertFalse(any(cmd[0] in ("usermod","groupmod","systemd-sysusers") for cmd in self.ctx.commands))
+
+    def test_unupgraded_proc_references_still_migrate_and_other_methods_do_not(self):
+        legacy=json.loads(self.ctx.path(common.LEGACY_REFERENCE).read_text())
+        legacy["ProcMonitorMethod"]="proc";del legacy["Ebpf"]["ModulesPath"]
+        self.ctx.write(common.CONFIG,json.dumps(legacy))
+        operator=migration.Migration(self.ctx)
+        self.assertEqual(operator.apply()["status"],"applied")
+        self.assertEqual(json.loads(self.ctx.path(common.CONFIG).read_text())["ProcMonitorMethod"],"proc")  # the operator's method is preserved
+        operator.rollback()
+        for method in ("audit","ebpf"):
+            drifted=dict(legacy,ProcMonitorMethod=method)  # ebpf without ModulesPath is not a reference
+            self.ctx.write(common.CONFIG,json.dumps(drifted))
+            with self.assertRaisesRegex(common.Refusal,"unexpected live config"):
+                migration.Migration(self.ctx).check()
 
     def test_read_only_migration_check_no_journal_or_unit_mutation(self):
         migration.Migration(self.ctx).check()

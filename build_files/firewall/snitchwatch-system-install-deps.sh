@@ -8,7 +8,6 @@
 #   pack:    python3 (bridge_artifact.py), tar gzip
 #   verify:  binutils (readelf/objdump), glibc-common (ldd), coreutils
 #            (sha256sum/install/timeout), diffutils (cmp), findutils
-#   install: systemd (systemd-analyze verify --user, systemctl --global)
 #   buildinfo: rpm (NEVRAs for the MANIFEST: the toolchain RPMs by name —
 #            incl. glibc-devel, libgcc, llvm-libs, zlib-ng-compat, which come
 #            in as dependencies — plus the full `rpm -qa`, because the image
@@ -30,5 +29,5 @@ if [[ -e /run/.toolboxenv || -e /run/host ]]; then
 fi
 
 dnf -y --setopt=install_weak_deps=False install \
-    git gcc rust cargo protobuf-compiler python3 binutils systemd tar gzip \
+    git gcc rust cargo protobuf-compiler python3 binutils tar gzip \
     findutils diffutils coreutils glibc-common rpm

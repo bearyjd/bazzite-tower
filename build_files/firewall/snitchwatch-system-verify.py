@@ -10,7 +10,7 @@ import sys
 
 MANIFEST = '/usr/share/snitchwatch/system-bridge-manifest.json'
 PINS = '/usr/share/snitchwatch/build-pins.json'
-EXPECTED_PINS_SHA256 = '98c8e24629db7818fa6d27569d1eaf29fbc05c810808f5b8af0c0a206fb44dc4'
+EXPECTED_PINS_SHA256 = 'd694c68428f57f870d5cc016088a992198ef64c73ae3318d33552bfa3a7ecde8'
 BINARY = '/usr/bin/snitchwatch-bridge-cli'
 PROFILE = '/usr/share/bazzite-tower/snitchwatch-bridge-profile'
 CONFIG = '/usr/share/bazzite-tower/opensnitchd-system-bridge-config.json'
@@ -84,6 +84,9 @@ SCANNER_SOURCE_ALLOWLIST = frozenset({
     'crates/scanner-privileged/src/command.rs',
     'crates/scanner-privileged/src/command/tests/exit_tests.rs',
     'crates/scanner-privileged/src/containment.rs',
+    'crates/scanner-privileged/src/containment/subtree.rs',
+    'crates/scanner-privileged/src/containment/subtree/tests.rs',
+    'crates/scanner-privileged/src/containment/subtree/tests/sweep_tests.rs',
     'crates/scanner-privileged/src/containment/test_fixtures/forked_tree.rs',
     'crates/scanner-privileged/src/containment/test_fixtures/marked_sleeps.rs',
     'crates/scanner-privileged/src/containment/test_fixtures/mod.rs',

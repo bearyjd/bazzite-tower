@@ -793,7 +793,14 @@ class ImageBuildContracts(unittest.TestCase):
             self.assertEqual(rpm['nevra'], f'{name}-0:1.99.1-2.fc45.x86_64')
             self.assertEqual(rpm['kojiPath'], 'rust/1.99.1/2.fc45/data/signed/f577861e/x86_64/' + filename)
         installer = (FACTORY / 'snitchwatch-system-install-deps.sh').read_bytes()
-        self.assertEqual(sha(installer), '247a396c0f3d504023f001c33bb1211f5f0f9bfd2c6685077d4bd312ac95f8cb')
+        self.assertEqual(sha(installer), 'bcd389f859882d25bb53baee7fde167f144f311d315ee0f39dc456793cd486eb')
+
+    def test_vendored_installer_matches_the_pinned_upstream_hash(self):
+        # prep.sh and assemble.sh `cmp` this copy against the upstream file, so a repin that changes
+        # packaging/release/install-deps.sh must update the vendored copy in the same change.
+        pins = json.loads((FACTORY / 'snitchwatch-system-pins.json').read_text())
+        installer = (FACTORY / 'snitchwatch-system-install-deps.sh').read_bytes()
+        self.assertEqual(sha(installer), pins['sourceFiles']['packaging/release/install-deps.sh'])
 
     def test_rust_install_precedes_version_gate(self):
         # Execute the actual prep-stage setup fragment (snitchwatch-system-prep.sh,

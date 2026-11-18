@@ -76,6 +76,7 @@ again on a future kernel bump.
 | CPU power baseline | `cat /sys/devices/system/cpu/cpu0/cpufreq/energy_performance_preference` (expect `balance_performance`); `cat /sys/firmware/acpi/platform_profile` (expect `balanced`); `systemctl is-active thermald` |
 | Virt stack up | `systemctl is-active virtqemud.socket` · `virsh -c qemu:///system list --all` |
 | Read-only image/host summary | `ujust tower-health` — booted/staged identity, running versions, failed services, RAS evidence and SELinux labels; `ujust tower-health --diagnostics` adds bounded current-boot/resume excerpts |
+| OpenSnitch is really using eBPF (not the silent `/proc` fallback) | `sudo /usr/libexec/bazzite-tower-opensnitch-ebpf-check --runtime [--detail]` — last line `RESULT: PASS\|WARN\|FAIL`; WARN `proc` = documented fallback; also shown by `sudo ujust tower-health` and both readiness helpers; see "Runtime check" below |
 | OpenSnitch legacy bridge readiness | `ujust opensnitch-readiness` — read-only check of the active daemon, fail-open config and verified user bridge at `127.0.0.1:50051`; see the OpenSnitch section below |
 | Cockpit web management (opt-in) | `ujust enable-cockpit`; it binds only to loopback. Review Tailnet ACLs, then separately run `tailscale serve --https=443 http://127.0.0.1:9090`; do not expose :9090 directly without explicit firewall policy. |
 | Docker/libvirt NAT forwarding (opt-in Docker) | `just test-docker-libvirt-forwarding` (from a repository checkout) — restarts Docker, checks its `DOCKER-USER` NAT-bridge/uplink pair rules, then probes Docker bridge networking. Rules are only for active libvirt XML `forward mode='nat'` bridges; no broad source-RFC1918 or bridge-wildcard policy is added. A post-start reconciliation failure is non-fatal to Docker and later libvirt/NetworkManager events retry it. |
@@ -202,9 +203,10 @@ Known-good: `18.1.18.2644` and above.
 
 The default image selects the legacy TCP user bridge at `127.0.0.1:50051`.
 `SNITCHWATCH_BRIDGE=system` is an explicit image build opt-in and requires
-`FIREWALL_DAEMON=opensnitch`. Both profiles retain `ProcMonitorMethod: proc`
-(the tested baseline; historical eBPF load errors do not establish kernel
-incompatibility). Both profiles permanently
+`FIREWALL_DAEMON=opensnitch`. Both profiles ship `ProcMonitorMethod: ebpf` with
+`Ebpf.ModulesPath` pinned to the image's per-kernel modules; `proc` is the
+documented one-key fallback (see "OpenSnitch eBPF default, the `proc` fallback"
+below). Both profiles permanently
 ship `DefaultAction: allow`; deny enforcement always requires explicit operator
 opt-in. Unanswered unruled connections use allow, while explicit rules still
 apply. `DropWhileAsking` remains absent (default false); opting into it can drop
@@ -334,8 +336,11 @@ System readiness requires an explicit privileged read for cross-account
 process inspection: run `sudo ujust snitchwatch-system-readiness`.
 It verifies immutable provenance, service/socket ownership,
 permissions, token access, resolved service hardening and the shipped
-`allow`/`proc` policy. An explicit local deny override fails this readiness
-contract as policy drift; readiness does not enable enforcement.
+`allow` policy with `ProcMonitorMethod` `ebpf` (and the pinned `Ebpf.ModulesPath`)
+or the documented `proc` fallback, then runs the read-only eBPF runtime check
+(`FAIL` refuses, `WARN` is reported). An explicit local deny override, any other
+method or an unpinned `ebpf` config fails this readiness contract as policy drift;
+readiness does not enable enforcement.
 Readiness runs its helpers (`flatpak`, `systemctl`, `ss`, `busctl`, `getent`, `python3`, `systemd-run`) by fixed `/usr/bin` path with a minimal environment, ignoring the caller's `PATH`; the root entry scripts run `python3 -I` so `PYTHONPATH`/user site are ignored. A missing helper, or unparseable, non-regular, symlinked, FIFO or over-64-KiB user-store Flatpak metadata, metadata with any line outside the canonical `key=value`/`[section]`/`#comment` grammar (indentation, `\r`, `\f` and other control characters make Python's configparser and Flatpak's GKeyFile read the file differently), a section outside Application/Build/Context/Environment/Session Bus Policy/System Bus Policy/the Debug extension, or a `[Context]` key outside `shared`/`sockets`/`devices`/`filesystems`/`persistent` (extend `CONTEXT_KEYS`/`METADATA_SECTIONS` in the same change that adds a Flatpak permission), prints `NOT READY: ...` and exits 1.
 The installed GUI's `filesystems=` must hold `/run/snitchwatch:ro`, `/run/snitchwatch-auth:ro` and `xdg-config/snitchwatch:create` and may add only `xdg-config/kdeglobals:ro` plus exact `--filesystem=` entries of the image's pinned `flatpakFinishArgs` (the four read-only icon exports); anything else, including a `:rw`/`:create` variant or `home`/`host-os`, prints `NOT READY: same-ID Flatpak filesystem profile mismatch`. Compare with `grep ^filesystems= ~/.local/share/flatpak/app/org.snitchwatch.Snitchwatch/x86_64/*/active/metadata` (every installed branch is checked).
 It is read-only and cannot prove a GUI answers prompts. Migration and rollback
@@ -360,7 +365,7 @@ recovery. Helper: `/usr/libexec/bazzite-tower-snitchwatch-deny` (root).
 
 1. `ujust snitchwatch-deny status` - confirms preconditions (`opensnitch.service`
    active, root-only bridge socket present, root-owned config with
-   `allow`/`proc`). Machine-readable:
+   `allow` and `ebpf` or `proc`). Machine-readable:
    `sudo /usr/libexec/bazzite-tower-snitchwatch-deny status --json` returns
    `{"schema":1,"profile","defaultAction","optIn","pending","expiresAt","canEnable","blockers","expired"}`.
    `expired` is an additive field (schema stays 1): true when a trial is still
@@ -468,7 +473,7 @@ pending upstream baseline-cache integration. Missing optional tools are shown
 as skipped checks. A scan is diagnostic evidence, not a complete integrity
 assessment. On the eventual candidate the owner must verify activation,
 authentication, cancellation/denial, repeat requests, visible skipped checks,
-root-private state and unchanged allow/proc settings. Native build/reproducibility,
+root-private state and unchanged allow policy and eBPF/proc monitor settings. Native build/reproducibility,
 image/SELinux behavior and those runtime checks remain separate release gates.
 
 ### Endpoint events for Vigie (opt-in, everything off by default)
@@ -541,44 +546,71 @@ Not verified: the package/unit names against the real Fedora 44 repository, the
 packages' install-time preset behavior in the real base image, a real image
 build, SELinux behavior of TCP 514 on this host, and any live flow to Vigie.
 
-### OpenSnitch resource baseline and owner eBPF experiment
+### OpenSnitch eBPF default, the `proc` fallback and the resource baseline
 
-> **Do not run this on the system profile until the separate eBPF enable change
-> lands.** Since Track A the system profile (OpenSnitch 1.9.0 daemon, a1353848)
-> ships BPF objects compiled at image build from that same commit against the
-> image's own kernel-devel (`/usr/share/bazzite-tower/ebpf-manifest.json` records
-> kernel, commit and hashes; `bazzite-tower-opensnitch-ebpf-check` binds it to the
-> image kernel). They are a matched pair on paper only: loading and attribution
-> are runtime-unverified, and the image stays `allow`/`proc` with no `ModulesPath`.
-> Legacy now ships per-kernel BPF objects too (built from OpenSnitch v1.8.0,
-> b404c4c6, the commit its RPM daemon is built from; manifest-checked, runtime-
-> unverified). The procedure below applies only to the legacy profile (RPM daemon
-> and objects, both v1.8.0).
->
-> Build failure mode: legacy images (`:latest`, `:latest-kernel`, safe-pin) now
-> FAIL the build when the base image lacks a `kernel-devel` matching its
-> `kernel-core` (deliberate, fail-closed; no degrade path). The weekly
-> `base-bump.yml` PRs are exposed to this, so expect base-bump to fail loudly
-> there; do not merge a red one. A `FIREWALL_DAEMON=portmaster` build also builds
-> the modules and then discards them (it needs that `kernel-devel` and a GitHub
-> fetch it does not otherwise use).
+Both profiles ship `ProcMonitorMethod: ebpf` with `Ebpf.ModulesPath` pinned to
+`/usr/lib/opensnitchd/ebpf` (without the pin the daemon searches
+`/usr/local/lib/opensnitchd/ebpf` first, where a stale object could shadow the
+image's). That directory holds the per-kernel objects built at image build from
+the same OpenSnitch commit as the daemon that loads them (system a1353848;
+legacy v1.8.0 = b404c4c6); `/usr/share/bazzite-tower/ebpf-manifest.json` records
+kernel, commit and hashes and `bazzite-tower-opensnitch-ebpf-check` binds it to
+the image kernel. The daemon falls back to `/proc` **silently** when the modules
+fail to load, so the configured method is not evidence: the runtime check below
+decides, and it is wired into `ujust snitchwatch-system-readiness` (system
+profile, root), `ujust opensnitch-readiness` (legacy profile; skipped with a
+`needs root` note when unprivileged) and `ujust tower-health` (one line,
+`UNKNOWN` when unprivileged). A runtime `FAIL` makes readiness exit non-zero; a
+`WARN` (including the documented `proc` fallback) does not.
 
-This is an optional **owner-operated** test on the candidate, after its initial
-`allow`/`proc` boot passes `sudo ujust snitchwatch-system-readiness` and the full
-`tests/boot-check.sh` gate. Agents do not edit host configuration, invoke sudo,
-restart services or reboot. No kernel, security or probe workarounds belong in
-this experiment. A past `unable to load eBPF module` message does not identify
-its cause. The image supplies `/usr/lib/opensnitchd/ebpf/opensnitch.o`,
-`opensnitch-procs.o` and `opensnitch-dns.o` (built per kernel; the RPM's copies
-are overwritten); build/smoke verifies their ELF BPF
-headers and manifest, while the native daemon executable itself does not embed them.
+> Not yet verified on the laptop: that the matched modules actually load and
+> attribute connections (the fd link name, the daemon log strings and the fd
+> floor are uncalibrated, see "Runtime check" below).
 
-Use the exact same candidate digest, workload, GUI, power state and observation
-lengths in each mode. Record digest, kernel, daemon identity and backend startup
-evidence with the measurements; measurements on r16.1 cannot establish r16.2
-behavior. Keep all other configuration fixed.
-Allow two minutes of warmup, sample ten minutes idle, then ten minutes of a
-repeatable normal workload. The reporting-only sampler needs only Python's
+Build failure mode: legacy images (`:latest`, `:latest-kernel`, safe-pin) FAIL
+the build when the base image lacks a `kernel-devel` matching its `kernel-core`
+(deliberate, fail-closed; no degrade path). The weekly `base-bump.yml` PRs are
+exposed to this, so expect base-bump to fail loudly there; do not merge a red
+one. A `FIREWALL_DAEMON=portmaster` build also builds the modules and then
+discards them (it needs that `kernel-devel` and a GitHub fetch it does not
+otherwise use).
+
+#### `proc` fallback (one key, owner-operated)
+
+If eBPF misbehaves (runtime check `FAIL`, high CPU, missed connections), switch
+to the `/proc` monitor. Exactly one key changes; every other key is preserved.
+Agents do not edit host configuration, invoke sudo or restart services.
+
+```bash
+sudo flock -n /run/lock/bazzite-tower-snitchwatch-migration.lock sh -c 'f=/etc/opensnitchd/default-config.json; jq ".ProcMonitorMethod=\"proc\"" "$f" >"$f.new" && chmod 0644 "$f.new" && mv "$f.new" "$f"' && sudo systemctl restart opensnitch.service
+sudo /usr/libexec/bazzite-tower-opensnitch-ebpf-check --runtime   # expect RESULT: WARN: ... proc fallback
+```
+
+The migration lock (`/run/lock/bazzite-tower-snitchwatch-migration.lock`, held
+by the migration helper; `flock -n` refuses instead of waiting) serializes this
+edit against the helper: Linux filesystem exchange cannot conditionally replace
+a file against arbitrary uncoordinated root writers. To go back to eBPF, set the
+key to `"ebpf"` the same way (and restore `Ebpf.ModulesPath` if it was removed),
+restart, and run the runtime check. With `proc` the readiness contract still
+passes and reports a `WARN`: that is by design, not drift. A locally modified
+`/etc/opensnitchd/default-config.json` stops tracking the image through the
+bootc `/etc` 3-way merge, so a config kept at `proc` stays at `proc` after an
+upgrade (readiness `WARN` until you switch it back). Compare with
+`diff /usr/share/bazzite-tower/opensnitchd-default-config.json /etc/opensnitchd/default-config.json`
+(system profile reference: `opensnitchd-system-bridge-config.json`). An
+un-upgraded `/etc` holding the previous `proc` config (no `Ebpf.ModulesPath`)
+still migrates with `bazzite-tower-snitchwatch-migrate`.
+
+Any other `ProcMonitorMethod` (for example `audit`) is refused by readiness and
+by `ujust snitchwatch-deny`.
+
+#### Resource baseline (reporting only)
+
+To compare the two methods use the same candidate digest, workload, GUI, power
+state and observation lengths in each mode, with all other configuration fixed;
+record digest, kernel, daemon identity and the runtime-check result with the
+measurements. Allow two minutes of warmup, sample ten minutes idle, then ten
+minutes of a repeatable normal workload. The sampler needs only Python's
 standard library and reads MainPID and `/proc/PID/stat`; it collects no network
 payloads, connection details, command lines, environment or tokens. Optional
 `--pid gui=PID` includes a GUI process selected by the owner (reacquire after a
@@ -586,188 +618,31 @@ GUI restart). Run each window with the GUI/bridge mode held constant:
 
 ```bash
 # Run as the owner. sudo permits reading cross-account proc entries only.
-sudo /usr/libexec/bazzite-tower-snitchwatch-resources --duration 600 --interval 5 > proc-idle.json
-sudo /usr/libexec/bazzite-tower-snitchwatch-resources --duration 600 --interval 5 > proc-workload.json
+sudo /usr/libexec/bazzite-tower-snitchwatch-resources --duration 600 --interval 5 > ebpf-idle.json
+sudo /usr/libexec/bazzite-tower-snitchwatch-resources --duration 600 --interval 5 > ebpf-workload.json
 ```
 
-Repeat as `ebpf-idle.json` and `ebpf-workload.json` only after the eBPF startup
-checks below succeed. JSON includes each PID/start tick, monotonic sample time,
-interval CPU percentage (100% = one fully busy core; can exceed 100%), RSS and
-threads, plus CPU median/p95, RSS initial/final/peak and observed restart count.
-CPU is the change in utime+stime divided by actual elapsed monotonic time and
-clock ticks, never lifetime CPU. Compare matching windows and retain raw series;
+Repeat as `proc-idle.json` and `proc-workload.json` after the fallback above.
+JSON includes each PID/start tick, monotonic sample time, interval CPU
+percentage (100% = one fully busy core; can exceed 100%), RSS and threads, plus
+CPU median/p95, RSS initial/final/peak and observed restart count. CPU is the
+change in utime+stime divided by actual elapsed monotonic time and clock ticks,
+never lifetime CPU. Compare matching windows and retain raw series;
 unavailable/permission-denied samples and PID reuse/restarts invalidate an
-unbroken comparison. Samples spanning a missing process or identity change
-have no CPU percentage. Short-lived restarts between observations may be missed;
+unbroken comparison. Samples spanning a missing process or identity change have
+no CPU percentage. Short-lived restarts between observations may be missed;
 extra child processes are outside the sampled PID's accounting. No automatic
 resource thresholds or performance claims follow from the report. During each
 matching window also collect full-host CPU/memory (`vmstat -w 5 121`) and
 per-process CPU/RSS (`pidstat -u -r -h -p ALL 5 120`) in parallel, keeping
 GUI/bridge/scanner activity attributable. Sum-of-process RSS double-counts
 shared mappings; retain the host memory figures as well. Compare DNS lookups,
-new connections, reconnects and owner-operated suspend/resume, and inspect the
-same log interval for probe failures, fallback, restarts and instability. A
-performance improvement alone does not establish correctness. Default eBPF
-requires owner evidence and a later explicit decision; the complete restoration
-block below remains mandatory for experiments.
-
-Before editing, stop other policy writers. Run the complete block below from
-an owner terminal. A root shell holds the migration-lock descriptor while
-waiting for the owner subprocess to finish recovery. Its signal handlers preserve that lock
-through terminal interrupts. The editor and experiment shell run as
-the owner; `sudoedit` retains the selected owner editor. Every failure before
-editing aborts. After the verified private backup exists, EXIT/HUP/INT/TERM
-restore proc automatically, including editor failure and Ctrl-C. The trap is
-registered **before** the first edit. Do not run individual lines separately.
-The owner edit sets `ProcMonitorMethod` to `ebpf` and `LogLevel` to `1` (see below).
-
-```bash
-sudo bash -c '
-set -euo pipefail
-exec 9>/run/lock/bazzite-tower-snitchwatch-migration.lock
-flock -n 9
-trap ":" HUP INT TERM
-sudo -H -u "$1" -- env SUDO_EDITOR="$2" bash -s
-' -- "$USER" "${SUDO_EDITOR:-${VISUAL:-${EDITOR:-vi}}}" <<'EBPF_EXPERIMENT'
-set -Eeuo pipefail
-umask 077
-config=/etc/opensnitchd/default-config.json
-log=/var/log/opensnitchd.log
-sudo jq -e '.ProcMonitorMethod == "proc" and .DefaultAction == "allow" and .Server.Address == "unix:opensnitchd.sock"' "$config" >/dev/null
-sudo mkdir -p -m 0755 -- /var/lib/bazzite-tower
-backup_dir="$(sudo mktemp -d /var/lib/bazzite-tower/snitchwatch-ebpf.XXXXXX)"
-[ "$(sudo stat -c '%u:%g:%a' "$backup_dir")" = 0:0:700 ]
-sudo cp --preserve=all -- "$config" "$backup_dir/proc.json"
-sudo cmp -- "$config" "$backup_dir/proc.json"
-original_metadata="$(sudo stat -c '%u:%g:%a:%C' "$config")"
-[ "$(sudo stat -c '%u:%g:%a:%C' "$backup_dir/proc.json")" = "$original_metadata" ]
-printf 'Protected restore directory: %s\n' "$backup_dir"
-
-restore_proc() {
-    # Explicit guards: never restart after a failed copy or failed validation.
-    sudo cp --preserve=all -- "$backup_dir/proc.json" "$config" || return 1
-    sudo cmp -- "$backup_dir/proc.json" "$config" || return 1
-    local restored_metadata
-    restored_metadata="$(sudo stat -c '%u:%g:%a:%C' "$config")" || return 1
-    [ "$restored_metadata" = "$original_metadata" ] || return 1
-    sudo jq -e '.ProcMonitorMethod == "proc" and .DefaultAction == "allow" and .Server.Address == "unix:opensnitchd.sock"' "$config" >/dev/null || return 1
-    sudo systemctl restart opensnitch.service || return 1
-    # Readiness is a report, not a gate: an unrelated readiness failure must not
-    # keep this loop (and the migration lock) retrying forever. Retry briefly so a
-    # daemon still coming up after the restart is not reported as a failure.
-    for attempt in 1 2 3; do
-        if sudo ujust snitchwatch-system-readiness; then
-            printf 'Restored exact proc config, metadata and service readiness.\n'
-            return 0
-        fi
-        [ "$attempt" = 3 ] || sleep 2
-    done
-    printf 'WARNING: readiness did not pass after restore; READINESS NOT CONFIRMED. Run it and repair before resuming normal operations.\n' >&2
-}
-recover() {
-    local experiment_status=$?
-    trap - EXIT
-    trap '' HUP INT TERM
-    set +e
-    until restore_proc; do
-        printf 'RECOVERY FAILED; migration lock retained. Backup: %s/proc.json\n' "$backup_dir" >&2
-        printf 'Repair the failure in another terminal; press Enter to retry. Do not kill this session.\n' >&2
-        read -r _ </dev/tty || sleep 60
-    done
-    exit "$experiment_status"
-}
-trap recover EXIT
-trap 'exit 129' HUP
-trap 'exit 130' INT
-trap 'exit 143' TERM
-
-# Change exactly two keys and preserve every other one: ProcMonitorMethod from
-# proc to ebpf, and LogLevel from 2 to 1. The daemon logs the eBPF success lines
-# at INFO (level 1), so at the shipped LogLevel 2 the greps below could never
-# match. LogLevel 1 is experiment-only; restore_proc copies the backup back.
-sudoedit "$config" </dev/tty
-sudo python3 -I - "$backup_dir/proc.json" "$config" <<'CHECK_CONFIG'
-import json, sys
-before, after = [json.load(open(path)) for path in sys.argv[1:]]
-before['ProcMonitorMethod'] = 'ebpf'
-before['LogLevel'] = 1
-# Compare serialized forms: Python == equates 150 with 150.0 and 0 with False.
-if json.dumps(after, sort_keys=True) != json.dumps(before, sort_keys=True) or type(after['LogLevel']) is not int:
-    sys.exit('Only ProcMonitorMethod (ebpf) and LogLevel (1) may change')
-CHECK_CONFIG
-log_inode="$(sudo stat -c %i "$log")"
-log_bytes="$(sudo stat -c %s "$log")"
-ebpf_log="$(mktemp ./ebpf-experiment.XXXXXX.log)"
-printf 'New restart log interval: %s\n' "$ebpf_log"
-sudo systemctl restart opensnitch.service
-sudo systemctl is-active --quiet opensnitch.service
-
-check_interval() {
-    [ "$(sudo stat -c %i "$log")" = "$log_inode" ] || return 1
-    [ "$(sudo stat -c %s "$log")" -ge "$log_bytes" ] || return 1
-    sudo tail -c "+$((log_bytes + 1))" "$log" > "$ebpf_log" || return 1
-    grep -Fq '[eBPF] module loaded: /usr/lib/opensnitchd/ebpf/opensnitch.o' "$ebpf_log" || return 1
-    grep -Fq '[eBPF] module loaded: /usr/lib/opensnitchd/ebpf/opensnitch-procs.o' "$ebpf_log" || return 1
-    grep -Fq 'Process monitor method ebpf' "$ebpf_log" || return 1
-    if grep -Ei 'unable to load eBPF module|opensnitch-procs.o not available|error starting ebpf monitor method|module collection.*error|opening kprobe|opening kretprobe|tracepoint.*(fail|error|missing|not found)|(fail|error|missing).*tracepoint|Process monitor method (/?proc|audit|ftrace)' "$ebpf_log"; then
-        return 1
-    fi
-}
-sleep 120  # Same two-minute warmup as proc, then validate both loaded modules.
-check_interval
-cat "$ebpf_log"
-printf 'Inspect the new interval for any other fallback/probe errors. Type validated to sample: '
-read -r answer </dev/tty
-[ "$answer" = validated ]
-sudo /usr/libexec/bazzite-tower-snitchwatch-resources --duration 600 --interval 5 > ebpf-idle.json
-printf 'Prepare the same workload used for proc; type ready to start: '
-read -r answer </dev/tty
-[ "$answer" = ready ]
-sudo /usr/libexec/bazzite-tower-snitchwatch-resources --duration 600 --interval 5 > ebpf-workload.json
-check_interval  # Includes late workload errors, rotation and truncation.
-cat "$ebpf_log"
-# End of block triggers the EXIT trap and restores proc before the root parent releases its lock.
-EBPF_EXPERIMENT
-```
-
-The experiment edit sets exactly two keys: `ProcMonitorMethod` to `ebpf` and
-`LogLevel` to `1`. OpenSnitch v1.8.0 logs `[eBPF] module loaded: ...` and
-`Process monitor method ebpf` at INFO (level 1), while the shipped configs use
-`LogLevel` 2 (levels: DEBUG 0, INFO 1, IMPORTANT 2, WARNING 3, ERROR 4,
-FATAL 5), so leaving it at 2 hides every success line and the check always
-fails. `LogLevel` 1 is experiment-only: the restore path copies the private
-backup back, so the final restored config must be the shipped
-`proc`/`allow`/`LogLevel` 2. Any other key change aborts and restores.
-
-Missing logs, log rotation/truncation, absent successes, fallback, module load
-errors, relevant kprobe/kretprobe warnings or missing syscall/scheduler
-tracepoints abort and trigger restoration. Inspect the complete interval for
-other diagnostic wording; the pattern check cannot recognize every error.
-An active service or just the `opensnitch.o` success is insufficient. The DNS
-object's packaging check does not replace the two required module successes.
-Full system readiness **must refuse** the local eBPF override: its contract is
-the shipped allow/proc policy. Do not loosen readiness for this experiment.
-
-The recovery trap retries only after owner acknowledgement (or every 60 seconds
-if its terminal vanished) and keeps the lock held until copy, byte comparison,
-metadata/policy checks and service restart all succeed; readiness then runs and
-prints a warning if it fails, but does not hold the lock. A failed
-copy/validation never proceeds to restart. Do not close/kill a recovery session;
-repair its reported failure from another owner terminal and retry. SIGKILL,
-power loss and a reboot cannot be trapped: use the printed protected backup
-path to restore with `sudo cp --preserve=all -- BACKUP/proc.json
-/etc/opensnitchd/default-config.json`, compare bytes/metadata, validate proc/allow,
-restart OpenSnitch and run readiness **before** resuming normal operations.
-After successful proc recovery and block completion, run the same full `tests/boot-check.sh` gate used
-before the experiment. Preserve its result alongside the resource/log reports.
-
-Retain the protected backup and reports. `cp --preserve=all` restores original
-ownership, permissions and security context; do not relax DAC to make backup
-files readable. The full boot gate's existing whole-boot eBPF error assertion
-remains strict. If an experiment failed and left a boot-journal error, report
-that exact experiment interval separately alongside restored-proc checks;
-do not call the full gate clean or erase the evidence. A subsequent clean
-proc boot is an owner action, never an agent action.
+new connections, reconnects and owner-operated suspend/resume. A performance
+improvement alone does not establish correctness. The full
+`tests/boot-check.sh` gate's whole-boot `unable to load eBPF module` assertion
+stays strict: a failed eBPF interval leaves boot-journal evidence even after
+switching to `proc`; report that interval separately, do not call the gate
+clean or erase the evidence.
 
 Policy writers must serialize edits with the migration helper using
 `/run/lock/bazzite-tower-snitchwatch-migration.lock`. Linux filesystem exchange
@@ -870,8 +745,12 @@ unit start time, matching log lines) for owner gate A to paste back.
 
 Not verified: the `anon_inode:bpf-prog` link name on the real kernel, the log
 strings (from v1.8.0, unchecked at a1353848) and the fd floor
-(`EBPF_PROG_FD_FLOOR = 1` until gate A calibrates it). Nothing calls this check
-yet; readiness, health and boot-check wiring come with the enable change.
+(`EBPF_PROG_FD_FLOOR = 1` until gate A calibrates it). Wired into: system
+readiness (after the config contract; `FAIL` refuses, `WARN` is reported),
+`ujust opensnitch-readiness` (legacy, root only, otherwise skipped with a note),
+`ujust tower-health` (final `RESULT` line, `UNKNOWN` unprivileged) and, as a
+soft check only, `tests/boot-check.sh` (whether kprobes can load inside the podman
+systemd container is unverified).
 
 ### r15.1 transition from an existing deny deployment
 

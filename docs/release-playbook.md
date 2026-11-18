@@ -174,7 +174,7 @@ ghcr.io/bearyjd/bazzite-tower:snitchwatch-system` (same digest, nothing to downl
 ## Firewall defaults and owner checks
 
 The original r15 system release used `DefaultAction deny`; r15.1 and subsequent
-products retain `DefaultAction allow` in both profiles with `ProcMonitorMethod proc`. Deny
+products retain `DefaultAction allow` in both profiles with `ProcMonitorMethod ebpf` and the pinned `Ebpf.ModulesPath` (from the eBPF-enable release on; earlier products used `proc`). Deny
 enforcement requires explicit operator opt-in. The system profile uses a root-only
 `unix:opensnitchd.sock`. Extra owner acceptance steps:
 

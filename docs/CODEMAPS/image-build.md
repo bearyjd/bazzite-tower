@@ -7,7 +7,7 @@
 ## Accepted products and upstream base refresh
 
 `.github/base-refresh-policy.json` pins both accepted product profiles to
-`f8b490dd20e2572065b8cccd91bbdd2e9bc9ab16`. Legacy publishes `:stable` and
+`92afd7ab9db28ef8ef11aa5ab0de6b512a64a8ad`. Legacy publishes `:stable` and
 compatibility `:latest` with `IMAGE_TAG=latest`; reviewed r16.1 system publishes
 only `:snitchwatch-system`. The policy transition follows successful protected
 promotion and independent destination signature/SPDX checks. Host runtime

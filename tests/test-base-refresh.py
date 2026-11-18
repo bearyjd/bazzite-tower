@@ -519,4 +519,44 @@ class PolicySourceIdentity(unittest.TestCase):
         self.assertEqual(git('rev-parse', policy['sourceCommit'] + '^{tree}').stdout.strip(), policy['sourceTree'])
 
 
+class BaseVersionGrammar(unittest.TestCase):
+    """2026-11-17: upstream began labelling stable 45.20261117.1 (optional .N revision)."""
+    def test_accepts_plain_and_revision(self):
+        self.assertEqual(r.base_version('45.20261117'), (45, 20261117, 0))
+        self.assertEqual(r.base_version('45.20261117.1'), (45, 20261117, 1))
+        self.assertEqual(r.base_version('45.20261117.9999'), (45, 20261117, 9999))
+
+    def test_rejects_malformed(self):
+        for bad in ['', ' ', '45.20261117 ', ' 45.20261117', '45.20261117\n', '45.20261117.1\n', '45.20261117.0', '45.20261117.00',
+                    '45.20261117.01', '45.20261117.1.2', '45.20261117.', '45.20261117.10000', '45.2026111', '4.20261117',
+                    '45.20261117.-1', '45.20261117.a', '45.20261117.\u0661', '\u0664\u0665.20261117', 'v45.20261117', None, 45]:
+            with self.subTest(bad=bad), self.assertRaises(ValueError): r.base_version(bad)
+
+    def test_ordering_is_total_and_monotone(self):
+        order = ['45.20261117', '45.20261117.1', '45.20261117.2', '45.20261117.10', '45.20261118']
+        self.assertEqual(sorted(order, key=r.base_version), order)
+
+    def test_floor_and_baseline_comparisons(self):
+        self.assertGreaterEqual(r.base_version('45.20261117.1'), r.base_version('45.20261105'))
+        self.assertGreaterEqual(r.base_version('45.20261117.1'), r.base_version('45.20261117'))
+        self.assertLess(r.base_version('45.20261117'), r.base_version('45.20261117.1'))
+
+    def test_resolve_accepts_revision_label(self):
+        # Previously raised ValueError('invalid Bazzite version') in the scheduled `resolve` job.
+        policy = json.loads((ROOT / '.github/base-refresh-policy.json').read_bytes())
+        digest = 'sha256:' + 'c' * 64
+        info = {'Digest': digest, 'Labels': {'org.opencontainers.image.version': '45.20261117.1'}}
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp) / 'out'
+            env = {'CONTROL': str(ROOT), 'GITHUB_OUTPUT': str(out), 'GITHUB_REPOSITORY': 'bearyjd/bazzite-tower', 'GITHUB_REF': 'refs/heads/main',
+                   'GITHUB_EVENT_NAME': 'schedule', 'GITHUB_SHA': 'a' * 40, 'GITHUB_RUN_ID': '17', 'GITHUB_RUN_NUMBER': '2', 'GITHUB_RUN_ATTEMPT': '1',
+                   'GITHUB_WORKFLOW_REF': 'bearyjd/bazzite-tower/.github/workflows/base-refresh.yml@refs/heads/main'}
+            with patch.dict(os.environ, env), patch.object(r, 'command', return_value=json.dumps(info)), \
+                    patch.object(sys, 'argv', ['base-refresh.py', 'resolve', '--control', str(ROOT)]):
+                r.main()
+            lines = out.read_text().splitlines()
+        self.assertIn('version=45.20261117.1', lines)
+        self.assertIn('base=' + policy['upstream'] + '@' + digest, lines)
+
+
 if __name__ == '__main__': unittest.main()

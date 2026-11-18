@@ -278,7 +278,9 @@ def log_matches(path, started, utc):
             fallback.append(line)
         elif PARTIAL_LOG in line:
             partial.append(line)
-    covered = started is None or first is None or first <= started + LOG_START_SLACK_SECONDS
+    # With a known start, only a log whose FIRST parseable stamp reaches back to the start counts as covering it:
+    # an empty, truncated or unparseable log must not read as 'no fallback warning since start'.
+    covered = started is None or (first is not None and first <= started + LOG_START_SLACK_SECONDS)
     return LogScan(fallback, partial, covered)
 
 

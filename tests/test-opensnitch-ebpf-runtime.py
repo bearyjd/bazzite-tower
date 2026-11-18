@@ -56,6 +56,10 @@ def stamp(epoch, zone='UTC'):
     return datetime.datetime.fromtimestamp(epoch, zoneinfo.ZoneInfo(zone)).strftime('[%Y-%m-%d %H:%M:%S]')
 
 
+# A log that reaches back to the unit start: the default for tests that are not about log coverage.
+COVERING_LOG = f'{stamp(EPOCH + 1)}  INF  daemon started\n'
+
+
 def load_module():
     loader = importlib.machinery.SourceFileLoader('ebpf_check_inproc', str(CHECK))
     module = importlib.util.module_from_spec(importlib.util.spec_from_loader(loader.name, loader))
@@ -91,7 +95,7 @@ class Runtime(unittest.TestCase):
                 '--systemctl', str(self.bin / 'systemctl'), '--bpftool', str(self.bin / 'bpftool' if bpftool else self.dir / 'no-bpftool'),
                 *extra]
 
-    def run_check(self, method='ebpf', pid=PID, log='', start=START, mainpid_fail=False, args=(), config=True, env=None,
+    def run_check(self, method='ebpf', pid=PID, log=COVERING_LOG, start=START, mainpid_fail=False, args=(), config=True, env=None,
                   log_utc=True, config_text=None, bpftool=None, logpath=None, pid2=None):
         if config:
             self.config.write_text(config_text if config_text is not None else
@@ -182,7 +186,7 @@ class Runtime(unittest.TestCase):
         floor_copy.write_text(CHECK.read_text().replace('EBPF_PROG_FD_FLOOR = 1', 'EBPF_PROG_FD_FLOOR = 5'))
         self.setup_fds(bpf=2)
         self.config.write_text('{"ProcMonitorMethod": "ebpf", "LogUTC": true}')
-        self.log.write_text('')
+        self.log.write_text(COVERING_LOG)
         (self.bin / 'mainpid').write_text(f'{PID}\n')
         (self.bin / 'start').write_text(f'{START}\n')
         run = subprocess.run(['python3', '-B', str(floor_copy), *self.argv()], capture_output=True, text=True)
@@ -313,6 +317,16 @@ class Runtime(unittest.TestCase):
     def test_log_that_starts_after_the_unit_start_warns_instead_of_passing(self):
         self.setup_fds()
         self.assertVerdict(self.run_check(log=f'{stamp(EPOCH + 600)}  INF  hello\n'), 'WARN', 0, 'log does not cover the unit start (rotated?)')
+
+    def test_empty_log_with_a_known_start_warns_instead_of_passing(self):
+        # rotated or truncated after the daemon started, nothing written since: the startup fallback line may be gone
+        self.setup_fds()
+        self.assertVerdict(self.run_check(log=''), 'WARN', 0, 'log does not cover the unit start')
+
+    def test_log_without_any_parseable_timestamp_warns_instead_of_passing(self):
+        # e.g. LogMicro changes the stamp format: coverage cannot be shown
+        self.setup_fds()
+        self.assertVerdict(self.run_check(log='[2026-11-17 10:00:01.123456]  INF  hello\nno stamp here\n'), 'WARN', 0, 'log does not cover the unit start')
 
     def test_log_covering_the_start_passes(self):
         self.setup_fds()
@@ -464,7 +478,7 @@ class InProcess(unittest.TestCase):
         (self.dir / 'mainpid').write_text('4242\n')
         (self.dir / 'start').write_text(f'{START}\n')
         (self.dir / 'c.json').write_text('{"ProcMonitorMethod": "ebpf", "LogUTC": true}')
-        (self.dir / 'l.log').write_text('')
+        (self.dir / 'l.log').write_text(COVERING_LOG)
         real = os.readlink
 
         def flaky(path, *a, **k):

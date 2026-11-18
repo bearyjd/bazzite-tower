@@ -846,9 +846,11 @@ for humans.
   `opensnitch-procs.o not available` (partial eBPF, no exec events); or fds
   below the floor; or the log is unreadable (not a regular file, a symlink, or
   missing); or `log does not cover the unit start (rotated?)` (the first stamp
-  in the readable 8 MiB log tail is later than the unit start: log rotated or
-  truncated, so a fallback warning could be missing; re-run after the daemon
-  logged again or inspect `journalctl -u opensnitch.service`).
+  in the readable 8 MiB log tail is later than the unit start, or the tail has
+  no parseable stamp at all (empty log, rotated or truncated, or a changed
+  stamp format such as `LogMicro`): a fallback warning could be missing, so it
+  never counts as PASS; re-run after the daemon logged again or inspect
+  `journalctl -u opensnitch.service`).
 - FAIL: `silent /proc fallback` (method `ebpf` but zero bpf-prog fds, or
   `error starting ebpf monitor method` logged since start); daemon not running;
   method not `ebpf`/`proc`; config or `/proc/<pid>/fd` unreadable; the MainPID

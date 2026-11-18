@@ -661,8 +661,8 @@ echo "== MOTD rebrand =="
 # system-bridge leg, also passed by the PR verify leg). The system-bridge tags
 # (snitchwatch-system, plus the older snitchwatch-system-candidate alternative)
 # are accepted only when the immutable bridge profile selects system mode, so a
-# legacy image cannot claim them. Not yet enforced: that system mode REQUIRES one
-# of them, i.e. nothing fails if :latest were built with the system bridge.
+# legacy image cannot claim them. Conversely, system mode REQUIRES one of them,
+# so a :latest or :latest-kernel image built with the system bridge fails.
 # A mismatch here let a :latest-kernel machine's MOTD wrongly claim :latest
 # (see docs/RUNBOOK.md).
 # shellcheck disable=SC2016 # jq interprets $bridge_profile in its own language.
@@ -670,10 +670,10 @@ check "MOTD image-info rebranded to bazzite-tower" \
     jq --arg bridge_profile "$(< /usr/share/bazzite-tower/snitchwatch-bridge-profile)" \
         -e '."image-name" == "bazzite-tower"
         and ."image-ref" == "ostree-image-signed:docker://ghcr.io/bearyjd/bazzite-tower"
-        and (."image-tag" == "latest" or ."image-tag" == "latest-kernel"
-            or ($bridge_profile == "system"
-                and (."image-tag" == "snitchwatch-system-candidate"
-                    or ."image-tag" == "snitchwatch-system")))
+        and (if $bridge_profile == "system"
+            then (."image-tag" == "snitchwatch-system-candidate"
+                or ."image-tag" == "snitchwatch-system")
+            else (."image-tag" == "latest" or ."image-tag" == "latest-kernel") end)
         and ."image-tag" == ."image-branch"' \
     /usr/share/ublue-os/image-info.json
 

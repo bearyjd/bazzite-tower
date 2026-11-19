@@ -24,7 +24,7 @@ No device was bound, unbound or reset. Raw output is not committed (the cmdline 
   and steps 5 to 7 (bind/unbind soak, suspend matrix, in-guest reset recovery) are NOT done.
 - **xHCI 0d.0**: shares group 11 with the Thunderbolt NHI. Giving it to `sys-usb` takes USB4/Thunderbolt with it (plan D4).
 - **xHCI 14.0**: shares group 12 with platform SRAM telemetry, which a VM should not own; whole-group passthrough
-  needs a deliberate call (plan step 3). Neither xHCI exposes `reset_method` (plan step 4: boot-once at best).
+  needs a deliberate call (plan step 3). Neither xHCI exposes `reset_method`; under plan rev 1 (§7.2 step 4a, no boot-once mode) that rejects passthrough unless new evidence appears.
 
 ## Update: sudo run (owner, 2026-11-16 21:50 local), same topology, kernel log now present
 Source: `sudo bash scripts/cloison-hw-report.sh` on kernel `7.2.15-ogc1.1.fc45` (booted 2026-11-13). Raw output not committed (cmdline carries LUKS UUIDs).

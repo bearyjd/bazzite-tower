@@ -215,7 +215,7 @@ Bazzite's developer image, `bazzite-dx-nvidia`, overlaps the package layer this 
 
 - **It brings tooling this image deliberately leaves out.** `bazzite-dx` includes VS Code and ROCm. This image keeps the base lean and lists VS Code among the [packages explicitly excluded](#packages-explicitly-excluded). Rebasing onto it would mean carrying them, or removing them in every build.
 - **The pin and the base-bump flow target one tag.** `BASE_IMAGE` is pinned by digest to `bazzite-nvidia-open`, and the weekly `base-bump.yml` PR and smoke gate track that tag. Moving the base would mean redoing that tracking.
-- **The driver choice is made at the base.** The open NVIDIA modules and the kernel fix that comes with them are the reasons recorded under [NVIDIA open kernel modules over proprietary](#nvidia-open-kernel-modules-over-proprietary).
+- **It is built on the Deck/handheld variant.** `bazzite-dx-nvidia` is built from `bazzite-deck-nvidia`, while this image targets desktop/laptop `bazzite-nvidia-open` and is not for handhelds or Steam Deck. Both share the same open NVIDIA driver, so the difference is the base variant, not the driver.
 
 The virtualization stack, Docker CE and OpenSnitch layers are this image's own work, so the dev tooling that matters here is already baked in. If you want the `bazzite-dx` toolset, use that image.
 

@@ -778,20 +778,20 @@ class ImageBuildContracts(unittest.TestCase):
         for key in ('rpmSigningKey', 'kojiBase'):
             self.assertEqual(self.pins[key], daemon[key])
         expected = {
-            'rust': ('a92898fcc0aefbee228e5a02fae04e3569f7ed8aa232d37b4891b0306b153cfd', 32488438),
-            'cargo': ('3e57cabdaf0d9a5e990106b9e8e33f1d08f69721ae2094248fe7478752941052', 8309626),
-            'rust-std-static': ('9a53146899a3e225d077cf7afbbabd55c03aa1e7ae07f578e53ad66c429d7b28', 43108540),
+            'rust': ('6bb4cd8cd465247798db605268c191fb274c103e316dc06c7a4728a94b1485e3', 33422393),
+            'cargo': ('89296225457b5e5b080a3b5785e13582d94aff29af5d7111bc55cf1e0efa3d56', 8258381),
+            'rust-std-static': ('35f58252e68cedeefffc3e6833195dcf18e70b28c54c3f490a3cf51d528eeb34', 42951665),
         }
         rpms = self.pins['toolchainRpms']
         self.assertEqual(len(rpms), 3)
         self.assertEqual({r['name'] for r in rpms}, set(expected))
         for rpm in rpms:
             name = rpm['name']
-            filename = f'{name}-1.99.1-2.fc45.x86_64.rpm'
+            filename = f'{name}-1.100.0-1.fc45.x86_64.rpm'
             self.assertEqual((rpm['sha256'], rpm['size']), expected[name])
             self.assertEqual(rpm['file'], filename)
-            self.assertEqual(rpm['nevra'], f'{name}-0:1.99.1-2.fc45.x86_64')
-            self.assertEqual(rpm['kojiPath'], 'rust/1.99.1/2.fc45/data/signed/f577861e/x86_64/' + filename)
+            self.assertEqual(rpm['nevra'], f'{name}-0:1.100.0-1.fc45.x86_64')
+            self.assertEqual(rpm['kojiPath'], 'rust/1.100.0/1.fc45/data/signed/f577861e/x86_64/' + filename)
         installer = (FACTORY / 'snitchwatch-system-install-deps.sh').read_bytes()
         self.assertEqual(sha(installer), 'bcd389f859882d25bb53baee7fde167f144f311d315ee0f39dc456793cd486eb')
 
@@ -837,7 +837,7 @@ dnf() {
 rustc() {
     echo rustc >> "$events"
     [[ -f "$installed" ]] || return 1
-    echo 'rustc 1.99.1 (fixture)'
+    echo 'rustc 1.100.0 (fixture)'
 }
 protoc() { echo 'libprotoc 33.5'; }
 python3() {

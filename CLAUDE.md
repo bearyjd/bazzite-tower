@@ -235,15 +235,29 @@ that shape for any new hardware investigation.
   assertion** to make a change pass — if a change legitimately changes the
   intended behavior, update the assertion to match the *new* intent and say
   so explicitly; don't silently delete the check.
+- **Know which base a build uses.** The published `:latest`/`:stable` laptop
+  image's base is NOT the `Containerfile` pin: `.github/workflows/base-refresh.yml`
+  (daily) resolves upstream `ghcr.io/ublue-os/bazzite-nvidia-open:stable` to an
+  immutable digest and overrides `BASE_IMAGE` in the accepted source checkout,
+  rejecting bases below the floor in `.github/base-refresh-policy.json`
+  (`minimumBaseVersion`/`minimumKernel`; logic in `ci/base-refresh.py`). The
+  floor and policy are changed by reviewed PR, not by hand-editing a pin.
 - **Never bump or unpin the base image tag in `Containerfile` by hand** without
   re-reading `docs/research/i915-mtl-resume-2026-06-20.md` and confirming the
   upstream regression it documents is actually fixed (check for a real fix
-  commit, not just a version number moving past 7.0). This is the highest-
-  consequence line in the repo — see `.agent_native/agent_roadmap.md` item 1
-  for a known gap in the "is it safe yet" verification story. The owner stated
-  on 2026-10-21 that the i915 fix is in, so the weekly `base-bump.yml` PRs
-  (`ci/base-bump.sh`) are authorized; merge each one only when CI is green and
-  not mid-release, and still do not hand-edit the pin on a hunch.
+  commit, not just a version number moving past 7.0). The pin still decides
+  every build that does not go through base-refresh and does not pass its own
+  `BASE_IMAGE`: local `just build` and PR CI's `safe-pin` leg. (`build.yml`'s
+  `:latest-kernel` lane passes `BASE_IMAGE=...:stable` and so ignores the pin.)
+  TODO(owner): confirm whether the pin should still be treated as
+  highest-consequence now that no published channel is built from it. See
+  `.agent_native/agent_roadmap.md` item 1 for a known gap in the "is it safe
+  yet" verification story. The owner stated on 2026-10-21 that the
+  i915 fix is in, so the weekly `base-bump.yml` PRs (`ci/base-bump.sh`) are
+  authorized; merge each one only when CI is green and not mid-release, and
+  still do not hand-edit the pin on a hunch. Note: `base-bump.yml` currently
+  fails with HTTP 403 on its token (not fixed as of this change), so expect no
+  bump PRs until the owner repairs it.
 - **Do not run full container/VM/ISO builds speculatively** — see
   "Verification loop" above for the cheaper alternatives to try first.
 - **`docs/**` changes don't trigger an image rebuild** (`build.yml` has

@@ -274,7 +274,13 @@ run_tests() {
     local name
     for name in ${UPSTREAM_UI_CONFIG_TESTS//|/ }; do
         echo "== go test ./ui -run ^$name\$ (own process)"
-        go test -count=1 -run "^$name\$" ./ui
+        # -run "^name$" prints "ok [no tests to run]" and passes if upstream
+        # renames a test, and a SKIP also exits 0: require the PASS line.
+        go test -count=1 -v -run "^$name\$" ./ui | tee "/work/ui-$name.log"
+        grep -q -- "^--- PASS: $name (" "/work/ui-$name.log" || {
+            echo "FAIL: upstream ui test $name did not report PASS (renamed, removed or skipped?)" >&2
+            exit 1
+        }
     done
     echo "PASS: OpenSnitch patch tests"
 }

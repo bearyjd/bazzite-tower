@@ -28,7 +28,7 @@ env:
   DEFAULT_TAG: "latest"
   # Pin the builder separately from the image-under-test: :latest is mutable
   # and would make identical disk workflow revisions non-reproducible.
-  BIB_IMAGE: "quay.io/centos-bootc/bootc-image-builder@sha256:4d8a0d9d173a9f450ff42d70777e1e0a6681a68f5c0f5084b65222eceb1f4d05"
+  BIB_IMAGE: "quay.io/centos-bootc/bootc-image-builder@sha256:dab86ee6b46dcade411b37f4e70b07d93b6a06da0dbfec6fe89247a220e0d9f8"
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref || github.run_id }}

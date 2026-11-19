@@ -2,7 +2,7 @@ image_name := "bazzite-tower"
 # titanoboa commit used by build-iso-live; bump deliberately after review.
 titanoboa_rev := "5c457c3d0518bd17e754be0fd98a60d29d26abb4"
 export default_tag := env("DEFAULT_TAG", "latest")
-export bib_image := env("BIB_IMAGE", "quay.io/centos-bootc/bootc-image-builder@sha256:4d8a0d9d173a9f450ff42d70777e1e0a6681a68f5c0f5084b65222eceb1f4d05")
+export bib_image := env("BIB_IMAGE", "quay.io/centos-bootc/bootc-image-builder@sha256:dab86ee6b46dcade411b37f4e70b07d93b6a06da0dbfec6fe89247a220e0d9f8")
 
 alias build-vm := build-qcow2
 alias rebuild-vm := rebuild-qcow2

@@ -23,7 +23,7 @@
 </div>
 <!-- glowup:hero end -->
 
-A custom [bootc](https://github.com/bootc-dev/bootc) image derived from `ghcr.io/ublue-os/bazzite-nvidia-open`, tailored for an NVIDIA RTX-equipped desktop/laptop workstation that doubles as a virtualization host and developer machine. The published `:latest`/`:stable` base is refreshed daily by `.github/workflows/base-refresh.yml` (the opt-in `:latest-kernel` channel is built weekly and on push to `main` by `build.yml`); images are signed with cosign and published to `ghcr.io/bearyjd/bazzite-tower`.
+A custom [bootc](https://github.com/bootc-dev/bootc) image derived from `ghcr.io/ublue-os/bazzite-nvidia-open`, tailored for an NVIDIA RTX-equipped desktop/laptop workstation that doubles as a virtualization host and developer machine. The published `:latest`/`:stable` base is refreshed daily by `.github/workflows/base-refresh.yml` (which also publishes `:snitchwatch-system`; the opt-in `:latest-kernel` channel is built weekly and on push to `main` by `build.yml`); images are signed with cosign and published to `ghcr.io/bearyjd/bazzite-tower`.
 
 ## Why this exists
 

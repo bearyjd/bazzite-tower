@@ -23,6 +23,7 @@ rather than `:stable` for reproducibility in those builds.
 not a recommendation to boot it. See the `Containerfile` header comment for the
 full history.
 **Publishes:** `ghcr.io/bearyjd/bazzite-tower:{latest, latest.YYYYMMDD, YYYYMMDD, <sha>}`
+(`:latest`/`:stable` and `:snitchwatch-system` are published by `base-refresh.yml`; `build.yml` publishes `latest-kernel-*` only)
 and the same shape under `latest-kernel-*` and `snitchwatch-system-*` (opt-in system bridge), cosign-signed by digest.
 
 ## Lifecycle (source → running OS)
@@ -38,7 +39,7 @@ build_files/build.d/ ─RUN────┘        │
                    ghcr.io/bearyjd/bazzite-tower:latest ──┐
                                       │                    │ installer/ payload + titanoboa
                   bootc switch /      │                    ▼
-                  weekly rebase       │          live/installer ISO  (Secure Boot OK)
+                  rebase              │          live/installer ISO  (Secure Boot OK)
                                       ▼
                           laptop OS (ThinkPad P1)
 ```

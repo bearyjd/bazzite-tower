@@ -551,7 +551,7 @@ lint:
         exit 1
     fi
     # Run shellcheck on all Bash scripts
-    /usr/bin/find . -iname "*.sh" -type f -exec shellcheck "{}" ';'
+    /usr/bin/find . -iname "*.sh" -type f -exec shellcheck {} +
 
 # Fills the gap between `just lint` (shellcheck, seconds) and `just build`
 # (minutes). Until this existed, the only check on the Containerfile itself was

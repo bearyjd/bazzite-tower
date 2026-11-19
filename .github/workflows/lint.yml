@@ -1,0 +1,84 @@
+---
+# Advisory lint gate: runs the existing Justfile recipes (`just lint` =
+# shellcheck, `just lint-containerfile` = hadolint pinned by digest in the
+# Justfile). continue-on-error keeps findings from blocking merges until the
+# baseline is confirmed stable across a hadolint repin; flip to blocking later.
+name: Lint
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'Containerfile*'
+      - '**.sh'
+      - 'Justfile'
+      - '.github/workflows/lint.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: lint-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Install just
+        env:
+          JUST_VERSION: "1.40.0"
+          JUST_SHA256: 181b91d0ceebe8a57723fb648ed2ce1a44d849438ce2e658339df4f8db5f1263
+        run: |
+          set -euo pipefail
+          curl -fsSL -o just.tgz "https://github.com/casey/just/releases/download/${JUST_VERSION}/just-${JUST_VERSION}-x86_64-unknown-linux-musl.tar.gz"
+          echo "${JUST_SHA256}  just.tgz" | sha256sum -c -
+          sudo tar -xzf just.tgz -C /usr/local/bin just
+          rm just.tgz
+          just --version
+
+      - name: Install shellcheck
+        env:
+          SHELLCHECK_VERSION: "0.11.0"
+          SHELLCHECK_SHA256: 8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198
+        run: |
+          set -euo pipefail
+          curl -fsSL -o shellcheck.tar.xz "https://github.com/koalaman/shellcheck/releases/download/v${SHELLCHECK_VERSION}/shellcheck-v${SHELLCHECK_VERSION}.linux.x86_64.tar.xz"
+          echo "${SHELLCHECK_SHA256}  shellcheck.tar.xz" | sha256sum -c -
+          sudo tar -xJf shellcheck.tar.xz -C /usr/local/bin --strip-components=1 "shellcheck-v${SHELLCHECK_VERSION}/shellcheck"
+          rm shellcheck.tar.xz
+          shellcheck --version
+
+      - name: shellcheck (just lint)
+        id: shellcheck
+        continue-on-error: true
+        run: just lint
+
+      - name: hadolint (just lint-containerfile)
+        id: hadolint
+        continue-on-error: true
+        run: just lint-containerfile
+
+      # continue-on-error makes a failed step report success, so surface the
+      # advisory result explicitly (annotation + job summary).
+      - name: Report advisory results
+        if: always()
+        env:
+          SHELLCHECK_OUTCOME: ${{ steps.shellcheck.outcome }}
+          HADOLINT_OUTCOME: ${{ steps.hadolint.outcome }}
+        run: |
+          for pair in "shellcheck:${SHELLCHECK_OUTCOME}" "hadolint:${HADOLINT_OUTCOME}"; do
+            name="${pair%%:*}"; outcome="${pair#*:}"
+            if [ "${outcome}" = "failure" ]; then
+              echo "::warning title=Advisory lint::${name} reported findings (advisory, not blocking)"
+              echo "- ${name}: FAILED (advisory)" >> "${GITHUB_STEP_SUMMARY}"
+            else
+              echo "- ${name}: ${outcome}" >> "${GITHUB_STEP_SUMMARY}"
+            fi
+          done

@@ -4,7 +4,6 @@
 Commands are faked on a PATH-only directory and /sys, /dev are faked through
 TOWER_HEALTH_FSROOT. Every probe has a negative fixture that must report WARN or UNKNOWN.
 """
-import os
 from pathlib import Path
 import shutil
 import subprocess
@@ -27,14 +26,16 @@ elif name == "mokutil":
     if mode == "fail":
         print("failed to read", file=sys.stderr); sys.exit(1)
     print({"enabled": "SecureBoot enabled", "disabled": "SecureBoot disabled",
-           "noshim": "SecureBoot enabled\nSecureBoot validation is disabled in shim"}[mode])
+           "noshim": "SecureBoot enabled\nSecureBoot validation is disabled in shim",
+           "weird": "SecureBoot maybe"}[mode])
 elif name == "findmnt":
     src = env.get("ROOT_SRC", "/dev/mapper/luks-root")
     if src == "none": sys.exit(1)
     print(src)
 elif name == "lsblk":
     chain = env.get("LSBLK")
-    if chain is None: sys.exit(1)
+    if chain is None or "[" in args[-1]:
+        print("lsblk: " + args[-1] + ": not a block device", file=sys.stderr); sys.exit(32)
     print(chain.replace(";", "\n"))
 elif name == "cryptsetup":
     if args[0] == "status":
@@ -44,6 +45,8 @@ elif name == "cryptsetup":
         print("/dev/mapper/luks-root is active and is in use.\n  type:    " + mode +
               "\n  cipher:  aes-xts-plain64\n  keysize: 512 bits")
     elif args[0] == "luksDump":
+        if args[-1] != "/dev/nvme0n1p3":
+            print("wrong device " + args[-1], file=sys.stderr); sys.exit(1)
         mode = env.get("CS_DUMP", "tpm2")
         if mode == "fail": sys.exit(1)
         if mode == "luks1": print("LUKS header information\nVersion:        1"); sys.exit()
@@ -75,7 +78,10 @@ class BootChain(unittest.TestCase):
         (self.fs / "sys/class/tpm/tpm0/tpm_version_major").write_text("2\n")
         (self.fs / "dev/tpmrm0").write_text("")
         for name in ("timeout", "head", "tr", "awk", "python3", "grep", "tail", "cut", "od"):
-            (self.bin / name).symlink_to(shutil.which(name))
+            found = shutil.which(name)
+            if found is None:
+                raise AssertionError("required tool missing on the test host: " + name)
+            (self.bin / name).symlink_to(found)
         for name in ("id", "mokutil", "findmnt", "lsblk", "cryptsetup"):
             p = self.bin / name
             p.write_text(MOCK)
@@ -118,6 +124,13 @@ class BootChain(unittest.TestCase):
     def test_sb_unreadable_is_unknown_never_pass(self):
         self.assertTrue(self.run_bc(MOKUTIL="fail")["Secure Boot"].startswith("UNKNOWN"))
 
+    def test_sb_garbage_reply_without_efivar_is_unknown(self):
+        self.assertTrue(self.run_bc(MOKUTIL="weird")["Secure Boot"].startswith("UNKNOWN"))
+
+    def test_sb_unrecognized_state_is_not_pass(self):
+        value = self.run_bc(MOKUTIL="weird")["Secure Boot"]
+        self.assertTrue(value.startswith(("WARN", "UNKNOWN")), value)
+
     # Lockdown
     def test_lockdown_modes(self):
         f = self.fs / "sys/kernel/security/lockdown"
@@ -148,6 +161,14 @@ class BootChain(unittest.TestCase):
         value = self.run_bc(ROOT_SRC="/dev/nvme0n1p3", LSBLK=PLAIN_CHAIN)["Root encryption"]
         self.assertTrue(value.startswith("WARN"), value)
 
+    def test_root_btrfs_subvol_source_is_stripped(self):
+        value = self.run_bc(ROOT_SRC="/dev/mapper/luks-root[/root]")["Root encryption"]
+        self.assertTrue(value.startswith("PASS LUKS2"), value)
+
+    def test_root_unrecognized_crypt_type_is_not_pass(self):
+        value = self.run_bc(CS_STATUS="BOGUS")["Root encryption"]
+        self.assertTrue(value.startswith(("WARN", "UNKNOWN")), value)
+
     def test_root_crypt_status_unreadable_is_unknown(self):
         self.assertTrue(self.run_bc(CS_STATUS="denied")["Root encryption"].startswith("UNKNOWN"))
 
@@ -171,6 +192,10 @@ class BootChain(unittest.TestCase):
     def test_tpm_without_resource_manager_warns(self):
         (self.fs / "dev/tpmrm0").unlink()
         self.assertTrue(self.run_bc()["TPM"].startswith("WARN"))
+
+    def test_tpm_version_unreadable_is_unknown_not_pass(self):
+        (self.fs / "sys/class/tpm/tpm0/tpm_version_major").unlink()
+        self.assertTrue(self.run_bc()["TPM"].startswith("UNKNOWN"))
 
     def test_tpm12_warns(self):
         (self.fs / "sys/class/tpm/tpm0/tpm_version_major").write_text("1\n")

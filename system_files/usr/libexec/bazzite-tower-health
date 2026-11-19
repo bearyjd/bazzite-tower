@@ -311,7 +311,8 @@ bc_tpm() {
         ver=$(head -c 8 -- "$bc_root/sys/class/tpm/tpm0/tpm_version_major" 2>/dev/null | tr -cd '0-9')
         case "$ver" in
             1) bc_report "TPM" "WARN TPM 1.2 only (TPM2 needed)" ;;
-            *) bc_tpm_present=true; bc_report "TPM" "PASS tpm0 and /dev/tpmrm0 present (major version ${ver:-unreadable})" ;;
+            2) bc_tpm_present=true; bc_report "TPM" "PASS TPM2: tpm0 and /dev/tpmrm0 present" ;;
+            *) bc_tpm_present=true; bc_report "TPM" "UNKNOWN tpm0 and /dev/tpmrm0 present but TPM version unreadable" ;;
         esac
     elif [[ -d "$bc_root/sys/class/tpm/tpm0" ]]; then
         bc_report "TPM" "WARN tpm0 present but no /dev/tpmrm0 resource manager"

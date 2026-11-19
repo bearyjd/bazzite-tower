@@ -1,0 +1,43 @@
+---
+# Advisory lint gate: runs the existing Justfile recipes (`just lint` =
+# shellcheck, `just lint-containerfile` = hadolint pinned by digest in the
+# Justfile). continue-on-error keeps findings from blocking merges until the
+# baseline is confirmed stable across a hadolint repin; flip to blocking later.
+name: Lint
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'Containerfile*'
+      - '**.sh'
+      - 'Justfile'
+      - '.github/workflows/lint.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: lint-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Install just
+        run: sudo apt-get install -y --no-install-recommends just
+
+      - name: shellcheck (just lint)
+        continue-on-error: true
+        run: just lint
+
+      - name: hadolint (just lint-containerfile)
+        continue-on-error: true
+        run: just lint-containerfile

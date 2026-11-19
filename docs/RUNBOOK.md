@@ -66,9 +66,9 @@ again on a future kernel bump.
 
 ## Health-gated rollback (greenboot) and pinning the known-good deployment
 
-**What is verified (offline image check, `.omc/results/decision-doc-2026-11-19.md` item 3, local and gitignored).**
+**What is verified (from an offline `podman run --rm --network=none` check of image `bazzite-tower` 45.20261117.1 on 2026-11-19; not re-run on the laptop).**
 The base inherits `greenboot-0.16.4` and `greenboot-default-health-checks-0.16.4`;
-`greenboot-healthcheck.service` and `greenboot-set-rollback-trigger.service` are `enabled`;
+`greenboot-healthcheck.service` and `greenboot-set-rollback-trigger.service` are `enabled` (the trigger unit name is from that image check only, unverified against upstream docs for 0.16.x);
 `GREENBOOT_MAX_BOOT_ATTEMPTS=3`; the required checks are `02_watchdog.sh` and
 `01_repository_dns_check.sh`, and Bazzite disables the DNS check in `/etc/greenboot/greenboot.conf`;
 `/usr/lib/bootupd/grub2-static/configs.d/08_greenboot.cfg` implements the `boot_counter` fallback to
@@ -77,14 +77,14 @@ nor `tests/boot-check.sh` asserts any greenboot unit (grep: no match).
 `docs/research/kwin-screenlocker-abi-2026-07-26/REPORT.md` reports greenboot rolling this laptop
 back twice after a black-screen boot; that is a past owner observation, not re-verified here.
 
-**Unverified (the decision doc's [U] items).** Whether the laptop's installed grub uses bootupd's
-static configs (an Anaconda-installed Bazzite may have an older `grub.cfg`, and `bootc upgrade`
-does not update the bootloader); whether `boot_counter` is currently set on each upgrade; how
+**Unverified.** Whether the laptop's installed grub uses bootupd's
+static configs (an Anaconda-installed Bazzite may have an older `grub.cfg`; bootc does not run `bootupctl update` after installation, per
+[bootc bootloaders](https://bootc.dev/bootc/bootc-bootloaders.7.html): "bootloader updates must be handled separately"); whether `boot_counter` is currently set on each upgrade; how
 greenboot 0.16 performs the rollback on a bootc host; whether any health-check script beyond the
 base defaults is installed or meaningful. `bazzite-tower-health` always exits 0
 (`system_files/usr/libexec/bazzite-tower-health`), so it is a report, not a gate.
 
-**What it can and cannot catch.** greenboot gates *boot success*. It does **not** catch an s2idle
+**What it can and cannot catch.** By design (judgment, not verified on this host), greenboot gates *boot success*. It does **not** catch an s2idle
 resume regression, the main kernel risk on this machine
 ([i915 resume](research/i915-mtl-resume-2026-06-20.md)); that only shows after a suspend. After a
 new deployment boots, test resume by hand (see "Testing suspend/resume" under Health checks).
@@ -107,19 +107,20 @@ this laptop. Do not infer it works from the unit being enabled.
 
 **Not added yet, on purpose.** A log-only health check (`wanted.d`) is deliberately not shipped
 until the evidence above shows the counter is live; a required check that false-positives costs
-three reboots and a rollback (decision doc item 3). Send the output of the commands above.
+three reboots and a rollback (a required check that false-positives costs three reboots and a rollback). Send the output of the commands above.
 
 **Pin the known-good deployment.** Pinning exempts a deployment from being garbage-collected, so
-it survives later upgrades. Do it after you have accepted the current boot (including a suspend
+it survives later upgrades. Pin the *known-good, booted* deployment, not a pending one. Do it after you have accepted the current boot (including a suspend
 test) and before `bootc upgrade` or `bootc switch`:
 
 ```bash
 ostree admin status                  # note the index of the known-good deployment
-sudo ostree admin pin 0              # 0 = the booted/newest entry; use the index shown above
-sudo ostree admin pin --unpin <index>   # release it when it is no longer needed
+sudo ostree admin pin booted         # pin the known-good (currently booted) deployment
+sudo ostree admin pin --unpin <index>   # use the index from ostree admin status; release it when it is no longer needed
 ```
 
-Indexes shift as deployments come and go, so read `ostree admin status` each time. `bootc rollback`
+`pin` also accepts an index (index 0 is the first entry in `ostree admin status`, which is the *pending* deployment when one is staged), `booted`, `pending` or `rollback`
+([man page](https://ostreedev.github.io/ostree/man/ostree-admin-pin.html)). Indexes shift as deployments come and go, so prefer `booted` and confirm with `ostree admin status`. `bootc rollback`
 swaps to the *previous* deployment, which after two upgrades is not the one you pinned (Cloison §4.3 makes the same point). `ostree admin pin` is documented upstream
 ([ostree-admin-pin](https://ostreedev.github.io/ostree/man/ostree-admin-pin.html)) and is the
 step planned in [Cloison §4.3, Operation 0](prp/cloison-kvm-compartments.md); it is

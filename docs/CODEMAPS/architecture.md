@@ -81,3 +81,4 @@ enforcing-SELinux VM gates. See [system bridge research](../research/snitchwatch
 - [iso-build.md](iso-build.md) — the live/installer ISO (separate `installer/` payload)
 - [ci-cd.md](ci-cd.md) — workflows, promotion gate, tests
 - [dependencies.md](dependencies.md) — base image, repos, packages, actions
+- [cloison.md](cloison.md) — Cloison variant image: M1 scaffold only, local builds, plan under REWORK

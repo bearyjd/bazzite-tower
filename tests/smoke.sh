@@ -652,6 +652,7 @@ check "Cockpit loopback socket drop-in present" test -f /etc/systemd/system/cock
 check "Cockpit loopback socket drop-in resets wildcard listener" \
     grep -qx 'ListenStream=' /etc/systemd/system/cockpit.socket.d/10-loopback.conf
 check "tower-health helper is executable" test -x /usr/libexec/bazzite-tower-health
+check "tower-health helper has the boot-chain baseline section" grep -q 'Boot-chain baseline' /usr/libexec/bazzite-tower-health
 
 echo "== MOTD rebrand =="
 # Guards against the upstream image-info.json (which the login MOTD reads

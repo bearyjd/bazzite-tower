@@ -203,6 +203,151 @@ probe "Secure Boot" mokutil --sb-state
 # Version-only availability avoids that implicit network/write path.
 probe "Firmware tool availability (version only)" fwupdmgr --version
 
+# Boot-chain baseline: observation only. Each probe prints PASS, WARN or UNKNOWN;
+# UNKNOWN (needs root / tool missing / unreadable) is never promoted to PASS, and
+# WARN means "not enabled", not a fault: the repo does not require any of these.
+# TOWER_HEALTH_FSROOT only prefixes /sys and /dev so fixtures can fake them.
+bc_root="${TOWER_HEALTH_FSROOT:-}"
+bc_crypt_name=""
+bc_crypt_backing=""
+bc_tpm_present=false
+
+bc_report() { printf '  %-30s %s\n' "$1:" "$2"; }
+
+# $1 = mokutil-style text; prints the verdict.
+bc_sb_decide() {
+    case "$1" in
+        *"validation is disabled"*) echo "WARN enabled but shim validation is disabled" ;;
+        *"SecureBoot enabled"*) echo "PASS enabled" ;;
+        *"SecureBoot disabled"*) echo "WARN disabled (not enforced)" ;;
+        *) echo "UNKNOWN (unrecognized Secure Boot state)" ;;
+    esac
+}
+
+bc_secure_boot() {
+    local out f raw
+    if [[ ! -d "$bc_root/sys/firmware/efi" ]]; then
+        bc_report "Secure Boot" "WARN not an EFI boot (legacy BIOS): Secure Boot cannot be active"
+        return
+    fi
+    if available mokutil && available timeout && out=$(timeout 8s mokutil --sb-state 2>&1); then
+        bc_report "Secure Boot" "$(bc_sb_decide "$(printf '%s' "$out" | tr -d '\000-\010\013-\037\177' | head -c 400)")"
+        return
+    fi
+    # Fallback: EFI variable = 4 attribute bytes then one data byte (1 = enabled).
+    for f in "$bc_root"/sys/firmware/efi/efivars/SecureBoot-*; do
+        [[ -r "$f" ]] || continue
+        raw=$(od -An -tu1 -- "$f" 2>/dev/null | tr -s ' \n' ' ')
+        raw=${raw% }
+        case "${raw##* }" in
+            1) bc_report "Secure Boot" "$(bc_sb_decide "SecureBoot enabled")" ; return ;;
+            0) bc_report "Secure Boot" "$(bc_sb_decide "SecureBoot disabled")" ; return ;;
+        esac
+    done
+    bc_report "Secure Boot" "UNKNOWN (mokutil failed/missing and EFI variable unreadable)"
+}
+
+bc_lockdown() {
+    local raw mode
+    if ! raw=$(head -c 256 -- "$bc_root/sys/kernel/security/lockdown" 2>/dev/null) || [[ -z "$raw" ]]; then
+        bc_report "Kernel lockdown" "UNKNOWN (securityfs lockdown file unreadable)"
+        return
+    fi
+    mode=${raw#*\[}
+    mode=${mode%%\]*}
+    case "$mode" in
+        integrity|confidentiality|confidential) bc_report "Kernel lockdown" "PASS $mode" ;;
+        none) bc_report "Kernel lockdown" "WARN none (not enforced)" ;;
+        *) bc_report "Kernel lockdown" "UNKNOWN (unrecognized: ${raw:0:60})" ;;
+    esac
+}
+
+bc_root_encryption() {
+    local mnt src chain t n p seen=false out ctype cipher
+    for mnt in /sysroot /; do
+        src=$(timeout 8s findmnt -no SOURCE "$mnt" 2>/dev/null | head -n 1)
+        src=${src%%\[*}
+        [[ "$src" == /dev/* ]] && break
+        src=""
+    done
+    if ! available findmnt || ! available lsblk || ! available timeout; then
+        bc_report "Root encryption" "UNKNOWN (findmnt/lsblk unavailable)"
+        return
+    fi
+    if [[ -z "$src" ]]; then
+        bc_report "Root encryption" "UNKNOWN (root source is not a block device)"
+        return
+    fi
+    # lsblk -s walks from the root device down through its ancestors (lvm, crypt, part).
+    if ! chain=$(timeout 8s lsblk -nrso TYPE,NAME,PATH "$src" 2>/dev/null) || [[ -z "$chain" ]]; then
+        bc_report "Root encryption" "UNKNOWN (lsblk could not describe $src)"
+        return
+    fi
+    while read -r t n p; do
+        if "$seen" && [[ -z "$bc_crypt_backing" ]]; then bc_crypt_backing=$p; fi
+        if [[ "$t" == crypt && -z "$bc_crypt_name" ]]; then bc_crypt_name=$n; seen=true; fi
+    done <<<"$chain"
+    if [[ -z "$bc_crypt_name" ]]; then
+        bc_report "Root encryption" "WARN root is not on a dm-crypt device (unencrypted)"
+        return
+    fi
+    if ! available cryptsetup || ! out=$(timeout 8s cryptsetup status "$bc_crypt_name" 2>&1); then
+        bc_report "Root encryption" "UNKNOWN (dm-crypt root, LUKS version unreadable: needs root / cryptsetup missing)"
+        return
+    fi
+    ctype=$(printf '%s\n' "$out" | awk '$1 == "type:" {print $2; exit}' | tr -cd '[:alnum:]')
+    cipher=$(printf '%s\n' "$out" | awk '$1 == "cipher:" {print $2; exit}' | tr -cd '[:alnum:]_.:-')
+    case "$ctype" in
+        LUKS2) bc_report "Root encryption" "PASS LUKS2 (cipher ${cipher:-unknown})" ;;
+        LUKS1) bc_report "Root encryption" "WARN LUKS1 (LUKS2 expected; cipher ${cipher:-unknown})" ;;
+        PLAIN) bc_report "Root encryption" "WARN plain dm-crypt, no LUKS header (cipher ${cipher:-unknown})" ;;
+        *) bc_report "Root encryption" "UNKNOWN (dm-crypt root, unrecognized type)" ;;
+    esac
+}
+
+bc_tpm() {
+    local ver=""
+    if [[ -d "$bc_root/sys/class/tpm/tpm0" && -e "$bc_root/dev/tpmrm0" ]]; then
+        ver=$(head -c 8 -- "$bc_root/sys/class/tpm/tpm0/tpm_version_major" 2>/dev/null | tr -cd '0-9')
+        case "$ver" in
+            1) bc_report "TPM" "WARN TPM 1.2 only (TPM2 needed)" ;;
+            *) bc_tpm_present=true; bc_report "TPM" "PASS tpm0 and /dev/tpmrm0 present (major version ${ver:-unreadable})" ;;
+        esac
+    elif [[ -d "$bc_root/sys/class/tpm/tpm0" ]]; then
+        bc_report "TPM" "WARN tpm0 present but no /dev/tpmrm0 resource manager"
+    else
+        bc_report "TPM" "WARN no TPM device (disabled in firmware or absent)"
+    fi
+}
+
+bc_tpm_keyslot() {
+    local dump
+    if ! "$bc_tpm_present"; then
+        bc_report "TPM2 LUKS keyslot" "WARN no usable TPM2, nothing can be enrolled"
+    elif [[ -z "$bc_crypt_backing" ]]; then
+        bc_report "TPM2 LUKS keyslot" "UNKNOWN (no LUKS backing device identified)"
+    elif [[ "$(id -u 2>/dev/null)" != 0 ]]; then
+        bc_report "TPM2 LUKS keyslot" "UNKNOWN (needs root; rerun tower-health as root)"
+    elif ! available cryptsetup || ! dump=$(timeout 8s cryptsetup luksDump "$bc_crypt_backing" 2>/dev/null); then
+        bc_report "TPM2 LUKS keyslot" "UNKNOWN (luksDump failed or cryptsetup missing)"
+    elif ! grep -Eq '^Version:[[:space:]]+2' <<<"$dump"; then
+        bc_report "TPM2 LUKS keyslot" "WARN not LUKS2, no token metadata for TPM2 enrollment"
+    elif grep -Eq '^[[:space:]]*[0-9]+:[[:space:]]*systemd-tpm2' <<<"$dump"; then
+        bc_report "TPM2 LUKS keyslot" "PASS systemd-tpm2 token enrolled"
+    else
+        bc_report "TPM2 LUKS keyslot" "WARN no systemd-tpm2 token (not enrolled)"
+    fi
+}
+
+echo
+echo "== Boot-chain baseline (observation only) =="
+bc_secure_boot
+bc_lockdown
+bc_root_encryption
+bc_tpm
+bc_tpm_keyslot
+echo "  WARN = not enabled (visibility only, nothing was changed); UNKNOWN = not determinable here."
+
 if "$diagnostics"; then
     echo
     echo "== Bounded fresh-boot / resume excerpts (current boot only) =="

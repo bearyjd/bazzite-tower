@@ -974,6 +974,34 @@ Microcode: `microcode_ctl` is layered at the latest Fedora revision in `build.sh
 Early-load takes effect once the initramfs is regenerated (on a base bump); confirm
 the running revision with `grep -m1 microcode /proc/cpuinfo`.
 
+## Boot-chain baseline
+
+`ujust tower-health` ends its report with a "Boot-chain baseline" block that
+records what the boot chain actually is on this laptop. The probes only observe:
+no enrollment, no `mokutil --import`, no key or kernel-argument change, no
+sudo prompt. The compartment design (`docs/prp/cloison-kvm-compartments.md`)
+assumes disk encryption and a trusted boot chain, so this makes that assumption
+visible. Run `sudo ujust tower-health` for full output; unprivileged runs report
+`UNKNOWN (needs root)` for the keyslot probe.
+
+| Probe | Source | Meaning |
+|---|---|---|
+| Secure Boot | `mokutil --sb-state`, else the `SecureBoot-*` EFI variable | `PASS` enforced; `WARN` disabled, shim validation off, or a non-EFI boot |
+| Kernel lockdown | `/sys/kernel/security/lockdown` | `PASS` `integrity` or `confidentiality`; `WARN` `none` |
+| Root encryption | `findmnt` + `lsblk -s` to a `crypt` device, `cryptsetup status` | `PASS` LUKS2 (with cipher); `WARN` LUKS1, plain dm-crypt or unencrypted |
+| TPM | `/sys/class/tpm/tpm0`, `/dev/tpmrm0` | `PASS` TPM2 with resource manager; `WARN` absent, no resource manager or TPM 1.2 |
+| TPM2 LUKS keyslot | `cryptsetup luksDump` tokens (root only) | `PASS` a `systemd-tpm2` token exists; `WARN` none |
+
+`WARN` means "not enabled", not a fault: nothing in this repo requires any of
+these. `UNKNOWN` means the state could not be determined (needs root, tool
+missing, unreadable) and is never a pass. A healthy result for the compartment
+assumptions is Secure Boot `PASS`, lockdown `PASS`, root `PASS LUKS2`; a TPM2
+keyslot is optional (it is only needed for unattended unlock). The real values
+for this laptop have not been recorded yet: run it and note the result here.
+
+Offline tests: `tests/test-tower-health-boot-chain.py` (fixtures for every
+state above, including the root and non-root paths).
+
 ## SELinux labels: boot.log and kvmfr
 
 `ujust tower-health` shows the current and installed-policy expected labels for

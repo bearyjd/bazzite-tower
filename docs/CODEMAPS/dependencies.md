@@ -53,7 +53,7 @@ Snitchwatch daemon build toolchain: 7 Fedora 45 RPMs pinned by sha256 in
 `build_files/firewall/snitchwatch-system-daemon-pins.json` and fetched from Koji
 (signed copies, key sha256 pinned); see [image-build](image-build.md).
 Phase 2 separately pins three signed Koji bridge RPMs (rust, cargo,
-rust-std-static 1.99.1-2.fc45) in `build_files/firewall/snitchwatch-system-pins.json`.
+rust-std-static 1.100.0-1.fc45) in `build_files/firewall/snitchwatch-system-pins.json`.
 The shared toolchain helper runs after the byte-identical upstream installer
 and before the Rust gate; the daemon retains its seven pins. Remaining live
 toolchain and transitive dependencies, including LLVM, are not fully hermetic

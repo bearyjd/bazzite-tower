@@ -29,7 +29,7 @@
     "path": "/usr/share/pki/rpm-gpg/RPM-GPG-KEY-fedora-45-primary",
     "sha256": "846912c73a910dab32da8ef0c0d68cb89d11ff514f598d2d1dd96d04d58b2425"
   },
-  "rustVersion": "1.99.1",
+  "rustVersion": "1.100.0",
   "schemaVersion": 1,
   "sourceCommit": "7c29f7eabcbb45b8c022aa50c5bcbb0156653d46",
   "sourceFiles": {
@@ -94,28 +94,28 @@
   "submoduleCommit": "a1353848ba1b660320e90cefea782c3fba272c00",
   "toolchainRpms": [
     {
-      "file": "rust-1.99.1-2.fc45.x86_64.rpm",
-      "kojiPath": "rust/1.99.1/2.fc45/data/signed/f577861e/x86_64/rust-1.99.1-2.fc45.x86_64.rpm",
+      "file": "rust-1.100.0-1.fc45.x86_64.rpm",
+      "kojiPath": "rust/1.100.0/1.fc45/data/signed/f577861e/x86_64/rust-1.100.0-1.fc45.x86_64.rpm",
       "name": "rust",
-      "nevra": "rust-0:1.99.1-2.fc45.x86_64",
-      "sha256": "a92898fcc0aefbee228e5a02fae04e3569f7ed8aa232d37b4891b0306b153cfd",
-      "size": 32488438
+      "nevra": "rust-0:1.100.0-1.fc45.x86_64",
+      "sha256": "6bb4cd8cd465247798db605268c191fb274c103e316dc06c7a4728a94b1485e3",
+      "size": 33422393
     },
     {
-      "file": "cargo-1.99.1-2.fc45.x86_64.rpm",
-      "kojiPath": "rust/1.99.1/2.fc45/data/signed/f577861e/x86_64/cargo-1.99.1-2.fc45.x86_64.rpm",
+      "file": "cargo-1.100.0-1.fc45.x86_64.rpm",
+      "kojiPath": "rust/1.100.0/1.fc45/data/signed/f577861e/x86_64/cargo-1.100.0-1.fc45.x86_64.rpm",
       "name": "cargo",
-      "nevra": "cargo-0:1.99.1-2.fc45.x86_64",
-      "sha256": "3e57cabdaf0d9a5e990106b9e8e33f1d08f69721ae2094248fe7478752941052",
-      "size": 8309626
+      "nevra": "cargo-0:1.100.0-1.fc45.x86_64",
+      "sha256": "89296225457b5e5b080a3b5785e13582d94aff29af5d7111bc55cf1e0efa3d56",
+      "size": 8258381
     },
     {
-      "file": "rust-std-static-1.99.1-2.fc45.x86_64.rpm",
-      "kojiPath": "rust/1.99.1/2.fc45/data/signed/f577861e/x86_64/rust-std-static-1.99.1-2.fc45.x86_64.rpm",
+      "file": "rust-std-static-1.100.0-1.fc45.x86_64.rpm",
+      "kojiPath": "rust/1.100.0/1.fc45/data/signed/f577861e/x86_64/rust-std-static-1.100.0-1.fc45.x86_64.rpm",
       "name": "rust-std-static",
-      "nevra": "rust-std-static-0:1.99.1-2.fc45.x86_64",
-      "sha256": "9a53146899a3e225d077cf7afbbabd55c03aa1e7ae07f578e53ad66c429d7b28",
-      "size": 43108540
+      "nevra": "rust-std-static-0:1.100.0-1.fc45.x86_64",
+      "sha256": "35f58252e68cedeefffc3e6833195dcf18e70b28c54c3f490a3cf51d528eeb34",
+      "size": 42951665
     }
   ]
 }

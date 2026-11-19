@@ -53,8 +53,9 @@ build_files/build.d/ ─RUN────┘        │
 `build_files/build.d/95-firewall.sh` selects the firewall and the independent
 `SNITCHWATCH_BRIDGE=legacy|system` profile. Legacy remains the default: OpenSnitch
 1.8.0 uses TCP `127.0.0.1:50051` and the user bridge is separately installed.
-Both profiles retain `proc` and fail-open `allow`; eBPF stays off (the image's
-BPF objects are the v1.8.0 RPM's and do not match the system 1.9.0 daemon).
+Both profiles retain `proc` and fail-open `allow`; eBPF stays off. Both profiles ship BPF
+objects built per kernel at image build from their daemon's own commit (Track A,
+manifest-checked; runtime-unverified): system a1353848, legacy v1.8.0 b404c4c6 (the RPM daemon's release).
 
 The opt-in system candidate consumes a pinned native build and stages units
 from the same Snitchwatch source. It supplies `/usr/bin/snitchwatch-bridge-cli`,

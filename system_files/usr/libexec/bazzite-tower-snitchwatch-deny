@@ -53,7 +53,7 @@ SNAPSHOT = SNAPSHOT_DIR+"/deny-status.json"
 SYSTEM_ADDRESS = "unix:opensnitchd.sock"
 LEGACY_ADDRESS = "127.0.0.1:50051"
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
-LOCK_TIMEOUT = 30.0
+LOCK_TIMEOUT = 60.0  # must outlast common.EBPF_RUNTIME_TIMEOUT (the deny check runs under the lock)
 LOCK_POLL = 0.1
 KEY = b'"DefaultAction"'
 ACTION = re.compile(rb'("DefaultAction"\s*:\s*")(allow|deny)(")')
@@ -235,8 +235,10 @@ def inspect(ctx):
             blockers.append("unknown profile: Server.Address is "+repr(address)+"; only "+SYSTEM_ADDRESS+" is supported")
         if action != "allow":
             blockers.append("current DefaultAction is "+(action if action != "other" else "not allow/deny")+"; opt-in requires allow")
-        if json.loads(data).get("ProcMonitorMethod") != "proc":
-            blockers.append("ProcMonitorMethod is not proc; opt-in requires proc")
+        try:
+            common.proc_method_contract(json.loads(data))
+        except common.Refusal as error:
+            blockers.append(str(error)+" (opt-in blocked)")
     except (OSError, ValueError, AttributeError, common.Refusal) as error:
         blockers.append("config is not the expected root-owned file: "+str(error))
     if not service_active(ctx):
@@ -351,6 +353,14 @@ def turn_on(ctx, minutes):
         blockers.append("deny is already confirmed; run off first")
     common.require(not blockers, "cannot enable deny: "+"; ".join(blockers))
     data, metadata = read_config(ctx)
+    if json.loads(data)["ProcMonitorMethod"] == "ebpf":
+        # Never arm deny on a daemon that silently runs without (full) eBPF process attribution; proc is the documented fallback.
+        try:
+            runtime = common.ebpf_runtime(ctx)
+        except common.Refusal as error:
+            raise common.Refusal("cannot enable deny: "+str(error)) from error
+        # Only a clean PASS: every WARN (partial, log not covering the start, unreadable, below floor) leaves a fallback unruled out.
+        common.require(runtime.startswith("PASS: "), "cannot enable deny: "+runtime)
     deny = set_action(data, "deny")
     now = utcnow()
     state = dict(schema=1, id=uuid.uuid4().hex, pending=True, createdAt=stamp(now), minutes=minutes, expiresAt=stamp(now+timedelta(minutes=minutes)),

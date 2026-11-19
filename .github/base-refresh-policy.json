@@ -7,9 +7,9 @@
   "upstreamTag": "stable",
   "minimumBaseVersion": "45.20261105",
   "minimumKernel": "7.2.15-ogc1.1.fc45",
-  "sourceCommit": "f8b490dd20e2572065b8cccd91bbdd2e9bc9ab16",
-  "sourceTree": "9ca85b42a1fb5ee1917fc90b2bb51c7bb586c0e8",
-  "sourceCreated": "2026-11-16T02:24:38Z",
+  "sourceCommit": "0555af1233a023a7cd387e4030b55613d7b29ab8",
+  "sourceTree": "c0bb234595e6de5e0306f9410689eee529be985c",
+  "sourceCreated": "2026-11-18T13:46:47Z",
   "profiles": {
     "legacy": {
       "imageTag": "latest",
@@ -39,8 +39,8 @@
     }
   },
   "nativeSource": {
-    "commit": "be4a6cd0bc838359db8b8ccd872ee84459a1bc9d",
-    "tree": "bd807728b1be808e257ddd63296a0ea6b8d9eef8",
+    "commit": "c221512bf1aa0baab736eb9cc567080447164ccb",
+    "tree": "41bd79b1c88545a0d1dc3ed7ee7989b9092f5bf2",
     "submoduleCommit": "a1353848ba1b660320e90cefea782c3fba272c00"
   },
   "daemonSource": {

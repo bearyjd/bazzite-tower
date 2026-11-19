@@ -1,41 +1,429 @@
-#!/usr/bin/env python3
-"""Check RPM-supplied eBPF object packaging; this cannot prove kernel loading."""
+#!/usr/bin/python3 -I
+"""Check the packaged OpenSnitch eBPF objects; this cannot prove kernel loading.
+
+Every profile: the three objects are ELF64 BPF relocatable files.
+system and legacy: the objects were built at image build for this image's
+kernel (Track A): /usr/share/bazzite-tower/ebpf-manifest.json must name the one
+/usr/lib/modules/* release, that kernel's config sha256 (the headers' .config
+was byte-identical to it at build) and the sha256 of every object on disk.
+legacy additionally: the manifest must be for OpenSnitch v1.8.0 (the commit
+below), the commit the upstream RPM daemon of this profile is built from, and
+record that RPM version. (Before the legacy build existed, legacy carried the
+RPM objects and had to have no manifest; that assertion is now inverted.)
+
+--runtime (read-only, run as root to read /proc/<pid>/fd): decide whether the
+running daemon really uses eBPF, since it falls back to /proc silently when the
+modules fail to load. PASS/WARN exit 0, FAIL exit 1, usage error exit 2; the
+last line is `RESULT: PASS|WARN|FAIL: <reason>`. --detail adds the raw
+calibration data. Test-only overrides (--config, --log, --proc-root, --systemctl, --bpftool) are
+refused as root unless BAZZITE_TOWER_EBPF_CHECK_TESTING=1.
+"""
 import argparse
+import collections
+import datetime
+import hashlib
+import json
 import os
 from pathlib import Path
+import re
 import stat
 import struct
+import subprocess
 import sys
 
 OBJECTS = ('opensnitch.o', 'opensnitch-procs.o', 'opensnitch-dns.o')
+OBJECTS_DIR = 'usr/lib/opensnitchd/ebpf'
+MANIFEST = 'usr/share/bazzite-tower/ebpf-manifest.json'
+PROFILE = 'usr/share/bazzite-tower/snitchwatch-bridge-profile'
+# Legacy daemon = the upstream v1.8.0 release RPM (95-firewall.sh); its tag peels to this commit.
+# Must agree with snitchwatch-system-ebpf-pins.json (tests/test-snitchwatch-ebpf.py).
+LEGACY_OPENSNITCH_COMMIT = 'b404c4c6316760fa7bc415509d3f8d747f7dc9cc'
+LEGACY_RPM_VERSION = '1.8.0'
+LEGACY_RPM_RELEASE = '1'
+LEGACY_RPM_SHA256 = 'e06e9119daf764e56455b61c319e496274c0274bb53bb94a0ff1ab72967fea7d'
+LEGACY_TREE_SHA256 = '39512718023e91e3d48bdaa6f0c958a5457ebb8df560dbd53d348f55551c6fd6'
+
+# --runtime constants. UNVERIFIED on the real kernel: the fd link name and the daemon log
+# strings (taken from OpenSnitch v1.8.0, not yet checked at the a1353848 daemon).
+SERVICE = 'opensnitch.service'
+CONFIG_PATH = '/etc/opensnitchd/default-config.json'
+LOG_PATH = '/var/log/opensnitchd.log'
+BPF_PROG_LINK = 'anon_inode:bpf-prog'
+FALLBACK_LOG = 'error starting ebpf monitor method'
+PARTIAL_LOG = 'opensnitch-procs.o not available'
+# Calibration pending (owner gate A, .omc/plans/owner-gates-r16-3-2026-11-17.md): fill in the
+# observed ebpf fd count minus optional kprobes and the evidence path (fd-ebpf-L1.txt).
+EBPF_PROG_FD_FLOOR = 1
+LOG_TAIL_BYTES = 8 * 1024 * 1024
+LOG_START_SLACK_SECONDS = 2  # the daemon's first log line may trail the unit start by a moment (stamps are whole seconds)
+LOG_TIME = re.compile(r'^\[(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d)\]')
+SYSTEMCTL = '/usr/bin/systemctl'
+BPFTOOL = '/usr/bin/bpftool'  # /usr/sbin is a symlink to /usr/bin on Fedora 42+
+CHILD_ENV = {'PATH': '/usr/bin:/usr/sbin', 'LC_ALL': 'C'}
+TESTING_ENV = 'BAZZITE_TOWER_EBPF_CHECK_TESTING'
+LogScan = collections.namedtuple('LogScan', 'fallback partial covered')
+
+
+def read_object(path):
+    if not stat.S_ISREG(path.lstat().st_mode):
+        raise ValueError(f'{path}: expected a regular file, not a symlink')
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    with os.fdopen(fd, 'rb') as source:
+        if not stat.S_ISREG(os.fstat(source.fileno()).st_mode):
+            raise ValueError(f'{path}: expected a regular file')
+        return source.read()
 
 
 def verify(root):
     for name in OBJECTS:
-        path = Path(root) / 'usr/lib/opensnitchd/ebpf' / name
-        if not stat.S_ISREG(path.lstat().st_mode):
-            raise ValueError(f'{path}: expected a regular file, not a symlink')
-        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
-        with os.fdopen(fd, 'rb') as source:
-            if not stat.S_ISREG(os.fstat(source.fileno()).st_mode):
-                raise ValueError(f'{path}: expected a regular file')
-            header = source.read(64)
+        path = Path(root) / OBJECTS_DIR / name
+        header = read_object(path)[:64]
         if (len(header) != 64 or header[:7] != b'\x7fELF\x02\x01\x01'
                 or struct.unpack_from('<HHI', header, 16) != (1, 247, 1)
                 or struct.unpack_from('<H', header, 52)[0] != 64):
             raise ValueError(f'{path}: expected a nonempty ELF64 little-endian relocatable BPF object')
 
 
-def main():
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--root', default='/')
-    args = parser.parse_args()
+def image_kernel(root):
+    modules = Path(root) / 'usr/lib/modules'
+    releases = sorted(entry.name for entry in modules.iterdir() if entry.is_dir()) if modules.is_dir() else []
+    if len(releases) != 1:
+        raise ValueError(f'{modules}: expected exactly one kernel, found {releases}')
+    return releases[0]
+
+
+def verify_manifest(root, profile):
+    manifest = json.loads((Path(root) / MANIFEST).read_text())
+    if manifest.get('schemaVersion') != 1 or manifest.get('profile') != profile:
+        raise ValueError(f'{MANIFEST}: unsupported schema or profile {manifest.get("profile")!r}')
+    if (manifest.get('objectsDir') != '/' + OBJECTS_DIR
+            or not re.fullmatch('[0-9a-f]{40}', str(manifest.get('opensnitchCommit', '')))
+            or not re.fullmatch('[0-9a-f]{64}', str(manifest.get('ebpfProgTreeSha256', '')))):
+        raise ValueError(f'{MANIFEST}: malformed source identity or objects directory')
+    kernel = image_kernel(root)
+    if manifest.get('kernelRelease') != kernel:
+        raise ValueError(f'eBPF objects were built for kernel {manifest.get("kernelRelease")!r}, '
+                         f'but the image kernel is {kernel}')
+    config = Path(root) / 'usr/lib/modules' / kernel / 'config'
+    if not stat.S_ISREG(config.lstat().st_mode):
+        raise ValueError(f'{config}: expected a regular file')
+    config_sha = hashlib.sha256(config.read_bytes()).hexdigest()
+    if manifest.get('kernelConfigSha256') != config_sha:
+        raise ValueError(f'eBPF objects were built against kernel config {manifest.get("kernelConfigSha256")!r}, '
+                         f'but the image kernel config is {config_sha}')
+    objects = manifest.get('objects')
+    if not isinstance(objects, dict) or set(objects) != set(OBJECTS):
+        raise ValueError(f'{MANIFEST}: expected exactly the objects {sorted(OBJECTS)}')
+    for name in OBJECTS:
+        actual = hashlib.sha256(read_object(Path(root) / OBJECTS_DIR / name)).hexdigest()
+        if actual != objects[name]:
+            raise ValueError(f'{OBJECTS_DIR}/{name}: sha256 {actual} differs from the build manifest {objects[name]}')
+    return manifest
+
+
+def verify_legacy_pairing(manifest):
+    """Check the manifest against the pins and files; this does NOT verify the RPM.
+
+    The manifest only records the daemon RPM the modules were paired with. That the installed
+    daemon is that RPM is bound at build time by `ebpf.py check-rpm` in 95-firewall.sh."""
+    rpm = manifest.get('daemonRpm')
+    if manifest.get('opensnitchCommit') != LEGACY_OPENSNITCH_COMMIT:
+        raise ValueError(f'{MANIFEST}: legacy modules were built from {manifest.get("opensnitchCommit")!r}, '
+                         f'not the v1.8.0 commit {LEGACY_OPENSNITCH_COMMIT} of the RPM daemon')
+    if (not isinstance(rpm, dict) or rpm.get('name') != 'opensnitch' or rpm.get('version') != LEGACY_RPM_VERSION
+            or rpm.get('tag') != 'v' + LEGACY_RPM_VERSION or rpm.get('release') != LEGACY_RPM_RELEASE
+            or rpm.get('sha256') != LEGACY_RPM_SHA256):
+        raise ValueError(f'{MANIFEST}: legacy manifest must record the pinned opensnitch {LEGACY_RPM_VERSION} daemon RPM it is paired with, '
+                         f'found {rpm!r}')
+    if manifest.get('ebpfProgTreeSha256') != LEGACY_TREE_SHA256:
+        raise ValueError(f'{MANIFEST}: legacy ebpf_prog tree {manifest.get("ebpfProgTreeSha256")!r} is not the pinned {LEGACY_TREE_SHA256}')
+
+
+def verify_image(root):
+    verify(root)
+    profile = (Path(root) / PROFILE).read_text().strip()
+    if profile == 'system':
+        manifest = verify_manifest(root, profile)
+        return (f'built for kernel {manifest["kernelRelease"]} from OpenSnitch {manifest["opensnitchCommit"][:12]}, '
+                f'hashes match the build manifest')
+    if profile == 'legacy':
+        manifest = verify_manifest(root, profile)
+        verify_legacy_pairing(manifest)
+        return (f'legacy profile: built for kernel {manifest["kernelRelease"]} from OpenSnitch v{LEGACY_RPM_VERSION} '
+                f'{manifest["opensnitchCommit"][:12]} (paired with the RPM daemon), hashes match the build manifest')
+    raise ValueError(f'{PROFILE}: unknown bridge profile {profile!r}')
+
+
+def run_text(argv):
+    result = subprocess.run(argv, capture_output=True, text=True, timeout=30, check=False, env=CHILD_ENV)
+    if result.returncode != 0:
+        raise OSError(f'{argv[0]} exited {result.returncode}')
+    return result.stdout.strip()
+
+
+def unit_property(systemctl, name):
+    # --timestamp=unix (systemd 251+) prints `@<epoch>`: independent of the timezone and its abbreviation.
+    stamp = ['--timestamp=unix'] if name == 'ActiveEnterTimestamp' else []
+    return run_text([systemctl, 'show', *stamp, '-p', name, '--value', SERVICE])
+
+
+def unit_start(systemctl):
+    """(epoch seconds, label) of the unit's last activation; (None, None) when unknown."""
     try:
-        verify(args.root)
+        match = re.fullmatch(r'@(\d+)', unit_property(systemctl, 'ActiveEnterTimestamp'))
+    except (OSError, subprocess.SubprocessError):
+        return None, None
+    if not match or int(match.group(1)) == 0:
+        return None, None
+    epoch = int(match.group(1))
+    try:
+        return epoch, datetime.datetime.fromtimestamp(epoch, datetime.timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')
+    except (ValueError, OverflowError, OSError):
+        return None, None
+
+
+def escape(text):
+    return str(text).encode('unicode_escape').decode('ascii')
+
+
+def config_settings(path):
+    """(ProcMonitorMethod, LogUTC) of the on-disk config (not what the running daemon loaded)."""
+    try:
+        config = json.loads(Path(path).read_text())
+        method, log_utc = config.get('ProcMonitorMethod'), config.get('LogUTC')
+    except (OSError, ValueError, AttributeError) as error:
+        raise ValueError(f'cannot read ProcMonitorMethod from {path} ({error}); restore the config') from error
+    return (method if isinstance(method, str) else None), log_utc is True
+
+
+def fd_links(proc_root, pid):
+    """Link targets of the pid's fds; an fd or the pid vanishing mid-scan is skipped, an unlistable directory is fatal."""
+    fd_dir = Path(proc_root) / str(pid) / 'fd'
+    try:
+        entries = sorted(fd_dir.iterdir())
+        links = []
+        for entry in entries:
+            try:
+                links.append(os.readlink(entry))
+            except (FileNotFoundError, ProcessLookupError):
+                continue
+        return links
+    except OSError as error:
+        raise ValueError(f'cannot read {fd_dir} ({error}); run as root while {SERVICE} is running') from error
+
+
+def daemon_problem(proc_root, pid):
+    """Reason string when the pid is not the opensnitchd binary, else None."""
+    exe = Path(proc_root) / str(pid) / 'exe'
+    try:
+        target = os.readlink(exe)
+    except OSError as error:
+        return f'cannot read {exe} ({error}); cannot confirm pid {pid} is opensnitchd'
+    if not target.removesuffix(' (deleted)').endswith('/opensnitchd'):
+        return f'pid {pid} is {escape(target)!r}, not opensnitchd; is {SERVICE} the real daemon?'
+    return None
+
+
+def read_tail(path):
+    """Last LOG_TAIL_BYTES of a regular file, or None if it is not one / unreadable (never blocks, never reads past the cap)."""
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW)
+    except OSError:
+        return None
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode):
+            return None
+        offset = max(0, info.st_size - LOG_TAIL_BYTES)
+        os.lseek(fd, offset, os.SEEK_SET)
+        data = b''
+        while len(data) < LOG_TAIL_BYTES:
+            chunk = os.read(fd, LOG_TAIL_BYTES - len(data))
+            if not chunk:
+                break
+            data += chunk
+    except OSError:
+        return None
+    finally:
+        os.close(fd)
+    lines = data.decode('utf-8', 'replace').splitlines()
+    return lines[1:] if offset else lines
+
+
+def log_epoch(text, utc):
+    naive = datetime.datetime.strptime(text, '%Y-%m-%d %H:%M:%S')
+    return (naive.replace(tzinfo=datetime.timezone.utc) if utc else naive).timestamp()
+
+
+def log_matches(path, started, utc):
+    """LogScan of the log tail since `started` (epoch); None if the log is unreadable.
+
+    A line without a (valid) timestamp inherits the previous one; with no known start every line counts."""
+    lines = read_tail(path)
+    if lines is None:
+        return None
+    fallback, partial, current, first = [], [], None, None
+    for line in lines:
+        stamp = LOG_TIME.match(line)
+        if stamp:
+            try:
+                current = log_epoch(stamp.group(1), utc)
+            except (ValueError, OverflowError, OSError):
+                pass
+            else:
+                first = current if first is None else first
+        if started is not None and current is not None and current < started:
+            continue
+        if FALLBACK_LOG in line:
+            fallback.append(line)
+        elif PARTIAL_LOG in line:
+            partial.append(line)
+    # With a known start, only a log whose FIRST parseable stamp reaches back to the start counts as covering it:
+    # an empty, truncated or unparseable log must not read as 'no fallback warning since start'.
+    covered = started is None or (first is not None and first <= started + LOG_START_SLACK_SECONDS)
+    return LogScan(fallback, partial, covered)
+
+
+def bpftool_programs(bpftool, pid):
+    if not (os.path.isfile(bpftool) and os.access(bpftool, os.X_OK)):
+        return 'bpftool not installed'
+    try:
+        programs = json.loads(run_text([bpftool, 'prog', 'show', '--json']))
+    except (OSError, ValueError, subprocess.SubprocessError) as error:
+        return f'bpftool failed ({error})'
+    if not isinstance(programs, list):
+        return 'bpftool output not understood'
+    owned = []
+    for program in programs:
+        pids = program.get('pids') if isinstance(program, dict) else None
+        if isinstance(pids, list) and any(isinstance(entry, dict) and entry.get('pid') == pid for entry in pids):
+            owned.append(f'{program.get("type")} {program.get("name")}')
+    return owned
+
+
+def link_kind(link):
+    return re.sub(r'\[\d+\]', '[*]', link) if re.match(r'(socket|pipe):', link) else link
+
+
+def print_detail(pid, started, label, method, links, scan, programs):
+    print(f'detail: MainPID={pid} ActiveEnterTimestamp={"unknown" if started is None else f"@{started} ({label})"} '
+          f'ProcMonitorMethod={escape(method)!r}')
+    counts = collections.Counter(link_kind(link) for link in links or [])
+    print(f'detail: fd total={sum(counts.values())} {BPF_PROG_LINK}={counts.get(BPF_PROG_LINK, 0)}')
+    for kind, count in counts.most_common():
+        print(f'detail: fd {count:6d} {escape(kind)}')
+    print(f'detail: bpftool {escape(programs)}' if isinstance(programs, str) else f'detail: bpftool programs of pid {pid}: {escape(programs)}')
+    for line in (scan.fallback + scan.partial) if scan else []:
+        print(f'detail: log {escape(line)}')
+
+
+def decide(*, method, config, log, pid, problem, count, fallback, partial, log_readable, covered, started_label, programs, floor):
+    """Pure decision table: (level, reason) from already-gathered facts."""
+    names = f' (bpf programs: {", ".join(programs)})' if programs else ''
+    if problem:
+        return 'FAIL', problem
+    if method == 'proc':
+        return 'WARN', 'ProcMonitorMethod is proc: the documented /proc fallback is in effect, eBPF is not in use'
+    if method != 'ebpf':
+        return 'FAIL', f'ProcMonitorMethod is {method!r}, expected ebpf (or the documented proc); fix {config}'
+    if fallback:
+        since = f'since {started_label}' if started_label else ('in the log (start time unknown: log not time-bounded, may be stale; '
+                                                                'restart the daemon and re-run)')
+        return 'FAIL', (f'silent /proc fallback: the daemon logged {FALLBACK_LOG!r} {since} '
+                        f'({count} {BPF_PROG_LINK} fds); check the module build and `journalctl -u {SERVICE}`')
+    if count == 0:
+        return 'FAIL', (f'silent /proc fallback: ProcMonitorMethod is ebpf but pid {pid} holds no {BPF_PROG_LINK} fd; '
+                        f'eBPF did not load, check {log} and the module manifest')
+    if partial:
+        return 'WARN', f'partial eBPF: the daemon logged {PARTIAL_LOG!r} (no exec events); rebuild/repair opensnitch-procs.o{names}'
+    if not covered:
+        return 'WARN', f'{count} {BPF_PROG_LINK} fds but the log does not cover the unit start (rotated?); fallback warnings cannot be ruled out{names}'
+    if count < floor:
+        return 'WARN', f'only {count} {BPF_PROG_LINK} fds, below the calibrated floor {floor}; eBPF may be partial{names}'
+    if not log_readable:
+        return 'WARN', f'{count} {BPF_PROG_LINK} fds but {log} is unreadable, partial mode cannot be ruled out{names}'
+    note = ' (fd floor UNCALIBRATED: gate A pending)' if floor == 1 else ''
+    return 'PASS', (f'ProcMonitorMethod ebpf, pid {pid} holds {count} {BPF_PROG_LINK} fds, no fallback warning since start{note}{names}')
+
+
+def evaluate(args):
+    """Gather the facts (I/O), print calibration data when --detail, and return decide(...)."""
+    try:
+        pid = int(unit_property(args.systemctl, 'MainPID') or 0)
+    except (OSError, ValueError, subprocess.SubprocessError) as error:
+        return 'FAIL', f'cannot query systemd for {SERVICE} MainPID ({error}); is systemd running?'
+    started, label = unit_start(args.systemctl)
+    if pid <= 0:
+        return 'FAIL', f'{SERVICE} has no running daemon (MainPID {pid}); start it: systemctl start {SERVICE}'
+    try:
+        method, log_utc = config_settings(args.config)
+    except ValueError as error:
+        return 'FAIL', str(error)
+    scan = log_matches(args.log, started, log_utc)
+    links, problem, found = None, None, 'skipped'
+    if method == 'ebpf':
+        try:
+            links = fd_links(args.proc_root, pid)
+            problem = daemon_problem(args.proc_root, pid)
+        except ValueError as error:
+            problem = str(error)
+        try:
+            again = int(unit_property(args.systemctl, 'MainPID') or 0)
+        except (OSError, ValueError, subprocess.SubprocessError):
+            again = None
+        if problem is None and again != pid:
+            problem = 'daemon pid changed during the check; re-run it'
+        found = bpftool_programs(args.bpftool, pid)
+    if args.detail:
+        print_detail(pid, started, label, method, links, scan, found)
+    return decide(method=method, config=args.config, log=args.log, pid=pid, problem=problem,
+                  count=(links or []).count(BPF_PROG_LINK), fallback=len(scan.fallback) if scan else 0,
+                  partial=len(scan.partial) if scan else 0, log_readable=scan is not None, covered=scan.covered if scan else True,
+                  started_label=label,
+                  programs=[escape(name.split(' ', 1)[-1]) for name in found] if isinstance(found, list) else [], floor=EBPF_PROG_FD_FLOOR)
+
+
+def parse_args(argv):
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument('--root')
+    parser.add_argument('--runtime', action='store_true', help='read-only check that the running daemon really uses eBPF')
+    parser.add_argument('--detail', action='store_true', help='with --runtime: print raw calibration data')
+    parser.add_argument('--config', default=CONFIG_PATH, help='--runtime: daemon config (test override)')
+    parser.add_argument('--log', default=LOG_PATH, help='--runtime: daemon log (test override)')
+    parser.add_argument('--proc-root', default='/proc', help='--runtime: procfs root (test override)')
+    parser.add_argument('--systemctl', default=SYSTEMCTL, help='--runtime: systemctl binary (test override)')
+    parser.add_argument('--bpftool', default=BPFTOOL, help='--runtime: bpftool binary (test override)')
+    args = parser.parse_args(argv)
+    if args.runtime and args.root is not None:
+        parser.error('--runtime does not take --root')
+    if args.detail and not args.runtime:
+        parser.error('--detail requires --runtime')
+    overridden = (args.config, args.log, args.proc_root, args.systemctl, args.bpftool) != (CONFIG_PATH, LOG_PATH, '/proc', SYSTEMCTL, BPFTOOL)
+    if args.runtime and overridden and os.geteuid() == 0 and os.environ.get(TESTING_ENV) != '1':
+        parser.error(f'--config/--log/--proc-root/--systemctl/--bpftool are test-only and refused as root unless {TESTING_ENV}=1')
+    return args
+
+
+def runtime(args):
+    try:
+        verdict, reason = evaluate(args)
+    except Exception as error:  # every exit path must end in a RESULT line
+        verdict, reason = 'FAIL', f'internal error ({type(error).__name__})'
+    print(f'RESULT: {verdict}: {escape(reason)}')
+    return 1 if verdict == 'FAIL' else 0
+
+
+def main(argv=None):
+    args = parse_args(argv)
+    if args.runtime:
+        return runtime(args)
+    args.root = args.root or '/'
+    try:
+        detail = verify_image(args.root)
     except (OSError, ValueError) as error:
         print(f'FAIL: {error}', file=sys.stderr)
         return 1
-    print('PASS: all three OpenSnitch eBPF objects have ELF BPF headers (runtime unverified)')
+    print(f'PASS: all three OpenSnitch eBPF objects have ELF BPF headers; {detail} (runtime unverified)')
     return 0
 
 

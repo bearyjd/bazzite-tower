@@ -18,7 +18,7 @@
     "DefaultAction": "allow",
     "DefaultDuration": "once",
     "InterceptUnknown": false,
-    "ProcMonitorMethod": "proc",
+    "ProcMonitorMethod": "ebpf",
     "LogLevel": 2,
     "LogUTC": true,
     "LogMicro": false,
@@ -34,7 +34,8 @@
     },
     "Ebpf": {
         "EventsWorkers": 8,
-        "QueueEventsSize": 0
+        "QueueEventsSize": 0,
+        "ModulesPath": "/usr/lib/opensnitchd/ebpf"
     },
     "Stats": {
         "MaxEvents": 250,

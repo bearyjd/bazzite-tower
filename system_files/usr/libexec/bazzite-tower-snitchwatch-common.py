@@ -8,6 +8,7 @@ import re
 import shlex
 import stat
 import subprocess
+import time
 from pathlib import Path
 
 PINS = "/usr/share/snitchwatch/build-pins.json"
@@ -46,6 +47,17 @@ BASE_GLOBAL_OVERRIDE_SHA256 = "85e2bf73515c8da8950f1afbbfaedfeca453777eeb0be0ea8
 VENDOR_DROPIN_SHA256 = "ae6b234f92bc22f1201a7572b59b454c9809f33c80d13f361b9674e1801acc37"
 TYPED_EMPTY_PROPERTIES = {"EnvironmentFiles": "a(sb)", **{name: "a(sasbttttuii)" for name in ("ExecStartPre", "ExecStartPost", "ExecStop", "ExecStopPost", "ExecCondition")}}
 
+
+EBPF_MODULES_PATH = "/usr/lib/opensnitchd/ebpf"
+EBPF_CHECK = "/usr/libexec/bazzite-tower-opensnitch-ebpf-check"
+# Reason fragments of the runtime check (tests pin them to the helper's own constants).
+EBPF_PROG_LINK = "anon_inode:bpf-prog"
+EBPF_NO_PROGRAMS = "holds no "+EBPF_PROG_LINK+" fd"  # eBPF not (yet) loaded, no fallback line: may just be startup
+EBPF_PARTIAL_LOG = "opensnitch-procs.o not available"
+EBPF_SETTLE_SECONDS = 15  # PROVISIONAL until owner gate A calibrates the fd floor/startup timing
+EBPF_CONFIRM_SECONDS = 2  # pause before the confirming run that must follow a settled verdict
+EBPF_RUNTIME_TIMEOUT = 30
+EBPF_RANK = {"PASS": 0, "WARN": 1, "FAIL": 2}
 
 # Single table of every helper the privileged tools may run, by absolute path
 # (all verified in /usr/bin on the Bazzite host; /bin and /usr/sbin are symlinks
@@ -324,8 +336,58 @@ def config_contract(ctx, address="unix:opensnitchd.sock"):
         require(deny_opt_in(ctx), "DefaultAction drift: deny is accepted only with a confirmed operator opt-in marker and no pending deny trial")
     else:
         require(action == "allow", "DefaultAction drift: system readiness requires allow; deny is an explicit local opt-in")
-    require(config.get("ProcMonitorMethod") == "proc", "ProcMonitorMethod drift: system profile requires proc")
+    proc_method_contract(config)
     return config
+
+
+def proc_method_contract(config):
+    # The pinned ModulesPath is part of the contract for both methods so the one-key proc fallback stays migratable.
+    method = config.get("ProcMonitorMethod")
+    require(method in ("ebpf", "proc"), "ProcMonitorMethod drift: system profile requires ebpf (default) or proc (documented fallback)")
+    ebpf = config.get("Ebpf")
+    require(isinstance(ebpf, dict) and ebpf.get("ModulesPath") == EBPF_MODULES_PATH, "Ebpf.ModulesPath drift: "+method+" requires "+EBPF_MODULES_PATH)
+    return method
+
+
+def ebpf_run(ctx):
+    try:
+        result = ctx.command([EBPF_CHECK, "--runtime"], okay=(0, 1), timeout=EBPF_RUNTIME_TIMEOUT)
+    except subprocess.TimeoutExpired as error:
+        raise Refusal("eBPF runtime check timed out after "+str(EBPF_RUNTIME_TIMEOUT)+" s") from error
+    lines = result.stdout.strip().splitlines()
+    match = re.fullmatch(r"RESULT: (PASS|WARN|FAIL): (.*)", lines[-1]) if lines else None
+    require(match is not None, "eBPF runtime check produced no RESULT line")
+    verdict, reason = match.groups()
+    return ("FAIL" if result.returncode != 0 else verdict), verdict, reason
+
+
+def ebpf_runtime(ctx, settle=0, pause=time.sleep, clock=time.monotonic):
+    # PASS/WARN (proc fallback is a WARN, not drift) are reported; FAIL (silent /proc fallback,
+    # daemon down, wrong method) refuses readiness. Needs root, as does all of runtime_readiness.
+    # settle>0 (right after a daemon start) re-polls only the "no bpf-prog fd, no fallback line" FAIL,
+    # which a daemon that has not loaded its modules yet also shows; any other verdict is final, except
+    # that a good verdict after such a FAIL must be confirmed by a second, not-worse run (a daemon still
+    # starting can look good once). The confirming run, if worse, is the verdict.
+    deadline = clock()+settle
+    effective, verdict, reason = ebpf_run(ctx)
+    seen_zero = False
+    while True:
+        if verdict == "FAIL" and EBPF_NO_PROGRAMS in reason and clock() < deadline:
+            seen_zero = True
+            pause(1)
+            effective, verdict, reason = ebpf_run(ctx)
+            continue
+        if seen_zero and effective != "FAIL":
+            seen_zero = False
+            pause(EBPF_CONFIRM_SECONDS)
+            confirm = ebpf_run(ctx)
+            first = effective
+            effective, verdict, reason = confirm
+            if EBPF_RANK[effective] > EBPF_RANK[first]:
+                continue
+        break
+    require(effective != "FAIL", "eBPF runtime check "+verdict+": "+reason)
+    return verdict+": "+reason
 
 
 def inert_dropin_directory(ctx, name):
@@ -531,7 +593,7 @@ def service_state(ctx):
     return result
 
 
-def runtime_readiness(ctx):
+def runtime_readiness(ctx, settle=0, pause=time.sleep, clock=time.monotonic):
     immutable(ctx)
     uid, gid, ui_gid, members = account_ids(ctx)
     actual = unit_contract(ctx)
@@ -570,4 +632,6 @@ def runtime_readiness(ctx):
         info = ctx.stat(path)
         require(kind(info.st_mode) and info.st_uid == owner and info.st_gid == group and stat.S_IMODE(info.st_mode) == mode, "runtime DAC/type mismatch: "+path)
         require(not {"system.posix_acl_access", "system.posix_acl_default"}&set(os.listxattr(ctx.path(path))), "unexpected runtime ACL grant: "+path)
-    return dict(profile="system", bridgePid=pid, daemonPid=daemon_pid, daemonPatchSha256=daemon["patch"]["sha256"], uiGroup="snitchwatch-ui", explicitUiMembers=members.split(",") if members else [], defaultAction="deny (operator opt-in)" if config["DefaultAction"] == "deny" else "allow", procMonitorMethod="proc", graphicalRoundTrip="not checked")
+    # Last, so the specific active/pid/conflict refusals above are not hidden behind the eBPF verdict.
+    ebpf = ebpf_runtime(ctx, settle, pause, clock)
+    return dict(profile="system", bridgePid=pid, daemonPid=daemon_pid, daemonPatchSha256=daemon["patch"]["sha256"], uiGroup="snitchwatch-ui", explicitUiMembers=members.split(",") if members else [], defaultAction="deny (operator opt-in)" if config["DefaultAction"] == "deny" else "allow", procMonitorMethod=config["ProcMonitorMethod"], ebpfRuntime=ebpf, graphicalRoundTrip="not checked")

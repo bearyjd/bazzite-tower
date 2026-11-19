@@ -45,12 +45,14 @@ auto-closes — each leg's labelled tracking issue, independently of whether
 `base-refresh.yml` permits missing-stable initialization only through the
 reviewed, API-verified run2/attempt1 recovery described below; other missing
 baselines hold for independently reviewed recovery. It reads `.github/base-refresh-policy.json`: both product
-profiles pin reviewed source `f8b490dd20e2572065b8cccd91bbdd2e9bc9ab16`.
+profiles pin reviewed source `0555af1233a023a7cd387e4030b55613d7b29ab8`.
 Legacy retains `IMAGE_TAG=latest`; system retains
 `IMAGE_TAG=snitchwatch-system`. Source SHA/tree/cleanliness and profile contracts
 are checked before the build; independent validation checks image/RPM/SPDX
 identity and actual Bazzite/kernel floors (`45.20261105` /
-`7.2.15-ogc1.1.fc45`). The publisher fetches trusted code from the GitHub API at
+`7.2.15-ogc1.1.fc45`). The Bazzite version grammar is `NN.NNNNNNNN` with an
+optional `.N` revision (N 1-9999, since 2026-11-17: `45.20261117.1`); anything
+else fails closed. The publisher fetches trusted code from the GitHub API at
 the dispatched main SHA, with no source checkout. Policy staleness blocks tag
 movement. Features still need owner runtime acceptance, protected fixed-digest
 promotion and a subsequent reviewed policy update.

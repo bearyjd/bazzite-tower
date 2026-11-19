@@ -30,9 +30,10 @@ FROM scratch AS ctx
 COPY build_files /
 
 # Select only the requested dependency stage. Podman skips unused stages by
-# default; legacy has no Fedora toolchain, Git fetch or native compilation.
-FROM scratch AS snitchwatch-legacy
-COPY build_files/firewall/snitchwatch-system-legacy-marker /out/usr/share/bazzite-tower/snitchwatch-bridge-profile
+# default. Legacy has no native snitchwatch build (no scanner, bridge, daemon or
+# snitchwatch checkout); its only build work is the per-kernel eBPF modules, from
+# the OpenSnitch v1.8.0 commit its RPM daemon is built from (see the ebpf-legacy
+# stages below), delivered through the snitchwatch-legacy stage.
 
 # System bridge (opt-in), split so that third-party build code cannot reach what
 # is trusted later (H1). The FROM chain of the scanner, daemon and assembly
@@ -72,6 +73,63 @@ RUN SNITCHWATCH_BRIDGE=system FIREWALL_DAEMON="${FIREWALL_DAEMON}" bash /factory
     python3 /factory/snitchwatch-system-handoff.py check daemon --daemon-verifier /factory/snitchwatch-system-daemon-verify.py /work/daemon-out && \
     python3 /factory/snitchwatch-system-handoff.py export daemon --daemon-verifier /factory/snitchwatch-system-daemon-verify.py /work/daemon-out /handoff/daemon
 
+# Per-kernel OpenSnitch eBPF objects (Track A). The objects are not CO-RE, so
+# they must be compiled against the exact kernel this image ships. ebpf-kernel
+# reads BASE_IMAGE's own kernel-devel headers and refuses unless kernel-core,
+# kernel-devel, /usr/src/kernels/<r> and /usr/lib/modules/<r> agree (never a
+# Fedora-header fallback, never the build host's running kernel). The toolchain
+# (pinned Koji clang21/llvm21) is installed once with network; both compiles are
+# offline siblings, ancestors of nothing, and assembly refuses unless their
+# objects are byte-identical. Shared by both profiles; legacy has its own ebpf-legacy-* compile stages below.
+FROM ${BASE_IMAGE} AS ebpf-kernel
+COPY --from=ctx /firewall/snitchwatch-system-ebpf.py /factory/
+RUN --network=none python3 -B /factory/snitchwatch-system-ebpf.py kernel-export /handoff/ebpf-kernel
+
+FROM snitchwatch-prep AS snitchwatch-ebpf-prep
+ARG FIREWALL_DAEMON
+RUN SNITCHWATCH_BRIDGE=system FIREWALL_DAEMON="${FIREWALL_DAEMON}" bash /factory/snitchwatch-system-ebpf-prep.sh /work/ebpf
+
+FROM snitchwatch-ebpf-prep AS snitchwatch-ebpf
+ARG FIREWALL_DAEMON
+COPY --from=ebpf-kernel /handoff/ebpf-kernel/ /handoff/ebpf-kernel/
+RUN --network=none SNITCHWATCH_BRIDGE=system FIREWALL_DAEMON="${FIREWALL_DAEMON}" bash /factory/snitchwatch-system-ebpf-build.sh /work/ebpf /handoff/ebpf-kernel /handoff/ebpf ebpf
+
+FROM snitchwatch-ebpf-prep AS snitchwatch-ebpf-rebuild
+ARG FIREWALL_DAEMON
+COPY --from=ebpf-kernel /handoff/ebpf-kernel/ /handoff/ebpf-kernel/
+RUN --network=none SNITCHWATCH_BRIDGE=system FIREWALL_DAEMON="${FIREWALL_DAEMON}" bash /factory/snitchwatch-system-ebpf-build.sh /work/ebpf /handoff/ebpf-kernel /handoff/ebpf-rebuild ebpf-rebuild
+
+# Legacy profile (SNITCHWATCH_BRIDGE=legacy): the same per-kernel compile, for
+# the upstream v1.8.0 release RPM daemon. The modules are built from commit
+# b404c4c6 (what tag v1.8.0 peels to), fetched here with network and re-hashed
+# against the pin offline; 95-firewall.sh refuses unless the downloaded RPM is
+# the pinned v1.8.0 one. These stages do not descend from snitchwatch-prep, so
+# legacy never builds or fetches any native snitchwatch source. Assembly descends
+# from the base, not the toolchain stage: no compiler in its ancestry.
+FROM registry.fedoraproject.org/fedora:45@sha256:ea0998f4c945b85c2134793cda4fac35ee394f0d677a04c5b1fe769e13f959b8 AS ebpf-legacy-base
+COPY --from=ctx /firewall/snitchwatch-system* /factory/
+RUN SNITCHWATCH_BRIDGE=legacy bash /factory/snitchwatch-system-ebpf-legacy-base.sh
+
+FROM ebpf-legacy-base AS ebpf-legacy-prep
+RUN SNITCHWATCH_BRIDGE=legacy bash /factory/snitchwatch-system-ebpf-prep.sh /work/ebpf
+
+FROM ebpf-legacy-prep AS ebpf-legacy
+COPY --from=ebpf-kernel /handoff/ebpf-kernel/ /handoff/ebpf-kernel/
+RUN --network=none SNITCHWATCH_BRIDGE=legacy bash /factory/snitchwatch-system-ebpf-build.sh /work/ebpf /handoff/ebpf-kernel /handoff/ebpf ebpf
+
+FROM ebpf-legacy-prep AS ebpf-legacy-rebuild
+COPY --from=ebpf-kernel /handoff/ebpf-kernel/ /handoff/ebpf-kernel/
+RUN --network=none SNITCHWATCH_BRIDGE=legacy bash /factory/snitchwatch-system-ebpf-build.sh /work/ebpf /handoff/ebpf-kernel /handoff/ebpf-rebuild ebpf-rebuild
+
+FROM ebpf-legacy-base AS ebpf-legacy-assembly
+COPY --from=ebpf-kernel /handoff/ebpf-kernel/kernel-facts.json /handoff/ebpf-kernel/kernel-facts.json
+COPY --from=ebpf-legacy /handoff/ebpf/ /handoff/ebpf/
+COPY --from=ebpf-legacy-rebuild /handoff/ebpf-rebuild/ /handoff/ebpf-rebuild/
+RUN --network=none SNITCHWATCH_BRIDGE=legacy bash /factory/snitchwatch-system-ebpf-legacy-assemble.sh /handoff /out
+
+FROM scratch AS snitchwatch-legacy
+COPY --from=ebpf-legacy-assembly /out/ /out/
+
 FROM snitchwatch-prep AS snitchwatch-system
 ARG FIREWALL_DAEMON
 COPY --from=ctx /firewall/snitchwatch-system* /tools/
@@ -79,6 +137,9 @@ COPY --from=snitchwatch-scanner /handoff/scanner/ /handoff/scanner/
 COPY --from=snitchwatch-bridge /handoff/bridge/ /handoff/bridge/
 COPY --from=snitchwatch-bridge-rebuild /handoff/bridge-rebuild/ /handoff/bridge-rebuild/
 COPY --from=snitchwatch-daemon /handoff/daemon/ /handoff/daemon/
+COPY --from=ebpf-kernel /handoff/ebpf-kernel/kernel-facts.json /handoff/ebpf-kernel/kernel-facts.json
+COPY --from=snitchwatch-ebpf /handoff/ebpf/ /handoff/ebpf/
+COPY --from=snitchwatch-ebpf-rebuild /handoff/ebpf-rebuild/ /handoff/ebpf-rebuild/
 RUN --network=none SNITCHWATCH_BRIDGE=system FIREWALL_DAEMON="${FIREWALL_DAEMON}" bash /tools/snitchwatch-system-assemble.sh /work/native /handoff /out
 
 # DL3006 is a false positive here: this names a build STAGE picked by an ARG

@@ -84,16 +84,19 @@ opensnitch)
 # check below this needs nothing a container lacks, and is HARD.
 hard "opensnitchd execs at runtime" \
     bash -c '/usr/bin/opensnitchd -version >/dev/null 2>&1'
-# proc is the shipped baseline. Historical load errors alone do not identify
-# their cause or prove kernel incompatibility. Keep this whole-boot regression
-# assertion; owner eBPF experiments additionally inspect the daemon file log
-# for the new restart interval (see RUNBOOK). A failed experiment can leave
-# boot-journal evidence here even after restoring proc; report that interval.
+# ebpf is the shipped method; a module load failure makes the daemon fall back to /proc
+# silently, so the whole-boot journal regression assertion stays HARD. The daemon file log
+# and the runtime check below are SOFT: whether kprobes can load inside this podman
+# systemd container is UNVERIFIED, so CI must not depend on it.
 hard "no eBPF module load failure" \
     bash -c '! journalctl -b 0 --no-pager 2>/dev/null | grep -q "unable to load eBPF module"'
 # Interception needs NFQUEUE + NET_ADMIN, which a container does not have — the
 # daemon legitimately fails to come up here, so activeness is informational only.
 soft "opensnitch.service active" systemctl is-active --quiet opensnitch.service
+soft "no eBPF fallback in the daemon file log" \
+    bash -c '! grep -q "error starting ebpf monitor method" /var/log/opensnitchd.log 2>/dev/null'
+soft "opensnitch eBPF runtime check (needs kprobes)" \
+    python3 /usr/libexec/bazzite-tower-opensnitch-ebpf-check --runtime
 # System sockets, credentials and hardening need a running systemd but not
 # NFQUEUE. Actual interception and SELinux authorization remain VM gates.
 bridge_profile="$(< /usr/share/bazzite-tower/snitchwatch-bridge-profile)"

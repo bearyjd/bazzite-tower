@@ -68,6 +68,7 @@ elif name == "uname":
 elif name == "stat":
     path = pathlib.Path(args[-1])
     print(os.environ.get("MOCK_UID", "0") + ":" + str(path.stat().st_nlink))
+elif name == "id": print(os.environ.get("MOCK_ID", "1000"))
 elif name == "selinuxenabled": sys.exit(int(os.environ.get("SELINUX_RC", "0")))
 elif name == "restorecon": pass
 else: raise SystemExit("unexpected command: " + name)
@@ -83,11 +84,11 @@ class Diagnostics(unittest.TestCase):
         self.bin.mkdir()
         self.trace = self.base / "trace"
         self.env = {**os.environ, "PATH": str(self.bin), "TRACE": str(self.trace)}
-        for name in ("timeout", "head", "tr", "awk", "python3", "grep"):
+        for name in ("timeout", "head", "tr", "awk", "python3", "grep", "tail", "cut"):
             (self.bin / name).symlink_to(shutil.which(name))
         for name in ("rpm-ostree", "systemctl", "journalctl", "cat", "rpm", "fwupdmgr",
                      "ls", "matchpathcon", "ras-mc-ctl", "mokutil", "uname", "stat",
-                     "selinuxenabled", "restorecon"):
+                     "selinuxenabled", "restorecon", "id"):
             path = self.bin / name
             path.write_text(MOCK)
             path.chmod(0o755)
@@ -122,6 +123,39 @@ class Diagnostics(unittest.TestCase):
         journals = [c for c in self.calls() if c[0] == "journalctl"]
         self.assertTrue(journals)
         self.assertTrue(all("-b" in c and "-n" in c and (("-k" in c and any(x.startswith("--grep=") for x in c)) or ("-u" in c and "rasdaemon.service" in c)) for c in journals))
+
+    def health_with_ebpf_check(self, body, uid):
+        """Run a copy of the script whose runtime-check path is a fixture (the shipped path is fixed)."""
+        check = self.base / "ebpf-check"
+        check.write_text("#!/usr/bin/python3\nimport sys\n" + body)
+        check.chmod(0o755)
+        script = self.base / "health"
+        script.write_text(HEALTH.read_text().replace("/usr/libexec/bazzite-tower-opensnitch-ebpf-check", str(check)))
+        self.env["MOCK_ID"] = uid
+        result = subprocess.run(["/bin/bash", str(script)], env=self.env, capture_output=True, text=True, timeout=20)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return result.stdout
+
+    def test_ebpf_runtime_is_unknown_without_root_and_never_run(self):
+        output = self.health()
+        self.assertIn("OpenSnitch eBPF runtime", output)
+        self.assertIn("UNKNOWN (needs root; run /usr/libexec/bazzite-tower-opensnitch-ebpf-check --runtime as root)", output)
+
+    def test_ebpf_runtime_shows_only_the_result_line_as_root(self):
+        for verdict, status in (("PASS", 0), ("WARN", 0), ("FAIL", 1)):
+            with self.subTest(verdict=verdict):
+                output = self.health_with_ebpf_check(
+                    "print('detail line that must not be shown')\nprint('RESULT: %s: fixture reason')\nsys.exit(%d)\n" % (verdict, status), "0")
+                self.assertIn("    RESULT: %s: fixture reason" % verdict, output)
+                self.assertNotIn("detail line that must not be shown", output)
+
+    def test_ebpf_runtime_hang_is_unknown_at_the_timeout(self):
+        output = self.health_with_ebpf_check("import time\ntime.sleep(60)\n", "0")
+        self.assertIn("UNKNOWN (no RESULT line; status=124)", output)
+
+    def test_ebpf_runtime_without_a_result_line_is_unknown(self):
+        output = self.health_with_ebpf_check("print('garbage')\nsys.exit(3)\n", "0")
+        self.assertIn("UNKNOWN (no RESULT line; status=3)", output)
 
     def test_permission_denial_even_with_zero_journal_status(self):
         self.env.update(IDENTITY="denied", JOURNAL="denied")

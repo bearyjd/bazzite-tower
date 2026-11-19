@@ -102,7 +102,7 @@ The image ships a Snitchwatch-tuned `/etc/opensnitchd/default-config.json` with 
 | Key | Value | Why |
 |---|---|---|
 | `Server.Address` | `127.0.0.1:50051` | The Snitchwatch bridge's gRPC listener, instead of `opensnitch-ui`'s `unix:///tmp/osui.sock`. |
-| `ProcMonitorMethod` | `proc` | Tested baseline. A historical module-load error ([snitchwatch#6](https://github.com/bearyjd/snitchwatch/issues/6)) does not establish kernel incompatibility. All three RPM eBPF objects are checked at build time; owner-only [runtime A/B testing](docs/RUNBOOK.md#opensnitch-resource-baseline-and-owner-ebpf-experiment) is still required. |
+| `ProcMonitorMethod` | `ebpf` | Default, with `Ebpf.ModulesPath` pinned to `/usr/lib/opensnitchd/ebpf` (per-kernel modules built at image build from the daemon's own commit). The daemon falls back to `/proc` silently if they fail to load, so `bazzite-tower-opensnitch-ebpf-check --runtime` (wired into readiness and `ujust tower-health`) decides; `proc` is the documented one-key [fallback](docs/RUNBOOK.md#opensnitch-ebpf-default-the-proc-fallback-and-the-resource-baseline). Loading on the laptop is not yet verified. |
 | `DefaultAction` | `allow` (both profiles) | Permanent default; deny enforcement always requires explicit operator opt-in. |
 
 Both profiles permanently ship `DefaultAction: allow`: unanswered unruled connections use allow, so headless networking remains available. Deny enforcement is always an explicit operator opt-in, never a rollout end state. A local `DefaultAction: deny` can block every new unruled outbound connection when no decision client answers prompts. `DropWhileAsking` is not enabled by the image; explicitly opting into it can drop traffic while prompts are pending even with the allow default. Explicit firewall rules still apply.
@@ -113,14 +113,14 @@ the pinned native bridge version 0.1.1, system socket/service units and immutabl
 The r15.1 bridge/GUI source pin is `5c969a2e21dc7f5c976e7048aa9f95e5663c7de2`;
 its native bridge, wire protocol, packaging inputs and Flatpak permissions retain
 the r15 bytes.
-It also builds OpenSnitch 1.9.0 (upstream a1353848, eBPF off: `proc` only) from the reviewed upstream pin plus the downstream
+It also builds OpenSnitch 1.9.0 (upstream a1353848, matched per-kernel eBPF modules built from the same commit) from the reviewed upstream pin plus the downstream
 queue-shutdown and NFT policy-ownership repair. A separate daemon manifest
 verifies the installed executable, repair patch, build inputs and licenses.
 OpenSnitch uses `unix:opensnitchd.sock` from `/run/snitchwatch` (upstream's
 `opensnitch.service` drop-in, `WorkingDirectory=-/run/snitchwatch`) with
 `DefaultAction: allow` (deny requires explicit operator opt-in) and
-`ProcMonitorMethod: proc` (upstream's config says `ebpf`; the tower keeps the
-tested `proc` baseline). If the socket fails the daemon still starts and unanswered
+`ProcMonitorMethod: ebpf` with `Ebpf.ModulesPath` pinned to `/usr/lib/opensnitchd/ebpf`
+(`proc` is the documented one-key fallback, reported by readiness as a WARN). If the socket fails the daemon still starts and unanswered
 unruled connections use the allow default. System readiness and migration
 require the shipped allow policy; an explicit local deny override is reported
 as policy drift. See the [runbook](docs/RUNBOOK.md#opensnitch--snitchwatch-deployment-status). GUI
@@ -341,7 +341,7 @@ upgrades retain the policy in `/etc`.
 
 Three channels use the same `Containerfile`, with separate accepted product
 profiles. `.github/base-refresh-policy.json` freezes the product source at
-`f8b490dd20e2572065b8cccd91bbdd2e9bc9ab16`.
+`0555af1233a023a7cd387e4030b55613d7b29ab8`.
 
 The r16.1 policy transition must merge only after protected fixed-digest promotion
 completes and independent destination signature/SPDX checks pass. Host runtime
@@ -370,7 +370,7 @@ acceptance remains unverified; the owner authorized the CI-based release path.
 - Uses the reviewed r16.1 system profile with `SNITCHWATCH_BRIDGE=system` and
   `FIREWALL_DAEMON=opensnitch`, refreshed by `base-refresh.yml` against the same
   immutable upstream base. Both profiles retain `DefaultAction: allow` and
-  `ProcMonitorMethod: proc`; these gates do not establish host eBPF compatibility.
+  `ProcMonitorMethod: ebpf` (pinned `Ebpf.ModulesPath`); these gates do not establish host eBPF loading, which the runtime check (`bazzite-tower-opensnitch-ebpf-check --runtime`) reports on the host.
 - **Switching is not just `bootc switch`.** `/etc` survives `bootc rollback`, so the
   profile change has its own transaction (RUNBOOK, "OpenSnitch / Snitchwatch
   deployment status"). Order: `sudo bootc switch --enforce-container-sigpolicy

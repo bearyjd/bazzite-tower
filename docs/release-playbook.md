@@ -18,7 +18,7 @@ explicit owner instruction.
 
 `base-refresh.yml` runs daily and by dispatch on `main`, without a per-base owner
 approval. `.github/base-refresh-policy.json` pins accepted product source
-`f8b490dd20e2572065b8cccd91bbdd2e9bc9ab16`: legacy publishes `:stable` and its
+`0555af1233a023a7cd387e4030b55613d7b29ab8`: legacy publishes `:stable` and its
 compatibility alias `:latest` (`IMAGE_TAG=latest`); reviewed r16.1 system publishes
 only `:snitchwatch-system`. Both profiles use this exact product source.
 The workflow resolves a fresh immutable Bazzite base, enforces the
@@ -174,7 +174,7 @@ ghcr.io/bearyjd/bazzite-tower:snitchwatch-system` (same digest, nothing to downl
 ## Firewall defaults and owner checks
 
 The original r15 system release used `DefaultAction deny`; r15.1 and subsequent
-products retain `DefaultAction allow` in both profiles with `ProcMonitorMethod proc`. Deny
+products retain `DefaultAction allow` in both profiles with `ProcMonitorMethod ebpf` and the pinned `Ebpf.ModulesPath` (from the eBPF-enable release on; earlier products used `proc`). Deny
 enforcement requires explicit operator opt-in. The system profile uses a root-only
 `unix:opensnitchd.sock`. Extra owner acceptance steps:
 

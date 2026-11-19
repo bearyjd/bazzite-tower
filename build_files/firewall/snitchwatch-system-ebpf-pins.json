@@ -1,0 +1,103 @@
+{
+  "ccFlags": [
+    "-DCC_USING_FENTRY",
+    "-fms-extensions",
+    "-Wno-microsoft-anon-tag"
+  ],
+  "clangVersion": "21.1.8",
+  "kojiBase": "https://kojipkgs.fedoraproject.org/packages/",
+  "objects": [
+    "opensnitch-dns.o",
+    "opensnitch-procs.o",
+    "opensnitch.o"
+  ],
+  "profiles": {
+    "legacy": {
+      "daemonRpm": {
+        "file": "opensnitch-1.8.0-1.x86_64.rpm",
+        "name": "opensnitch",
+        "release": "1",
+        "sha256": "e06e9119daf764e56455b61c319e496274c0274bb53bb94a0ff1ab72967fea7d",
+        "version": "1.8.0"
+      },
+      "ebpfProgTreeSha256": "39512718023e91e3d48bdaa6f0c958a5457ebb8df560dbd53d348f55551c6fd6",
+      "opensnitchCommit": "b404c4c6316760fa7bc415509d3f8d747f7dc9cc",
+      "sourceRepository": "https://github.com/evilsocket/opensnitch.git",
+      "tag": "v1.8.0"
+    },
+    "system": {
+      "ebpfProgTreeSha256": "c37c309a548ec5518aec25bd4602d7c5672fb8e94ab9430893615aeafe0e4537",
+      "opensnitchCommit": "a1353848ba1b660320e90cefea782c3fba272c00"
+    }
+  },
+  "rpmSigningKey": {
+    "fingerprint": "4F50A6114CD5C6976A7F1179655A4B02F577861E",
+    "path": "/usr/share/pki/rpm-gpg/RPM-GPG-KEY-fedora-45-primary",
+    "sha256": "846912c73a910dab32da8ef0c0d68cb89d11ff514f598d2d1dd96d04d58b2425"
+  },
+  "schemaVersion": 1,
+  "toolchainRpms": [
+    {
+      "file": "clang21-21.1.8-10.fc45.x86_64.rpm",
+      "kojiPath": "llvm21/21.1.8/10.fc45/data/signed/f577861e/x86_64/clang21-21.1.8-10.fc45.x86_64.rpm",
+      "name": "clang21",
+      "nevra": "clang21-0:21.1.8-10.fc45.x86_64",
+      "sha256": "292eced9bc70b83fd949cf6c94371d69a37a100f0ba0ad1344262ddf89e0ffdf",
+      "size": 7628421
+    },
+    {
+      "file": "clang21-libs-21.1.8-10.fc45.x86_64.rpm",
+      "kojiPath": "llvm21/21.1.8/10.fc45/data/signed/f577861e/x86_64/clang21-libs-21.1.8-10.fc45.x86_64.rpm",
+      "name": "clang21-libs",
+      "nevra": "clang21-libs-0:21.1.8-10.fc45.x86_64",
+      "sha256": "7457f1475108f1fd9a9353604b6552fd1019ddd3bdb62ce460dce1cbe9cf7c98",
+      "size": 31673451
+    },
+    {
+      "file": "clang21-resource-filesystem-21.1.8-10.fc45.x86_64.rpm",
+      "kojiPath": "llvm21/21.1.8/10.fc45/data/signed/f577861e/x86_64/clang21-resource-filesystem-21.1.8-10.fc45.x86_64.rpm",
+      "name": "clang21-resource-filesystem",
+      "nevra": "clang21-resource-filesystem-0:21.1.8-10.fc45.x86_64",
+      "sha256": "3e2db9458241956131f104239a1843131a7cea61ca7627cfca8832749f7039d7",
+      "size": 19031
+    },
+    {
+      "file": "llvm21-21.1.8-10.fc45.x86_64.rpm",
+      "kojiPath": "llvm21/21.1.8/10.fc45/data/signed/f577861e/x86_64/llvm21-21.1.8-10.fc45.x86_64.rpm",
+      "name": "llvm21",
+      "nevra": "llvm21-0:21.1.8-10.fc45.x86_64",
+      "sha256": "5d17baddf762cf3de9dcfe8b251cd40e861bfd53efe8e8b936e579a4bb901b55",
+      "size": 25767454
+    },
+    {
+      "file": "llvm21-filesystem-21.1.8-10.fc45.x86_64.rpm",
+      "kojiPath": "llvm21/21.1.8/10.fc45/data/signed/f577861e/x86_64/llvm21-filesystem-21.1.8-10.fc45.x86_64.rpm",
+      "name": "llvm21-filesystem",
+      "nevra": "llvm21-filesystem-0:21.1.8-10.fc45.x86_64",
+      "sha256": "9c125c5374c8c79b11f744ccbc78428073e614837a13c9f6872ad0b8c2c2f80e",
+      "size": 13385
+    },
+    {
+      "file": "llvm21-libs-21.1.8-10.fc45.x86_64.rpm",
+      "kojiPath": "llvm21/21.1.8/10.fc45/data/signed/f577861e/x86_64/llvm21-libs-21.1.8-10.fc45.x86_64.rpm",
+      "name": "llvm21-libs",
+      "nevra": "llvm21-libs-0:21.1.8-10.fc45.x86_64",
+      "sha256": "f7aaf194dc9ab587827a2ea24b08a2675cf1d48582c5cbe691b8fbfa2fe96dd8",
+      "size": 36575266
+    }
+  ],
+  "tools": {
+    "cc": {
+      "path": "/usr/bin/clang-21",
+      "rpm": "clang21"
+    },
+    "llc": {
+      "path": "/usr/bin/llc-21",
+      "rpm": "llvm21"
+    },
+    "strip": {
+      "path": "/usr/bin/llvm-strip-21",
+      "rpm": "llvm21"
+    }
+  }
+}

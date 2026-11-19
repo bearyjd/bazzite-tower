@@ -144,7 +144,7 @@ class RefreshTests(unittest.TestCase):
     def test_valid_artifact_and_stable_alias_identity(self):
         proof, hashes = self.valid()
         self.assertEqual(proof['channels'], ['stable', 'latest'])
-        self.assertEqual(proof['sourceCommit'], 'f8b490dd20e2572065b8cccd91bbdd2e9bc9ab16')
+        self.assertEqual(proof['sourceCommit'], '0555af1233a023a7cd387e4030b55613d7b29ab8')
         self.assertEqual(set(hashes), r.FILES)
 
     def test_policy_schema_dest_ref_profile_fail_closed(self):
@@ -190,6 +190,30 @@ class RefreshTests(unittest.TestCase):
         with self.assertRaises(ValueError): r.monotonic(self.policy, self.proof, previous)
         newer = copy.deepcopy(self.proof); newer['kernel'] = '7.3.0-ogc1.1.fc45'; newer['baseVersion'] = '45.20261106'
         r.monotonic(self.policy, newer, self.proof)
+
+    def previous_and_new(self, previous, new):
+        a = copy.deepcopy(self.proof); a['baseVersion'] = previous
+        b = copy.deepcopy(self.proof); b['baseVersion'] = new
+        return a, b
+
+    def test_monotonic_orders_revision_suffixed_versions(self):
+        a, b = self.previous_and_new('45.20261115', '45.20261117.1')
+        r.monotonic(self.policy, b, a)
+        a, b = self.previous_and_new('45.20261117.1', '45.20261117.2')
+        r.monotonic(self.policy, b, a)
+        a, b = self.previous_and_new('45.20261117.1', '45.20261117')
+        with self.assertRaisesRegex(ValueError, 'below signed channel baseline'): r.monotonic(self.policy, b, a)
+
+    def test_policy_and_evidence_accept_a_revision_floor(self):
+        policy = copy.deepcopy(self.policy); policy['minimumBaseVersion'] = '45.20261105.1'
+        write(self.path, policy)
+        self.assertEqual(r.policy(self.root)['minimumBaseVersion'], '45.20261105.1')
+        args = (self.base, None, self.proof['image'], self.proof['sbomSha256'], self.proof['kernel'])
+        r.evidence(policy, 'legacy', self.base, '45.20261105.1', *args[2:])
+        r.evidence(policy, 'legacy', self.base, '45.20261117.1', *args[2:])
+        for low in ['45.20261105', '45.20261104.9']:
+            with self.subTest(low=low), self.assertRaisesRegex(ValueError, 'below accepted floor'):
+                r.evidence(policy, 'legacy', self.base, low, *args[2:])
 
     def test_unsafe_artifact_inventory_and_symlink_refused(self):
         extra = self.data / 'extra'; extra.write_text('bad')
@@ -517,6 +541,55 @@ class PolicySourceIdentity(unittest.TestCase):
         expected = datetime.fromtimestamp(epoch, timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
         self.assertEqual(policy['sourceCreated'], expected)
         self.assertEqual(git('rev-parse', policy['sourceCommit'] + '^{tree}').stdout.strip(), policy['sourceTree'])
+
+
+class BaseVersionGrammar(unittest.TestCase):
+    """2026-11-17: upstream began labelling stable 45.20261117.1 (optional .N revision)."""
+    def test_accepts_plain_and_revision(self):
+        self.assertEqual(r.base_version('45.20261117'), (45, 20261117, 0))
+        self.assertEqual(r.base_version('45.20261117.1'), (45, 20261117, 1))
+        self.assertEqual(r.base_version('45.20261117.9999'), (45, 20261117, 9999))
+
+    def test_rejects_malformed(self):
+        for bad in ['', ' ', '45.20261117 ', ' 45.20261117', '45.20261117\n', '45.20261117.1\n', '45.20261117.0', '45.20261117.00',
+                    '45.20261117.01', '45.20261117.1.2', '45.20261117.', '45.20261117.10000', '45.2026111', '4.20261117',
+                    '45.20261117.-1', '45.20261117.a', '45.20261117.\u0661', '\u0664\u0665.20261117', 'v45.20261117', None, 45]:
+            with self.subTest(bad=bad), self.assertRaises(ValueError): r.base_version(bad)
+
+    def test_ordering_is_total_and_monotone(self):
+        order = ['45.20261117', '45.20261117.1', '45.20261117.2', '45.20261117.10', '45.20261118']
+        self.assertEqual(sorted(order, key=r.base_version), order)
+
+    def test_floor_and_baseline_comparisons(self):
+        self.assertGreaterEqual(r.base_version('45.20261117.1'), r.base_version('45.20261105'))
+        self.assertGreaterEqual(r.base_version('45.20261117.1'), r.base_version('45.20261117'))
+        self.assertLess(r.base_version('45.20261117'), r.base_version('45.20261117.1'))
+
+    def test_resolve_uses_the_digest_pinned_inspect_version(self):
+        # Previously raised ValueError('invalid Bazzite version') in the scheduled `resolve` job.
+        # The :stable inspect and the @sha256: inspect disagree; the pinned one is authoritative.
+        # A private policy copy with a low floor keeps this independent of the live floor.
+        digest = 'sha256:' + 'c' * 64
+        tag_info = {'Digest': digest, 'Labels': {'org.opencontainers.image.version': '45.20261101'}}
+        pinned_info = {'Digest': digest, 'Labels': {'org.opencontainers.image.version': '45.20261117.1'}}
+        def skopeo(*argv):
+            return json.dumps(pinned_info if '@sha256:' in argv[-1] else tag_info)
+        with tempfile.TemporaryDirectory() as tmp:
+            control = Path(tmp) / 'control'; (control / '.github').mkdir(parents=True)
+            policy = json.loads((ROOT / '.github/base-refresh-policy.json').read_bytes())
+            policy['minimumBaseVersion'] = '45.20261001'
+            write(control / '.github/base-refresh-policy.json', policy)
+            out = Path(tmp) / 'out'
+            env = {'CONTROL': str(control), 'GITHUB_OUTPUT': str(out), 'GITHUB_REPOSITORY': 'bearyjd/bazzite-tower', 'GITHUB_REF': 'refs/heads/main',
+                   'GITHUB_EVENT_NAME': 'schedule', 'GITHUB_SHA': 'a' * 40, 'GITHUB_RUN_ID': '17', 'GITHUB_RUN_NUMBER': '2', 'GITHUB_RUN_ATTEMPT': '1',
+                   'GITHUB_WORKFLOW_REF': 'bearyjd/bazzite-tower/.github/workflows/base-refresh.yml@refs/heads/main'}
+            with patch.dict(os.environ, env), patch.object(r, 'command', side_effect=skopeo), \
+                    patch.object(sys, 'argv', ['base-refresh.py', 'resolve', '--control', str(control)]):
+                r.main()
+            lines = out.read_text().splitlines()
+        self.assertIn('version=45.20261117.1', lines)
+        self.assertNotIn('version=45.20261101', lines)
+        self.assertIn('base=' + policy['upstream'] + '@' + digest, lines)
 
 
 if __name__ == '__main__': unittest.main()

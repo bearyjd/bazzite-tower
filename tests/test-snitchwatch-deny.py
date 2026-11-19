@@ -198,13 +198,75 @@ class Refusals(DenyBase):
 
     def test_wrong_current_action_or_proc_method(self):
         for changes, text in (({"DefaultAction": "deny"}, "allow"), ({"DefaultAction": "ask"}, "allow"),
-                              ({"ProcMonitorMethod": "ebpf"}, "proc")):
+                              ({"ProcMonitorMethod": "audit"}, "ProcMonitorMethod drift")):
             with self.subTest(changes=changes):
                 self.edit_config(**changes)
                 self.refused("on", text=text)
                 self.assert_untouched()
                 self.assertFalse(self.status()["canEnable"])
                 self.edit_config(DefaultAction="allow", ProcMonitorMethod="proc")
+        self.edit_config(DefaultAction="allow")
+        raw = json.loads(self.config_path.read_text())
+        del raw["ProcMonitorMethod"]
+        self.config_path.write_text(json.dumps(raw))
+        self.refused("on", text="ProcMonitorMethod drift")
+        self.assertFalse(self.status()["canEnable"])
+
+    def test_ebpf_and_proc_methods_both_allow_opt_in(self):
+        for method in ("ebpf", "proc"):
+            with self.subTest(method=method):
+                self.edit_config(DefaultAction="allow", ProcMonitorMethod=method)
+                self.assertTrue(self.status()["canEnable"], self.status()["blockers"])
+
+    def runtime_checks(self):
+        return [cmd for cmd in self.ctx.commands if cmd == [common.EBPF_CHECK, "--runtime"]]
+
+    def test_modules_path_drift_blocks_opt_in_for_both_methods(self):
+        for method in ("ebpf", "proc"):
+            for modules in (None, "/usr/local/lib/opensnitchd/ebpf"):
+                with self.subTest(method=method, modules=modules):
+                    ebpf = dict(json.loads(self.config_path.read_text())["Ebpf"])
+                    ebpf.pop("ModulesPath", None)
+                    if modules:
+                        ebpf["ModulesPath"] = modules
+                    self.edit_config(ProcMonitorMethod=method, Ebpf=ebpf)
+                    self.refused("on", text="ModulesPath")
+                    self.assert_untouched()
+                    self.assertFalse(self.status()["canEnable"])
+                    self.assertEqual(self.runtime_checks(), [])
+
+    def test_ebpf_opt_in_refuses_everything_but_a_clean_runtime_pass(self):
+        self.edit_config(ProcMonitorMethod="ebpf")
+        refused = (("FAIL", "silent /proc fallback: pid 501 holds no anon_inode:bpf-prog fd", 1),
+                   ("WARN", "partial eBPF: the daemon logged 'opensnitch-procs.o not available' (no exec events)", 0),
+                   ("WARN", "the log does not cover the unit start; fallback cannot be ruled out", 0),
+                   ("WARN", "log unreadable: fallback cannot be ruled out", 0),
+                   ("WARN", "only 1 anon_inode:bpf-prog fds, below the calibrated floor 9", 0),
+                   ("PASS", "contradictory exit", 1))
+        for result in refused:
+            with self.subTest(result=result):
+                self.ctx.ebpf_runtime = result
+                self.refused("on", text="cannot enable deny: .*"+re.escape(result[1][:20]) if result[2] == 0 else "cannot enable deny")
+                self.assert_untouched()
+        self.ctx.ebpf_hang = True
+        self.refused("on", text="timed out")
+        self.assert_untouched()
+
+    def test_ebpf_opt_in_allowed_on_a_runtime_pass(self):
+        self.edit_config(ProcMonitorMethod="ebpf")
+        self.ctx.ebpf_runtime = ("PASS", "fixture: daemon holds eBPF programs", 0)
+        self.ok("on")
+        self.assertEqual(len(self.runtime_checks()), 1)
+
+    def test_proc_opt_in_skips_the_runtime_check(self):
+        self.edit_config(ProcMonitorMethod="proc")
+        self.ctx.commands.clear()
+        self.ctx.ebpf_runtime = ("FAIL", "would refuse if it ran", 1)
+        self.ok("on")
+        self.assertEqual(self.runtime_checks(), [])
+
+    def test_policy_lock_wait_outlasts_the_runtime_check_bound(self):
+        self.assertGreater(load("deny_constants", HELPER).LOCK_TIMEOUT, common.EBPF_RUNTIME_TIMEOUT+10)
 
     def test_already_pending_is_refused_and_changes_nothing_more(self):
         self.ok("on")

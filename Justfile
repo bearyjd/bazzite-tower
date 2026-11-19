@@ -1,4 +1,6 @@
 image_name := "bazzite-tower"
+# titanoboa commit used by build-iso-live; bump deliberately after review.
+titanoboa_rev := "5c457c3d0518bd17e754be0fd98a60d29d26abb4"
 export default_tag := env("DEFAULT_TAG", "latest")
 export bib_image := env("BIB_IMAGE", "quay.io/centos-bootc/bootc-image-builder@sha256:4d8a0d9d173a9f450ff42d70777e1e0a6681a68f5c0f5084b65222eceb1f4d05")
 
@@ -105,7 +107,7 @@ build $target_image=image_name $tag=default_tag:
 build-snitchwatch-system $target_image=("localhost/" + image_name) $tag="snitchwatch-system":
     #!/usr/bin/env bash
     set -euo pipefail
-    BUILD_ARGS=("--build-arg" "FIREWALL_DAEMON=opensnitch" "--build-arg" "SNITCHWATCH_BRIDGE=system")
+    BUILD_ARGS=("--build-arg" "FIREWALL_DAEMON=opensnitch" "--build-arg" "SNITCHWATCH_BRIDGE=system" "--build-arg" "IMAGE_TAG=snitchwatch-system")
     if [[ -z "$(git status -s)" ]]; then
         BUILD_ARGS+=("--build-arg" "SHA_HEAD_SHORT=$(git rev-parse --short HEAD)")
     fi
@@ -117,7 +119,7 @@ build-snitchwatch-system-vm $target_image=("localhost/" + image_name) $tag="snit
     #!/usr/bin/env bash
     set -euo pipefail
     podman build --build-arg FIREWALL_DAEMON=opensnitch --build-arg SNITCHWATCH_BRIDGE=system \
-        --build-arg VM_GATE_SSH=1 --pull=newer --tag "${target_image}:${tag}" .
+        --build-arg IMAGE_TAG=snitchwatch-system --build-arg VM_GATE_SSH=1 --pull=newer --tag "${target_image}:${tag}" .
 
 # Build the Portmaster VM spike. It is deliberately not the default image and
 # its service stays disabled: boot only its qcow2 in a disposable VM first.
@@ -358,7 +360,9 @@ build-iso-live $base_image=("ghcr.io/bearyjd/" + image_name) $tag=default_tag:
         --build-arg BASE_IMAGE="${base_image}:${tag}" \
         -t "localhost/bazzite-tower-payload:${tag}" installer/
     work="$(mktemp -d)"
-    git clone --depth 1 https://github.com/ublue-os/titanoboa "$work/titanoboa"
+    git init -q "$work/titanoboa"
+    git -C "$work/titanoboa" fetch --depth 1 https://github.com/ublue-os/titanoboa "{{ titanoboa_rev }}"
+    git -C "$work/titanoboa" checkout -q --detach FETCH_HEAD
     # main.sh prints the produced ISO's path as its only stdout line; capture it.
     iso="$(cd "$work/titanoboa" && sudo TITANOBOA_CTR_IMAGE="localhost/bazzite-tower-payload:${tag}" ./main.sh)"
     if [ -n "${iso:-}" ] && [ -f "$iso" ]; then

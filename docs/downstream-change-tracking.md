@@ -23,8 +23,8 @@ weekly Sunday cron:
 2. `bootc container lint` passes, and
 3. the exact candidate boots its systemd and passes `tests/boot-check.sh`.
 
-It then pushes `:latest` (and dated tags) on every green build, and the laptop
-rebases onto `:latest`. **"Build is green" is not the same as "image works."**
+`build.yml` then pushes only the opt-in `:latest-kernel` channel; `:latest`
+is published by `base-refresh.yml` (daily), and the laptop rebases onto `:latest`. **"Build is green" is not the same as "image works."**
 Our two highest-risk areas fail in different ways, and only one of those ways is
 currently caught:
 

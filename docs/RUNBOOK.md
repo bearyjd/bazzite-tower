@@ -32,7 +32,11 @@ sudo bootc upgrade
 sudo systemctl reboot
 ```
 
-`:latest` rebuilds weekly (Sun 06:00 UTC) and on every push to `main`.
+`:latest` (alias `:stable`) is refreshed daily (07:17 UTC) by `.github/workflows/base-refresh.yml`,
+which resolves upstream `bazzite-nvidia-open:stable` to an immutable digest and builds the
+accepted source on it (also publishing `:snitchwatch-system` for the system profile), rejecting bases below the floor in `.github/base-refresh-policy.json`.
+The `Containerfile` `BASE_IMAGE` pin does not decide this base. `build.yml` (weekly Sun 06:00 UTC
+and on push to `main`) publishes only the opt-in `:latest-kernel` channel.
 
 ## Rollback (do this first when a boot goes bad)
 

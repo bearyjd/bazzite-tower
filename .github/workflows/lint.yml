@@ -43,10 +43,42 @@ jobs:
           rm just.tgz
           just --version
 
+      - name: Install shellcheck
+        env:
+          SHELLCHECK_VERSION: "0.11.0"
+          SHELLCHECK_SHA256: 8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198
+        run: |
+          set -euo pipefail
+          curl -fsSL -o shellcheck.tar.xz "https://github.com/koalaman/shellcheck/releases/download/v${SHELLCHECK_VERSION}/shellcheck-v${SHELLCHECK_VERSION}.linux.x86_64.tar.xz"
+          echo "${SHELLCHECK_SHA256}  shellcheck.tar.xz" | sha256sum -c -
+          sudo tar -xJf shellcheck.tar.xz -C /usr/local/bin --strip-components=1 "shellcheck-v${SHELLCHECK_VERSION}/shellcheck"
+          rm shellcheck.tar.xz
+          shellcheck --version
+
       - name: shellcheck (just lint)
+        id: shellcheck
         continue-on-error: true
         run: just lint
 
       - name: hadolint (just lint-containerfile)
+        id: hadolint
         continue-on-error: true
         run: just lint-containerfile
+
+      # continue-on-error makes a failed step report success, so surface the
+      # advisory result explicitly (annotation + job summary).
+      - name: Report advisory results
+        if: always()
+        env:
+          SHELLCHECK_OUTCOME: ${{ steps.shellcheck.outcome }}
+          HADOLINT_OUTCOME: ${{ steps.hadolint.outcome }}
+        run: |
+          for pair in "shellcheck:${SHELLCHECK_OUTCOME}" "hadolint:${HADOLINT_OUTCOME}"; do
+            name="${pair%%:*}"; outcome="${pair#*:}"
+            if [ "${outcome}" = "failure" ]; then
+              echo "::warning title=Advisory lint::${name} reported findings (advisory, not blocking)"
+              echo "- ${name}: FAILED (advisory)" >> "${GITHUB_STEP_SUMMARY}"
+            else
+              echo "- ${name}: ${outcome}" >> "${GITHUB_STEP_SUMMARY}"
+            fi
+          done

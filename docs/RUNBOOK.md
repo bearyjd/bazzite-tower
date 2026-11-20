@@ -960,7 +960,7 @@ is run by the owner on the laptop; nothing is automated.
 
 **1. Why.** Docker's post-install page states: "The `docker` group grants
 root-level privileges to the user." (docs.docker.com/engine/install/linux-postinstall,
-section "Add your user to the `docker` group"). A member can ask the daemon to
+section "Manage Docker as a non-root user"). A member can ask the daemon to
 mount `/` or start a privileged container.
 
 **2. Move everyday use to rootless podman (host steps, in order).**
@@ -997,11 +997,21 @@ pkcheck --action-id org.libvirt.unix.manage  --process $$ ; echo $?   # expect 2
 pkcheck --action-id org.libvirt.unix.monitor --process $$ ; echo $?   # expect 0 (allowed)
 ```
 
-Before the change both print 0. `ujust vm-list` and `ujust vm-net-status` are
-read-only and stay prompt-free; `virt-manager` and read-write `virsh` ask once,
-then are cached for about 5 minutes. Coverage of other libvirt paths
-(`libvirt-dbus.rules`) is NOT verified. Rollback: revert the change and rebuild,
-or `sudo bootc rollback` and reboot.
+Before the change both print 0. An exit 0 for manage within about 5 minutes of
+typing a password is the cached grant, not a failure of the rule. `ujust vm-list`
+and `ujust vm-net-status` are read-only and stay prompt-free; `virt-manager` and
+read-write `virsh` ask once, then are cached for about 5 minutes.
+
+**libvirt-dbus is no longer installed.** `cockpit-machines` pulled it in, and it
+let any `libvirt`-group process do read-write `qemu:///system` over the system
+bus with no prompt: `/usr/share/dbus-1/system.d/org.libvirt.conf:15-16` allows
+group `libvirt` to send to `org.libvirt`, and the daemon (user `libvirtdbus`) is
+granted manage = YES by `libvirt-dbus.rules`, without a polkit check on the real
+caller. So `cockpit-machines` was removed (`70-guards-monitoring.sh`) and the
+Cockpit "Virtual Machines" page is gone; `virt-manager` and `virsh` are
+unaffected. `ujust fix-vm-groups` adds you to `libvirt`; that is fine now, since
+`libvirt`-group manage needs a password through the 49- rule. Rollback: revert
+the change and rebuild, or `sudo bootc rollback` and reboot.
 
 ## Common issues
 

@@ -13,13 +13,15 @@ rule="${repo_root}/system_files/usr/share/polkit-1/rules.d/49-bazzite-tower-libv
 
 if ! command -v node >/dev/null 2>&1; then
     echo "node not found: libvirt polkit rule check SKIPPED (unverified)" >&2
+    [[ -n "${CI:-}" ]] && exit 1
     exit 0
 fi
 
 tmp=$(mktemp -d)
 trap 'rm -rf "${tmp}"' EXIT
 install -d "${tmp}/rules.d"
-install -m 0644 -- "${rule}" "${tmp}/rules.d/49-bazzite-tower-libvirt-manage.rules"
+rule_name=$(basename "${rule}")
+install -m 0644 -- "${rule}" "${tmp}/rules.d/${rule_name}"
 install -m 0644 /dev/stdin "${tmp}/rules.d/50-libvirt.rules" <<'EOF'
 polkit.addRule(function(action, subject) {
     if (action.id == "org.libvirt.unix.manage" && subject.isInGroup("libvirt")) {
@@ -29,7 +31,7 @@ polkit.addRule(function(action, subject) {
 EOF
 
 # Syntax check (rules are plain JS; node only recognises .js, so feed stdin).
-node --check - < "${tmp}/rules.d/49-bazzite-tower-libvirt-manage.rules"
+node --check - < "${tmp}/rules.d/${rule_name}"
 
 node - "${tmp}/rules.d" <<'EOF'
 const fs = require('fs');

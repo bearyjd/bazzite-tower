@@ -251,10 +251,10 @@ Each is its own fragment, so you can drop either independently if your hardware 
 
 Bootc images don't bake in a default user — the first user is created by KDE Plasma's initial-setup on first boot. `bazzite-tower` uses two complementary mechanisms to give that user immediate virtualization access:
 
-1. **Polkit rule** (`/etc/polkit-1/rules.d/50-libvirt-wheel.rules`) — grants `unix-group:wheel` access to `org.libvirt.unix.manage` and `org.libvirt.unix.monitor`. Anyone in `wheel` can talk to `qemu:///system` from `virt-manager` and `virsh` immediately, no logout required.
+1. **Polkit rule** (`/usr/share/polkit-1/rules.d/49-bazzite-tower-libvirt-manage.rules`) — read-write `qemu:///system` (`org.libvirt.unix.manage`) asks for an admin password (cached about 5 minutes) for members of `wheel` or `libvirt`; this is root-equivalent, so it is no longer silent. Read-only access (`org.libvirt.unix.monitor`) stays passwordless. The rule is named `49-` so it sorts before libvirt's own `50-libvirt.rules`, which would otherwise grant the `libvirt` group manage without a prompt.
 2. **First-boot oneshot** (`bazzite-tower-firstboot.service`) — runs after `systemd-user-sessions.service`, finds the first UID≥1000 user, and runs `usermod -aG kvm,libvirt` (adding only groups that exist). This grants real group membership for tools that check `groups` and for raw `/dev/kvm` access. The unit retries every boot until a regular user exists, then writes a marker file (`/var/lib/.bazzite-tower-groups-done`) so it stops running.
 
-Result: `virsh -c qemu:///system list` and `virt-manager` work on first login (via the polkit rule). Raw `/dev/kvm` (`qemu-system-x86_64 -enable-kvm`) works once the first-boot service has applied the groups — in practice after the next reboot following initial account creation, plus a fresh login session to pick the new groups up.
+Result: `ujust vm-list` (read-only) works on first login without a prompt; `virt-manager` and read-write `virsh -c qemu:///system` ask for your password. Raw `/dev/kvm` (`qemu-system-x86_64 -enable-kvm`) works once the first-boot service has applied the groups — in practice after the next reboot following initial account creation, plus a fresh login session to pick the new groups up.
 
 ### Docker CE instead of podman-docker
 

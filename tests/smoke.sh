@@ -14,6 +14,7 @@
 # systemd, no network. `systemctl is-enabled`/`is-active`-at-runtime behaviour is
 # left to the boot test; here we only read on-disk enablement (the symlinks
 # `systemctl enable` wrote at build time), which is readable offline.
+# shellcheck disable=SC2016 # the polkit-rule checks pass single-quoted bash -c bodies
 set -uo pipefail
 
 fail=0
@@ -72,8 +73,29 @@ done
 check_masked "libvirtd.service"
 # Default NAT network marked autostart (the symlink build.sh creates by hand).
 check "default network autostart symlink" test -L /etc/libvirt/qemu/networks/autostart/default.xml
-# Polkit rule granting wheel access to qemu:///system.
-check "libvirt-wheel polkit rule present" test -f /etc/polkit-1/rules.d/50-libvirt-wheel.rules
+# Polkit: org.libvirt.unix.manage (read-write qemu:///system) must ASK for a
+# password. INTENT CHANGE (was: "libvirt-wheel polkit rule present", i.e. wheel
+# got manage+monitor = YES from /etc/polkit-1/rules.d/50-libvirt-wheel.rules).
+libvirt_rule=/usr/share/polkit-1/rules.d/49-bazzite-tower-libvirt-manage.rules
+check "libvirt manage polkit rule present" test -f "${libvirt_rule}"
+check "libvirt manage rule returns AUTH_ADMIN_KEEP for manage" \
+    grep -q 'polkit.Result.AUTH_ADMIN_KEEP' "${libvirt_rule}"
+check "libvirt manage rule targets org.libvirt.unix.manage" \
+    grep -q 'action.id == "org.libvirt.unix.manage"' "${libvirt_rule}"
+check "libvirt manage rule covers wheel and libvirt groups" \
+    bash -c 'grep -q "isInGroup(\"wheel\")" "$1" && grep -q "isInGroup(\"libvirt\")" "$1"' _ "${libvirt_rule}"
+# Neither YES nor monitor may appear in an executable (non-comment) line.
+check "libvirt manage rule has no YES result and does not touch monitor" \
+    bash -c '! grep -v "^[[:space:]]*//" "$1" | grep -Eq "Result\.YES|unix\.monitor"' _ "${libvirt_rule}"
+# polkit takes the first rule that returns a result, in lexical filename order
+# across /etc and /usr/share, so ours must sort before libvirt's own
+# (group libvirt -> manage = YES) rule or it would never run.
+check "libvirt manage rule sorts before upstream 50-libvirt.rules" \
+    bash -c 'export LC_ALL=C; [[ "$(basename "$1")" < "50-libvirt.rules" ]]' _ "${libvirt_rule}"
+check "no leftover wheel-YES libvirt rule (old 50-libvirt-wheel.rules)" \
+    test ! -e /etc/polkit-1/rules.d/50-libvirt-wheel.rules
+check "no other /etc polkit rule grants libvirt manage YES" \
+    bash -c '! grep -rlE "unix\.manage" /etc/polkit-1/rules.d 2>/dev/null | grep -q .'
 # The tooling we install must actually be on PATH.
 check "qemu-system-x86_64 present" command -v qemu-system-x86_64
 check "virsh present"              command -v virsh

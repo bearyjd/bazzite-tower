@@ -37,20 +37,15 @@ if [[ -f /etc/libvirt/qemu/networks/default.xml ]]; then
     ln -sfn ../default.xml /etc/libvirt/qemu/networks/autostart/default.xml
 fi
 
-# ── Polkit: wheel → qemu:///system access (immediate, no logout required) ─────
-install -Dm644 /dev/stdin /etc/polkit-1/rules.d/50-libvirt-wheel.rules <<'EOF'
-polkit.addRule(function(action, subject) {
-    if ((action.id == "org.libvirt.unix.manage" ||
-         action.id == "org.libvirt.unix.monitor") &&
-        subject.isInGroup("wheel")) {
-        return polkit.Result.YES;
-    }
-});
-EOF
+# ── Polkit: libvirt manage requires authentication ────────────────────────────
+# Deliberately nothing is written here. system_files/usr/share/polkit-1/rules.d/
+# 49-bazzite-tower-libvirt-manage.rules makes org.libvirt.unix.manage (read-write
+# qemu:///system) ask for an admin password; org.libvirt.unix.monitor stays at its
+# passwordless default. A former /etc rule granted wheel manage+monitor = YES.
 
 # ── First-boot oneshot: add the first regular user to virtualisation groups ────
-# Polkit covers libvirt access for wheel users, but raw /dev/kvm and tools that
-# check `groups` membership need real kvm/libvirt entries. Docker access is an
+# Raw /dev/kvm and tools that check `groups` membership need real kvm/libvirt
+# entries (libvirt manage itself now prompts for a password, see above). Docker access is an
 # explicit opt-in because its group is root-equivalent. The unit and its helper
 # ship in system_files/; the unit retries every boot until a regular user exists,
 # then drops a marker so it stops running.

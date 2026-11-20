@@ -22,7 +22,7 @@ import sys
 #   qemu*/libvirt*/edk2-ovmf/swtpm/virt-*  -> the virtualization stack + the
 #                                              sysusers/user + modular-daemon logic
 #   NetworkManager*/iwd/wpa_supplicant     -> the Wi-Fi backend guard's assumptions
-#   polkit*                                -> the wheel -> qemu:///system rule API
+#   polkit*                                -> the libvirt manage rule (49-bazzite-tower-libvirt-manage.rules) JS API
 #   systemd*                               -> unit semantics / sysusers behaviour
 #   kernel*                                -> IOMMU / passthrough
 #   bootc                                  -> kargs.d handling

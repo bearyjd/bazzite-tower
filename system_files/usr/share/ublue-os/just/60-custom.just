@@ -18,12 +18,12 @@ vm-stop:
 # List all VMs known to the system libvirt instance
 [group('Virtualization')]
 vm-list:
-    virsh -c qemu:///system list --all
+    virsh -c qemu:///system --readonly list --all
 
 # Show the status of all libvirt virtual networks
 [group('Virtualization')]
 vm-net-status:
-    virsh -c qemu:///system net-list --all
+    virsh -c qemu:///system --readonly net-list --all
 
 # Add the current user to the kvm and libvirt groups
 [group('Virtualization')]

@@ -3,8 +3,7 @@
 Plan: `docs/prp/cloison-kvm-compartments.md` (sections 4, 9, 10). Status: **scaffold only**.
 
 ## Status of the plan
-A Codex critic (2026-11-16) returned **REWORK** on the plan. The plan must be
-revised before M2 starts. Findings that shape this scaffold:
+Plan rev 3 (2026-11-19): recommendations pending owner approval. Earlier, a Codex critic (2026-11-16) returned **REWORK** on rev 0. Findings that shape this scaffold:
 - 2: signature-policy bootstrap is missing (the daily deployment must trust the
   new repo before the first enforced switch). Therefore nothing is published
   and `policy.json` / `registries.d` are untouched.

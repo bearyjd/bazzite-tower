@@ -56,8 +56,8 @@ The specific upstream changes that can trigger each failure:
   or the default supplicant; `iwd`/`wpa_supplicant` packaging changes. The guard
   greps real paths (`/etc/NetworkManager`, `/usr/lib/NetworkManager`) and calls
   `systemctl is-enabled iwd` — any of those assumptions can drift.
-- **Polkit rule (`build.d/60-libvirt-services.sh`):** a polkit major bump changes the
-  JS rules API, so `wheel → qemu:///system` access stops applying.
+- **Polkit rule (`system_files/usr/share/polkit-1/rules.d/49-bazzite-tower-libvirt-manage.rules`):** a polkit major bump changes the
+  JS rules API, so the libvirt manage password requirement could stop applying (manage would fall back to libvirt's own group-`libvirt` YES rule).
 - **kargs (`system_files/usr/lib/bootc/kargs.d/00-iommu.toml`):** bootc changes
   how `kargs.d` is read, so IOMMU silently stops being applied.
 
@@ -123,7 +123,7 @@ to a script in `build.d/` or a `system_files/` artifact:
 - `test -L /etc/libvirt/qemu/networks/autostart/default.xml` → autostart symlink
   present.
 - `command -v qemu-system-x86_64 virsh virt-install` → all resolve.
-- polkit rule file `/etc/polkit-1/rules.d/50-libvirt-wheel.rules` present.
+- polkit rule file `/usr/share/polkit-1/rules.d/49-bazzite-tower-libvirt-manage.rules` present, returns `AUTH_ADMIN_KEEP` for manage, sorts before `50-libvirt.rules`; no `/etc/polkit-1/rules.d/50-libvirt-wheel.rules`.
 
 **Wi-Fi**
 - `systemctl is-enabled bazzite-tower-wifi-backend-guard.service` → `enabled`.

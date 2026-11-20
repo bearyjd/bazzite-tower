@@ -950,6 +950,69 @@ and that matches the same connection (for example a blocklist containing
 systemd-resolved) still wins and can block updates. That is by design: deny
 always beats these allows.
 
+## Docker without silent root
+
+Two groups give your everyday account root without a password prompt: `docker`
+and (until the polkit change in `49-bazzite-tower-libvirt-manage.rules`)
+`libvirt`/`wheel` for read-write `qemu:///system`. The image now makes libvirt
+manage ask for a password. This section covers the Docker half. Everything here
+is run by the owner on the laptop; nothing is automated.
+
+**1. Why.** Docker's post-install page states: "The `docker` group grants
+root-level privileges to the user." (docs.docker.com/engine/install/linux-postinstall,
+section "Manage Docker as a non-root user"). A member can ask the daemon to
+mount `/` or start a privileged container.
+
+**2. Move everyday use to rootless podman (host steps, in order).**
+1. `docker context ls`, then `docker context use podman`. The `podman` context
+   points at the rootless socket `unix:///run/user/1000/podman/podman.sock`
+   (owner-verified 2026-11-19).
+2. Verify with a harmless container, for example `docker run --rm hello-world`.
+3. Before going further, try every compose project you rely on, especially the
+   GPU ones (`gpus:` / nvidia device reservations) and any `network_mode: host`.
+   UNVERIFIED: whether nvidia compose files work through podman's Docker-compatible
+   API (podman prefers CDI, e.g. `--device nvidia.com/gpu=all`). Do not remove
+   yourself from `docker` until these work or you have accepted `sudo docker`.
+4. Only then: `sudo gpasswd -d $USER docker`, log out and in. Keep `sudo docker`
+   for the rare rootful need.
+
+**3. The trap.** `ujust enable-docker` re-adds you to `docker` every time it runs
+(`system_files/usr/share/ublue-os/just/60-custom.just:110-112`, the
+`usermod -aG docker` branch). Do not rerun it. If you do, remove yourself
+again with `sudo gpasswd -d $USER docker`. (Splitting that recipe is deliberately
+deferred.)
+
+**4. Honest ceiling.** With both paths closed the result is "root at your next
+`sudo`", not "no root": code running as your user can still wrap `sudo` and
+capture the password you type next. The Cloison plan already accepts this: its
+section 2 lists "KWin and the whole Plasma session" in the host TCB ("This is a
+desktop host, not a Qubes dom0") and "a malicious owner" as out of scope
+(`docs/prp/cloison-kvm-compartments.md`).
+
+**5. Verify the libvirt change on the laptop** (after booting an image with the
+rule; from a normal terminal in your session):
+
+```
+pkcheck --action-id org.libvirt.unix.manage  --process $$ ; echo $?   # expect 2 (challenge)
+pkcheck --action-id org.libvirt.unix.monitor --process $$ ; echo $?   # expect 0 (allowed)
+```
+
+Before the change both print 0. An exit 0 for manage within about 5 minutes of
+typing a password is the cached grant, not a failure of the rule. `ujust vm-list`
+and `ujust vm-net-status` are read-only and stay prompt-free; `virt-manager` and
+read-write `virsh` ask once, then are cached for about 5 minutes.
+
+**libvirt-dbus is no longer installed.** `cockpit-machines` pulled it in, and it
+let any `libvirt`-group process do read-write `qemu:///system` over the system
+bus with no prompt: `/usr/share/dbus-1/system.d/org.libvirt.conf:15-16` allows
+group `libvirt` to send to `org.libvirt`, and the daemon (user `libvirtdbus`) is
+granted manage = YES by `libvirt-dbus.rules`, without a polkit check on the real
+caller. So `cockpit-machines` was removed (`70-guards-monitoring.sh`) and the
+Cockpit "Virtual Machines" page is gone; `virt-manager` and `virsh` are
+unaffected. `ujust fix-vm-groups` adds you to `libvirt`; that is fine now, since
+`libvirt`-group manage needs a password through the 49- rule. Rollback: revert
+the change and rebuild, or `sudo bootc rollback` and reboot.
+
 ## Common issues
 
 | Symptom | Cause | Fix |

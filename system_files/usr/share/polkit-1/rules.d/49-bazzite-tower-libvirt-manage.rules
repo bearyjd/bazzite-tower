@@ -1,0 +1,21 @@
+// Require an admin password (cached for polkit's default ~5 minutes) for
+// org.libvirt.unix.manage, i.e. read-write qemu:///system. Manage is
+// root-equivalent: a domain can pass a host block device or filesystem
+// through to a guest.
+//
+// This file must sort BEFORE libvirt's own /usr/share/polkit-1/rules.d/
+// 50-libvirt.rules, which returns YES for group libvirt: polkit evaluates rule
+// files from /etc and /usr/share in lexical filename order and the first rule
+// that returns a result wins. Returning AUTH_ADMIN_KEEP here (the action's own
+// default) preempts that rule for the groups below. It is deliberately NOT
+// restricted to local/active sessions: an ssh or user-manager process in these
+// groups must not fall through to the upstream YES.
+//
+// org.libvirt.unix.monitor (read-only) is untouched: the action's default is
+// already "yes" and this file does not mention it.
+polkit.addRule(function(action, subject) {
+    if (action.id == "org.libvirt.unix.manage" &&
+        (subject.isInGroup("wheel") || subject.isInGroup("libvirt"))) {
+        return polkit.Result.AUTH_ADMIN_KEEP;
+    }
+});

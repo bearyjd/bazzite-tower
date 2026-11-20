@@ -31,12 +31,15 @@ systemctl disable sysstat.service sysstat-collect.timer sysstat-summary.timer sy
 chmod 0644 /usr/lib/systemd/system-sleep/sysstat.sleep
 
 # ── Cockpit: web-based system + VM management (opt-in) ─────────────────────────
-# Homelab management surface on :9090 — VMs (cockpit-machines drives the same
-# libvirt stack baked above), services, storage, logs, and podman. The base
-# already ships most of Cockpit (bridge/system/networkmanager/storaged/podman/
-# files/selinux); only cockpit-machines is missing, and the socket isn't enabled.
-# Add the VM module but do not enable socket activation. The operator opts in with
+# Homelab management surface on :9090 — services, storage, logs, and podman. The
+# base already ships most of Cockpit (bridge/system/networkmanager/storaged/
+# podman/files/selinux) and does NOT ship cockpit-machines or libvirt-dbus
+# (verified with rpm -q on the base image). cockpit-machines is deliberately NOT
+# installed: it pulls in libvirt-dbus, which lets any group-libvirt process manage
+# qemu:///system over the system bus without a password, bypassing
+# 49-bazzite-tower-libvirt-manage.rules. VMs: use virt-manager / virsh.
+# Do not enable socket activation. The operator opts in with
 # `ujust enable-cockpit`; its image-supplied drop-in binds Cockpit to loopback so
 # remote access needs deliberate Tailscale Serve or firewall policy.
-dnf install -y cockpit cockpit-machines
+dnf install -y cockpit
 systemctl disable cockpit.socket || true

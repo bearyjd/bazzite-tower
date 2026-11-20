@@ -547,9 +547,11 @@ Open items:
   `snitchwatch-daemon-patch.yml` workflow run them, `-race` included.
   Putting back the r2 `return EIO` makes the gate fail
   (`.agent_native/agent_roadmap.md` item 7).
-- Ignored per-message `nfq_handle_packet()` failures are not counted or
-  logged; the `NETLINK_NO_ENOBUFS` `setsockopt` result is unchecked; reader
-  errors name the internal queue index, not the queue number.
+- Ignored per-message `nfq_handle_packet()` failures are now counted
+  (`nfq_failed_packets`) and logged to stderr (journal) at the 1st, 2nd, 4th,
+  8th... failure, and a failed `NETLINK_NO_ENOBUFS` `setsockopt` logs a warning;
+  the reader still continues past a failed message. Still open: reader errors
+  name the internal queue index, not the queue number (`Run()` does not take it).
 - Serialized prompts are an upstream limitation with a real desktop cost:
   background services can hold the only prompt slot. On r4 a `kioworker`
   Ask (discord.com) held it right after login; Steam and the Bazzite welcome

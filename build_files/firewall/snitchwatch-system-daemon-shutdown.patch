@@ -1079,7 +1079,7 @@ index 9c06aab7..d80761c8 100644
  }
  
  static inline struct nfq_q_handle* CreateQueue(struct nfq_handle *h, uint16_t queue, uint32_t idx) {
-@@ -94,24 +108,63 @@ static inline struct nfq_q_handle* CreateQueue(struct nfq_handle *h, uint16_t qu
+@@ -94,24 +108,74 @@ static inline struct nfq_q_handle* CreateQueue(struct nfq_handle *h, uint16_t qu
      return qh;
  }
  
@@ -1091,6 +1091,9 @@ index 9c06aab7..d80761c8 100644
 -    char buf[4096] __attribute__ ((aligned));
 -    int rcvd, opt = 1;
 -
++// Process-wide count of nfq_handle_packet() failures the readers ignore.
++static unsigned long nfq_failed_packets = 0;
++
 +// Each queue has its own wake pipe. No other thread closes nfq handles while
 +// this reader (and its synchronous callbacks) is using them.
 +static inline int Run(struct nfq_handle *h, int fd, int wake_fd) {
@@ -1100,7 +1103,10 @@ index 9c06aab7..d80761c8 100644
 +    char buf[8192] __attribute__ ((aligned));
 +    int opt = 1;
 +    struct pollfd fds[2] = {{.fd = fd, .events = POLLIN}, {.fd = wake_fd, .events = POLLIN}};
-     setsockopt(fd, SOL_NETLINK, NETLINK_NO_ENOBUFS, &opt, sizeof(int));
+-    setsockopt(fd, SOL_NETLINK, NETLINK_NO_ENOBUFS, &opt, sizeof(int));
++    // Without NO_ENOBUFS a full socket buffer ends the reader with ENOBUFS.
++    if (setsockopt(fd, SOL_NETLINK, NETLINK_NO_ENOBUFS, &opt, sizeof(int)) < 0)
++        fprintf(stderr, "nfqueue reader: NETLINK_NO_ENOBUFS failed (errno %d); a full socket buffer will end the reader\n", errno);
 -
 -    while ((rcvd = recv(fd, buf, sizeof(buf), 0)) >= 0) {
 -        if (stop == 1) {
@@ -1124,7 +1130,13 @@ index 9c06aab7..d80761c8 100644
 +            // the reply to a verdict for an entry the kernel already flushed
 +            // (another base chain was unregistered). Upstream ignores it: one
 +            // stale message must not end the reader while the queue is bound.
-+            nfq_handle_packet(h, buf, received);
++            // Still ignored, but counted and logged (rate limited to the
++            // 1st, 2nd, 4th, 8th... failure) so a flood is visible in the journal.
++            if (nfq_handle_packet(h, buf, received) < 0) {
++                unsigned long failed = __atomic_add_fetch(&nfq_failed_packets, 1, __ATOMIC_SEQ_CST);
++                if ((failed & (failed - 1)) == 0)
++                    fprintf(stderr, "nfqueue reader: ignored %lu nfq_handle_packet() failure(s)\n", failed);
++            }
 +        }
      }
 +}
@@ -3626,7 +3638,7 @@ new file mode 100644
 index 00000000..7621d2e5
 --- /dev/null
 +++ b/daemon/netfilter/testdata/queue_run.c
-@@ -0,0 +1,46 @@
+@@ -0,0 +1,48 @@
 +#include "queue.h"
 +#include <assert.h>
 +#include <sys/socket.h>
@@ -3665,6 +3677,8 @@ index 00000000..7621d2e5
 +        nanosleep(&pause,NULL);
 +    }
 +    assert(__atomic_load_n(&handled,__ATOMIC_SEQ_CST)==3);
++    // The ignored failure is counted, not silently dropped.
++    assert(__atomic_load_n(&nfq_failed_packets,__ATOMIC_SEQ_CST)==1);
 +    // A truncated message cannot be parsed, so its packet would never get a verdict.
 +    assert(__atomic_load_n(&largest,__ATOMIC_SEQ_CST)==QUEUED_MESSAGE_LEN);
 +    assert(write(wake[1],"x",1)==1);

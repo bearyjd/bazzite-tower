@@ -14,7 +14,7 @@
     "daemon/go.mod": "82a691d61203fc0e7ad836889444606b5f1152244b63b0e8027bf773a922871a",
     "daemon/go.sum": "1bd9973dbb5bf74576a99d3c2625b314f180dd649963ebcef51df7753e85b596"
   },
-  "patchSha256": "7900dbfb669ecf91eb6584cda571edbe23f4b8ba7c739427c034169581ee59f1",
+  "patchSha256": "ad9a804d5a667bbc456df1ab4ad32af72ee2e868a7a0e79a21603271010e2eb2",
   "patchedFiles": {
     "daemon/drop_while_asking_test.go": "acae364ef2421fb1dcc5a15ca6228129743ebd8afb7f968c59f17a596b15655d",
     "daemon/firewall/nftables/chains.go": "bc26d889f83d4f2a14d19f8ec4ebe39d66dc2cae2d95e41627d2acb0fe0b6825",
@@ -26,7 +26,7 @@
     "daemon/netfilter/netfilter_test.go": "179bd65d1e6c83c199a463d3440b68c805925739373563da905b77c6450fcc92",
     "daemon/netfilter/packet.go": "38264e9430d0e6b6792affdc96e865e3248c9abd2c24853689e1c4fda5c130f9",
     "daemon/netfilter/queue.go": "aaf454bca5fd184583ef288b46a1f37f0230636dd2e6f02ffdf1b82934a5f618",
-    "daemon/netfilter/queue.h": "acb259a6cb9707c2775b2d85bdf75dafeb1369d1f201e1ea44b49e78c94bd5ee",
+    "daemon/netfilter/queue.h": "f2c7e3ff505b2bfeeb0c9a1a35b5c2ea8359ec5d1b5e55e16f004998f7b40acf",
     "daemon/netfilter/queue_destroy_test.go": "a1d662d567f2ffaeb305510a8d3af24aa5ef5e574c5feeda20292ae69ea595eb",
     "daemon/netfilter/queue_lifetime.go": "a45b5d20cfc1f2a82453316e25ed6607da30e3204eacf8403e61e32470c6c501",
     "daemon/netfilter/queue_reader_failure_test.go": "2d00ea1034f28882fae290c2154c73b126279e7d3b38c21d699363d05008076a",
@@ -35,7 +35,7 @@
     "daemon/netfilter/requeue_handoff_test.go": "2adedb11e1f68ea7b8b85bb75bdad64325399c93fd8bba07fa7118d40b9f6eed",
     "daemon/netfilter/testdata/queue_callback.c": "1632663a0dbe8ed4a029cb2011078aa51834f9b9c3786b76f3852dd3ea631c70",
     "daemon/netfilter/testdata/queue_drain.c": "94a7baf9f870c7098065534543eb47cf8f3da592efe224e21dab96d02b215ddc",
-    "daemon/netfilter/testdata/queue_run.c": "2480b14f4be4912274a6cde5725da7850ad0e579deb7155bac4bf3d1a9c04f7b",
+    "daemon/netfilter/testdata/queue_run.c": "f45af4fc956a642d49751e29f0bef1875804f94348ea07c855d7b1ff9f9b2ad7",
     "daemon/netlink/socket.go": "aae0837daa25c1999f03472fcf9df8782b0df68d62df13f8dad2889006707f69",
     "daemon/netlink/socket_exact_test.go": "9e7a06bd9e99d91067c8bc11a1f3844ed92ad17118bcd8259baf016417f260f5",
     "daemon/netlink/socket_linux.go": "c0141c71eef96c4117748709d1ba044e1f9de196609641eee25ceb3aec5bf956",

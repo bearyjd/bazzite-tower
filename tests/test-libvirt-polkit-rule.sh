@@ -11,9 +11,36 @@ set -euo pipefail
 repo_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 rule="${repo_root}/system_files/usr/share/polkit-1/rules.d/49-bazzite-tower-libvirt-manage.rules"
 
+# Self-test of the node-missing path: rerun this script with a PATH that has no
+# node and assert CI=1 -> exit 1 + FAILED message, CI unset -> exit 0 + SKIPPED.
+if [[ -z "${POLKIT_RULE_NO_NODE_SELFTEST:-}" ]]; then
+    nonode=$(mktemp -d)
+    trap 'rm -rf "${nonode}"' EXIT
+    ln -s "$(command -v dirname)" "${nonode}/dirname"
+    bash_bin=$(command -v bash)
+    rc=0
+    out=$(env PATH="${nonode}" POLKIT_RULE_NO_NODE_SELFTEST=1 CI=1 "${bash_bin}" "${BASH_SOURCE[0]}" 2>&1) || rc=$?
+    if [[ "${rc}" -ne 1 || "${out}" != *"node not found: libvirt polkit rule check FAILED (CI requires node)"* ]]; then
+        echo "FAIL no-node self-test (CI=1): rc=${rc} out=${out}" >&2
+        exit 1
+    fi
+    rc=0
+    out=$(env -u CI PATH="${nonode}" POLKIT_RULE_NO_NODE_SELFTEST=1 "${bash_bin}" "${BASH_SOURCE[0]}" 2>&1) || rc=$?
+    if [[ "${rc}" -ne 0 || "${out}" != *"SKIPPED"* ]]; then
+        echo "FAIL no-node self-test (CI unset): rc=${rc} out=${out}" >&2
+        exit 1
+    fi
+    echo "no-node self-test (CI=1 fails, CI unset skips): pass"
+    rm -rf "${nonode}"
+    trap - EXIT
+fi
+
 if ! command -v node >/dev/null 2>&1; then
+    if [[ -n "${CI:-}" ]]; then
+        echo "node not found: libvirt polkit rule check FAILED (CI requires node)" >&2
+        exit 1
+    fi
     echo "node not found: libvirt polkit rule check SKIPPED (unverified)" >&2
-    [[ -n "${CI:-}" ]] && exit 1
     exit 0
 fi
 

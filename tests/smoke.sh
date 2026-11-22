@@ -84,9 +84,10 @@ check "libvirt manage rule targets org.libvirt.unix.manage" \
     grep -q 'action.id == "org.libvirt.unix.manage"' "${libvirt_rule}"
 check "libvirt manage rule covers wheel and libvirt groups" \
     bash -c 'grep -q "isInGroup(\"wheel\")" "$1" && grep -q "isInGroup(\"libvirt\")" "$1"' _ "${libvirt_rule}"
-# Neither YES nor monitor may appear in an executable (non-comment) line.
+# Neither YES nor monitor may appear in an executable (non-comment) line; a
+# missing rule file must fail, not pass vacuously.
 check "libvirt manage rule has no YES result and does not touch monitor" \
-    bash -c '! grep -v "^[[:space:]]*//" "$1" | grep -Eq "Result\.YES|unix\.monitor"' _ "${libvirt_rule}"
+    bash -c '[[ -f "$1" ]] && ! grep -v "^[[:space:]]*//" "$1" | grep -Eq "Result\.YES|unix\.monitor"' _ "${libvirt_rule}"
 # polkit takes the first rule that returns a result, in lexical filename order
 # across /etc and /usr/share, so ours must sort before libvirt's own
 # (group libvirt -> manage = YES) rule or it would never run.

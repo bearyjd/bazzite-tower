@@ -39,8 +39,8 @@ REAL_READLINK = os.readlink
 VENDOR_CONTENT = '# This file is part of the systemd package.\n# See https://fedoraproject.org/wiki/Changes/Shorter_Shutdown_Timer.\n#\n# To facilitate debugging when a service fails to stop cleanly,\n# TimeoutStopFailureMode=abort is set to "crash" services that fail to stop in\n# the time allotted. This will cause the service to be terminated with SIGABRT\n# and a coredump to be generated.\n#\n# To undo this configuration change, create a mask file:\n#   sudo mkdir -p /etc/systemd/system/service.d\n#   sudo ln -sv /dev/null /etc/systemd/system/service.d/10-timeout-abort.conf\n\n[Service]\nTimeoutStopFailureMode=abort\n'
 
 
-ZERO_FD = ("FAIL", "silent /proc fallback: ProcMonitorMethod is ebpf but pid 501 holds no anon_inode:bpf-prog fd; eBPF did not load, check /var/log/opensnitchd.log and the module manifest", 1)
-EXPLICIT_FALLBACK = ("FAIL", "silent /proc fallback: the daemon logged 'error starting ebpf monitor method' since @1 (0 anon_inode:bpf-prog fds); check the module build", 1)
+ZERO_FD = ("FAIL", "silent /proc fallback: ProcMonitorMethod is ebpf but pid 501 holds no anon_inode:bpf_link fd; eBPF did not load, check /var/log/opensnitchd.log and the module manifest", 1)
+EXPLICIT_FALLBACK = ("FAIL", "silent /proc fallback: the daemon logged 'error starting ebpf monitor method' since @1 (0 anon_inode:bpf_link fds); check the module build", 1)
 PASS_RUNTIME = ("PASS", "fixture: daemon holds eBPF programs", 0)
 
 

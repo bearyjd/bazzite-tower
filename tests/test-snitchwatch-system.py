@@ -1312,7 +1312,8 @@ class SystemBehavior(unittest.TestCase):
         record=operator.apply()
         self.assertEqual(record["status"],"applied")
         self.assertEqual(len(self.helper_calls()),5);self.assertEqual(clock.slept,[1,1,1,common.EBPF_CONFIRM_SECONDS])
-        self.assertIn("provisional",record["ebpfRuntime"]);self.assertIn("gate A",record["ebpfRuntime"])
+        self.assertTrue(record["ebpfRuntime"].startswith("PASS:"),record["ebpfRuntime"])
+        self.assertNotIn("provisional",record["ebpfRuntime"]);self.assertNotIn("gate A",record["ebpfRuntime"])
 
     def settled(self, script):
         self.ctx.ebpf_script=list(script);clock=FakeClock()

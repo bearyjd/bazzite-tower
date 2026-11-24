@@ -251,7 +251,7 @@ class Migration:
             self.mutate("start", "opensnitch.service")
             # A freshly started daemon may not have loaded its modules yet: settle before judging.
             readiness = common.runtime_readiness(self.ctx, self.settle, self.pause, self.clock)
-            record["ebpfRuntime"] = readiness["ebpfRuntime"]+"; provisional until owner gate A calibrates the fd floor"
+            record["ebpfRuntime"] = readiness["ebpfRuntime"]
             record["status"] = "applied"
             self.save(record)
         except BaseException as error:

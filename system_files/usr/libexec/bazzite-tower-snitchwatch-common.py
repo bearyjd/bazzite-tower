@@ -51,7 +51,7 @@ TYPED_EMPTY_PROPERTIES = {"EnvironmentFiles": "a(sb)", **{name: "a(sasbttttuii)"
 EBPF_MODULES_PATH = "/usr/lib/opensnitchd/ebpf"
 EBPF_CHECK = "/usr/libexec/bazzite-tower-opensnitch-ebpf-check"
 # Reason fragments of the runtime check (tests pin them to the helper's own constants).
-EBPF_PROG_LINK = "anon_inode:bpf-prog"
+EBPF_PROG_LINK = "anon_inode:bpf_link"
 EBPF_NO_PROGRAMS = "holds no "+EBPF_PROG_LINK+" fd"  # eBPF not (yet) loaded, no fallback line: may just be startup
 EBPF_PARTIAL_LOG = "opensnitch-procs.o not available"
 EBPF_SETTLE_SECONDS = 15  # PROVISIONAL until owner gate A calibrates the fd floor/startup timing
@@ -364,7 +364,7 @@ def ebpf_run(ctx):
 def ebpf_runtime(ctx, settle=0, pause=time.sleep, clock=time.monotonic):
     # PASS/WARN (proc fallback is a WARN, not drift) are reported; FAIL (silent /proc fallback,
     # daemon down, wrong method) refuses readiness. Needs root, as does all of runtime_readiness.
-    # settle>0 (right after a daemon start) re-polls only the "no bpf-prog fd, no fallback line" FAIL,
+    # settle>0 (right after a daemon start) re-polls only the "no bpf_link fd, no fallback line" FAIL,
     # which a daemon that has not loaded its modules yet also shows; any other verdict is final, except
     # that a good verdict after such a FAIL must be confirmed by a second, not-worse run (a daemon still
     # starting can look good once). The confirming run, if worse, is the verdict.

@@ -773,7 +773,7 @@ sudo /usr/libexec/bazzite-tower-opensnitch-ebpf-check --runtime [--detail]
 ```
 
 It reads `ProcMonitorMethod` from `/etc/opensnitchd/default-config.json`,
-counts `anon_inode:bpf-prog` fds of the `opensnitch.service` MainPID and scans
+counts `anon_inode:bpf_link` fds of the `opensnitch.service` MainPID and scans
 `/var/log/opensnitchd.log` from the unit's start (taken from systemd as an epoch,
 so timezone-independent; log stamps are read as UTC when the config says
 `"LogUTC": true`, else as local time). The last line is
@@ -783,10 +783,10 @@ Every exit path of `--runtime` ends in such a line (an unexpected error is
 anchored line `^RESULT: `; `--detail` lines (escaped, but still log-derived) are
 for humans.
 
-- PASS: method `ebpf`, at least the floor of bpf-prog fds, no fallback warning,
+- PASS: method `ebpf`, at least the floor of bpf_link fds, no fallback warning,
   the log reaches back to the unit start. While the floor is the uncalibrated
   placeholder the reason says `(fd floor UNCALIBRATED: gate A pending)`: one
-  bpf-prog fd is not proof of full eBPF. `bpftool` program names of the daemon
+  bpf_link fd is not proof of full eBPF. `bpftool` program names of the daemon
   pid (when bpftool exists) are listed in the reason; not required yet.
 - WARN: method `proc` (the documented fallback, shipped today); or
   `opensnitch-procs.o not available` (partial eBPF, no exec events); or fds
@@ -797,7 +797,7 @@ for humans.
   stamp format such as `LogMicro`): a fallback warning could be missing, so it
   never counts as PASS; re-run after the daemon logged again or inspect
   `journalctl -u opensnitch.service`).
-- FAIL: `silent /proc fallback` (method `ebpf` but zero bpf-prog fds, or
+- FAIL: `silent /proc fallback` (method `ebpf` but zero bpf_link fds, or
   `error starting ebpf monitor method` logged since start); daemon not running;
   method not `ebpf`/`proc`; config or `/proc/<pid>/fd` unreadable; the MainPID
   is not `opensnitchd` or changed during the check. When the unit start time is
@@ -810,7 +810,7 @@ runtime `PASS`: every WARN (partial eBPF, log not covering the unit start,
 unreadable log, below the fd floor) and every FAIL or timeout refuses it, since
 each leaves a silent fallback unruled out. Until gate A calibrates the fd floor,
 a below-floor WARN therefore also blocks it. The `proc` fallback may still opt in.
-After a restart, a settled good verdict (one that followed a startup "no bpf-prog
+After a restart, a settled good verdict (one that followed a startup "no bpf_link
 fd" FAIL) is confirmed by a second run 2 s later; a worse confirming run wins.
 
 The check reads the on-disk config, not what the daemon loaded: after editing
@@ -822,9 +822,15 @@ are refused as root unless `BAZZITE_TOWER_EBPF_CHECK_TESTING=1`.
 program names for the daemon pid when bpftool exists, config value, MainPID,
 unit start time, matching log lines) for owner gate A to paste back.
 
-Not verified: the `anon_inode:bpf-prog` link name on the real kernel, the log
-strings (from v1.8.0, unchecked at a1353848) and the fd floor
-(`EBPF_PROG_FD_FLOOR = 1` until gate A calibrates it). Wired into: system
+The link name is verified on the real kernel (7.3.4-ogc8.1, opensnitchCommit
+a1353848): a healthy eBPF daemon holds 17 `anon_inode:bpf_link`, 17
+`anon_inode:[perf_event]` and 10 `anon_inode:bpf-map` fds and zero
+`anon_inode:bpf-prog` (the Go loader closes program fds after attaching), so
+`bpf_link` is the signal; the `bpftool prog show` pids field is empty in that
+state and is not used for the verdict. Not verified: the log strings (from
+v1.8.0, unchecked at a1353848) and the fd floor (`EBPF_PROG_FD_FLOOR = 1` until
+gate A calibrates it; the optional-kprobe count is unknown, pending `bpftool
+link show` output). Wired into: system
 readiness (after the config contract; `FAIL` refuses, `WARN` is reported),
 `ujust opensnitch-readiness` (legacy, root only, otherwise skipped with a note),
 `ujust tower-health` (final `RESULT` line, `UNKNOWN` unprivileged) and, as a

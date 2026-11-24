@@ -43,16 +43,18 @@ LEGACY_RPM_RELEASE = '1'
 LEGACY_RPM_SHA256 = 'e06e9119daf764e56455b61c319e496274c0274bb53bb94a0ff1ab72967fea7d'
 LEGACY_TREE_SHA256 = '39512718023e91e3d48bdaa6f0c958a5457ebb8df560dbd53d348f55551c6fd6'
 
-# --runtime constants. UNVERIFIED on the real kernel: the fd link name and the daemon log
-# strings (taken from OpenSnitch v1.8.0, not yet checked at the a1353848 daemon).
+# --runtime constants. The fd link name is VERIFIED on the real kernel (7.3.4-ogc8.1, opensnitchCommit a1353848:
+# the daemon holds anon_inode:bpf_link fds and zero anon_inode:bpf-prog, the Go loader closes program fds after
+# attaching links). The daemon log strings (FALLBACK_LOG / PARTIAL_LOG, from OpenSnitch v1.8.0) are still UNVERIFIED.
 SERVICE = 'opensnitch.service'
 CONFIG_PATH = '/etc/opensnitchd/default-config.json'
 LOG_PATH = '/var/log/opensnitchd.log'
-BPF_PROG_LINK = 'anon_inode:bpf-prog'
+BPF_PROG_LINK = 'anon_inode:bpf_link'
 FALLBACK_LOG = 'error starting ebpf monitor method'
 PARTIAL_LOG = 'opensnitch-procs.o not available'
-# Calibration pending (owner gate A, .omc/plans/owner-gates-r16-3-2026-11-17.md): fill in the
-# observed ebpf fd count minus optional kprobes and the evidence path (fd-ebpf-L1.txt).
+# Calibration pending (owner gate A, .omc/plans/owner-gates-r16-3-2026-11-17.md): observed 17 bpf_link fds on
+# 7.3.4-ogc8.1 with opensnitchCommit a1353848; the floor is not set because the optional-kprobe count is unknown
+# (pending `bpftool link show` output). Fill in the required count and the evidence path (fd-ebpf-L1.txt).
 EBPF_PROG_FD_FLOOR = 1
 LOG_TAIL_BYTES = 8 * 1024 * 1024
 LOG_START_SLACK_SECONDS = 2  # the daemon's first log line may trail the unit start by a moment (stamps are whole seconds)

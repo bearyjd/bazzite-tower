@@ -237,11 +237,11 @@ class Refusals(DenyBase):
 
     def test_ebpf_opt_in_refuses_everything_but_a_clean_runtime_pass(self):
         self.edit_config(ProcMonitorMethod="ebpf")
-        refused = (("FAIL", "silent /proc fallback: pid 501 holds no anon_inode:bpf-prog fd", 1),
+        refused = (("FAIL", "silent /proc fallback: pid 501 holds no anon_inode:bpf_link fd", 1),
                    ("WARN", "partial eBPF: the daemon logged 'opensnitch-procs.o not available' (no exec events)", 0),
                    ("WARN", "the log does not cover the unit start; fallback cannot be ruled out", 0),
                    ("WARN", "log unreadable: fallback cannot be ruled out", 0),
-                   ("WARN", "only 1 anon_inode:bpf-prog fds, below the calibrated floor 9", 0),
+                   ("WARN", "only 1 anon_inode:bpf_link fds, below the calibrated floor 9", 0),
                    ("PASS", "contradictory exit", 1))
         for result in refused:
             with self.subTest(result=result):

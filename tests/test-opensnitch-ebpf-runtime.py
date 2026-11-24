@@ -26,7 +26,7 @@ _spec = importlib.util.spec_from_file_location('ebpf_tests', Path(__file__).with
 base = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(base)
 
-BPF = 'anon_inode:bpf-prog'
+BPF = 'anon_inode:bpf_link'
 FALLBACK = 'error starting ebpf monitor method'
 PARTIAL = 'opensnitch-procs.o not available'
 EPOCH = 1794909600  # 2026-11-17 10:00:00 UTC
@@ -124,7 +124,7 @@ class Runtime(unittest.TestCase):
         for needle in needles:
             self.assertIn(needle, line)
 
-    def test_ebpf_with_bpf_prog_fds_passes_and_prints_the_count(self):
+    def test_ebpf_with_bpf_link_fds_passes_and_prints_the_count(self):
         self.setup_fds(bpf=3)
         self.assertVerdict(self.run_check(), 'PASS', 0, '3 ' + BPF)
 
@@ -132,8 +132,24 @@ class Runtime(unittest.TestCase):
         self.setup_fds(bpf=1)
         self.assertVerdict(self.run_check(), 'PASS', 0, '(fd floor UNCALIBRATED: gate A pending)')
 
-    def test_ebpf_with_zero_bpf_prog_fds_is_a_silent_fallback(self):
+    def test_ebpf_with_zero_bpf_link_fds_is_a_silent_fallback(self):
         self.setup_fds(bpf=0)
+        self.assertVerdict(self.run_check(), 'FAIL', 1, 'silent /proc fallback')
+
+    def test_live_kernel_fd_set_with_closed_prog_fds_passes(self):
+        # Observed live (7.3.4-ogc8.1, opensnitchCommit a1353848): the Go loader closes the program fds after
+        # attaching, so a healthy eBPF load holds bpf_link/perf_event/bpf-map fds and zero bpf-prog fds.
+        live = ['anon_inode:[perf_event]'] * 17 + ['anon_inode:bpf-map'] * 10 + ['/dev/null', 'socket:[123]']
+        self.setup_fds(bpf=17, other=live)
+        self.assertVerdict(self.run_check(), 'PASS', 0, '17 ' + BPF, 'no fallback warning since start')
+
+    def test_no_bpf_link_fds_is_a_silent_fallback_even_with_maps_and_perf_events(self):
+        other = ['anon_inode:[perf_event]'] * 17 + ['anon_inode:bpf-map'] * 10 + ['/dev/null']
+        self.setup_fds(bpf=0, other=other)
+        self.assertVerdict(self.run_check(), 'FAIL', 1, 'silent /proc fallback', 'holds no ' + BPF + ' fd')
+
+    def test_bpf_prog_fds_alone_are_not_counted(self):
+        self.setup_fds(bpf=0, other=['anon_inode:bpf-prog'] * 3 + ['/dev/null'])
         self.assertVerdict(self.run_check(), 'FAIL', 1, 'silent /proc fallback')
 
     def test_fallback_warning_after_unit_start_fails_even_with_fds(self):

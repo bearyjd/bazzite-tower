@@ -104,10 +104,10 @@ check "no other /etc polkit rule grants libvirt manage YES" \
 check "qemu-system-x86_64 present" command -v qemu-system-x86_64
 check "virsh present"              command -v virsh
 check "virt-install present"       command -v virt-install
-# Looking Glass: kvmfr host module is base-provided; the version-coupled client is
-# installed on demand via this ujust recipe (not baked). Assert the recipe shipped.
-check "looking-glass-client ujust recipe present" \
-    grep -q 'install-looking-glass-client' /usr/share/ublue-os/just/60-custom.just
+# Looking Glass kvmfr is disabled (owner decision 2026-11-23): module blocked, the
+# recipe, udev rule and karg removed. Assert none of them came back.
+check "looking-glass-client ujust recipe absent" \
+    bash -c '! grep -q "install-looking-glass-client" /usr/share/ublue-os/just/60-custom.just'
 
 echo "== Wi-Fi backend guard =="
 check_enabled "bazzite-tower-wifi-backend-guard.service"
@@ -287,8 +287,10 @@ echo "== Device rules (promoted from /etc drift) =="
 # All previously local-only in /etc, so a rebase lost them. Deliberately NOT
 # promoted: 72-usbhp.rules (fails udevadm verify, and tags every USB device),
 # and four empty files. See docs/RUNBOOK.md "/etc drift vs the image".
-check "kvmfr device rule present"      test -f /usr/lib/udev/rules.d/70-kvmfr.rules
-check "kvmfr grants qemu group"        grep -q 'GROUP="qemu"' /usr/lib/udev/rules.d/70-kvmfr.rules
+check "kvmfr blocked from loading"     grep -qx 'install kvmfr /bin/false' /usr/lib/modprobe.d/disable-kvmfr.conf
+check "kvmfr boot autoload emptied"    bash -c 'test -f /usr/lib/modules-load.d/kvmfr.conf && ! grep -qE "^[[:space:]]*[^#[:space:]]" /usr/lib/modules-load.d/kvmfr.conf'
+check "kvmfr device rule absent"       test ! -e /usr/lib/udev/rules.d/70-kvmfr.rules
+check "no kvmfr.static_size_mb karg"   bash -c '! grep -rq "kvmfr.static_size_mb" /usr/lib/bootc/kargs.d'
 check "smartcard rule is uaccess, not 0666" grep -qxF 'SUBSYSTEM=="usb", ATTR{idVendor}=="058f", ATTR{idProduct}=="9540", TAG+="uaccess"' /usr/lib/udev/rules.d/99-smartcard.rules
 check "i2c-designware power rule"      test -f /usr/lib/udev/rules.d/99-i2c-designware.rules
 check "XR glasses rules (xreal)"       test -f /usr/lib/udev/rules.d/70-xreal-xr.rules

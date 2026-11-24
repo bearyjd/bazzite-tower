@@ -187,15 +187,16 @@ class Diagnostics(unittest.TestCase):
         self.assertIn("Booted/staged image: UNKNOWN", output)
         self.assertLess(len(output), 16000)
 
-    def test_exact_local_override_presence_without_contents(self):
+    def test_kvmfr_probes_removed_and_local_contexts_unread(self):
         fixture = self.base / "file_contexts.local"
         fixture.write_text("/dev/kvmfr0    system_u:object_r:svirt_tmpfs_t:s0\n/private SECRET-MAPPING\n")
         copy = self.base / "health"
         copy.write_text(HEALTH.read_text().replace("/etc/selinux/targeted/contexts/files/file_contexts.local", str(fixture)))
         result = subprocess.run(["/bin/bash", str(copy)], env=self.env, capture_output=True, text=True, timeout=20)
-        self.assertIn("Local SELinux override for exact /dev/kvmfr0: present", result.stdout)
+        self.assertNotIn("kvmfr", result.stdout)
         self.assertNotIn("SECRET-MAPPING", result.stdout)
         self.assertNotIn("svirt_tmpfs_t", result.stdout)
+        self.assertIn("Local configuration path", result.stdout)
 
     def test_explicit_diagnostics_are_bounded(self):
         self.assertNotIn("Decoded recorded RAS errors", self.health())

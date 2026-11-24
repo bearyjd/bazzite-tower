@@ -168,31 +168,14 @@ echo
 echo "== SELinux and local override evidence =="
 probe "SELinux mode" getenforce
 label_status /var/log/boot.log
-label_status /dev/kvmfr0
-# Report only presence of the exact kvmfr local SELinux mapping; never dump
-# file_contexts.local, which can contain unrelated owner configuration.
-local_contexts=/etc/selinux/targeted/contexts/files/file_contexts.local
-if [[ -r "$local_contexts" ]]; then
-    timeout 8s grep -qE '^/dev/kvmfr0[[:space:]]' "$local_contexts"
-    case $? in
-        0) echo "  Local SELinux override for exact /dev/kvmfr0: present (contents not printed)" ;;
-        1) echo "  Local SELinux override for exact /dev/kvmfr0: absent (broader patterns not evaluated)" ;;
-        *) echo "  Local SELinux override for /dev/kvmfr0: UNKNOWN (query failed)" ;;
-    esac
-elif [[ -r "${local_contexts%/*}" && -x "${local_contexts%/*}" && ! -e "$local_contexts" ]]; then
-    echo "  Local SELinux override file: absent"
+path=/etc/systemd/system/logrotate.service.d
+if [[ -e "$path" || -L "$path" ]]; then
+    printf '  Local configuration path present: %s (contents not read)\n' "$path"
+elif [[ -r "${path%/*}" && -x "${path%/*}" ]]; then
+    printf '  Local configuration path absent: %s\n' "$path"
 else
-    echo "  Local SELinux override for /dev/kvmfr0: UNKNOWN (missing permission or policy path)"
+    printf '  Local configuration path UNKNOWN (parent inaccessible/missing): %s\n' "$path"
 fi
-for path in /etc/udev/rules.d/70-kvmfr.rules /etc/modprobe.d/kvmfr.conf /etc/systemd/system/logrotate.service.d; do
-    if [[ -e "$path" || -L "$path" ]]; then
-        printf '  Local configuration path present: %s (contents not read)\n' "$path"
-    elif [[ -r "${path%/*}" && -x "${path%/*}" ]]; then
-        printf '  Local configuration path absent: %s\n' "$path"
-    else
-        printf '  Local configuration path UNKNOWN (parent inaccessible/missing): %s\n' "$path"
-    fi
-done
 
 echo
 echo "== Firmware and security availability =="

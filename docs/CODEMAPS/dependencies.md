@@ -13,7 +13,7 @@ Lake s2idle-resume fix; proprietary `bazzite-nvidia` was used until
 `:stable` is still built as the opt-in `:latest-kernel` tag. Swap the
 Containerfile `FROM` → `bazzite-nvidia` for the proprietary driver. Base
 provides (relied on, not installed here): the
-`kvmfr` Looking Glass module (`kvmfr` + `kmod-kvmfr`, hikariknight COPR),
+`kmod-kvmfr` (present but blocked here by `modprobe.d/disable-kvmfr.conf`),
 tailscale, distrobox, most of Cockpit, the KDE Plasma desktop (`kwin`,
 `kscreenlocker`, `libplasma`, ...).
 
@@ -109,7 +109,6 @@ share the same major.minor, and the `exclude=` line is actually present in
 |---|---|---|
 | Fedora + ublue/bazzite COPRs (base) | enabled | virt stack, dev tooling, health pkgs |
 | `docker-ce` (download.docker.com) | `enabled=0` on disk | build-time only via `--enablerepo`; inert at runtime |
-| `pgaskin/looking-glass-client` (COPR) | **runtime only** | enabled inside a distrobox by `ujust install-looking-glass-client`; never touches the host image |
 
 ## Registries / external services
 

@@ -324,8 +324,9 @@ def print_detail(pid, started, label, method, links, scan, programs):
 
 def runtime_floor(profile_file):
     try:
-        profile = Path(profile_file).read_text().strip()
-    except OSError:
+        with open(profile_file, 'rb') as handle:
+            profile = handle.read(64).decode().strip()
+    except (OSError, ValueError):  # unreadable or non-UTF-8: conservative floor, not an internal error
         return EBPF_PROG_FD_FLOOR
     return EBPF_PROG_FD_FLOORS.get(profile, EBPF_PROG_FD_FLOOR)
 

@@ -233,6 +233,14 @@ class Runtime(unittest.TestCase):
         self.setup_fds(bpf=1)
         self.assertVerdict(self.run_check(), 'PASS', 0, '(fd floor UNCALIBRATED: gate A pending)')
 
+    def test_garbage_profile_file_uses_the_conservative_floor_not_a_fail(self):
+        for blob in (b'\xff\xfe\x80system', b'\x00' * 100):
+            with self.subTest(blob=blob):
+                shutil.rmtree(self.proc, ignore_errors=True)
+                self.profile_file.write_bytes(blob)
+                self.setup_fds(bpf=1)
+                self.assertVerdict(self.run_check(), 'PASS', 0, '(fd floor UNCALIBRATED: gate A pending)')
+
     def test_floor_constants_are_pinned(self):
         loaded = base.load(CHECK)
         self.assertEqual(loaded['EBPF_PROG_FD_FLOORS']['system'], 17)

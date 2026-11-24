@@ -136,7 +136,7 @@ was pinned).
 | Audio: SOF bypass active | `journalctl -k -b 0 \| grep -i dsp_driver` and `grep -c "FW reported error: 9"` should be 0; `cat /proc/asound/cards` shows the HDA card |
 | CPU MCE / RAS summary | `sudo ras-mc-ctl --summary` · `sudo ras-mc-ctl --errors` |
 | Running CPU microcode revision | `grep -m1 microcode /proc/cpuinfo` (and `journalctl -k \| grep -i microcode`) |
-| Tracked kernel args applied (no dupes) | `cat /proc/cmdline` — expect each tracked karg exactly once (IOMMU, `kvmfr.static_size_mb=128`, `vfio_pci.disable_vga=1`, `kvm.ignore_msrs=1`, `nvme_core.default_ps_max_latency_us=0`) |
+| Tracked kernel args applied (no dupes) | `cat /proc/cmdline` — expect each tracked karg exactly once (IOMMU, `vfio_pci.disable_vga=1`, `kvm.ignore_msrs=1`, `nvme_core.default_ps_max_latency_us=0`). A base-added `kvmfr.static_size_mb=128` may also appear (see "kvmfr disabled") |
 | NVMe SMART health / self-tests | `sudo smartctl -H /dev/nvme0` · `/dev/nvme1`; smartd warnings + scheduled tests: `journalctl -u smartd` |
 | Swappiness in effect | `sysctl vm.swappiness` (expect `10`) |
 | Indexer excludes applied | `balooctl6 config show excludeFilters` (expect `.gradle`, build/cache dirs) |
@@ -147,7 +147,7 @@ was pinned).
 | OpenSnitch legacy bridge readiness | `ujust opensnitch-readiness` — read-only check of the active daemon, fail-open config and verified user bridge at `127.0.0.1:50051`; see the OpenSnitch section below |
 | Cockpit web management (opt-in) | `ujust enable-cockpit`; it binds only to loopback. Review Tailnet ACLs, then separately run `tailscale serve --https=443 http://127.0.0.1:9090`; do not expose :9090 directly without explicit firewall policy. |
 | Docker/libvirt NAT forwarding (opt-in Docker) | `just test-docker-libvirt-forwarding` (from a repository checkout) — restarts Docker, checks its `DOCKER-USER` NAT-bridge/uplink pair rules, then probes Docker bridge networking. Rules are only for active libvirt XML `forward mode='nat'` bridges; no broad source-RFC1918 or bridge-wildcard policy is added. A post-start reconciliation failure is non-fatal to Docker and later libvirt/NetworkManager events retry it. |
-| Looking Glass client | kvmfr host module is baked (`ls /dev/kvmfr0`); install the version-coupled client on demand with `ujust install-looking-glass-client`, then `looking-glass-client` (match its B-version to the Windows host app) |
+| kvmfr blocked | `lsmod` shows no `kvmfr`; `sudo modprobe kvmfr` fails (`install kvmfr /bin/false`, `modprobe.d/disable-kvmfr.conf`). Re-enable: see "kvmfr disabled" below |
 | Default NAT network | `ujust vm-net-status` |
 | Wi-Fi diagnostics (offline) | `ujust wifi-debug` |
 
@@ -1142,14 +1142,13 @@ for this laptop have not been recorded yet: run it and note the result here.
 Offline tests: `tests/test-tower-health-boot-chain.py` (fixtures for every
 state above, including the root and non-root paths).
 
-## SELinux labels: boot.log and kvmfr
+## SELinux labels: boot.log
 
 `ujust tower-health` shows the current and installed-policy expected labels for
-`/var/log/boot.log` and `/dev/kvmfr0`, failed services, and whether an exact
-`/dev/kvmfr0` mapping exists in the targeted policy's `file_contexts.local`. It
-prints no file contents or other local mappings. Broader matching local patterns
-are not enumerated; `matchpathcon` is the effective policy expectation. Missing
-tools/permissions are **unknown**. The report does not change either label.
+`/var/log/boot.log`, failed services, and whether the logrotate drop-in path is
+present. It prints no file contents. `matchpathcon` is the effective policy
+expectation. Missing tools/permissions are **unknown**. The report does not change
+the label.
 
 On this machine the owner observed `boot.log` as `var_t` while the installed
 policy expected `plymouthd_var_log_t`, causing normal logrotate to fail. The
@@ -1173,12 +1172,28 @@ sudo systemctl start logrotate.service
 systemctl status logrotate.service --no-pager
 ```
 
-`/dev/kvmfr0` is a separate owner-maintained SELinux override issue. A local exact
-mapping to `svirt_tmpfs_t` was observed in `file_contexts.local`; do not infer that
-the image udev ownership rule caused the denial. Inspect with
-`sudo semanage fcontext -l -C` and `matchpathcon /dev/kvmfr0`, then review any
-mapping change with the owner. The image does not remove local mappings, relabel
-kvmfr, relax enforcement or install an allow-all policy.
+## kvmfr disabled
+
+The Looking Glass `kvmfr` module (base-provided `kmod-kvmfr`) is blocked by
+`/usr/lib/modprobe.d/disable-kvmfr.conf` (`install kvmfr /bin/false` +
+`blacklist`); owner decision 2026-11-23. The module files stay on disk, and the
+`kvmfr.static_size_mb=128` karg, `70-kvmfr.rules` and `ujust install-looking-glass-client`
+were removed. Manual load (UNVERIFIED on the host):
+
+```bash
+sudo modprobe --ignore-install kvmfr static_size_mb=128
+sudo chgrp qemu /dev/kvmfr0; sudo chmod 0660 /dev/kvmfr0   # the udev rule is gone
+```
+
+Permanent re-enable: `git revert` the disabling commit.
+
+The base image also sets `kvmfr.static_size_mb=128` itself, so it may still appear
+on the kernel command line after this repo's karg was dropped. It is harmless (a
+parameter of a module that never loads) but UNVERIFIED: after the first boot check
+`cat /proc/cmdline` / `rpm-ostree kargs`. `/etc/udev/rules.d/70-kvmfr.rules` and the
+base-shipped comment-only `/etc/modprobe.d/kvmfr.conf` are inert once kvmfr is
+blocked; do not remove them on this account. The local SELinux mapping for
+`/dev/kvmfr0` is owner/base-managed and not touched by the image.
 
 ## Wi-Fi: BE200 firmware asserts (desktop freezes)
 
@@ -1406,8 +1421,8 @@ secrets and must never be baked into the image.**
 
 ### Device rules — triaged 2026-08-29
 
-Promoted to `system_files/usr/lib/udev/rules.d/`: `70-kvmfr.rules` (Looking
-Glass needs `/dev/kvmfr0` group-owned by qemu), `99-smartcard.rules` (rewritten
+Promoted to `system_files/usr/lib/udev/rules.d/`: `70-kvmfr.rules` (later removed,
+see "kvmfr disabled"), `99-smartcard.rules` (rewritten
 from `MODE="0666"` to `TAG+="uaccess"` — the old rule was world read/write),
 `99-i2c-designware.rules`, `70-xreal-xr.rules`, `70-viture-xr.rules`,
 `70-plustek-scanner.rules`. Plus `btusb-no-autosuspend.conf` to `modprobe.d/`.
@@ -1418,7 +1433,7 @@ from `MODE="0666"` to `TAG+="uaccess"` — the old rule was world read/write),
 |------|-----|
 | `72-usbhp.rules` | **Fails `udevadm verify`** (missing comma after `ACTION=="add"`), so it has never worked. Even corrected it would tag *every* USB device with uaccess. Whatever printer problem it was for is still unsolved |
 | `70-rokid-xr.rules`, `70-rayneo-xr.rules`, `70-uinput-xr.rules` | Empty — comments only, zero directives |
-| `modprobe.d/kvmfr.conf` | Empty — 290 bytes of comments, zero directives |
+| `modprobe.d/kvmfr.conf` | Empty — comments only, zero directives (base-shipped, inert; kvmfr is now blocked, see "kvmfr disabled") |
 | `modprobe.d/i915-sleep.conf` | Redundant: all three options are already kernel args from `kargs.d/10-i915-display.toml` |
 | `modprobe.d/kvm.conf` | Likely redundant with `kvm.ignore_msrs=1` in `kargs.d/30-vfio-kvm.toml` — verify before deleting |
 | `firewalld/zones/FedoraWorkstation.xml` | Diff vs the base file is *attribute reordering only* (`port protocol= port=` vs `port port= protocol=`). Semantically identical; firewalld rewrote it on load. `.xml.old` is cruft |

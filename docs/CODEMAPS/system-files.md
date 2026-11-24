@@ -23,7 +23,6 @@ build.sh except the disabled `portmaster.service` VM spike.
 The image-owned `/usr/lib/systemd/system/logrotate.service.d/20-boot-log-label.conf`
 adds only `ExecStartPre=bazzite-tower-boot-log-label`; it preserves the vendor
 logrotate command, timer and AC-power condition and enables no extra service.
-There is no kvmfr relabel or local SELinux mapping removal.
 
 ## systemd-sleep hooks (`/usr/lib/systemd/system-sleep/`)
 
@@ -134,7 +133,7 @@ Wayland/X11 sandbox authority or runtime/release acceptance.
 
 ## ujust recipes (`/usr/share/ublue-os/just/60-custom.just`)
 
-- **Virtualization**: `vm-start`, `vm-stop`, `vm-list`, `vm-net-status`, `fix-vm-groups`, `install-looking-glass-client` (installs the version-coupled LG client into a Fedora distrobox from the pgaskin COPR → `~/.local/bin`; kvmfr module is base-provided)
+- **Virtualization**: `vm-start`, `vm-stop`, `vm-list`, `vm-net-status`, `fix-vm-groups`
 - **Diagnostics**: `wifi-debug`, `tower-health`, `opensnitch-readiness` (selected-profile fail-open preflight)
 - **Host opt-ins**: `enable-docker` (root-equivalent group warning), `enable-cockpit` (loopback-only socket; prints a separate Tailscale Serve command), `enable-waydroid` (does not initialise Android)
 
@@ -144,16 +143,17 @@ Wayland/X11 sandbox authority or runtime/release acceptance.
 - `10-i915-display.toml` → `i915.enable_dc=0 i915.enable_psr=0 i915.enable_psr2_sel_fetch=0` — eDP PSR/DC stability on the MTL panel
 - `20-suspend.toml` → `mem_sleep_default=s2idle` — MTL has no working S3
 - `25-audio-sof-bypass.toml` → `snd_intel_dspcfg.dsp_driver=1` — force legacy HDA; kernel SOF ABI 3.23 can't load firmware's ABI-3.29 topology (no repo downgrade). Speakers (TAS2781 via ALC287 HDA side-codec)/HP/HDMI work; loses DMIC array
-- `30-vfio-kvm.toml` → `kvmfr.static_size_mb=128 vfio_pci.disable_vga=1 kvm.ignore_msrs=1 kvm.report_ignored_msrs=0` — codified passthrough tuning (additive; not base defaults)
+- `30-vfio-kvm.toml` → `vfio_pci.disable_vga=1 kvm.ignore_msrs=1 kvm.report_ignored_msrs=0` — codified passthrough tuning (additive; not base defaults)
 - `40-nvme.toml` → `nvme_core.default_ps_max_latency_us=0` — Samsung 990 EVO Plus APST-idle workaround
 
 ## Other drop-ins
 
 - `/etc/dnf/dnf.conf` (appended `exclude=` line, guarded on `[main]` being present) → written by `build.d/05-pin-kde-packages.sh` (build-time only, not from `system_files/`); excludes the KDE Plasma/KWin family so this build's own dnf transactions can't skew `kwin` ahead of `kscreenlocker`. Not `/etc/dnf/dnf.conf.d/` — this base runs dnf5, which has no such directory (real dnf5 drop-in dir is `/etc/dnf/libdnf5.conf.d/`); see `dependencies.md` and the "Correction" note in `docs/research/kwin-screenlocker-abi-2026-08-08/`
+- `/usr/lib/modprobe.d/disable-kvmfr.conf` → `install kvmfr /bin/false` + `blacklist kvmfr` (base-provided Looking Glass module blocked, files kept; base may still add its own `kvmfr.static_size_mb=128` karg (harmless, unverified); manual re-enable in RUNBOOK "kvmfr disabled")
 - `/usr/lib/modprobe.d/blacklist-unused-gpu.conf` → blacklist `amdgpu`, `amdxcp` (no AMD silicon; `xe` left loaded)
 - `/usr/lib/modprobe.d/iwlwifi-be200-stability.conf` → `iwlmld power_scheme=1` (CAM) + `iwlwifi disable_11be=1 power_save=0 uapsd_disable=1` — BE200 firmware asserts `NMI_INTERRUPT_UNKNOWN` and the driver hard-resets the chip, freezing the desktop for 5-15s on this wifi-only box. `iwlmld` has its own power scheme that `iwlwifi.power_save` does not cover; see RUNBOOK "Wi-Fi: BE200 firmware asserts"
 - `/usr/lib/modprobe.d/btusb-no-autosuspend.conf` → `options btusb enable_autosuspend=0` — autosuspend drops the Intel BT link on this ThinkPad
-- `/usr/lib/udev/rules.d/` → device rules promoted from /etc drift 2026-08-29: `70-kvmfr.rules` (Looking Glass `/dev/kvmfr0`, GROUP=qemu), `99-smartcard.rules` (uaccess; was world-writable `MODE="0666"`), `99-i2c-designware.rules` (pin `power/control=on`, the controller misses wakeups under runtime PM), `70-xreal-xr.rules` + `70-viture-xr.rules` (XR glasses), `70-plustek-scanner.rules` (SPICE USB redirection needs user access)
+- `/usr/lib/udev/rules.d/` → device rules promoted from /etc drift 2026-08-29: `99-smartcard.rules` (uaccess; was world-writable `MODE="0666"`), `99-i2c-designware.rules` (pin `power/control=on`, the controller misses wakeups under runtime PM), `70-xreal-xr.rules` + `70-viture-xr.rules` (XR glasses), `70-plustek-scanner.rules` (SPICE USB redirection needs user access)
 - `/usr/share/polkit-1/rules.d/49-bazzite-tower-libvirt-manage.rules` → `org.libvirt.unix.manage` returns `AUTH_ADMIN_KEEP` for wheel/libvirt (sorts before libvirt's own `50-libvirt.rules`, which would give group libvirt a silent YES); monitor untouched. Logic checked offline by `tests/test-libvirt-polkit-rule.sh`
 - `/usr/lib/sysctl.d/99-tower-swappiness.conf` → `vm.swappiness=10` (zram was filling with RAM free)
 - `/usr/lib/systemd/journald.conf.d/90-tower-journal-cap.conf` → `SystemMaxUse=4G` + `MaxRetentionSec=1month` (default cap ~10% of fs)

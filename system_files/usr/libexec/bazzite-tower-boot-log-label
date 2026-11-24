@@ -38,5 +38,5 @@ else
     exit 1
 fi
 # Current installed policy supplies the context; do not hardcode a base type.
-# No -R, -F, policy edits, kvmfr relabel or enforcement changes.
+# No -R, -F, policy edits or enforcement changes.
 exec restorecon -- /var/log/boot.log

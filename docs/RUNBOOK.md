@@ -631,8 +631,8 @@ profile, root), `ujust opensnitch-readiness` (legacy profile; skipped with a
 `WARN` (including the documented `proc` fallback) does not.
 
 > Not yet verified on the laptop: that the matched modules actually load and
-> attribute connections (the fd link name, the daemon log strings and the fd
-> floor are uncalibrated, see "Runtime check" below).
+> attribute connections (the fd link name and the system fd floor are
+> calibrated; the daemon log strings and the legacy fd floor are not, see "Runtime check" below).
 
 Build failure mode: legacy images (`:latest`, `:latest-kernel`, safe-pin) FAIL
 the build when the base image lacks a `kernel-devel` matching its `kernel-core`
@@ -784,9 +784,11 @@ anchored line `^RESULT: `; `--detail` lines (escaped, but still log-derived) are
 for humans.
 
 - PASS: method `ebpf`, at least the floor of bpf_link fds, no fallback warning,
-  the log reaches back to the unit start. While the floor is the uncalibrated
-  placeholder the reason says `(fd floor UNCALIBRATED: gate A pending)`: one
-  bpf_link fd is not proof of full eBPF. `bpftool` program names of the daemon
+  the log reaches back to the unit start. The floor is per bridge profile: 17
+  for `system` (calibrated); the `legacy` profile, and an unreadable or unknown
+  profile file, keep the uncalibrated placeholder 1 and the reason says
+  `(fd floor UNCALIBRATED: gate A pending)`: one bpf_link fd is not proof of
+  full eBPF. `bpftool` program names of the daemon
   pid (when bpftool exists) are listed in the reason; not required yet.
 - WARN: method `proc` (the documented fallback, shipped today); or
   `opensnitch-procs.o not available` (partial eBPF, no exec events); or fds
@@ -808,8 +810,8 @@ for humans.
 Deny opt-in (`bazzite-tower-snitchwatch-deny on`) under `ebpf` requires a clean
 runtime `PASS`: every WARN (partial eBPF, log not covering the unit start,
 unreadable log, below the fd floor) and every FAIL or timeout refuses it, since
-each leaves a silent fallback unruled out. Until gate A calibrates the fd floor,
-a below-floor WARN therefore also blocks it. The `proc` fallback may still opt in.
+each leaves a silent fallback unruled out. A below-floor WARN (fewer than 17
+on the system profile) therefore also blocks it. The `proc` fallback may still opt in.
 After a restart, a settled good verdict (one that followed a startup "no bpf_link
 fd" FAIL) is confirmed by a second run 2 s later; a worse confirming run wins.
 
@@ -827,10 +829,16 @@ a1353848): a healthy eBPF daemon holds 17 `anon_inode:bpf_link`, 17
 `anon_inode:[perf_event]` and 10 `anon_inode:bpf-map` fds and zero
 `anon_inode:bpf-prog` (the Go loader closes program fds after attaching), so
 `bpf_link` is the signal; the `bpftool prog show` pids field is empty in that
-state and is not used for the verdict. Not verified: the log strings (from
-v1.8.0, unchecked at a1353848) and the fd floor (`EBPF_PROG_FD_FLOOR = 1` until
-gate A calibrates it; the optional-kprobe count is unknown, pending `bpftool
-link show` output). Wired into: system
+state and is not used for the verdict. The system-profile fd floor is 17 (owner gate A, observed
+2026-11-23; `bpftool link show` for the daemon pid: 9 kprobes (tcp_v4_connect x2,
+tcp_v6_connect x2, inet_dgram_connect x2, iptunnel_xmit, udp_sendmsg,
+udpv6_sendmsg), 3 uprobes on libc.so.6 (DNS module), 5 tracepoints
+(sys_enter/exit_execve, sys_enter/exit_execveat, sched_process_exit); the optional
+udp_tunnel6_xmit_skb kprobe is not attached, so 18 is also healthy). Upstream logs a
+lost kprobe attach only at Warning, so a partial load leaves no fallback line and
+the floor is the only guard. Not verified: the log strings (from v1.8.0,
+unchecked at a1353848) and the legacy floor (still the uncalibrated 1: no
+evidence for v1.8.0). Wired into: system
 readiness (after the config contract; `FAIL` refuses, `WARN` is reported),
 `ujust opensnitch-readiness` (legacy, root only, otherwise skipped with a note),
 `ujust tower-health` (final `RESULT` line, `UNKNOWN` unprivileged) and, as a

@@ -52,10 +52,13 @@ LOG_PATH = '/var/log/opensnitchd.log'
 BPF_PROG_LINK = 'anon_inode:bpf_link'
 FALLBACK_LOG = 'error starting ebpf monitor method'
 PARTIAL_LOG = 'opensnitch-procs.o not available'
-# Calibration pending (owner gate A, .omc/plans/owner-gates-r16-3-2026-11-17.md): observed 17 bpf_link fds on
-# 7.3.4-ogc8.1 with opensnitchCommit a1353848; the floor is not set because the optional-kprobe count is unknown
-# (pending `bpftool link show` output). Fill in the required count and the evidence path (fd-ebpf-L1.txt).
-EBPF_PROG_FD_FLOOR = 1
+# System profile: 17 bpf_link fds, owner gate A, observed 2026-11-23 on 7.3.4-ogc8.1 with opensnitchCommit a1353848
+# (`bpftool link show`: 9 kprobes, 3 uprobes on libc for the DNS module, 5 execve/execveat/sched_process_exit
+# tracepoints; the optional udp_tunnel6_xmit_skb kprobe is not attached, so 18 is also healthy). Upstream logs a
+# lost kprobe attach only at Warning, so a partial load leaves no fallback log line and this floor is the only guard.
+# Legacy (v1.8.0) has no such evidence: its floor stays the uncalibrated 1. An unreadable/unknown profile also uses 1.
+EBPF_PROG_FD_FLOORS = {'system': 17, 'legacy': 1}
+EBPF_PROG_FD_FLOOR = EBPF_PROG_FD_FLOORS['legacy']  # conservative default
 LOG_TAIL_BYTES = 8 * 1024 * 1024
 LOG_START_SLACK_SECONDS = 2  # the daemon's first log line may trail the unit start by a moment (stamps are whole seconds)
 LOG_TIME = re.compile(r'^\[(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d)\]')
@@ -319,6 +322,14 @@ def print_detail(pid, started, label, method, links, scan, programs):
         print(f'detail: log {escape(line)}')
 
 
+def runtime_floor(profile_file):
+    try:
+        profile = Path(profile_file).read_text().strip()
+    except OSError:
+        return EBPF_PROG_FD_FLOOR
+    return EBPF_PROG_FD_FLOORS.get(profile, EBPF_PROG_FD_FLOOR)
+
+
 def decide(*, method, config, log, pid, problem, count, fallback, partial, log_readable, covered, started_label, programs, floor):
     """Pure decision table: (level, reason) from already-gathered facts."""
     names = f' (bpf programs: {", ".join(programs)})' if programs else ''
@@ -382,7 +393,7 @@ def evaluate(args):
                   count=(links or []).count(BPF_PROG_LINK), fallback=len(scan.fallback) if scan else 0,
                   partial=len(scan.partial) if scan else 0, log_readable=scan is not None, covered=scan.covered if scan else True,
                   started_label=label,
-                  programs=[escape(name.split(' ', 1)[-1]) for name in found] if isinstance(found, list) else [], floor=EBPF_PROG_FD_FLOOR)
+                  programs=[escape(name.split(' ', 1)[-1]) for name in found] if isinstance(found, list) else [], floor=runtime_floor(args.profile_file))
 
 
 def parse_args(argv):
@@ -395,14 +406,15 @@ def parse_args(argv):
     parser.add_argument('--proc-root', default='/proc', help='--runtime: procfs root (test override)')
     parser.add_argument('--systemctl', default=SYSTEMCTL, help='--runtime: systemctl binary (test override)')
     parser.add_argument('--bpftool', default=BPFTOOL, help='--runtime: bpftool binary (test override)')
+    parser.add_argument('--profile-file', default='/' + PROFILE, help='--runtime: bridge profile file (test override)')
     args = parser.parse_args(argv)
     if args.runtime and args.root is not None:
         parser.error('--runtime does not take --root')
     if args.detail and not args.runtime:
         parser.error('--detail requires --runtime')
-    overridden = (args.config, args.log, args.proc_root, args.systemctl, args.bpftool) != (CONFIG_PATH, LOG_PATH, '/proc', SYSTEMCTL, BPFTOOL)
+    overridden = (args.config, args.log, args.proc_root, args.systemctl, args.bpftool, args.profile_file) != (CONFIG_PATH, LOG_PATH, '/proc', SYSTEMCTL, BPFTOOL, '/' + PROFILE)
     if args.runtime and overridden and os.geteuid() == 0 and os.environ.get(TESTING_ENV) != '1':
-        parser.error(f'--config/--log/--proc-root/--systemctl/--bpftool are test-only and refused as root unless {TESTING_ENV}=1')
+        parser.error(f'--config/--log/--proc-root/--systemctl/--bpftool/--profile-file are test-only and refused as root unless {TESTING_ENV}=1')
     return args
 
 

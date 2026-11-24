@@ -288,6 +288,7 @@ echo "== Device rules (promoted from /etc drift) =="
 # promoted: 72-usbhp.rules (fails udevadm verify, and tags every USB device),
 # and four empty files. See docs/RUNBOOK.md "/etc drift vs the image".
 check "kvmfr blocked from loading"     grep -qx 'install kvmfr /bin/false' /usr/lib/modprobe.d/disable-kvmfr.conf
+check "kvmfr boot autoload emptied"    bash -c 'test -f /usr/lib/modules-load.d/kvmfr.conf && ! grep -qE "^[[:space:]]*[^#[:space:]]" /usr/lib/modules-load.d/kvmfr.conf'
 check "kvmfr device rule absent"       test ! -e /usr/lib/udev/rules.d/70-kvmfr.rules
 check "no kvmfr.static_size_mb karg"   bash -c '! grep -rq "kvmfr.static_size_mb" /usr/lib/bootc/kargs.d'
 check "smartcard rule is uaccess, not 0666" grep -qxF 'SUBSYSTEM=="usb", ATTR{idVendor}=="058f", ATTR{idProduct}=="9540", TAG+="uaccess"' /usr/lib/udev/rules.d/99-smartcard.rules

@@ -1176,7 +1176,9 @@ systemctl status logrotate.service --no-pager
 
 The Looking Glass `kvmfr` module (base-provided `kmod-kvmfr`) is blocked by
 `/usr/lib/modprobe.d/disable-kvmfr.conf` (`install kvmfr /bin/false` +
-`blacklist`); owner decision 2026-11-23. The module files stay on disk, and the
+`blacklist`); owner decision 2026-11-23. The base's boot-time autoload
+(`/usr/lib/modules-load.d/kvmfr.conf`) is overridden by a comment-only copy in this
+repo, otherwise `systemd-modules-load` would hit the `install` line and fail. The module files stay on disk, and the
 `kvmfr.static_size_mb=128` karg, `70-kvmfr.rules` and `ujust install-looking-glass-client`
 were removed. Manual load (UNVERIFIED on the host):
 
@@ -1187,8 +1189,11 @@ sudo chgrp qemu /dev/kvmfr0; sudo chmod 0660 /dev/kvmfr0   # the udev rule is go
 
 Permanent re-enable: `git revert` the disabling commit.
 
-The base image also sets `kvmfr.static_size_mb=128` itself, so it may still appear
-on the kernel command line after this repo's karg was dropped. It is harmless (a
+`kvmfr.static_size_mb=128` may also come from the base's `kargs.d` or from a local
+`rpm-ostree kargs` entry (kernel arguments live in /boot, not in /usr; local ones
+persist across updates), so it may still appear
+on the kernel command line after this repo's karg was dropped. A local one is removed on the
+host with `sudo rpm-ostree kargs --delete=kvmfr.static_size_mb=128` (UNVERIFIED). It is harmless (a
 parameter of a module that never loads) but UNVERIFIED: after the first boot check
 `cat /proc/cmdline` / `rpm-ostree kargs`. `/etc/udev/rules.d/70-kvmfr.rules` and the
 base-shipped comment-only `/etc/modprobe.d/kvmfr.conf` are inert once kvmfr is

@@ -129,6 +129,7 @@ ebpf_runtime() {
 # Only unit names, state and restart counts are shown: never unit contents.
 US_RESTART_THRESHOLD=20
 US_MAX_LISTED=10
+US_MAX_UNITS=300
 us_cmd=()
 
 # Address the INVOKING user's manager: plain --user when unprivileged, otherwise
@@ -146,9 +147,9 @@ us_resolve() {
     us_cmd=(systemctl --user "--machine=$user@.host")
 }
 
-# $1 = `systemctl show` blocks.
+# $1 = `systemctl show` blocks, $2 = note when the unit list was truncated.
 us_evaluate() {
-    printf '%s\n' "$1" | awk -v thr="$US_RESTART_THRESHOLD" -v max="$US_MAX_LISTED" '
+    printf '%s\n' "$1" | awk -v thr="$US_RESTART_THRESHOLD" -v max="$US_MAX_LISTED" -v note="$2" '
         BEGIN { RS = ""; FS = "\n" }
         {
             id = ""; st = ""; ss = ""; n = 0
@@ -171,13 +172,22 @@ us_evaluate() {
         }
         END {
             if (!seen) print "    UNKNOWN (user manager returned no parseable unit state)"
-            else if (!flagged) printf "    none: %d user services checked, no failed, restart-looping or >%d restarts\n", seen, thr
-            else if (flagged > max) printf "    [%d more not shown]\n", flagged - max
+            else if (!flagged && note == "") printf "    none: %d user services checked, no failed, restart-looping or >%d restarts\n", seen, thr
+            if (flagged > max) printf "    [%d more not shown]\n", flagged - max
+            if (seen && note != "") print "    UNKNOWN (" note ")"
         }'
 }
 
+us_fail() {
+    if (( $1 == 124 )); then
+        echo "    UNKNOWN (user manager timed out)"
+    else
+        echo "    UNKNOWN (user manager unreachable)"
+    fi
+}
+
 us_report() {
-    local list out names
+    local list out names rc note=""
     echo "  User services (invoking user's manager; failed, activating/auto-restart, NRestarts > $US_RESTART_THRESHOLD):"
     if ! available systemctl || ! available timeout; then
         echo "    UNKNOWN (tool unavailable)"
@@ -187,20 +197,22 @@ us_report() {
         echo "    UNKNOWN (no invoking non-root user; run via sudo ujust tower-health)"
         return
     fi
-    if ! list=$(timeout 8s "${us_cmd[@]}" list-units --all --type=service --no-legend --plain --no-pager 2>/dev/null); then
-        echo "    UNKNOWN (user manager unreachable)"
-        return
-    fi
-    mapfile -t names < <(awk '$1 ~ /^[A-Za-z0-9@._:\\-]+\.service$/ {print $1}' <<<"$list" | head -n 300)
+    list=$(timeout 8s "${us_cmd[@]}" list-units --all --type=service --no-legend --plain --no-pager 2>/dev/null)
+    rc=$?
+    if (( rc != 0 )); then us_fail "$rc"; return; fi
+    mapfile -t names < <(awk '$1 ~ /^[A-Za-z0-9@._:\\-]+\.service$/ {print $1}' <<<"$list")
     if (( ${#names[@]} == 0 )); then
         echo "    none (0 user services loaded)"
         return
     fi
-    if ! out=$(timeout 8s "${us_cmd[@]}" show -p Id -p ActiveState -p SubState -p NRestarts --no-pager -- "${names[@]}" 2>/dev/null); then
-        echo "    UNKNOWN (user manager unreachable)"
-        return
+    if (( ${#names[@]} > US_MAX_UNITS )); then
+        note="only the first $US_MAX_UNITS of ${#names[@]} user services checked"
+        names=("${names[@]:0:US_MAX_UNITS}")
     fi
-    us_evaluate "$out"
+    out=$(timeout 8s "${us_cmd[@]}" show -p Id -p ActiveState -p SubState -p NRestarts --no-pager -- "${names[@]}" 2>/dev/null)
+    rc=$?
+    if (( rc != 0 )); then us_fail "$rc"; return; fi
+    us_evaluate "$out" "$note"
 }
 
 label_status() {

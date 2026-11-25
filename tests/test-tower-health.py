@@ -36,6 +36,18 @@ if name == "rpm-ostree":
              "container-image-reference": "example@sha256:def"}]}))
     else: print("rpm-ostree fixture")
 elif name == "systemctl":
+    if args[0] == "--user":
+        if os.environ.get("USER_MGR") == "down":
+            print("Failed to connect to bus: No medium found", file=sys.stderr); sys.exit(1)
+        units = json.loads(os.environ.get("USER_UNITS", "[]"))
+        if "list-units" in args:
+            for u in units: print(u[0], "loaded", u[1], u[2], "Fixture description")
+        elif "show" in args:
+            for u in units:
+                print("Id=" + u[0], "ActiveState=" + u[1], "SubState=" + u[2], "NRestarts=" + str(u[3]),
+                      "Environment=LEAK_ENV_MARKER=1", "ExecStart=/leak/exec-marker --secret", sep="\n")
+                print()
+        sys.exit(0)
     if args[0] == "is-enabled": print("disabled"); sys.exit(1)
     if args[0] == "is-active": print("inactive"); sys.exit(3)
     if args[0] == "--failed": print("broken.service loaded failed failed Fixture")
@@ -113,7 +125,10 @@ class Diagnostics(unittest.TestCase):
         self.assertLess(max(map(len, output.splitlines())), 520)
         for command in self.calls():
             if command[0] == "systemctl":
-                self.assertIn(command[1], ("is-enabled", "is-active", "--failed", "show"))
+                self.assertIn(command[1], ("is-enabled", "is-active", "--failed", "show", "--user"))
+                if command[1] == "--user":
+                    self.assertTrue(set(command[2:]) & {"list-units", "show"})
+                    self.assertFalse({"start", "stop", "restart", "reset-failed", "enable", "disable", "kill"} & set(command))
             self.assertNotIn(command[0], ("restorecon", "selinuxenabled"))
             self.assertNotIn("refresh", command)
             if command[0] == "fwupdmgr":
@@ -204,6 +219,63 @@ class Diagnostics(unittest.TestCase):
         self.assertIn(["ras-mc-ctl", "--errors"], self.calls())
         result = subprocess.run(["/bin/bash", str(HEALTH), "--unknown"], env=self.env, capture_output=True)
         self.assertEqual(result.returncode, 2)
+
+    def user_section(self, units=None, uid="1000", **env):
+        self.env.update(MOCK_ID=uid, USER_UNITS=json.dumps(units or []), **env)
+        output = self.health()
+        return output.split("  User services (", 1)[1].split("\n", 1)[1].split("\n\n", 1)[0]
+
+    def test_user_services_clean(self):
+        section = self.user_section([["a.service", "active", "running", 0], ["b.service", "inactive", "dead", 3]])
+        self.assertIn("none: 2 user services checked", section)
+        self.assertNotIn("PROBLEM", section)
+
+    def test_user_services_failed_unit(self):
+        section = self.user_section([["bad.service", "failed", "failed", 2], ["ok.service", "active", "running", 0]])
+        self.assertIn("PROBLEM bad.service: NRestarts=2 state=failed/failed (failed)", section)
+        self.assertNotIn("ok.service", section)
+
+    def test_user_services_restart_loop_is_flagged_though_not_failed(self):
+        section = self.user_section([["loop.service", "activating", "auto-restart", 143355]])
+        self.assertIn("PROBLEM loop.service: NRestarts=143355 state=activating/auto-restart (restart loop)", section)
+        section = self.user_section([["on-failure.service", "active", "running", 143000]])
+        self.assertIn("NRestarts=143000", section)
+
+    def test_user_services_restart_threshold_boundary(self):
+        section = self.user_section([["edge.service", "active", "running", 20]])
+        self.assertNotIn("PROBLEM", section)
+        section = self.user_section([["edge.service", "active", "running", 21]])
+        self.assertIn("PROBLEM edge.service: NRestarts=21", section)
+
+    def test_user_services_output_is_bounded(self):
+        section = self.user_section([["u%d.service" % i, "failed", "failed", 0] for i in range(15)])
+        self.assertEqual(section.count("PROBLEM"), 10)
+        self.assertIn("[5 more not shown]", section)
+
+    def test_user_manager_unreachable_is_unknown(self):
+        section = self.user_section([], USER_MGR="down")
+        self.assertIn("UNKNOWN (user manager unreachable)", section)
+        self.assertNotIn("none", section)
+
+    def test_user_services_never_leak_unit_contents(self):
+        output = self.user_section([["loop.service", "activating", "auto-restart", 99]])
+        self.assertNotIn("LEAK_ENV_MARKER", output)
+        self.assertNotIn("exec-marker", output)
+        shown = self.health()
+        self.assertNotIn("exec-marker", shown)
+
+    def test_user_manager_addressed_via_machine_when_root(self):
+        self.user_section([["a.service", "active", "running", 0]], uid="0", SUDO_USER="alice")
+        users = [c for c in self.calls() if c[:2] == ["systemctl", "--user"]]
+        self.assertTrue(users)
+        self.assertTrue(all("--machine=alice@.host" in c for c in users))
+
+    def test_user_services_root_without_invoking_user_is_unknown(self):
+        self.env.pop("SUDO_USER", None)
+        self.env.pop("PKEXEC_UID", None)
+        section = self.user_section([["a.service", "failed", "failed", 0]], uid="0")
+        self.assertIn("UNKNOWN (no invoking non-root user", section)
+        self.assertFalse([c for c in self.calls() if c[:2] == ["systemctl", "--user"]])
 
     def repair(self):
         # Rewrite fixed absolute paths in a throwaway COPY. Production helper has

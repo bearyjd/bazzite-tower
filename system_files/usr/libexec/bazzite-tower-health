@@ -124,6 +124,97 @@ ebpf_runtime() {
     fi
 }
 
+# User services: a crash-looping user unit cycles activating/auto-restart and is
+# never listed by `--failed`, so the probe reads ActiveState/SubState/NRestarts.
+# Only unit names, state and restart counts are shown: never unit contents.
+US_RESTART_THRESHOLD=20
+US_MAX_LISTED=10
+US_MAX_UNITS=300
+us_cmd=()
+
+# Address the INVOKING user's manager: plain --user when unprivileged, otherwise
+# --machine=<user>@.host for SUDO_USER (or the PKEXEC_UID owner). Root alone has no target.
+us_resolve() {
+    local user=${SUDO_USER:-}
+    if [[ "$(id -u 2>/dev/null)" != 0 ]]; then
+        us_cmd=(systemctl --user)
+        return 0
+    fi
+    if [[ -z "$user" && "${PKEXEC_UID:-}" =~ ^[0-9]+$ ]]; then
+        user=$(id -nu "$PKEXEC_UID" 2>/dev/null)
+    fi
+    [[ "$user" =~ ^[A-Za-z_][A-Za-z0-9_.-]*$ && "$user" != root ]] || return 1
+    us_cmd=(systemctl --user "--machine=$user@.host")
+}
+
+# $1 = `systemctl show` blocks, $2 = note when the unit list was truncated.
+us_evaluate() {
+    printf '%s\n' "$1" | awk -v thr="$US_RESTART_THRESHOLD" -v max="$US_MAX_LISTED" -v note="$2" '
+        BEGIN { RS = ""; FS = "\n" }
+        {
+            id = ""; st = ""; ss = ""; n = 0
+            for (i = 1; i <= NF; i++) {
+                if ($i ~ /^Id=/) id = substr($i, 4)
+                else if ($i ~ /^ActiveState=/) st = substr($i, 13)
+                else if ($i ~ /^SubState=/) ss = substr($i, 10)
+                else if ($i ~ /^NRestarts=[0-9]+$/) n = substr($i, 11) + 0
+            }
+            if (id == "") next
+            seen++
+            why = ""
+            if (st == "failed") why = "failed"
+            else if (st == "activating" && ss == "auto-restart") why = "restart loop"
+            else if (n > thr) why = "many restarts"
+            if (why == "") next
+            flagged++
+            gsub(/[^A-Za-z0-9@._:\\-]/, "?", id); gsub(/[^a-z-]/, "?", st); gsub(/[^a-z-]/, "?", ss)
+            if (flagged <= max) printf "    PROBLEM %s: NRestarts=%d state=%s/%s (%s)\n", id, n, st, ss, why
+        }
+        END {
+            if (!seen) print "    UNKNOWN (user manager returned no parseable unit state)"
+            else if (!flagged && note == "") printf "    none: %d user services checked, no failed, restart-looping or >%d restarts\n", seen, thr
+            if (flagged > max) printf "    [%d more not shown]\n", flagged - max
+            if (seen && note != "") print "    UNKNOWN (" note ")"
+        }'
+}
+
+us_fail() {
+    if (( $1 == 124 )); then
+        echo "    UNKNOWN (user manager timed out)"
+    else
+        echo "    UNKNOWN (user manager unreachable)"
+    fi
+}
+
+us_report() {
+    local list out names rc note=""
+    echo "  User services (invoking user's manager; failed, activating/auto-restart, NRestarts > $US_RESTART_THRESHOLD):"
+    if ! available systemctl || ! available timeout; then
+        echo "    UNKNOWN (tool unavailable)"
+        return
+    fi
+    if ! us_resolve; then
+        echo "    UNKNOWN (no invoking non-root user; rerun from your own session as root)"
+        return
+    fi
+    list=$(timeout 8s "${us_cmd[@]}" list-units --all --type=service --no-legend --plain --no-pager 2>/dev/null)
+    rc=$?
+    if (( rc != 0 )); then us_fail "$rc"; return; fi
+    mapfile -t names < <(awk '$1 ~ /^[A-Za-z0-9@._:\\-]+\.service$/ {print $1}' <<<"$list")
+    if (( ${#names[@]} == 0 )); then
+        echo "    none (0 user services loaded)"
+        return
+    fi
+    if (( ${#names[@]} > US_MAX_UNITS )); then
+        note="only the first $US_MAX_UNITS of ${#names[@]} user services checked"
+        names=("${names[@]:0:US_MAX_UNITS}")
+    fi
+    out=$(timeout 8s "${us_cmd[@]}" show -p Id -p ActiveState -p SubState -p NRestarts --no-pager -- "${names[@]}" 2>/dev/null)
+    rc=$?
+    if (( rc != 0 )); then us_fail "$rc"; return; fi
+    us_evaluate "$out" "$note"
+}
+
 label_status() {
     local path="$1"
     probe "$path current label (no contents)" ls -Zd -- "$path"
@@ -155,6 +246,7 @@ for unit in smartd.service rasdaemon.service bazzite-tower-power-tuning.service 
 done
 ebpf_runtime
 probe "Failed system services (up to 20 displayed)" systemctl --failed --type=service --no-legend --plain --no-pager
+us_report
 
 echo
 echo "== MCE / memory evidence =="

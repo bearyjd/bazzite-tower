@@ -113,7 +113,7 @@ share the same major.minor, and the `exclude=` line is actually present in
 ## Registries / external services
 
 - **GHCR** — image publish + pull (the rebase target)
-- **download.docker.com** — build-time only (Docker CE + gpg key)
+- **download.docker.com** — build-time only (Docker CE + gpg key; key fingerprint-pinned in `30-docker-ce.sh` via `build_files/lib/verify-gpg-key.sh`, installed to `/etc/pki/rpm-gpg/RPM-GPG-KEY-docker-ce`, repos use `gpgkey=file://`)
 - **S3** (rclone, optional) — disk/ISO upload (`S3_*` secrets)
 - **ArtifactHub** — image metadata/labels
 

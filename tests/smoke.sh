@@ -317,6 +317,13 @@ echo "== Docker CE =="
 check "docker present"     command -v docker
 check "containerd present" command -v containerd
 check "iptables explicitly present" command -v iptables
+# The Docker signing key is fingerprint-pinned at build time (30-docker-ce.sh)
+# and repos reference the local copy, never a remote gpgkey URL.
+check "Docker CE pinned GPG key installed" test -s /etc/pki/rpm-gpg/RPM-GPG-KEY-docker-ce
+check "docker repo files have no remote gpgkey (gpgkey=http)" \
+    bash -c '! grep -qE "^gpgkey=http" /etc/yum.repos.d/docker*.repo'
+check "docker repo files use the local gpgkey and gpgcheck=1" \
+    bash -c 'grep -q "^gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-docker-ce$" /etc/yum.repos.d/docker-ce.repo && ! grep -q "^gpgcheck=0" /etc/yum.repos.d/docker-ce.repo'
 check "flock present for Docker/libvirt reconciliation" command -v flock
 # The 'docker' group must be baked into the image: docker.socket resolves it at
 # early boot, and if it's only created late at runtime the socket fails every boot.

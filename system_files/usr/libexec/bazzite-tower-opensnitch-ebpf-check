@@ -45,7 +45,10 @@ LEGACY_TREE_SHA256 = '39512718023e91e3d48bdaa6f0c958a5457ebb8df560dbd53d348f5555
 
 # --runtime constants. The fd link name is VERIFIED on the real kernel (7.3.4-ogc8.1, opensnitchCommit a1353848:
 # the daemon holds anon_inode:bpf_link fds and zero anon_inode:bpf-prog, the Go loader closes program fds after
-# attaching links). The daemon log strings (FALLBACK_LOG / PARTIAL_LOG, from OpenSnitch v1.8.0) are still UNVERIFIED.
+# attaching links). The daemon log strings (FALLBACK_LOG / PARTIAL_LOG) are verified at SOURCE level only, at
+# daemon commit a1353848ba1b660320e90cefea782c3fba272c00 (daemon/procmon/monitor/init.go: line 116
+# log.Warning("error starting ebpf monitor method: %v", err), line 106 log.Warning("opensnitch-procs.o not
+# available: %s", err.Msg)); they were NOT observed in a live failing run.
 SERVICE = 'opensnitch.service'
 CONFIG_PATH = '/etc/opensnitchd/default-config.json'
 LOG_PATH = '/var/log/opensnitchd.log'
@@ -56,9 +59,12 @@ PARTIAL_LOG = 'opensnitch-procs.o not available'
 # (`bpftool link show`: 9 kprobes, 3 uprobes on libc for the DNS module, 5 execve/execveat/sched_process_exit
 # tracepoints; the optional udp_tunnel6_xmit_skb kprobe is not attached, so 18 is also healthy). Upstream logs a
 # lost kprobe attach only at Warning, so a partial load leaves no fallback log line and this floor is the only guard.
-# Legacy (v1.8.0) has no such evidence: its floor stays the uncalibrated 1. An unreadable/unknown profile also uses 1.
+# Legacy (v1.8.0) has no such evidence: its floor stays the uncalibrated 1. An unreadable/unknown profile also uses 1,
+# but the 17-link guard was then not applied, so that case is a WARN, never a silent PASS.
 EBPF_PROG_FD_FLOORS = {'system': 17, 'legacy': 1}
-EBPF_PROG_FD_FLOOR = EBPF_PROG_FD_FLOORS['legacy']  # conservative default
+EBPF_CALIBRATED_PROFILES = frozenset({'system'})  # profiles whose floor is backed by observed evidence
+EBPF_UNKNOWN_FD_FLOOR = 1  # conservative floor when the profile cannot be determined
+EBPF_PROG_FD_FLOOR = EBPF_UNKNOWN_FD_FLOOR  # kept for tests/callers that pin the old name
 LOG_TAIL_BYTES = 8 * 1024 * 1024
 LOG_START_SLACK_SECONDS = 2  # the daemon's first log line may trail the unit start by a moment (stamps are whole seconds)
 LOG_TIME = re.compile(r'^\[(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d)\]')
@@ -323,15 +329,19 @@ def print_detail(pid, started, label, method, links, scan, programs):
 
 
 def runtime_floor(profile_file):
+    """(floor, calibrated, problem): problem is a reason when the profile could not be determined, else None."""
     try:
         with open(profile_file, 'rb') as handle:
             profile = handle.read(64).decode().strip()
-    except (OSError, ValueError):  # unreadable or non-UTF-8: conservative floor, not an internal error
-        return EBPF_PROG_FD_FLOOR
-    return EBPF_PROG_FD_FLOORS.get(profile, EBPF_PROG_FD_FLOOR)
+    except (OSError, ValueError) as error:  # unreadable or non-UTF-8: conservative floor, not an internal error
+        return EBPF_UNKNOWN_FD_FLOOR, False, f'bridge profile {profile_file} could not be read ({type(error).__name__})'
+    if profile not in EBPF_PROG_FD_FLOORS:
+        return EBPF_UNKNOWN_FD_FLOOR, False, f'bridge profile {profile_file} names an unknown profile {escape(profile)!r}'
+    return EBPF_PROG_FD_FLOORS[profile], profile in EBPF_CALIBRATED_PROFILES, None
 
 
-def decide(*, method, config, log, pid, problem, count, fallback, partial, log_readable, covered, started_label, programs, floor):
+def decide(*, method, config, log, pid, problem, count, fallback, partial, log_readable, covered, started_label, programs, floor,
+           calibrated=False, profile_problem=None):
     """Pure decision table: (level, reason) from already-gathered facts."""
     names = f' (bpf programs: {", ".join(programs)})' if programs else ''
     if problem:
@@ -352,11 +362,14 @@ def decide(*, method, config, log, pid, problem, count, fallback, partial, log_r
         return 'WARN', f'partial eBPF: the daemon logged {PARTIAL_LOG!r} (no exec events); rebuild/repair opensnitch-procs.o{names}'
     if not covered:
         return 'WARN', f'{count} {BPF_PROG_LINK} fds but the log does not cover the unit start (rotated?); fallback warnings cannot be ruled out{names}'
+    if profile_problem:
+        return 'WARN', (f'{count} {BPF_PROG_LINK} fds, but {profile_problem}, so the per-profile fd floor (system: '
+                        f'{EBPF_PROG_FD_FLOORS["system"]}) was not applied and a partial eBPF load cannot be ruled out{names}')
     if count < floor:
         return 'WARN', f'only {count} {BPF_PROG_LINK} fds, below the calibrated floor {floor}; eBPF may be partial{names}'
     if not log_readable:
         return 'WARN', f'{count} {BPF_PROG_LINK} fds but {log} is unreadable, partial mode cannot be ruled out{names}'
-    note = ' (fd floor UNCALIBRATED: gate A pending)' if floor == 1 else ''
+    note = ' (fd floor UNCALIBRATED: gate A pending)' if not calibrated else ''
     return 'PASS', (f'ProcMonitorMethod ebpf, pid {pid} holds {count} {BPF_PROG_LINK} fds, no fallback warning since start{note}{names}')
 
 
@@ -394,7 +407,8 @@ def evaluate(args):
                   count=(links or []).count(BPF_PROG_LINK), fallback=len(scan.fallback) if scan else 0,
                   partial=len(scan.partial) if scan else 0, log_readable=scan is not None, covered=scan.covered if scan else True,
                   started_label=label,
-                  programs=[escape(name.split(' ', 1)[-1]) for name in found] if isinstance(found, list) else [], floor=runtime_floor(args.profile_file))
+                  programs=[escape(name.split(' ', 1)[-1]) for name in found] if isinstance(found, list) else [],
+                  **dict(zip(('floor', 'calibrated', 'profile_problem'), runtime_floor(args.profile_file))))
 
 
 def parse_args(argv):

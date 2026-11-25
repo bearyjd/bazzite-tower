@@ -836,8 +836,13 @@ udpv6_sendmsg), 3 uprobes on libc.so.6 (DNS module), 5 tracepoints
 (sys_enter/exit_execve, sys_enter/exit_execveat, sched_process_exit); the optional
 udp_tunnel6_xmit_skb kprobe is not attached, so 18 is also healthy). Upstream logs a
 lost kprobe attach only at Warning, so a partial load leaves no fallback line and
-the floor is the only guard. Not verified: the log strings (from v1.8.0,
-unchecked at a1353848) and the legacy floor (still the uncalibrated 1: no
+the floor is the only guard. If the bridge profile file is unreadable or names an
+unknown profile, the check uses the conservative floor 1 and reports `WARN` (the
+per-profile floor was not applied), never a silent `PASS`; a readable `legacy`
+profile keeps floor 1 with the UNCALIBRATED note and `PASS`. Verified at source
+level only: the log strings (daemon commit a1353848,
+`daemon/procmon/monitor/init.go` lines 116 and 106), NOT observed in a live
+failing run. Not verified: the legacy floor (still the uncalibrated 1: no
 evidence for v1.8.0). Wired into: system
 readiness (after the config contract; `FAIL` refuses, `WARN` is reported),
 `ujust opensnitch-readiness` (legacy, root only, otherwise skipped with a note),

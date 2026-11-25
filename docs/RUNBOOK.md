@@ -543,6 +543,18 @@ authentication, cancellation/denial, repeat requests, visible skipped checks,
 root-private state and unchanged allow policy and eBPF/proc monitor settings. Native build/reproducibility,
 image/SELinux behavior and those runtime checks remain separate release gates.
 
+**Owner acceptance of the Deep Scan on the booted image (2026-11-24):** GUI Flatpak
+`org.snitchwatch.Snitchwatch` branch `r16.1-candidate` (GUI 0.1.1), `opensnitchd` 1.9.0.
+Verified: the **Run Deep Scan** action exists and runs after a polkit prompt; scan #12
+finished in about 10 seconds or less (journal and GUI timestamps) with 0 new anomalies, 0 outstanding, 2 informational
+(Secure Boot enabled; kernel lockdown `none`) and 2 skipped checks (`file_drift`,
+delegated to the shared baseline cache; `rootkit_signature`, `chkrootkit` not
+installed); `/var/lib/snitchwatch-scanner` stays `root:root` mode `0700`; the
+OpenSnitch `default-config.json` hash was identical before and after (policy and
+eBPF/proc settings untouched). **Not verified:** denial and cancellation of the prompt,
+a repeat scan prompting again, and the scanner's own CPU and peak memory (a 2 s
+`pidstat` sample missed the short-lived process; no figure is claimed).
+
 ### Endpoint events for Vigie (opt-in, everything off by default)
 
 The image carries the *packages* for an optional feed of connection events to
@@ -1137,10 +1149,53 @@ these. `UNKNOWN` means the state could not be determined (needs root, tool
 missing, unreadable) and is never a pass. A healthy result for the compartment
 assumptions is Secure Boot `PASS`, lockdown `PASS`, root `PASS LUKS2`; a TPM2
 keyslot is optional (it is only needed for unattended unlock). The real values
-for this laptop have not been recorded yet: run it and note the result here.
+for this laptop are recorded below.
+
+**Recorded baseline (owner-run `sudo ujust tower-health`, 2026-11-24; booted
+45.20261117.1, kernel 7.3.4-ogc8.1.fc45):**
+
+| Probe | Result |
+|---|---|
+| Secure Boot | `PASS` enabled |
+| Kernel lockdown | `WARN` none (not enforced); the Deep Scan reports the same as informational. Owner decision pending: not changed |
+| Root encryption | `PASS` LUKS2, `aes-xts-plain64`. Two LUKS2 volumes (one per NVMe) form one btrfs filesystem and are both unlocked at boot by two `rd.luks.uuid=` arguments, so any unattended unlock must cover both |
+| TPM | `PASS` TPM2 (`tpm0`, `/dev/tpmrm0`) |
+| TPM2 LUKS keyslot | `WARN` at the time of the run. Afterwards (owner-reported) a `systemd-tpm2` token bound to PCR 7 only was enrolled in keyslot 2 of both volumes, next to a passphrase (slot 0) and a recovery key (slot 1) |
+
+TPM unlock is **not yet verified**: it needs `rd.luks.options=<uuid>=tpm2-device=auto`
+for both volumes (tried first as a one-off boot-menu edit, not made permanent). The
+initramfs already carries `systemd-cryptsetup`, the `systemd-tpm2` token plugin and
+`tpm2-tss`, so no image change is expected. PCR 7 tracks only the Secure Boot state;
+`/boot` is unencrypted and the initramfs and kernel command line are not covered, so
+this protects against drive theft but not against a determined attacker with the
+machine (a TPM PIN or a GRUB password narrows that). A change to Secure Boot keys or MOK
+enrollment changes PCR 7 and falls back to the passphrase; re-enroll with
+`systemd-cryptenroll --wipe-slot=tpm2` and the same enroll command.
 
 Offline tests: `tests/test-tower-health-boot-chain.py` (fixtures for every
 state above, including the root and non-root paths).
+
+### Known kernel log noise (observed, not faults)
+
+Seen on this laptop in `journalctl -k`, 2026-11-24. None was investigated and none
+justifies a configuration change (hardware-tuning rule: evidence for this machine
+first):
+
+- `NVRM: GPU0 nvAssertFailedNoLog: Assertion failed: PRH failed to update thermal limit!`
+  (NVIDIA 620.70.06). Present in every one of the three most recent boots (147, 1175
+  and 453 lines), including a boot with no suspends, so it is not suspend-related.
+- `spd5118 18-0050: Failed to write b = 0: -6` with `spd5118_resume returns -6`: the
+  temperature sensor on the memory module's SPD hub does not answer after an s2idle
+  resume. Intermittent (5 of 9 suspends in one boot, 1 of 1 on kernel 7.3.4). The system
+  resumed normally and `rasdaemon` shows no memory errors; it is the sensor, not memory
+  data.
+
+**Suspend/resume check on kernel 7.3.4 (owner-run, 2026-11-24):** one
+`rtcwake -m freeze -s 5` (5 s s2idle): suspend entry to exit took 7 s, GuC
+firmware reloaded on both GPU tiles (HuC shown on GT1), no `cx0`/`pll` or other i915 error. The i915 MTL
+resume regression (`docs/research/i915-mtl-resume-2026-06-20.md`) did not recur in this
+short test. **Not verified:** a longer or real lid/power-button suspend, and Wi-Fi,
+Bluetooth, audio and GPU behavior after wake.
 
 ## SELinux labels: boot.log
 

@@ -18,7 +18,7 @@ explicit owner instruction.
 
 `base-refresh.yml` runs daily and by dispatch on `main`, without a per-base owner
 approval. `.github/base-refresh-policy.json` pins accepted product source
-`9afc5514d8d6ac631f9cd4740ff965abf07e69ea`: legacy publishes `:stable` and its
+`652cd53523417bf0a10e6bf8de2237d11e20042f`: legacy publishes `:stable` and its
 compatibility alias `:latest` (`IMAGE_TAG=latest`); reviewed r16.1 system publishes
 only `:snitchwatch-system`. Both profiles use this exact product source.
 The workflow resolves a fresh immutable Bazzite base, enforces the

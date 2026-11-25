@@ -3,7 +3,7 @@
 
 Fakes only: a procfs tree of dangling symlinks, a config, a log and `systemctl`/`bpftool`
 scripts passed through the test-only --systemctl/--bpftool flags. No daemon, kernel, root, container or network. The fd link
-name and log strings are UNVERIFIED on the real kernel/daemon; the constants are
+name is verified on the real kernel; the log strings are verified at source level only (daemon a1353848), not in a live failing run; the constants are
 asserted by name so a calibration edit is a visible, deliberate test change.
 """
 import contextlib
@@ -81,7 +81,8 @@ class Runtime(unittest.TestCase):
         self.proc = self.dir / 'proc'
         self.config = self.dir / 'default-config.json'
         self.log = self.dir / 'opensnitchd.log'
-        self.profile_file = self.dir / 'bridge-profile'  # absent by default: unreadable profile, conservative floor
+        self.profile_file = self.dir / 'bridge-profile'
+        self.profile_file.write_text('legacy\n')  # readable legacy by default: floor 1, UNCALIBRATED note, PASS
 
     def set_profile(self, profile):
         self.profile_file.write_text(f'{profile}\n')
@@ -228,24 +229,39 @@ class Runtime(unittest.TestCase):
                 self.setup_fds(bpf=count)
                 self.assertVerdict(self.run_check(), 'PASS', 0, f'{count} ' + BPF, '(fd floor UNCALIBRATED: gate A pending)')
 
-    def test_unknown_profile_uses_the_conservative_floor(self):
+    WARN_PROFILE = 'was not applied'
+
+    def test_unknown_profile_warns_that_the_floor_was_not_applied(self):
         self.set_profile('bogus')
         self.setup_fds(bpf=1)
-        self.assertVerdict(self.run_check(), 'PASS', 0, '(fd floor UNCALIBRATED: gate A pending)')
+        run = self.run_check()
+        self.assertVerdict(run, 'WARN', 0, 'unknown profile', "'bogus'", self.WARN_PROFILE)
 
-    def test_garbage_profile_file_uses_the_conservative_floor_not_a_fail(self):
+    def test_missing_profile_file_warns_that_the_floor_was_not_applied(self):
+        self.profile_file.unlink()
+        self.setup_fds(bpf=1)
+        self.assertVerdict(self.run_check(), 'WARN', 0, 'could not be read', self.WARN_PROFILE)
+
+    def test_garbage_profile_file_warns_not_fails(self):
         for blob in (b'\xff\xfe\x80system', b'\x00' * 100):
             with self.subTest(blob=blob):
                 shutil.rmtree(self.proc, ignore_errors=True)
                 self.profile_file.write_bytes(blob)
                 self.setup_fds(bpf=1)
-                self.assertVerdict(self.run_check(), 'PASS', 0, '(fd floor UNCALIBRATED: gate A pending)')
+                run = self.run_check()
+                self.assertVerdict(run, 'WARN', 0, self.WARN_PROFILE)
+                self.assertNotIn('UNCALIBRATED', run.stdout)
+
+    def test_unreadable_profile_does_not_hide_a_fallback_fail(self):
+        self.setup_fds(bpf=0)
+        self.assertVerdict(self.run_check(), 'FAIL', 1, 'holds no')
 
     def test_floor_constants_are_pinned(self):
         loaded = base.load(CHECK)
         self.assertEqual(loaded['EBPF_PROG_FD_FLOORS']['system'], 17)
         self.assertEqual(loaded['EBPF_PROG_FD_FLOORS']['legacy'], 1)
         self.assertEqual(loaded['EBPF_PROG_FD_FLOOR'], 1)
+        self.assertEqual(loaded['EBPF_UNKNOWN_FD_FLOOR'], 1)
         self.assertEqual(loaded['BPF_PROG_LINK'], BPF)
 
     def test_proc_method_warns_without_reading_fds(self):
@@ -487,7 +503,7 @@ class InProcess(unittest.TestCase):
 
     def decide(self, **over):
         facts = dict(method='ebpf', config='/c', log='/l', pid=7, problem=None, count=3, fallback=0, partial=0, log_readable=True,
-                     covered=True, started_label='2026-11-17 10:00:00 UTC', programs=(), floor=1)
+                     covered=True, started_label='2026-11-17 10:00:00 UTC', programs=(), floor=1, calibrated=False)
         return self.m.decide(**{**facts, **over})
 
     # fd race
@@ -525,6 +541,7 @@ class InProcess(unittest.TestCase):
         for name in '012':
             os.symlink(BPF, fd / name)
         os.symlink('/usr/bin/opensnitchd', self.dir / 'proc' / '4242' / 'exe')
+        (self.dir / 'profile').write_text('legacy\n')
         (self.dir / 'systemctl').write_text(FAKE_SYSTEMCTL)
         (self.dir / 'systemctl').chmod(0o755)
         (self.dir / 'mainpid').write_text('4242\n')
@@ -541,7 +558,7 @@ class InProcess(unittest.TestCase):
         with mock.patch.object(os, 'readlink', flaky), contextlib.redirect_stdout(out):
             code = self.m.main(['--runtime', '--config', str(self.dir / 'c.json'), '--log', str(self.dir / 'l.log'),
                                 '--proc-root', str(self.dir / 'proc'), '--systemctl', str(self.dir / 'systemctl'),
-                                '--bpftool', str(self.dir / 'none'), '--profile-file', str(self.dir / 'no-profile')])
+                                '--bpftool', str(self.dir / 'none'), '--profile-file', str(self.dir / 'profile')])
         self.assertEqual(code, 0, out.getvalue())
         self.assertIn('RESULT: PASS', out.getvalue())
         self.assertIn('2 ' + BPF, out.getvalue())
@@ -565,7 +582,10 @@ class InProcess(unittest.TestCase):
             (dict(log_readable=False), 'WARN', 'unreadable'),
             (dict(), 'PASS', '3 ' + BPF + ' fds'),
             (dict(floor=1), 'PASS', '(fd floor UNCALIBRATED: gate A pending)'),
-            (dict(count=6, floor=5), 'PASS', 'no fallback warning'),
+            (dict(count=6, floor=5, calibrated=True), 'PASS', 'no fallback warning'),
+            (dict(profile_problem='bridge profile /p could not be read (OSError)'), 'WARN', 'could not be read'),
+            (dict(profile_problem='x', count=0), 'FAIL', 'holds no'),
+            (dict(profile_problem='x', partial=1), 'WARN', 'partial eBPF'),
             (dict(programs=('a', 'b')), 'PASS', 'a, b'),
             (dict(programs=('a',), partial=1), 'WARN', 'a'),
         ]
@@ -576,10 +596,31 @@ class InProcess(unittest.TestCase):
                 self.assertIn(needle, got[1])
 
     def test_system_floor_drops_the_placeholder_note(self):
-        self.assertNotIn('UNCALIBRATED', self.decide(count=17, floor=self.m.EBPF_PROG_FD_FLOORS['system'])[1])
+        self.assertNotIn('UNCALIBRATED', self.decide(count=17, floor=self.m.EBPF_PROG_FD_FLOORS['system'], calibrated=True)[1])
 
     def test_calibrated_floor_drops_the_placeholder_note(self):
-        self.assertNotIn('UNCALIBRATED', self.decide(count=6, floor=5)[1])
+        self.assertNotIn('UNCALIBRATED', self.decide(count=6, floor=5, calibrated=True)[1])
+
+    def test_uncalibrated_note_follows_the_calibrated_fact_not_the_floor_value(self):
+        self.assertNotIn('UNCALIBRATED', self.decide(floor=1, calibrated=True)[1])  # a calibrated floor of 1
+        self.assertIn('UNCALIBRATED', self.decide(count=9, floor=9, calibrated=False)[1])  # an uncalibrated floor of 9
+
+    def test_profile_problem_is_warn_not_pass_and_not_fail(self):
+        level, reason = self.decide(profile_problem='bridge profile /p could not be read (OSError)')
+        self.assertEqual(level, 'WARN')
+        self.assertIn('was not applied', reason)
+
+    def test_runtime_floor_classifies_profiles(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / 'profile'
+            for text, expected in (('system\n', (17, True, None)), ('legacy\n', (1, False, None))):
+                path.write_text(text)
+                self.assertEqual(self.m.runtime_floor(str(path)), expected)
+            path.write_text('bogus\n')
+            floor, calibrated, problem = self.m.runtime_floor(str(path))
+            self.assertEqual((floor, calibrated), (1, False))
+            self.assertIn('unknown profile', problem)
+            self.assertEqual(self.m.runtime_floor(str(Path(tmp) / 'missing'))[:2], (1, False))
 
     def test_stale_start_reason(self):
         level, reason = self.decide(fallback=2, started_label=None)

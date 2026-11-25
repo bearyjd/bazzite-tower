@@ -194,7 +194,7 @@ us_report() {
         return
     fi
     if ! us_resolve; then
-        echo "    UNKNOWN (no invoking non-root user; run via sudo ujust tower-health)"
+        echo "    UNKNOWN (no invoking non-root user; rerun from your own session as root)"
         return
     fi
     list=$(timeout 8s "${us_cmd[@]}" list-units --all --type=service --no-legend --plain --no-pager 2>/dev/null)

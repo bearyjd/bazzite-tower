@@ -1,7 +1,11 @@
 #!/usr/bin/env python3
 """Offline tests for ci/koji-head-check.py against a local HEAD fixture server."""
+import importlib.util
 import json
 import os
+import socket
+import urllib.error
+import urllib.request
 import subprocess
 import sys
 import tempfile
@@ -14,6 +18,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / 'ci/koji-head-check.py'
 GUARD = 'KOJI_HEAD_CHECK_TESTING'
+spec = importlib.util.spec_from_file_location('koji_head_check', SCRIPT)
+khc = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(khc)
 REQUESTS = []
 FLAKY_SEEN = set()
 LOCK = threading.Lock()
@@ -58,6 +65,23 @@ class Handler(BaseHTTPRequestHandler):
                 first = p not in FLAKY_SEEN
                 FLAKY_SEEN.add(p)
             self.reply(503) if first else self.reply(200, 5)
+        elif p == '/forbidden':
+            self.reply(403)
+        elif p == '/forbid-then-ok':
+            with LOCK:
+                first = p not in FLAKY_SEEN
+                FLAKY_SEEN.add(p)
+            self.reply(403) if first else self.reply(200, 5)
+        elif p == '/rate429':
+            self.reply(429)
+        elif p == '/mixed':
+            with LOCK:
+                n = sum(1 for _, q in REQUESTS if q == p)
+            self.reply((403, 401, 403)[(n - 1) % 3])
+        elif p == '/badlen':
+            self.send_response(200)
+            self.send_header('Content-Length', 'abc')
+            self.end_headers()
         elif p == '/always503':
             self.reply(503)
         elif p == '/wrongsize':
@@ -146,6 +170,83 @@ class StatusTests(Fixture):
         self.assertIn('TRANSIENT p0 always503', r.stdout)
         self.assertEqual(len(REQUESTS), 3)
 
+    def test_stable_403_forbidden_exit1(self):
+        r = self.check([('forbidden', 5)])
+        self.assertEqual(r.returncode, 1)
+        self.assertIn('FORBIDDEN p0 forbidden (HTTP 403)', r.stdout)
+        self.assertEqual(len(REQUESTS), 3)
+
+    def test_403_then_200_ok(self):
+        r = self.check([('forbid-then-ok', 5)])
+        self.assertEqual(r.returncode, 0, r.stdout)
+        self.assertEqual(len(REQUESTS), 2)
+
+    def test_429_and_mixed_forbidden_stay_transient(self):
+        r = self.check([('rate429', 5)])
+        self.assertEqual(r.returncode, 3)
+        self.assertIn('TRANSIENT p0 rate429 (HTTP 429)', r.stdout)
+        r = self.check([('mixed', 5)])
+        self.assertEqual(r.returncode, 3, r.stdout)
+
+    def test_non_numeric_content_length_transient(self):
+        r = self.check([('badlen', 5)])
+        self.assertEqual(r.returncode, 3)
+        self.assertIn('TRANSIENT p0 badlen (bad Content-Length)', r.stdout)
+
+    def test_transient_cause_printed(self):
+        r = self.check([('always503', 5)])
+        self.assertIn('TRANSIENT p0 always503 (HTTP 503)', r.stdout)
+        rpms = [{'name': 'x', 'kojiPath': 'ok', 'size': 5}]
+        r = self.run_tool('--pins', str(self.pin(rpms)), '--base-url-override', 'http://127.0.0.1:1/',
+                          '--timeout', '0.4', '--backoff', '0')
+        self.assertRegex(r.stdout, r'TRANSIENT x ok \((URLError|ConnectionRefusedError)\)')
+
+    def test_garbage_status_line_transient_not_traceback(self):
+        srv = socket.socket()
+        srv.bind(('127.0.0.1', 0))
+        srv.listen(8)
+        self.addCleanup(srv.close)
+
+        def serve():
+            while True:
+                try:
+                    conn, _ = srv.accept()
+                except OSError:
+                    return
+                conn.recv(4096)
+                conn.sendall(b'NOT HTTP AT ALL\r\n\r\n')
+                conn.close()
+
+        threading.Thread(target=serve, daemon=True).start()
+        rpms = [{'name': 'a', 'kojiPath': 'x', 'size': 5}, {'name': 'b', 'kojiPath': 'y', 'size': 5}]
+        r = self.run_tool('--pins', str(self.pin(rpms)), '--base-url-override',
+                          f'http://127.0.0.1:{srv.getsockname()[1]}/', '--timeout', '1', '--backoff', '0')
+        self.assertEqual(r.returncode, 3, r.stdout + r.stderr)
+        self.assertNotIn('Traceback', r.stderr)
+        self.assertIn('TRANSIENT a x (BadStatusLine)', r.stdout)
+        self.assertIn('TRANSIENT b y', r.stdout)  # later entries are still checked
+
+    def test_deadline_zero_makes_no_requests(self):
+        r = self.check([('ok', 5), ('ok', 5)], '--deadline', '0')
+        self.assertEqual(r.returncode, 3)
+        self.assertEqual(r.stdout.count('(deadline)'), 2)
+        self.assertEqual(REQUESTS, [])
+
+    def test_deadline_stops_remaining_entries(self):
+        r = self.check([('slow', 5)] * 6, '--deadline', '1')
+        self.assertEqual(r.returncode, 3)
+        self.assertIn('(deadline)', r.stdout)
+        self.assertLess(len(REQUESTS), 18)
+
+    def test_production_redirect_to_http_refused(self):
+        handler = khc.StrictRedirect(frozenset({'https'}))
+        req = urllib.request.Request('https://k.example/a', method='HEAD')
+        with self.assertRaises(urllib.error.URLError):
+            handler.redirect_request(req, None, 302, 'Found', {}, 'http://k.example/a')
+        out = handler.redirect_request(req, None, 302, 'Found', {}, 'https://k.example/b')
+        self.assertEqual(out.get_method(), 'HEAD')
+        self.assertEqual(handler.max_redirections, 3)
+
     def test_slow_response_transient(self):
         r = self.check([('slow', 5)])
         self.assertEqual(r.returncode, 3)
@@ -193,11 +294,11 @@ class PinErrorTests(Fixture):
 
     def test_bad_koji_base(self):
         for base in ('http://kojipkgs.fedoraproject.org/packages/', 'https://k.example/packages',
-                     'https://k.example/pack ages/', 'ftp://x/'):
+                     'https://k.example/pack ages/', 'ftp://x/', 'https://k.example/p/\n'):
             self.refuses(self.pin([self.good], base=base))
 
     def test_unsafe_paths(self):
-        for path in ('a/../b', '/abs/path', 'bad path', 'a?b=c', ''):
+        for path in ('a/../b', '/abs/path', 'bad path', 'a?b=c', '', 'ok\n'):
             self.refuses(self.pin([{**self.good, 'kojiPath': path}]))
 
     def test_bad_size_and_shape(self):
@@ -231,12 +332,14 @@ class GuardAndListTests(Fixture):
             self.assertIn('test-only', r.stderr)
         self.assertEqual(REQUESTS, [])
 
-    def test_real_pins_list_16_no_network(self):
+    def test_real_pins_list_all_no_network(self):
+        expected = len(khc.collect(khc.DEFAULT_PINS, None))
+        self.assertGreater(expected, 0)
         r = self.run_tool('--list', guard=False)
         self.assertEqual(r.returncode, 0, r.stderr)
         lines = r.stdout.splitlines()
-        self.assertEqual(sum(l.startswith('WOULD-CHECK ') for l in lines), 16)
-        self.assertIn('16 entries would be checked', lines[-1])
+        self.assertEqual(sum(l.startswith('WOULD-CHECK ') for l in lines), expected)
+        self.assertIn(f'{expected} entries would be checked', lines[-1])
         self.assertNotIn('sha256', r.stdout)
         self.assertNotIn('http', r.stdout)
 

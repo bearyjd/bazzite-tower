@@ -26,10 +26,15 @@ any of it.
 |---|---|
 | `just build` | Build the container image locally with podman (adds `SHA_HEAD_SHORT` build-arg when the git tree is clean) |
 | `just smoke` | Offline-assert the built image — **this is the exact CI gate** run in `build.yml` before push (`tests/smoke.sh`) |
+| `just build-portmaster-spike` | Build the disabled Portmaster VM-spike image; never a default/host image |
 | `just build-cloison <parent_image@sha256:…>` | Build the Cloison M1 scaffold variant locally from `Containerfile.cloison`; refuses a non-digest parent and verifies the parent label. Local only, no CI/publish (`docs/CODEMAPS/cloison.md`) |
 | `just smoke-cloison` | Offline-assert the built Cloison image with the M1-specific `tests/smoke-cloison.sh`; not a CI gate |
 | `just build-qcow2` | Turn the image into a bootable qcow2 via bootc-image-builder (needs sudo + KVM + tens of GB free) |
+| `just build-raw` / `rebuild-qcow2` / `rebuild-raw` | RAW disk image via bootc-image-builder; `rebuild-*` runs `just build` first (needs sudo + KVM + disk space, like `build-qcow2`) |
+| `just build-iso` / `rebuild-iso` | Anaconda ISO via bootc-image-builder: **BROKEN upstream**, use `build-iso-live` |
 | `just run-vm-qcow2` | Boot the qcow2 in qemu; browser console at `localhost:8006` |
+| `just run-vm-raw` / `run-vm-iso` | Boot the RAW image / ISO in qemu (same console as `run-vm-qcow2`) |
+| `just run-vm-ssh` | Boot a login/SSH-capable VM (e.g. the Portmaster spike gate); prints the `ssh` command |
 | `just spawn-vm` | Boot via `systemd-vmspawn` instead (no browser console) |
 | `just build-iso-live` | Build the `installer/` payload + titanoboa live/installer ISO → `./output/` (UNVERIFIED path per `.claude/PRPs/reports/titanoboa-iso-workflow-report.md` — the runtime boot-in-VM gate has not been run) |
 | `just lint` | `shellcheck` every `*.sh` in the repo |
@@ -40,6 +45,7 @@ any of it.
 | `just snitchwatch-gate [args]` | Offline fixture checks with hashed inputs and retained evidence; no runtime claim |
 | `just test-docker-libvirt-forwarding` | Privileged, opt-in host check of `DOCKER-USER` rules for libvirt NAT bridges; not a CI test |
 | `just check` / `just fix` | Check / auto-format `Justfile`/`*.just` syntax |
+| `just test-ci` | Offline fixture tests for the `ci/` scripts (`ci/base-diff.py`, `ci/base-bump.sh`, `ci/base-blast-diff.sh`, `ci/base-bump-guard.py`) |
 | `just token-report [--since YYYY-MM-DD] [--project substring] [--json]` | Read-only Claude/Codex usage aggregates from local session logs; defaults to the last seven days, text stays under 40 lines, JSON includes all groups. No message content is emitted |
 | `just clean` | Remove build artifacts (`output/`, manifests, `*_build*`) |
 

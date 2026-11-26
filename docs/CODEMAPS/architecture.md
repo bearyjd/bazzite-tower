@@ -1,4 +1,4 @@
-<!-- Generated: 2026-08-08 | Files scanned: 45 | Token estimate: ~650 -->
+<!-- Generated: 2026-11-26 | Files scanned: 45 | Token estimate: ~650 -->
 <!-- Targeted update: 2026-10-05 | Snitchwatch deployment boundary; not a full regeneration -->
 # Architecture
 

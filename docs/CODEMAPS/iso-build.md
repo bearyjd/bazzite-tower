@@ -1,4 +1,4 @@
-<!-- Generated: 2026-10-21 | Files scanned: 5 | Token estimate: ~700 -->
+<!-- Generated: 2026-11-26 | Files scanned: 5 | Token estimate: ~700 -->
 # Live / Installer ISO
 
 A **separate** build from the installed OS image. Produces a bootable live KDE

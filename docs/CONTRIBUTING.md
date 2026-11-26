@@ -28,7 +28,11 @@ pieces fit together read [docs/CODEMAPS/](./CODEMAPS/architecture.md).
 | `just build-cloison <parent_image@sha256:…>` | Build the Cloison M1 scaffold variant locally (`Containerfile.cloison`); refuses a non-digest parent and verifies the parent label; no CI, no publish |
 | `just smoke-cloison` | Offline-assert the built Cloison image (`tests/smoke-cloison.sh`, M1-specific) — not a CI gate |
 | `just build-qcow2` | Turn the image into a bootable qcow2 via bootc-image-builder |
+| `just build-raw` | Turn the image into a bootable RAW disk image via bootc-image-builder |
+| `just build-iso` | Anaconda installer ISO via bootc-image-builder. **BROKEN upstream** (bootc-image-builder#1188 + bazzite#3418): use `just build-iso-live` |
+| `just rebuild-qcow2` / `rebuild-raw` / `rebuild-iso` | `just build` first, then the matching disk image (`rebuild-iso` has the same upstream break as `build-iso`) |
 | `just run-vm-qcow2` | Boot the qcow2 in qemu; browser console at `localhost:8006` |
+| `just run-vm-raw` / `run-vm-iso` | Boot the RAW image / the ISO in qemu, same browser console as `run-vm-qcow2` |
 | `just spawn-vm` | Boot via `systemd-vmspawn` instead (no browser console) |
 | `just run-vm-ssh` | Boot a login/SSH-capable VM (e.g. the Portmaster spike gate) — prints the `ssh` command, no console needed |
 | `just build-iso-live` | Build the `installer/` payload + titanoboa live/installer ISO → `./output/` |

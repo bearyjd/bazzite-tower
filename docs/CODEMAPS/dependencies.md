@@ -1,4 +1,4 @@
-<!-- Generated: 2026-08-08 | Files scanned: 6 | Token estimate: ~700 -->
+<!-- Generated: 2026-11-26 | Files scanned: 6 | Token estimate: ~700 -->
 <!-- Targeted update: 2026-10-05 | OpenSnitch/Snitchwatch release boundaries; not a full regeneration -->
 # Dependencies & External Surfaces
 

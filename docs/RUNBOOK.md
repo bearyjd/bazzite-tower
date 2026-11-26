@@ -1045,6 +1045,32 @@ unaffected. `ujust fix-vm-groups` adds you to `libvirt`; that is fine now, since
 `libvirt`-group manage needs a password through the 49- rule. Rollback: revert
 the change and rebuild, or `sudo bootc rollback` and reboot.
 
+## Docker CE repo key pin and rotation
+
+`build_files/build.d/30-docker-ce.sh` downloads Docker's repo signing key over https
+and passes it to `verify_gpg_key` (`build_files/lib/verify-gpg-key.sh`), which
+requires **exactly one** key whose full primary fingerprint equals `DOCKER_GPG_FPR`
+(set at the top of `30-docker-ce.sh`). Only that verified key is installed, to
+`/etc/pki/rpm-gpg/RPM-GPG-KEY-docker-ce`; every `docker-ce.repo` section uses
+`gpgkey=file://` with `gpgcheck=1`. `tests/smoke.sh` asserts the key file exists and
+that no docker repo file points at a remote key.
+
+If Docker rotates its key, or the downloaded file ever carries a second key, the build
+fails (every PR build and the daily refresh) with `Docker CE GPG key fingerprint
+mismatch: got <x>, want <y>`. Recovery is a reviewed PR:
+
+1. Take the new fingerprint from Docker's own documentation
+   (https://docs.docker.com/engine/install/fedora/), **not** from the failing log: the
+   log shows only what was downloaded.
+2. Update `DOCKER_GPG_FPR` and anything in `tests/test-docker-ce-gpg-pin.sh` that
+   repeats the value (`grep -rn <old fingerprint> .`).
+3. Merge, then repin the policy `sourceCommit` so the next refresh builds it (the
+   refresh builds the policy's commit, not main).
+
+Status: the pinned value is Docker's documented release-key fingerprint as recalled by
+the author; it was never fetched live from a sandbox, but CI built all three image
+variants with it (PR #240).
+
 ## Common issues
 
 | Symptom | Cause | Fix |

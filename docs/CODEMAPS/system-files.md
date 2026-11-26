@@ -1,4 +1,4 @@
-<!-- Generated: 2026-08-08 | Files scanned: 21 | Token estimate: ~1050 -->
+<!-- Generated: 2026-11-26 | Files scanned: 21 | Token estimate: ~1050 -->
 <!-- Targeted update: 2026-10-05 | OpenSnitch readiness and system-bridge boundary; not a full regeneration -->
 # System Files (baked-in runtime surface)
 

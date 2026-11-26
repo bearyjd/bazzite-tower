@@ -100,7 +100,7 @@ class StrictRedirect(urllib.request.HTTPRedirectHandler):
     def __init__(self, allowed_schemes: frozenset) -> None:
         self._allowed = allowed_schemes
 
-    def redirect_request(self, req, fp, code, msg, headers, newurl):
+    def redirect_request(self, _req, _fp, code, _msg, _headers, newurl):
         if urlsplit(newurl).scheme not in self._allowed:
             raise urllib.error.URLError(f'redirect to disallowed scheme ({code})')
         return urllib.request.Request(newurl, method='HEAD', headers={'User-Agent': 'koji-head-check'})
@@ -165,7 +165,7 @@ def write_step_summary(results: Sequence[Result], summary: str) -> None:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(description=__doc__.split('\n')[0])
+    p = argparse.ArgumentParser(description=(__doc__ or '').split('\n')[0])
     p.add_argument('--list', action='store_true', help='print what would be checked; no network')
     p.add_argument('--timeout', type=float, default=20.0, help='per-request timeout in seconds')
     p.add_argument('--backoff', type=float, default=2.0, help='base retry backoff in seconds')

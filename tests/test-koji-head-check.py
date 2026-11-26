@@ -22,7 +22,7 @@ LOCK = threading.Lock()
 class Handler(BaseHTTPRequestHandler):
     protocol_version = 'HTTP/1.1'
 
-    def log_message(self, *args):
+    def log_message(self, format: str, *args: object) -> None:
         pass
 
     def reply(self, code, length=None, location=None):

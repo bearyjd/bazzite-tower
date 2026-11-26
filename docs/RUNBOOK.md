@@ -1563,6 +1563,7 @@ Each guard workflow opens — and later auto-closes — a labelled tracking issu
 |---|---|---|
 | `GITHUB_TOKEN` | auto | GHCR push; open/close tracking issues (provided by Actions) |
 | `SIGNING_SECRET` | required for default-branch image release | cosign private key — signs image digests and SBOM attestations in `build.yml`; image publication fails if absent. ISO sign-blob remains optional. |
+| `BUMP_TOKEN` | optional | fine-grained PAT or app token (contents + pull requests write) so `base-bump.yml` can open the weekly base-bump PR with CI running; without it the workflow does nothing (PRs from `GITHUB_TOKEN` do not trigger `build.yml`) |
 | `S3_PROVIDER`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`, `S3_REGION`, `S3_ENDPOINT`, `S3_BUCKET_NAME` | optional | rclone upload of disk/ISO artifacts (`build-disk.yml`, `build-iso.yml`). Unset → artifact-only |
 <!-- END AUTO-GENERATED:secrets -->
 

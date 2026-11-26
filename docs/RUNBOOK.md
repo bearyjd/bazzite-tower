@@ -1582,6 +1582,21 @@ Each guard workflow opens — and later auto-closes — a labelled tracking issu
 | `iso-failure` | `build-iso.yml` | titanoboa live/installer ISO build failed |
 <!-- END AUTO-GENERATED:ci-labels -->
 
+## Koji signed-RPM availability guard
+
+`koji-head-check.yml` (daily 04:30 UTC, also manual) runs `ci/koji-head-check.py`: a read-only HEAD of every `kojiBase + kojiPath` in the three `snitchwatch-system*-pins.json` files, each retried up to 3 times. Local dry run without network: `python3 ci/koji-head-check.py --list`.
+
+| Exit | Meaning |
+|---|---|
+| 0 | all 16 present (and `Content-Length` equals the pinned `size` when Koji sends it) |
+| 1 | `GONE` (404/410: Koji purged the signed copy of a superseded build) or `SIZE_MISMATCH` (file replaced) - run goes red |
+| 3 | only `TRANSIENT` (timeout, connection error, 5xx/429): availability NOT confirmed, run passes with a warning; re-run later |
+| 2 | malformed/unreadable pin or bad usage |
+
+On `GONE`: the image build will fail with `download failed` at the next refresh. Repin the toolchain pins to the newest signed Koji build via a reviewed PR, then do the policy repin. Do not edit sha256/size by hand.
+
+UNVERIFIED: the first live run happens only when the workflow runs in Actions; real Koji behaviour (HEAD support, `Content-Length` on HEAD, redirects, rate limits) has not been observed.
+
 ## CI secrets
 
 <!-- AUTO-GENERATED:secrets (from .github/workflows/) -->

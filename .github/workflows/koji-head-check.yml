@@ -1,0 +1,39 @@
+---
+# Early warning that the Koji signed RPMs pinned for the snitchwatch toolchain
+# have not been purged (Koji drops signed copies of superseded builds). Read-only:
+# HEAD requests only, no secrets, no issues/labels, no writes. A red run (exit 1:
+# a pinned file is gone or was replaced) is the alert. Exit 3 (only transient
+# network/Koji trouble) does not fail the run but emits a warning annotation.
+name: Koji head check
+
+on:
+  schedule:
+    - cron: '30 4 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: koji-head-check
+  cancel-in-progress: false
+
+jobs:
+  koji-head-check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      - name: HEAD every pinned Koji RPM
+        run: |
+          set -uo pipefail
+          python3 ci/koji-head-check.py && rc=0 || rc=$?
+          case "$rc" in
+            0) ;;
+            3) echo "::warning::koji-head-check: only transient errors; availability NOT confirmed (re-run later)" ;;
+            *) exit "$rc" ;;
+          esac

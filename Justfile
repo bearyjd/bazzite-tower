@@ -630,6 +630,7 @@ test-ci:
     bash tests/test-base-diff.sh
     bash tests/test-base-bump.sh
     python3 tests/test-base-bump-guard.py
+    python3 tests/test-koji-head-check.py
 
 # Offline fixture checks with hashed inputs and retained evidence; no runtime claim.
 [group('Test')]

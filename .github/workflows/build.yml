@@ -147,6 +147,11 @@ jobs:
           python3 tests/test-opensnitch-ebpf-runtime.py
           python3 tests/test-snitchwatch-resources.py
           python3 tests/test-smoke-motd-tag.py
+          python3 tests/test-snitchwatch-deny.py
+          python3 tests/test-repin-snitchwatch.py
+          python3 tests/test-endpoint-events-packages.py
+          python3 tests/test-agent-token-report.py
+          tests/test-titanoboa-pin.sh
           tests/test-container-templates.sh
           tests/test-docker-libvirt-forwarding.sh
           tests/test-libvirt-polkit-rule.sh
@@ -276,6 +281,11 @@ jobs:
           python3 tests/test-opensnitch-ebpf-runtime.py
           python3 tests/test-snitchwatch-resources.py
           python3 tests/test-smoke-motd-tag.py
+          python3 tests/test-snitchwatch-deny.py
+          python3 tests/test-repin-snitchwatch.py
+          python3 tests/test-endpoint-events-packages.py
+          python3 tests/test-agent-token-report.py
+          tests/test-titanoboa-pin.sh
           tests/test-container-templates.sh
           tests/test-docker-libvirt-forwarding.sh
           tests/test-libvirt-polkit-rule.sh

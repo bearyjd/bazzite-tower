@@ -1582,6 +1582,21 @@ Each guard workflow opens — and later auto-closes — a labelled tracking issu
 | `iso-failure` | `build-iso.yml` | titanoboa live/installer ISO build failed |
 <!-- END AUTO-GENERATED:ci-labels -->
 
+## Koji signed-RPM availability guard
+
+`koji-head-check.yml` (daily 04:30 UTC, also manual) runs `ci/koji-head-check.py`: a read-only HEAD of every `kojiBase + kojiPath` in the three `snitchwatch-system*-pins.json` files, each retried up to 3 times (per-request timeout 8 s, total `--deadline` 420 s so the 10-minute job cap always holds; entries not reached are `TRANSIENT (deadline)`). Redirects: at most 3, https only, always re-issued as HEAD. Local dry run without network: `python3 ci/koji-head-check.py --list`.
+
+| Exit | Meaning |
+|---|---|
+| 0 | all 16 present (and `Content-Length` equals the pinned `size` when Koji sends it) |
+| 1 | `GONE` (404/410: Koji purged the signed copy of a superseded build), `FORBIDDEN` (401/403 on all 3 attempts: the build could not download it either) or `SIZE_MISMATCH` (file replaced) - run goes red |
+| 3 | only `TRANSIENT` (any other non-404/410 response or error, e.g. timeout, DNS/connection error, 5xx, 429, a 403 that is not stable, malformed reply, deadline; the cause is printed per line): availability NOT confirmed, run passes with a warning; re-run later |
+| 2 | malformed/unreadable pin or bad usage |
+
+On `GONE`/`FORBIDDEN`: only FUTURE builds are affected (the next refresh fails with `download failed`); the already-published image is untouched. Repin the toolchain pins to the newest signed Koji build via a reviewed PR, then do the policy repin. Do not edit sha256/size by hand.
+
+OBSERVED (owner-authorised run from the sandbox, 2026-11-26): all 16 pinned paths returned 200 (`OK=16 GONE=0 SIZE_MISMATCH=0 TRANSIENT=0`); on one URL (a rust RPM) HEAD returned 200 with `Content-Length` equal to the pinned size and no cross-host redirect. Still UNOBSERVED: `Content-Length` on each of the 16, rate limits under the daily schedule, and behaviour from the Actions network.
+
 ## CI secrets
 
 <!-- AUTO-GENERATED:secrets (from .github/workflows/) -->

@@ -628,7 +628,7 @@ Runs shfmt on all Bash scripts.
 
 ### `just test-ci`
 
-Runs fixture-based tests for `ci/base-diff.py` against committed manifest pairs under `tests/fixtures/base-diff/` — offline, no live upstream manifests needed.
+Runs fixture-based tests for `ci/base-diff.py` against committed manifest pairs under `tests/fixtures/base-diff/` — offline, no live upstream manifests needed. Also runs `tests/test-koji-head-check.py` (`ci/koji-head-check.py` against a local fixture HTTP server).
 
 ### `just test-snitchwatch-daemon-patch`
 

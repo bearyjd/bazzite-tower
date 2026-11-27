@@ -121,7 +121,7 @@ jobs:
           }
           jq -e '.spdxVersion | startswith("SPDX-")' "${RUNNER_TEMP}/spdx.json" >/dev/null
           # Bind the digest to the reviewed product commit through the candidate
-          # workflow's GitHub build provenance (same check as r13-immutable-ci).
+          # workflow's GitHub build provenance.
           run_bounded gh attestation verify "oci://${image}" --repo bearyjd/bazzite-tower \
             --signer-workflow bearyjd/bazzite-tower/.github/workflows/r13-candidate.yml \
             --source-digest 1c01f086f58bd33a5d7651254671e57723d45561 \

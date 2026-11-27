@@ -30,10 +30,8 @@ any of it.
 | `just build-cloison <parent_image@sha256:…>` | Build the Cloison M1 scaffold variant locally from `Containerfile.cloison`; refuses a non-digest parent and verifies the parent label. Local only, no CI/publish (`docs/CODEMAPS/cloison.md`) |
 | `just smoke-cloison` | Offline-assert the built Cloison image with the M1-specific `tests/smoke-cloison.sh`; not a CI gate |
 | `just build-qcow2` | Turn the image into a bootable qcow2 via bootc-image-builder (needs sudo + KVM + tens of GB free) |
-| `just build-raw` / `rebuild-qcow2` / `rebuild-raw` | RAW disk image via bootc-image-builder; `rebuild-*` runs `just build` first (needs sudo + KVM + disk space, like `build-qcow2`) |
-| `just build-iso` / `rebuild-iso` | Anaconda ISO via bootc-image-builder: **BROKEN upstream**, use `build-iso-live` |
+| `just rebuild-qcow2` | `just build` first, then the qcow2 (needs sudo + KVM + disk space, like `build-qcow2`) |
 | `just run-vm-qcow2` | Boot the qcow2 in qemu; browser console at `localhost:8006` |
-| `just run-vm-raw` / `run-vm-iso` | Boot the RAW image / ISO in qemu (same console as `run-vm-qcow2`) |
 | `just run-vm-ssh` | Boot a login/SSH-capable VM (e.g. the Portmaster spike gate); prints the `ssh` command |
 | `just spawn-vm` | Boot via `systemd-vmspawn` instead (no browser console) |
 | `just build-iso-live` | Build the `installer/` payload + titanoboa live/installer ISO → `./output/` (UNVERIFIED path per `.claude/PRPs/reports/titanoboa-iso-workflow-report.md` — the runtime boot-in-VM gate has not been run) |
@@ -82,7 +80,7 @@ verify.
   Follow this pattern for any new fragment.
 - `installer/` — separate payload builder for the live/installer ISO
   (titanoboa input); has its own `Containerfile`.
-- `disk_config/*.toml` — bootc-image-builder configs (qcow2/raw/iso).
+- `disk_config/*.toml` — bootc-image-builder configs (`disk.toml` qcow2; `vm-test.toml` SSH-gate VM).
 - `ci/base-diff.py` — diffs the upstream base image's package manifest against
   the last-seen one, filtered to a "blast radius" regex of packages our
   customizations depend on. Powers `base-watch.yml`.

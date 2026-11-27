@@ -620,8 +620,8 @@ format:
         echo "shfmt could not be found. Please install it."
         exit 1
     fi
-    # Run shfmt on all Bash scripts
-    /usr/bin/find . -iname "*.sh" -type f -exec shfmt --write "{}" ';'
+    # Run shfmt on our own Bash scripts only (not tests/, ci/ or vendored trees)
+    /usr/bin/find ./build_files ./scripts ./installer -iname "*.sh" -type f -exec shfmt --write "{}" ';'
 
 # Fixture-based tests for ci/base-diff.py (offline, no live upstream manifests needed)
 test-ci:

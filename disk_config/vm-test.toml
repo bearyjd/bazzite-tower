@@ -26,7 +26,7 @@ minsize = "20 GiB"
 name = "gate"
 groups = ["wheel"]
 password = "gate"
-key = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIM303ctXRgePs9Y0A7emEdkHNbz2ProqyPDCts3lcY20 portmaster-vm-gate-throwaway"
+key = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIM303ctXRgePs9Y0A7emEdkHNbz2ProqyPDCts3lcY20 vm-gate-throwaway"
 
 # NOTE: `[customizations.services] enabled = ["sshd"]` does NOT work here.
 # bootc-image-builder rejects it for the qcow2 image type and then builds anyway:

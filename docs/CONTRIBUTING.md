@@ -23,7 +23,6 @@ pieces fit together read [docs/CODEMAPS/](./CODEMAPS/architecture.md).
 | `just build` | Build the container image locally (adds `SHA_HEAD_SHORT` when the tree is clean) |
 | `just build-snitchwatch-system` | Build the opt-in system-bridge candidate image locally; no registry publication or GUI install |
 | `just build-snitchwatch-system-vm` | Same candidate plus the disposable SSH gate (`VM_GATE_SSH`); never the ordinary candidate |
-| `just build-portmaster-spike` | Build the disabled Portmaster VM-spike image; never a default/host image |
 | `just smoke` | Offline-assert the built image — **the exact CI gate** (`tests/smoke.sh`) |
 | `just build-cloison <parent_image@sha256:…>` | Build the Cloison M1 scaffold variant locally (`Containerfile.cloison`); refuses a non-digest parent and verifies the parent label; no CI, no publish |
 | `just smoke-cloison` | Offline-assert the built Cloison image (`tests/smoke-cloison.sh`, M1-specific) — not a CI gate |
@@ -34,7 +33,7 @@ pieces fit together read [docs/CODEMAPS/](./CODEMAPS/architecture.md).
 | `just run-vm-qcow2` | Boot the qcow2 in qemu; browser console at `localhost:8006` |
 | `just run-vm-raw` / `run-vm-iso` | Boot the RAW image / the ISO in qemu, same browser console as `run-vm-qcow2` |
 | `just spawn-vm` | Boot via `systemd-vmspawn` instead (no browser console) |
-| `just run-vm-ssh` | Boot a login/SSH-capable VM (e.g. the Portmaster spike gate) — prints the `ssh` command, no console needed |
+| `just run-vm-ssh` | Boot a login/SSH-capable VM (e.g. the snitchwatch-system VM gate) — prints the `ssh` command, no console needed |
 | `just build-iso-live` | Build the `installer/` payload + titanoboa live/installer ISO → `./output/` |
 | `just lint` | `shellcheck` every `*.sh` |
 | `just lint-containerfile [file]` | `hadolint` the `Containerfile` (or the given file) in seconds, no image build — not a CI gate |

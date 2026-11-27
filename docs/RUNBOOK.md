@@ -651,9 +651,7 @@ Build failure mode: legacy images (`:latest`, `:latest-kernel`, safe-pin) FAIL
 the build when the base image lacks a `kernel-devel` matching its `kernel-core`
 (deliberate, fail-closed; no degrade path). The weekly `base-bump.yml` PRs are
 exposed to this, so expect base-bump to fail loudly there; do not merge a red
-one. A `FIREWALL_DAEMON=portmaster` build also builds the modules and then
-discards them (it needs that `kernel-devel` and a GitHub fetch it does not
-otherwise use).
+one.
 
 #### `proc` fallback (one key, owner-operated)
 

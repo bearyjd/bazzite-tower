@@ -121,24 +121,6 @@ build-snitchwatch-system-vm $target_image=("localhost/" + image_name) $tag="snit
     podman build --build-arg FIREWALL_DAEMON=opensnitch --build-arg SNITCHWATCH_BRIDGE=system \
         --build-arg IMAGE_TAG=snitchwatch-system --build-arg VM_GATE_SSH=1 --pull=newer --tag "${target_image}:${tag}" .
 
-# Build the Portmaster VM spike. It is deliberately not the default image and
-# its service stays disabled: boot only its qcow2 in a disposable VM first.
-[group('Build')]
-build-portmaster-spike $target_image=image_name $tag="portmaster-spike":
-    #!/usr/bin/env bash
-    set -euo pipefail
-
-    BUILD_ARGS=("--build-arg" "FIREWALL_DAEMON=portmaster" "--build-arg" "VM_GATE_SSH=1")
-    if [[ -z "$(git status -s)" ]]; then
-        BUILD_ARGS+=("--build-arg" "SHA_HEAD_SHORT=$(git rev-parse --short HEAD)")
-    fi
-
-    podman build \
-        "${BUILD_ARGS[@]}" \
-        --pull=newer \
-        --tag "${target_image}:${tag}" \
-        .
-
 # Smoke-test a built image offline (no VM) — same assertions as the CI gate
 [group('Build')]
 smoke $target_image=image_name $tag=default_tag:
@@ -463,9 +445,8 @@ spawn-vm rebuild="0" type="qcow2" ram="6G":
       -i ./output/**/*.{{ type }}
 
 # Boot a login/SSH-capable qcow2 VM for interactive testing (e.g. the
-# Portmaster spike gate) -- see docs/research/portmaster-bootc-spike.md's
-# "VM-gate SSH" section. Requires target_image:tag to already be built with
-# --build-arg VM_GATE_SSH=1 (build-portmaster-spike already does this) --
+# snitchwatch-system VM gate). Requires target_image:tag to already be built
+# with --build-arg VM_GATE_SSH=1 (build-snitchwatch-system-vm already does this) --
 # without it sshd.socket is never enabled and this recipe boots a VM you
 # cannot reach. Uses disk_config/vm-test.toml, not disk.toml (which is what
 # ships and what the ThinkPad boots and which has neither a user nor sshd),
@@ -475,7 +456,7 @@ spawn-vm rebuild="0" type="qcow2" ram="6G":
 # qemux/qemu docker wrapper has a qcow2 GPT-probing bug on this host) and
 # spawn-vm (systemd-vmspawn's --network-user-mode has no port-forward option,
 # and its --vsock + systemd-ssh-proxy path failed empirically) -- both
-# documented in the research note above.
+# documented here.
 #
 # Deliberately non-secure-boot OVMF: a hand-rolled copy of the *.secboot.
 # OVMF_VARS template is not pre-enrolled with the shim/kernel trust chain
@@ -495,7 +476,7 @@ spawn-vm rebuild="0" type="qcow2" ram="6G":
 # that is normal, not a hang -- watch ${KEYDIR}/serial.log if it's ever
 # unclear which one you're looking at.
 [group('Run Virtal Machine')]
-run-vm-ssh $target_image=("localhost/" + image_name) $tag="portmaster-spike" $ssh_port="2222":
+run-vm-ssh $target_image=("localhost/" + image_name) $tag="snitchwatch-system-vm" $ssh_port="2222":
     #!/usr/bin/env bash
     set -euo pipefail
 

@@ -14,11 +14,10 @@
 | `docker-libvirt-forwarding.path` | path, `WantedBy=multi-user.target` | `PathChanged=/run/libvirt/network` (any change in libvirt's network state dir); `TriggerLimitBurst=1000`/10s | activates the `.service` | libvirt-side reconciliation trigger |
 | `docker-libvirt-forwarding.service` | oneshot | `ExecCondition` docker.service active and virtnetworkd.service active/activating/reloading; `StartLimitIntervalSec=0`; sleep 1, helper, sleep 2, helper (second pass catches merged events); `UnsetEnvironment` of test overrides | `/usr/local/libexec/docker-libvirt-forwarding` | reconcile DOCKER-USER NAT rules |
 | `docker-libvirt-forwarding.timer` | timer, `WantedBy=timers.target` | `OnBootSec=2min`, `OnUnitInactiveSec=10min` | the `.service` | self-heal if an event was missed |
-| `portmaster.service` | simple, disabled VM spike | `After=network-online`; conflicts with OpenSnitch/firewalld; `StateDirectory=portmaster`; `BindReadOnlyPaths=` pins config from `/usr`; `StartLimitBurst=3`; `ExecStopPost=` recovers netfilter rules | `…/portmaster/portmaster-core --bin-dir … --data-dir … --log-stdout` | direct, pinned Portmaster core test; never enabled in an image. Both dir flags are load-bearing: without `--bin-dir` the daemon falls back to a hardcoded `/usr/lib/portmaster` and its updater exits 2 mkdir'ing it on read-only `/usr` |
 
 Docker, Cockpit, and Waydroid are explicitly disabled in the image; Tailscale
 is enabled without a node identity. Other listed services are enabled in
-build.sh except the disabled `portmaster.service` VM spike.
+build.sh.
 
 The image-owned `/usr/lib/systemd/system/logrotate.service.d/20-boot-log-label.conf`
 adds only `ExecStartPre=bazzite-tower-boot-log-label`; it preserves the vendor
@@ -42,12 +41,11 @@ logrotate command, timer and AC-power condition and enables no extra service.
 - `bazzite-tower-snitchwatch-deny` — root `status [--json]|on [--revert-after N]|confirm|off|revert-if-pending [--boot]|publish-status`; system profile only, opt-in time-boxed `DefaultAction=deny` (single-key edit, exact backup in `/var/lib/bazzite-tower/snitchwatch-deny/`, transient revert timer, marker `/etc/bazzite-tower/snitchwatch-deny-optin`). `bazzite-tower-snitchwatch-deny-guard.service` (enabled by `build.d/96-snitchwatch-deny-guard.sh`) reverts a pending trial before `opensnitch.service` (an `opensnitch.service.d` drop-in makes it `Requires=`/`After=` the guard); common.py readiness accepts deny only with a confirmed marker. Image still ships allow. After each change it publishes `/run/snitchwatch/deny-status.json` (status schema 1 + `updatedAt`,`bootId`; GUI reads via the existing `:ro` mount) and `bazzite-tower-snitchwatch-deny-status.service` (non-fatal oneshot, not a firewall dependency) regenerates it at boot. Tests: `tests/test-snitchwatch-deny.py`
 - `docker-libvirt-forwarding` — Docker `ExecStartPost` helper: takes a bounded-wait `/run` lock, discovers only active libvirt XML NAT bridges, derives each live IPv4 network and default uplink, and idempotently adds tagged `NEW,ESTABLISHED,RELATED` / `RELATED,ESTABLISHED` `DOCKER-USER` pairs; removes only stale rules bearing its own prefix and fails if Docker did not create that chain
 - `bazzite-tower-power-tuning` — write platform_profile + per-CPU EPP; skips absent/read-only knobs
-(The former `bazzite-tower-portmaster-seed` helper is gone. Portmaster's config is no longer copied into `/var`: the unit `BindReadOnlyPaths=`-mounts `/usr/share/bazzite-tower/portmaster-config.default.json` over `/var/lib/portmaster/config.json`, so the update pin is image-managed and reverts with a rollback. systemd creates the mount destination itself, and a missing source fails the unit before `ExecStart` — fail closed.)
 
 ## Firewall selector (`build.d/95-firewall.sh`, `FIREWALL_DAEMON` build-arg)
 
-Default `opensnitch` uses the pinned v1.8.0 RPM extraction, enables the daemon
-and masks Portmaster. The independent `SNITCHWATCH_BRIDGE` marker lives at
+Default `opensnitch` uses the pinned v1.8.0 RPM extraction and enables the daemon.
+The independent `SNITCHWATCH_BRIDGE` marker lives at
 `/usr/share/bazzite-tower/snitchwatch-bridge-profile`: `legacy` selects the
 existing TCP/user-service contract; `system` requires OpenSnitch and selects
 an opt-in native system deployment.
@@ -127,8 +125,7 @@ installed branch metadata fixture and behavioral cases live in
 `tests/test-snitchwatch-system.py`. These offline checks do not establish actual
 Wayland/X11 sandbox authority or runtime/release acceptance.
 
-`FIREWALL_DAEMON=portmaster` remains a disabled, isolated VM spike using
-`just build-portmaster-spike`; it cannot select the system bridge.
+Any other `FIREWALL_DAEMON` value fails the build (the Portmaster spike was removed).
 
 
 ## ujust recipes (`/usr/share/ublue-os/just/60-custom.just`)

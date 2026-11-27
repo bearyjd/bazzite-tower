@@ -26,8 +26,7 @@ rclone, restic, zsh), the hardware/health additions (**smartmontools**,
 plus owner-invoked **bpftool**, **sysstat**, **igt-gpu-tools** and **trace-cmd**
 (r16.1 recipe additions, not yet built/installed; automatic collection/tracing off),
 and the firewall selector (default **OpenSnitch** v1.8.0, pinned RPM extraction +
-Snitchwatch config; disabled **Portmaster** VM spike behind
-`FIREWALL_DAEMON=portmaster`, see `docs/research/portmaster-bootc-spike.md`).
+Snitchwatch config; no other daemon is supported).
 
 ## OpenSnitch and Snitchwatch
 

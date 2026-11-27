@@ -1,8 +1,8 @@
 # PRP — Parameterized application-firewall module
 
 > **Status:** OpenSnitch parameterization remains proposed. A disabled,
-> Portmaster-only VM spike implementation now exists; see
-> [the runtime runbook](../research/portmaster-bootc-spike.md). Scoped
+> The Portmaster VM spike was abandoned and removed (2026-11-27); only the
+> OpenSnitch selector remains, and this document is historical. Scoped
 > deliberately narrower than the original request — see [Scope decision](#scope-decision).
 >
 > **Phase 1 investigation this rests on:** OpenSnitch surface audit + a source

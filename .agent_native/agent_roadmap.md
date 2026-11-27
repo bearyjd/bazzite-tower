@@ -11,11 +11,10 @@ prior worked example of an agent-driven hardware-bug investigation
 
 Ranked by **Human-Attention-Saved per Unit of Effort** (highest first).
 
-**Status (2026-08-07): 6 of 6 resolved. Nothing open.** (2026-10-07: item 7
-added and resolved the same day.)
+**Status (2026-11-27): items 1–8 resolved. Item 9 (simplification) has its ranked
+proposal and is being executed in reviewed waves; see item 9.**
 
-Every item in this audit is closed. Two things are worth carrying forward more
-than the individual fixes:
+Two lessons from the completed items still apply:
 
 - **Specs in this file went stale faster than the code.** Items 4 and 5 both
   described a repo that no longer existed by the time they ran (item 4 said 265
@@ -26,8 +25,7 @@ than the individual fixes:
   `docs/downstream-change-tracking.md` were already drifting before item 4
   touched anything. They are now `build.d/` filenames, which cannot.
 
-New gaps should be appended as item 7 onward rather than edited into the closed
-entries above.
+Append new work as numbered items and keep the closed items as history.
 
 ---
 
@@ -123,6 +121,28 @@ and it never ran: `OnBootSec=5min` had elapsed before the timer started, so
 `OnUnitActiveSec=1d` never began. If resume trouble is suspected on 7.2:
 `journalctl -k -b | grep -iE 'flip_done|dpll'`; `bootc rollback` is the mitigation.
 **Lesson:** an "is it enabled" assertion cannot catch a timer that never fires.
+
+---
+
+## 9. Simplify the image codebase while preserving ThinkPad capabilities — IN PROGRESS (proposal delivered 2026-11-27)
+
+**Status:** the ranked proposal (five read-only analyses plus a capability
+inventory) was delivered on 2026-11-27 and is executed in reviewed waves: safety-net
+tests first, then low-risk cuts, each as its own branch/PR with an independent
+review. Hardware-fact tuning is untouched. The proposal's full text is the local,
+untracked `.omc/results/item9-proposal-2026-11-27.md`.
+
+- **Scope (original spec):** inventory the image's capabilities and ThinkPad P1
+  customizations (graphics, suspend/resume, hardware tuning, Snitchwatch, update and
+  rollback) and trace each to its build steps, files and checks; look for duplicate
+  logic, obsolete compatibility paths and local code upstream Bazzite/Fedora now
+  covers (verify against the pinned base, both image profiles); deliver a ranked
+  proposal with estimated reduction, affected capabilities, regression risks and a
+  verification plan (offline / built image / ThinkPad), and bring it back for review
+  before editing implementation code.
+- **Owner decisions, 2026-11-27:** the Portmaster spike is abandoned; the r13
+  candidate/release pipeline is retired; Docker stays (used sometimes); the ISO path
+  is verified; stale docs are deleted, not archived.
 
 ---
 

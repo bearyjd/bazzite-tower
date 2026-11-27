@@ -101,7 +101,7 @@ jobs:
               return 0
             fi
             local wf n
-            for wf in r13-candidate.yml r13-immutable-ci.yml release.yml; do
+            for wf in r13-immutable-ci.yml; do
               n=$(gh run list --workflow "${wf}" --json status \
                 --jq '[.[] | select(.status != "completed")] | length') \
                 || { echo "::warning::cannot list ${wf} runs; not arming automerge"; return 0; }

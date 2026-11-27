@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # The ONE dependency list for the bridge release builder container
 # (SW_BUILDER_IMAGE in pins.env). build-bridge.sh (SW_INSTALL_DEPS=1),
-# release.yml and the justfile recipes all call this script instead of
+# and the justfile recipes all call this script instead of
 # repeating the list — add new build/verify tools here and nowhere else.
 #
 #   build:   git gcc rust cargo protobuf-compiler

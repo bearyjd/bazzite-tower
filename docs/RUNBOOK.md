@@ -863,76 +863,9 @@ readiness (after the config contract; `FAIL` refuses, `WARN` is reported),
 soft check only, `tests/boot-check.sh` (whether kprobes can load inside the podman
 systemd container is unverified).
 
-### r15.1 transition from an existing deny deployment
+### Reserved tower rules (system profile): OS updates and DNS
 
-r15.1 restores the permanent allow default for both profiles. An existing locally
-edited `/etc/opensnitchd/default-config.json` can retain `DefaultAction: deny`
-through ostree's three-way `/etc` merge. An image upgrade alone therefore does
-not guarantee this host uses allow. Inspect the live config after upgrading:
-
-```bash
-jq .Server.Address,.DefaultAction /etc/opensnitchd/default-config.json
-```
-
-To adopt the shipped policy, explicitly set `DefaultAction` to `allow` in that
-file and restart `opensnitch.service`. Preserve any other intended local edits.
-Then run `sudo ujust snitchwatch-system-readiness`; the system transport must
-remain `unix:opensnitchd.sock`. Keeping deny is an explicit local enforcement
-opt-in and fails the shipped allow readiness/migration contract as policy drift.
-If a migration journal exists, changing the live policy also makes rollback
-refuse to overwrite it; inspect the recorded baseline before recovery.
-
-### Historical r15 system image: fail-closed upgrade and recovery
-
-This section records the r15 deny default. Current images permanently ship
-allow in both profiles; deny is an explicit local opt-in. On current images,
-use the current migration/readiness contract above. The r15 instructions below
-apply only to an existing r15 deployment.
-
-**Before rebooting into an r15 `:snitchwatch-system` deployment** (ostree's `/etc`
-3-way merge keeps a locally edited config, which would leave the old policy or
-address in place):
-
-```
-sudo ostree admin config-diff | grep opensnitchd
-jq .Server.Address /etc/opensnitchd/default-config.json
-```
-
-If `config-diff` lists `M etc/opensnitchd/default-config.json`, run
-`sudo cp /usr/etc/opensnitchd/default-config.json /etc/opensnitchd/` so the merge
-takes the new image's file. After the reboot `jq .Server.Address,.DefaultAction
-/etc/opensnitchd/default-config.json` must print `"unix:opensnitchd.sock"` and
-`"deny"` (otherwise repeat the `cp` and `sudo systemctl restart
-opensnitch.service`).
-
-After boot: `sudo ss -xlp | grep /run/snitchwatch/opensnitchd.sock` shows the
-root-only (0600) gRPC listener held by systemd, `ss -tln | grep 127.0.0.1:50051`
-prints nothing, and `sudo grep 'Error compiling list rule' /var/log/opensnitchd.log`
-is empty.
-
-**Recovery with fail-closed.** Keep a console (TTY) login handy. If the bridge
-socket fails, `opensnitch.service` still starts (the drop-in only `Wants=` the
-socket and its working directory may be missing) and, with no UI to ask, denies
-every unruled outbound connection. Check `systemctl status
-snitchwatch-system-bridge-grpc.socket snitchwatch-system-bridge.service`, then
-`sudo systemctl restart snitchwatch-system-bridge-grpc.socket opensnitch.service`.
-The bridge service has no start limit (`StartLimitIntervalSec=0`), so a crash
-loop keeps retrying every 2 s instead of staying failed. If networking is still
-blocked, back out in this order:
-
-1. `ujust snitchwatch-system-migrate rollback` — if this host was moved to the
-   system bridge with the migrate helper, it restores the journaled pre-migration
-   config and unit state.
-2. `sudo bootc rollback && sudo reboot` — boots the previous deployment.
-3. Only then, as a last-resort local override, set `DefaultAction` to `allow` in
-   `/etc/opensnitchd/default-config.json` from the TTY and restart
-   `opensnitch.service`. This is local `/etc` drift that the readiness helper
-   reports, and it makes `snitchwatch-system-migrate rollback` refuse ("live
-   config changed after migration; rollback refuses to overwrite operator
-   policy"), so try steps 1–2 first and restore the image copy
-   (`/usr/share/bazzite-tower/opensnitchd-system-bridge-config.json`) afterwards.
-
-**OS updates under fail-closed.** Owner decision 2026-10-17: OS image updates
+**OS updates.** Owner decision 2026-10-17: OS image updates
 must always work, GUI or not. The system profile therefore ships a second
 reserved rule, `/etc/opensnitchd/rules/000-snitchwatch-tower-os-update.json` (allow,
 `always`, `precedence: false`, so any matching deny or blocklist rule still

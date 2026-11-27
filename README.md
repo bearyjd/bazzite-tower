@@ -156,10 +156,6 @@ The helper also publishes a read-only status snapshot at `/run/snitchwatch/deny-
 
 If a deny trial leaves a host unable to connect, wait for the automatic revert or reboot (the boot guard reverts an unconfirmed trial). Otherwise recover from a TTY with `sudo /usr/libexec/bazzite-tower-snitchwatch-deny off`, or by setting `DefaultAction` back to `allow` in `/etc/opensnitchd/default-config.json` and running `systemctl restart opensnitch.service`, or use `rpm-ostree rollback`.
 
-Existing r15 hosts with a locally edited deny config may retain it across the
-r15.1 upgrade through ostree's `/etc` merge. Explicitly adopt allow and restart
-OpenSnitch to use the shipped policy; see the [r15.1 transition](docs/RUNBOOK.md#r151-transition-from-an-existing-deny-deployment).
-
 The pristine image-intent copy lives at `/usr/share/bazzite-tower/opensnitchd-default-config.json`. Because `/etc` is 3-way merged across bootc upgrades, a locally edited `/etc/opensnitchd/default-config.json` stops tracking the image — `diff` the two to see exactly what drifted.
 
 Runtime dependencies are installed explicitly (`libnetfilter_queue`, `nftables`) because the extraction below resolves none: `libnetfilter_queue.so.1` is a hard `DT_NEEDED` of `opensnitchd` and is absent from the pinned base, so without it the daemon cannot exec at all.

@@ -340,8 +340,9 @@ build-iso $target_image=("localhost/" + image_name) $tag=default_tag: && (_build
 
 # Build a bootable live installer ISO with titanoboa (the working ISO path).
 # Builds the installer/ payload image FROM the base, then feeds it to titanoboa.
-# Needs sudo + KVM + tens of GB free. UNVERIFIED first cut — expect a few
-# build/spike iterations. The produced ISO lands in ./output/.
+# Needs sudo + KVM + tens of GB free. Verified: the live ISO booted under
+# Secure Boot on 2026-06-04 (docs/CODEMAPS/iso-build.md). The produced ISO lands
+# in ./output/.
 [group('Build Virtal Machine Image')]
 build-iso-live $base_image=("ghcr.io/bearyjd/" + image_name) $tag=default_tag:
     #!/usr/bin/env bash

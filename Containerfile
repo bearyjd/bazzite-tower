@@ -187,19 +187,16 @@ FROM snitchwatch-${SNITCHWATCH_BRIDGE} AS snitchwatch-selected
 # docs/research/i915-bug-report/UPSTREAM-FIX-STATUS-2026-08-28.md
 #
 # --- Prior history, while the default pin was proprietary `bazzite-nvidia` ---
+# (per-date status files were deleted; the 2026-08-28 file below supersedes them)
 #   :stable      = 7.1.5-ogc5.1  (still regressed as of 2026-08-08)
 #   44.20260429  = 6.19.11-ogc1  (the pin used 2026-06-20 through 2026-08-28)
 # 2026-07-04: fix landed in torvalds/linux master (062499cc4813b5a3) but was
 #   not yet in any released 7.0.y/7.1.y stable kernel or bazzite-nvidia:stable.
-#   docs/research/i915-bug-report/UPSTREAM-FIX-STATUS-2026-07-04.md
 # 2026-07-13: bazzite-nvidia:stable jumped to 7.1.3-ogc3.4; fix confirmed
 #   absent from linux-7.1.y at 7.1.3.
-#   docs/research/i915-bug-report/UPSTREAM-FIX-STATUS-2026-07-13.md
 # 2026-07-23: fix confirmed present in mainline v7.2-rc1+, but 7.2 had not
 #   released and bazzite-nvidia:stable was still on 7.1.3-ogc5.1.
-#   docs/research/i915-bug-report/UPSTREAM-FIX-STATUS-2026-07-23.md
 # 2026-08-08: 7.2 still unreleased; bazzite-nvidia:stable at 7.1.5-ogc5.1.
-#   docs/research/i915-bug-report/UPSTREAM-FIX-STATUS-2026-08-08.md
 # 2026-08-28: 7.2 released with the fix — but bazzite-nvidia:stable had by
 #   then moved to the unaffected-but-unfixed 6.18.44 `ogc-lts` track instead
 #   of following it. Default pin moved to bazzite-nvidia-open (see above).

@@ -255,9 +255,9 @@ fixtures, `Justfile` (new recipe), `docs/CONTRIBUTING.md` command table.
 
 **Resolution: extracted to `build_files/build.d/`, 12 scripts, one concern each.**
 `build.sh` is now a 37-line runner that `bash`-executes each `build.d/*.sh` in
-filename order. Scoped in
-[`.claude/PRPs/plans/build-sh-split.plan.md`](../.claude/PRPs/plans/build-sh-split.plan.md),
-which was itself reviewed by `/codex review` before implementation.
+filename order. Scoped in a plan
+(`.claude/PRPs/plans/build-sh-split.plan.md`, since deleted) that was itself
+reviewed by `/codex review` before implementation.
 
 **The spec here was stale and could not be followed as written.** It describes a
 265-line file with seven concerns and proposes nine filenames; the file was 380

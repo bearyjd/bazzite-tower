@@ -7,7 +7,7 @@
 ## Accepted products and upstream base refresh
 
 `.github/base-refresh-policy.json` pins both accepted product profiles to
-`fe35a4f39574f1610c5f5d5842cf9029945a3e6c`. Legacy publishes `:stable` and
+`dba334c2352f33d106faaa2499c2788b5890da29`. Legacy publishes `:stable` and
 compatibility `:latest` with `IMAGE_TAG=latest`; reviewed r16.1 system publishes
 only `:snitchwatch-system`. Historically, the r16.1 policy transition followed protected
 promotion and independent destination signature/SPDX checks. Host runtime
@@ -152,6 +152,7 @@ carry, because line ranges drift and filenames do not.
 | `10-virt-packages.sh` | dnf: qemu-kvm, libvirt*, virt-install/manager/viewer, edk2-ovmf, guestfs-tools, spice-gtk3 |
 | `15-signature-policy.sh` | migrates the global policy default to `reject`, adds a Docker-only empty-scope compatibility fallback if absent, merges the repository-scoped cosign `sigstoreSigned` rule, and installs sigstore attachments without erasing unrelated explicit policy rules |
 | `20-dev-tooling.sh` | dnf: android-tools, ccache, flatpak-builder, podman-machine/tui, rclone, restic, zsh |
+| `22-python-qt.sh` | dnf: python3-pyside6 (no weak deps) so the system `python3` can run Kirigami apps; fails the build if the transaction changes or removes any already-installed `qt6-*` package (Qt private-API skew guard) |
 | `30-docker-ce.sh` | fetch the Docker CE key over https, verify it with `build_files/lib/verify-gpg-key.sh` (exactly one key, full-fingerprint pin `DOCKER_GPG_FPR`; a mismatch fails the build) and install it to `/etc/pki/rpm-gpg/RPM-GPG-KEY-docker-ce`; write inert `docker-ce.repo` (every section enabled=0, local `gpgkey=file://`, gpgcheck=1); remove `podman-docker`; install via `--enablerepo=docker-ce-stable`, including explicit `iptables` for the Docker/libvirt forwarding helper |
 | `40-sysusers-fixup.sh` | **generic** orphan strip (keep only shadow/gshadow lines with a matching passwd/group) -> `systemd-sysusers` -> guarded `groupadd -r qemu` + `useradd qemu` + **`groupadd -r docker`**. Fixes virtqemud + docker.socket "Unknown group" boot failures. The most fragile piece; kept isolated on purpose |
 | `50-docker-networking.sh` | intentional no-op: `ujust enable-docker` creates the Docker-only `iptable_nat` modules-load file locally |

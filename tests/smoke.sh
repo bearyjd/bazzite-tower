@@ -140,6 +140,18 @@ check "i915 display kargs.d fragment present" test -f /usr/lib/bootc/kargs.d/10-
 check "suspend kargs.d fragment present" test -f /usr/lib/bootc/kargs.d/20-suspend.toml
 check "vfio/kvm kargs.d fragment present" test -f /usr/lib/bootc/kargs.d/30-vfio-kvm.toml
 check "nvme kargs.d fragment present" test -f /usr/lib/bootc/kargs.d/40-nvme.toml
+# Value assertions: match the whole uncommented `kargs = [...]` line (-x), since
+# the header comments in these fragments quote the same tokens.
+check "IOMMU kargs value (intel_iommu=on, iommu=pt)" \
+    grep -qxF 'kargs = ["intel_iommu=on", "iommu=pt"]' /usr/lib/bootc/kargs.d/00-iommu.toml
+check "i915 display kargs value (dc/psr/psr2_sel_fetch off)" \
+    grep -qxF 'kargs = ["i915.enable_dc=0", "i915.enable_psr=0", "i915.enable_psr2_sel_fetch=0"]' /usr/lib/bootc/kargs.d/10-i915-display.toml
+check "suspend kargs value (mem_sleep_default=s2idle)" \
+    grep -qxF 'kargs = ["mem_sleep_default=s2idle"]' /usr/lib/bootc/kargs.d/20-suspend.toml
+check "vfio/kvm kargs value (disable_vga, ignore_msrs, report_ignored_msrs=0)" \
+    grep -qxF 'kargs = ["vfio_pci.disable_vga=1", "kvm.ignore_msrs=1", "kvm.report_ignored_msrs=0"]' /usr/lib/bootc/kargs.d/30-vfio-kvm.toml
+check "nvme kargs value (APST off: default_ps_max_latency_us=0)" \
+    grep -qxF 'kargs = ["nvme_core.default_ps_max_latency_us=0"]' /usr/lib/bootc/kargs.d/40-nvme.toml
 check_enabled "bazzite-tower-firstboot.service"
 check "firstboot helper is executable" test -x /usr/libexec/bazzite-tower-firstboot
 
@@ -256,6 +268,13 @@ fi
 # to reappear.
 check "KDE Plasma dnf exclude present in dnf.conf" \
     grep -q '^exclude=.*kwin' /etc/dnf/dnf.conf
+
+echo "== Python Qt (PySide6 for the system python3) =="
+# build.d/22-python-qt.sh. An rpm -q alone would pass with a broken ABI match,
+# so import the bindings with the system interpreter as well.
+check "python3-pyside6 package" rpm -q python3-pyside6
+check "PySide6 QML/Quick import" /usr/bin/python3 -c 'import PySide6.QtQml, PySide6.QtQuick, PySide6.QtWidgets'
+check "Kirigami QML module present" test -d /usr/lib64/qt6/qml/org/kde/kirigami
 
 echo "== Audio (SOF bypass) =="
 # SOF/DSP is bypassed via snd_intel_dspcfg.dsp_driver=1 (legacy HDA): the kernel's

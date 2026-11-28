@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # tests/test-cloison-isolation.sh -- the Cloison variant must not leak into the
-# daily image's inputs, and Containerfile.cloison must not name its own base.
+# daily image's inputs or CI.
 #
 #   bash tests/test-cloison-isolation.sh
 #
@@ -8,11 +8,9 @@
 #    contain no reference to "cloison" (case-insensitive), so the daily image's
 #    build context and output are independent of the variant. A missing input
 #    is a FAILURE (never a vacuous pass).
-# 2. Every FROM in Containerfile.cloison is `${PARENT_IMAGE}` (optionally with
-#    AS <name>) or `scratch`: the base only ever arrives as a digest argument.
-# 3. NOTE only: Justfile and .github/workflows/*.yml mentions of cloison are
-#    reported. A workflow referencing Containerfile.cloison is a FAILURE (D5:
-#    no CI leg for the variant until M3).
+# 2. NOTE only: .github/workflows/*.yml mentions of cloison are reported. A
+#    workflow referencing Containerfile.cloison is a FAILURE (the variant now
+#    lives in the private bearyjd/cloison repo; tower has no CI leg for it).
 # Exits 1 with file:line for each offender.
 set -uo pipefail
 
@@ -39,38 +37,11 @@ if [[ "${missing}" -eq 0 ]]; then
     fi
 fi
 
-echo "== Containerfile.cloison FROM lines =="
-if [[ ! -f Containerfile.cloison ]]; then
-    echo "  FAIL Containerfile.cloison missing"
-    fail=1
-else
-    froms="$(grep -nEi '^[[:space:]]*FROM[[:space:]]' Containerfile.cloison || true)"
-    if [[ -z "${froms}" ]]; then
-        echo "  FAIL Containerfile.cloison has no FROM"
-        fail=1
-    fi
-    from_re='^[[:space:]]*FROM[[:space:]]+(\$\{PARENT_IMAGE\}|scratch)([[:space:]]+[Aa][Ss][[:space:]]+[A-Za-z0-9_.-]+)?[[:space:]]*$'
-    while IFS= read -r line; do
-        [[ -z "${line}" ]] && continue
-        body="${line#*:}"
-        if [[ "${body}" =~ ${from_re} ]]; then
-            echo "  ok   Containerfile.cloison:${line}"
-        else
-            echo "  FAIL Containerfile.cloison:${line} (FROM must be \${PARENT_IMAGE} or scratch)"
-            fail=1
-        fi
-    done <<< "${froms}"
-fi
-
 echo "== Justfile / workflows (notes; a workflow using Containerfile.cloison fails) =="
 if [[ ! -f Justfile || ! -d .github/workflows ]]; then
     echo "  FAIL Justfile or .github/workflows missing"
     fail=1
 else
-    notes="$(grep -nI cloison Justfile || true)"
-    if [[ -n "${notes}" ]]; then
-        printf '%s\n' "${notes}" | cut -c1-160 | sed 's/^/  NOTE Justfile:/'
-    fi
     wf_notes="$(grep -rnIi cloison .github/workflows || true)"
     if [[ -n "${wf_notes}" ]]; then
         printf '%s\n' "${wf_notes}" | cut -c1-160 | sed 's/^/  NOTE /'

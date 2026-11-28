@@ -256,8 +256,8 @@ that shape for any new hardware investigation.
   `BASE_IMAGE` arg (`safe-pin` and the `snitchwatch-system` verify leg) plus
   local `just build`. (`build.yml`'s `latest-kernel` legs pass
   `BASE_IMAGE=...:stable` and so ignore the pin.) See
-  `.agent_native/agent_roadmap.md` item 1 for a known gap in the "is it safe
-  yet" verification story. The owner stated on 2026-10-21 that the
+  `.agent_native/agent_roadmap.md` item 8 for why the old "is it safe yet"
+  watcher was removed. The owner stated on 2026-10-21 that the
   i915 fix is in, so the weekly `base-bump.yml` PRs (`ci/base-bump.sh`) are
   authorized; merge each one only when CI is green and not mid-release, and
   still do not hand-edit the pin on a hunch. Note: the owner reports `base-bump.yml`

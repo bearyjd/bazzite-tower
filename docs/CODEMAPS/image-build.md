@@ -9,9 +9,9 @@
 `.github/base-refresh-policy.json` pins both accepted product profiles to
 `fe35a4f39574f1610c5f5d5842cf9029945a3e6c`. Legacy publishes `:stable` and
 compatibility `:latest` with `IMAGE_TAG=latest`; reviewed r16.1 system publishes
-only `:snitchwatch-system`. The policy transition follows successful protected
+only `:snitchwatch-system`. Historically, the r16.1 policy transition followed protected
 promotion and independent destination signature/SPDX checks. Host runtime
-acceptance remains unverified under the owner-authorized CI-based release path.
+acceptance was not established under the owner-authorized CI-based release path.
 
 `base-refresh.yml` resolves upstream `bazzite-nvidia-open:stable` once to an
 immutable digest and supplies `BASE_IMAGE` to that accepted checkout. Independent
@@ -20,8 +20,9 @@ floors `45.20261105` / `7.2.15-ogc1.1.fc45`, as well as source/profile/SPDX
 identity. Build, smoke/runtime-systemd, signature, SPDX, build provenance, GitHub
 attestation and host signature policy gates precede publication; a current-main
 policy hash recheck rejects stale policy before public pointers move. Daily and
-main-only dispatch refreshes need no per-base owner click. New features still
-need protected fixed-digest acceptance and a subsequent reviewed policy update.
+main-only dispatch refreshes need no per-base owner click. New features need a
+merged pin PR and a reviewed policy update; owner laptop testing is not
+required first (owner decision 2026-11-27).
 
 The exact system release baseline is
 `sha256:3f9a0d238e69917a33a23710a53963e70b64526cc8e44f9d24787944dcca1f27`.
@@ -293,8 +294,9 @@ and refuses unsafe existing private state/database/sidecars. It does not run
 scans or repair host state. Smoke adds runtime linker/pkexec and legacy-exclusion
 assertions; the boot gate requires tmpfiles-provisioned root:root0700 state.
 `tests/test-snitchwatch-image-build.py` covers negative inventory, evidence,
-source-patch and environment-override cases. Actual root authorization, SELinux,
-AI export and owner scan behavior require later candidate runtime acceptance;
+source-patch and environment-override cases. These checks do not establish actual root authorization, SELinux,
+AI export or owner scan behavior (laptop testing is not a gate before a policy
+repin);
 upstream file-drift checking remains skipped. Base-refresh policy is unchanged;
 its tests model accepted source separately from newer control/product pins.
 The offline snapshot gate now includes the installed-branch metadata fixture
@@ -367,8 +369,8 @@ bridge pins record this identity and hashes of all 15 committed packaging inputs
 verifier authenticates the refreshed pins hash. Upstream installer bytes and
 signed Koji/toolchain/daemon pins remain unchanged. All 15 packaging-input
 digests, Flatpak finish arguments, native bridge and wire source remain unchanged
-from r15; this repin selects the GUI learning/naming work. This candidate pin does not
-establish independent review or runtime acceptance; authority remains held.
+from r15; this repin selects the GUI learning/naming work. That candidate
+pin did not by itself establish independent review or runtime acceptance.
 
 The system profile remains PR-tested; `build.yml` does not automatically publish it. Accepted-product base refresh uses the separate policy-pinned path described above. The r13 candidate/promoter pipeline (`r13-candidate.yml`, `release.yml`, `ci/r13-candidate-data.py`) was retired on 2026-11-27; `ci/r13-publication.py` remains as the trusted-gate library for `ci/base-refresh.py`. Base-image/toolchain pins and smoke/boot assertions are preserved.
 

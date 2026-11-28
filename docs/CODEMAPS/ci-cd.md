@@ -129,10 +129,10 @@ separate patched-daemon verifier checks the installed executable even when
 rootless boot containers cannot start NFQUEUE; an active daemon additionally
 requires the reviewed process hash, arguments and root UID. Fresh
 enforcing-SELinux image VM evidence remains a separate gate. Default release
-variants retain legacy TCP `127.0.0.1:50051`/`allow`; the opt-in
-r13 candidate flow selects new system bridge/daemon features for protected
-acceptance. Automatic base refresh uses the separately pinned accepted system
-product; it does not accept candidate features.
+variants retain legacy TCP `127.0.0.1:50051`/`allow`; new system bridge/daemon features reach publication only through a
+reviewed policy repin (the r13 candidate flow is retired). Automatic base
+refresh uses the separately pinned accepted system product; it does not accept
+features on its own.
 
 ## Diff filter (`ci/base-diff.py`)
 
@@ -167,4 +167,3 @@ are documented in RUNBOOK and remain separate from CI. The built-image smoke
 gate requires all three ELF BPF objects while retaining the allow/proc baseline;
 no CI fixture establishes live kernel probe compatibility. Historical
 `r13-immutable-ci.yml` stays unchanged to preserve its original publication proof.
-

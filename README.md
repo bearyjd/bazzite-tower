@@ -352,9 +352,10 @@ Three channels use the same `Containerfile`, with separate accepted product
 profiles. `.github/base-refresh-policy.json` freezes the product source at
 `fe35a4f39574f1610c5f5d5842cf9029945a3e6c`.
 
-The r16.1 policy transition must merge only after protected fixed-digest promotion
-completes and independent destination signature/SPDX checks pass. Host runtime
-acceptance remains unverified; the owner authorized the CI-based release path.
+Historically, the r16.1 policy transition merged only after protected
+fixed-digest promotion and independent destination signature/SPDX checks. Host
+runtime acceptance was not established; the owner authorized the CI-based
+release path.
 
 **`stable` — automatic Bazzite refresh of the accepted legacy product**
 

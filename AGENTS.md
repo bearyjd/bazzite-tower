@@ -29,7 +29,7 @@ Full detail lives in `CLAUDE.md` (same rules, longer), `README.md`, `docs/RUNBOO
 - Update the relevant `docs/CODEMAPS/*` in the same change as the code. Conventional-commit subjects (`feat:`, `fix:`, `ci:`, `chore:`, `docs:`).
 
 ## Releases (snitchwatch-system image)
-Follow `docs/release-playbook.md` (proven on r14). Applies only when the owner has authorized release work. In short:
+Follow `docs/release-playbook.md`. Applies only when the owner has authorized release work. In short:
 - Every change: own worktree + PR; local offline gates; green CI on the exact PR head; independent read-only review (`VERDICT: PASS`, no CRITICAL/HIGH) by an agent that did not write it; then `gh pr merge --merge --match-head-commit <sha>`.
 - Recompute every pin/identity hash from git bytes before any remote effect.
 - A release is a merged pin PR followed by a reviewed `.github/base-refresh-policy.json` repin. Laptop runtime testing is not required before the repin (owner decision 2026-11-27).

@@ -31,8 +31,8 @@ release-baseline exception is `sha256:3f9a0d238e69917a33a23710a53963e70b64526cc8
 verified with the repository key before use. The prior r15.1 digest receives no
 exception. Normal destination-bound signed refresh provenance still enforces
 monotonic Bazzite/kernel versions. A missing system tag always fails closed.
-Host runtime acceptance remains unverified; the owner authorized this CI-based
-release path. This does not establish runtime or host eBPF compatibility.
+Host runtime acceptance was not established; the owner
+authorized that CI-based release path. This does not establish runtime or host eBPF compatibility.
 
 The missing-`:stable` recovery is authorized only for server-assigned workflow
 run 2, attempt 1, on the exact `main` workflow identity. Run 1
@@ -97,8 +97,13 @@ Never force-push (including `--force-with-lease`); to update a branch, merge mai
 4. Recompute every pinned value from git bytes, never by hand:
    `git rev-parse <sha>^{tree}`, `sha256` of `git show <sha>:<path>`, and the
    Snitchwatch submodule gitlink with `git ls-tree`.
-5. For a policy repin, run `python3 tests/test-base-refresh.py` and check the new
-   source commit and tree against git.
+5. For a policy repin, run `python3 ci/repin-snitchwatch.py policy --commit <main
+   sha>` (dry run), then add `--write`. It sets `sourceCommit`, `sourceTree` and
+   `sourceCreated`, and refuses a `nativeSource` or pins-hash mismatch. It does
+   not check `daemonSource` or `daemonPatchSha256`: compare them with
+   `snitchwatch-system-daemon-pins.json` at that commit, because
+   `ci/base-refresh.py` refuses a mismatch only at refresh time. Then run
+   `python3 tests/test-base-refresh.py`.
 6. Watch CI in the background (`gh run watch … --exit-status` or an until-loop on
    `gh run view --json status`); read only `--log-failed | grep` excerpts.
 7. No laptop runtime acceptance is required before a policy repin (owner decision
@@ -150,7 +155,7 @@ ghcr.io/bearyjd/bazzite-tower:snitchwatch-system` (same digest, nothing to downl
 The original r15 system release used `DefaultAction deny`; r15.1 and subsequent
 products retain `DefaultAction allow` in both profiles with `ProcMonitorMethod ebpf` and the pinned `Ebpf.ModulesPath` (from the eBPF-enable release on; earlier products used `proc`). Deny
 enforcement requires explicit operator opt-in. The system profile uses a root-only
-`unix:opensnitchd.sock`. Optional owner checks when deploying an image:
+`unix:opensnitchd.sock`. Owner steps when deploying an image (not a gate before a policy repin):
 
 - Before the reboot: `sudo ostree admin config-diff | grep opensnitchd` (copy the
   `/usr/etc` version over only after reviewing local changes), and retain a console

@@ -539,10 +539,12 @@ Current upstream scans kernel arguments, loaded modules, Secure Boot/lockdown
 and optional chkrootkit signatures. **File-drift checking is explicitly skipped**
 pending upstream baseline-cache integration. Missing optional tools are shown
 as skipped checks. A scan is diagnostic evidence, not a complete integrity
-assessment. On the eventual candidate the owner must verify activation,
+assessment. CI does not establish activation,
 authentication, cancellation/denial, repeat requests, visible skipped checks,
-root-private state and unchanged allow policy and eBPF/proc monitor settings. Native build/reproducibility,
-image/SELinux behavior and those runtime checks remain separate release gates.
+root-private state or unchanged allow policy and eBPF/proc monitor settings on
+the laptop. Those laptop checks are not a gate before a policy repin (owner
+decision 2026-11-27); the owner can run them on a deployed image. That decision
+does not cover native build/reproducibility or image/SELinux evidence.
 
 **Owner acceptance of the Deep Scan on the booted image (2026-11-24):** GUI Flatpak
 `org.snitchwatch.Snitchwatch` branch `r16.1-candidate` (GUI 0.1.1), `opensnitchd` 1.9.0.

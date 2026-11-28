@@ -168,15 +168,6 @@ class LegacyWiring(unittest.TestCase):
         self.assertIn('opensnitch_rpm="opensnitch-${opensnitch_version}-%s.x86_64.rpm"' % rpm['release'], text)
         self.assertEqual(rpm['file'], 'opensnitch-%s-%s.x86_64.rpm' % (rpm['version'], rpm['release']))
 
-    def test_portmaster_variant_drops_the_staged_modules(self):
-        text = self.firewall_text()
-        branch = text[text.index('    portmaster)'):text.index('source "$(dirname')]
-        self.assertIn('/usr/share/bazzite-tower/opensnitch-ebpf', branch)
-        self.assertIn('/usr/share/bazzite-tower/ebpf-manifest.json', branch)
-        smoke = (ROOT / 'tests/smoke.sh').read_text()
-        portmaster = smoke[smoke.index('\nportmaster)'):]
-        self.assertIn('/usr/share/bazzite-tower/ebpf-manifest.json', portmaster)
-
     def test_pinned_legacy_identity_is_the_same_in_pins_check_helper_and_smoke(self):
         legacy = json.loads(EBPF_PINS_PATH.read_text())['profiles']['legacy']
         check = load(CHECK)

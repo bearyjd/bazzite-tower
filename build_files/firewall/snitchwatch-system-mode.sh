@@ -11,6 +11,6 @@ case "${SNITCHWATCH_BRIDGE:-legacy}" in
     *) echo "Unknown SNITCHWATCH_BRIDGE='${SNITCHWATCH_BRIDGE}'." >&2; exit 1 ;;
 esac
 case "${FIREWALL_DAEMON:-opensnitch}" in
-    opensnitch|portmaster) ;;
+    opensnitch) ;;
     *) echo "Unknown FIREWALL_DAEMON='${FIREWALL_DAEMON}'." >&2; exit 1 ;;
 esac

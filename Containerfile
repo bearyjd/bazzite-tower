@@ -206,10 +206,8 @@ FROM snitchwatch-${SNITCHWATCH_BRIDGE} AS snitchwatch-selected
 #   docs/research/i915-bug-report/UPSTREAM-FIX-STATUS-2026-08-28.md
 FROM ${BASE_IMAGE}
 
-# The production image remains on OpenSnitch.  `portmaster` is a deliberately
-# disabled test variant: build it explicitly with --build-arg
-# FIREWALL_DAEMON=portmaster and validate it in a VM before considering it for
-# a published/default tag.  See docs/research/portmaster-bootc-spike.md.
+# OpenSnitch is the only supported firewall daemon (the Portmaster spike was
+# abandoned and removed); build_files/build.d/95-firewall.sh rejects any other value.
 ARG FIREWALL_DAEMON
 ARG SNITCHWATCH_BRIDGE
 
@@ -217,8 +215,8 @@ ARG SNITCHWATCH_BRIDGE
 # leaves that alone. Only a VM-gate build run with --build-arg VM_GATE_SSH=1
 # enables sshd.socket, and only a disk built from disk_config/vm-test.toml
 # (not disk.toml, which is what ships and what the ThinkPad boots) has a user
-# or key to log in with. `:latest` is unaffected either way. See
-# docs/research/portmaster-bootc-spike.md's "VM-gate SSH" section.
+# or key to log in with. `:latest` is unaffected either way. See the
+# `run-vm-ssh` recipe comment in the Justfile.
 ARG VM_GATE_SSH
 
 ARG IMAGE_TAG

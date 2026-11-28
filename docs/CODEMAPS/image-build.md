@@ -162,8 +162,8 @@ carry, because line ranges drift and filenames do not.
 | `80-ras-microcode.sh` | dnf rasdaemon (enable); **mask `mcelog.service`**; dnf microcode_ctl (latest) |
 | `86-stall-detect.sh` | enable `bazzite-tower-stall-detect.service`: samples `CLOCK_MONOTONIC` and on a gap records which kernel workers sat in D state (the i915 GuC TLB-invalidation freeze leaves no watchdog trace) |
 | `90-power-thermal.sh` | dnf thermald (enable); enable `bazzite-tower-power-tuning.service` (balanced EPP + platform-profile). SOF audio: **no install** — bypassed via the `dsp_driver=1` karg |
-| `95-firewall.sh` | Firewall selector. Default `opensnitch`: pinned v1.8.0 RPM extraction, Snitchwatch config + enablement. `SNITCHWATCH_BRIDGE=system` opts into the pinned native bridge/system overlay; legacy remains default. `FIREWALL_DAEMON=portmaster` is a disabled VM spike, sourcing `../firewall/portmaster.sh`: source-build of the exact Portmaster v2.2.1 commit, direct core (no updater/bootstrapper), config pinned from `/usr` via `BindReadOnlyPaths=`, Go toolchain removed after build, OpenSnitch masked. Build with `just build-portmaster-spike`; never a default image |
-| `97-vm-gate-ssh.sh` | `VM_GATE_SSH=1` (off by default, `:latest` unaffected): enables `sshd.socket` so VM-gate testing (`just run-vm-ssh`) can SSH in instead of needing a GUI console. `build-portmaster-spike` already passes this build-arg |
+| `95-firewall.sh` | Firewall selector. Default `opensnitch`: pinned v1.8.0 RPM extraction, Snitchwatch config + enablement. `SNITCHWATCH_BRIDGE=system` opts into the pinned native bridge/system overlay; legacy remains default. Any other `FIREWALL_DAEMON` value fails the build (the Portmaster spike was removed) |
+| `97-vm-gate-ssh.sh` | `VM_GATE_SSH=1` (off by default, `:latest` unaffected): enables `sshd.socket` so VM-gate testing (`just run-vm-ssh`) can SSH in instead of needing a GUI console. `build-snitchwatch-system-vm` already passes this build-arg |
 | `98-rebrand-motd.sh` | overwrites the identity fields (`image-name`/`image-vendor`/`image-ref`/`image-tag`/`image-branch`) in `/usr/share/ublue-os/image-info.json` from the upstream base's own identity to `bazzite-tower`'s — the login MOTD template reads this file directly, so left unmodified it always claims the machine is running the upstream base image. `image-tag`/`image-branch` come from the `IMAGE_TAG` build-arg (Containerfile `ARG IMAGE_TAG=latest`, CI passes `latest`/`latest-kernel`/`snitchwatch-system` per matrix leg — a `:latest-kernel` machine's MOTD would otherwise wrongly claim `:latest`) |
 | `99-cleanup.sh` | `dnf clean all` |
 
@@ -221,18 +221,13 @@ toolchain NEVRAs, compile-stage RPM inventory sha256 (compile-stage-reported, in
 missing/nonregular/non-BPF object and, for system, unless the manifest kernel is
 the image's single `/usr/lib/modules/*` release, its config sha256 matches that
 kernel's `config`, and every on-disk object hash matches (legacy: also unless the manifest commit is the pinned v1.8.0
-commit and it records the pinned 1.8.0 daemon RPM (name, version, release, sha256) and the pinned tree sha; the helper does not verify the RPM itself, `check-rpm` at build time is the binding); smoke repeats these with `jq`/`sha256sum`. The portmaster VM spike has
-no OpenSnitch, so `95-firewall.sh` drops the staged modules and manifest there. This is not proof that probes load on the running
+commit and it records the pinned 1.8.0 daemon RPM (name, version, release, sha256) and the pinned tree sha; the helper does not verify the RPM itself, `check-rpm` at build time is the binding); smoke repeats these with `jq`/`sha256sum`. This is not proof that probes load on the running
 kernel; the daemon falls back to `/proc` silently, so `ProcMonitorMethod: ebpf` is judged by `bazzite-tower-opensnitch-ebpf-check --runtime` (in readiness and `tower-health`).
 Failure modes (deliberate, fail-closed; there is no degrade path): every legacy
 image (`:latest`, `:latest-kernel`, safe-pin) now FAILS the build when its base
 lacks a `kernel-devel` matching its `kernel-core` (the `ebpf-kernel` stage
 refuses), so the weekly `base-bump.yml` PRs are exposed to this and a base-bump
-build is expected to fail loudly there rather than ship stale objects. A
-`FIREWALL_DAEMON=portmaster` build still runs the `ebpf-legacy-*` stages (it needs
-that `kernel-devel` and a GitHub fetch of the pinned OpenSnitch commit) and then
-discards the modules, which the portmaster spike does not use.
-Offline tests: `tests/test-snitchwatch-ebpf.py` (guard fixtures, pins, tree hash,
+build is expected to fail loudly there rather than ship stale objects. Offline tests: `tests/test-snitchwatch-ebpf.py` (guard fixtures, pins, tree hash,
 header tar, handoff/compare, manifest, image check) and
 `tests/test-snitchwatch-ebpf-legacy.py` (legacy pins/pairing, RPM pin and query
 format, prep source-pin, assembly output shape, wiring), and

@@ -509,32 +509,6 @@ Arguments:
 - `$target_image` — the tag to apply to the image (default: `$image_name`)
 - `$tag` — the tag for the image (default: `$default_tag`)
 
-### `just build-portmaster-spike`
-
-Builds the opt-in Portmaster experiment with its service disabled. It is for a
-disposable VM only: it does not alter `:latest` and must not be switched onto
-the laptop. Follow [the VM spike runbook](docs/research/portmaster-bootc-spike.md)
-after building it.
-
-```bash
-just build-portmaster-spike
-just smoke image_name portmaster-spike
-```
-
-Boot it with `just run-vm-ssh` (see below) rather than `run-vm-qcow2`/`spawn-vm`
-— it prints a working `ssh` command instead of requiring a GUI console.
-Inside the VM, the verdict comes from `sudo tests/portmaster-vm-gate.sh`, which
-exits 0 only if every check passes. Do not judge the spike by watching
-`systemctl status`: the 2026-08-05 run was recorded as a pass because
-`is-active` was read before the daemon exited.
-
-Its config is deliberately not writable at runtime. The unit `BindReadOnlyPaths=`-mounts
-`/usr/share/bazzite-tower/portmaster-config.default.json` over
-`/var/lib/portmaster/config.json`, so the update pin lives in the image and
-reverts with a rollback. **Editing the file under `/var` has no effect** —
-change the `/usr` copy and rebuild. `core/automaticUpdates` defaults to `true`
-upstream, so a config the image cannot control means automatic updates are on.
-
 ### `just smoke`
 
 Runs the offline smoke test (`tests/smoke.sh`) against a built image — the same assertions as the CI promotion gate, with no VM required.
@@ -583,10 +557,10 @@ just spawn-vm rebuild="0" type="qcow2" ram="6G"
 
 ### `just run-vm-ssh`
 
-Boots a login/SSH-capable VM for interactive testing (e.g. the Portmaster
-spike gate) — no GUI console, no clipboard needed. Requires the image to be
-built with `--build-arg VM_GATE_SSH=1` (`build-portmaster-spike` already
-does this); prints the `ssh` command to connect once it's up.
+Boots a login/SSH-capable VM for interactive testing (e.g. the
+snitchwatch-system VM gate) — no GUI console, no clipboard needed. Requires the
+image to be built with `--build-arg VM_GATE_SSH=1` (`build-snitchwatch-system-vm`
+already does this); prints the `ssh` command to connect once it's up.
 
 ```bash
 just run-vm-ssh $target_image $tag $ssh_port
@@ -594,14 +568,13 @@ just run-vm-ssh $target_image $tag $ssh_port
 
 Arguments:
 - `$target_image` — the tag to boot (default: `$image_name`)
-- `$tag` — the tag to boot (default: `portmaster-spike`)
+- `$tag` — the tag to boot (default: `snitchwatch-system-vm`)
 - `$ssh_port` — host port to forward to the guest's `22` (default: `2222`)
 
 Uses `disk_config/vm-test.toml`, not `disk.toml` (what ships, what the
 ThinkPad boots, and which has neither a user nor `sshd`), and generates a
 fresh ephemeral SSH keypair every run. See the Justfile recipe's own
-comment and [the VM spike runbook](docs/research/portmaster-bootc-spike.md)'s
-"VM-gate SSH" section for why it boots with plain `qemu-system-x86_64`
+comment for why it boots with plain `qemu-system-x86_64`
 instead of `run-vm-qcow2` or `spawn-vm`.
 
 ## File Management

@@ -26,7 +26,6 @@ any of it.
 |---|---|
 | `just build` | Build the container image locally with podman (adds `SHA_HEAD_SHORT` build-arg when the git tree is clean) |
 | `just smoke` | Offline-assert the built image — **this is the exact CI gate** run in `build.yml` before push (`tests/smoke.sh`) |
-| `just build-portmaster-spike` | Build the disabled Portmaster VM-spike image; never a default/host image |
 | `just build-cloison <parent_image@sha256:…>` | Build the Cloison M1 scaffold variant locally from `Containerfile.cloison`; refuses a non-digest parent and verifies the parent label. Local only, no CI/publish (`docs/CODEMAPS/cloison.md`) |
 | `just smoke-cloison` | Offline-assert the built Cloison image with the M1-specific `tests/smoke-cloison.sh`; not a CI gate |
 | `just build-qcow2` | Turn the image into a bootable qcow2 via bootc-image-builder (needs sudo + KVM + tens of GB free) |
@@ -34,7 +33,7 @@ any of it.
 | `just build-iso` / `rebuild-iso` | Anaconda ISO via bootc-image-builder: **BROKEN upstream**, use `build-iso-live` |
 | `just run-vm-qcow2` | Boot the qcow2 in qemu; browser console at `localhost:8006` |
 | `just run-vm-raw` / `run-vm-iso` | Boot the RAW image / ISO in qemu (same console as `run-vm-qcow2`) |
-| `just run-vm-ssh` | Boot a login/SSH-capable VM (e.g. the Portmaster spike gate); prints the `ssh` command |
+| `just run-vm-ssh` | Boot a login/SSH-capable VM (e.g. the snitchwatch-system VM gate); prints the `ssh` command |
 | `just spawn-vm` | Boot via `systemd-vmspawn` instead (no browser console) |
 | `just build-iso-live` | Build the `installer/` payload + titanoboa live/installer ISO → `./output/` (UNVERIFIED path per `.claude/PRPs/reports/titanoboa-iso-workflow-report.md` — the runtime boot-in-VM gate has not been run) |
 | `just lint` | `shellcheck` every `*.sh` in the repo |
@@ -72,9 +71,6 @@ verify.
   load-bearing: `40-sysusers-fixup.sh` must run after `30-docker-ce.sh` and
   before `60-libvirt-services.sh`. Edit the script that owns the concern; add a
   new one at the number that places it correctly rather than appending.
-- `build_files/firewall/portmaster.sh` — sourced by `95-firewall.sh` only when
-  `FIREWALL_DAEMON=portmaster`. Not in `build.d/` because it is conditional, not
-  part of the unconditional glob.
 - `system_files/` — static content `COPY`ed verbatim to `/`: systemd units,
   `kargs.d/*.toml` fragments, libexec helpers, ujust recipes, sysctl/modprobe/
   journald drop-ins. **One concern per file** here — e.g. i915 display and

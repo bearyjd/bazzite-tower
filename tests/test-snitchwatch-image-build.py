@@ -930,7 +930,7 @@ python3() {
         self.check()
 
     def test_profile_selectors(self):
-        for bridge, firewall, valid in [('legacy', 'opensnitch', True), ('legacy', 'portmaster', True), ('system', 'opensnitch', True), ('system', 'portmaster', False), ('wrong', 'opensnitch', False), ('legacy', 'wrong', False)]:
+        for bridge, firewall, valid in [('legacy', 'opensnitch', True), ('system', 'opensnitch', True), ('legacy', 'portmaster', False), ('system', 'portmaster', False), ('wrong', 'opensnitch', False), ('legacy', 'wrong', False)]:
             with self.subTest(bridge=bridge, firewall=firewall):
                 env = {**os.environ, 'SNITCHWATCH_BRIDGE': bridge, 'FIREWALL_DAEMON': firewall}
                 result = subprocess.run(['bash', str(FACTORY / 'snitchwatch-system-mode.sh')], env=env, capture_output=True)

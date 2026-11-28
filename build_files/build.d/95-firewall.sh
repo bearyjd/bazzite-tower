@@ -7,20 +7,10 @@ install -d -m 0755 /usr/share/bazzite-tower
 printf '%s\n' "${SNITCHWATCH_BRIDGE:-legacy}" > /usr/share/bazzite-tower/snitchwatch-bridge-profile
 
 # ── Application firewall ─────────────────────────────────────────────────────
-# The selector defaults to the proven OpenSnitch setup.  Portmaster is an
-# explicitly-built, disabled-by-default VM spike; its script must never make it
-# into a normal :latest build unless FIREWALL_DAEMON=portmaster was supplied.
-# `portmaster` is intentionally a VM-only spike.  Its build is opt-in and the
-# production OpenSnitch block below remains the default path.
+# The selector defaults to (and only supports) OpenSnitch; any other value is
+# rejected below.
 case "${FIREWALL_DAEMON:-opensnitch}" in
     opensnitch) ;;
-    portmaster)
-        # The legacy overlay stages OpenSnitch eBPF modules and their manifest; this
-        # variant has no OpenSnitch to load them, so none may remain in the image.
-        rm -rf -- /usr/share/bazzite-tower/opensnitch-ebpf /usr/share/bazzite-tower/ebpf-manifest.json
-        # shellcheck disable=SC1091 # Build-time path is relative to this file.
-        source "$(dirname "${BASH_SOURCE[0]}")/../firewall/portmaster.sh"
-        ;;
     *)
         echo "Unknown FIREWALL_DAEMON='${FIREWALL_DAEMON:-}'." >&2
         exit 1
@@ -155,7 +145,4 @@ if [[ "${FIREWALL_DAEMON:-opensnitch}" == "opensnitch" ]]; then
     fi
     systemctl enable opensnitch.service
     printf '%s\n' opensnitch > /usr/share/bazzite-tower/firewall-daemon
-    # Keep the unavailable alternative impossible to start without leaving a
-    # rollback-persistent /etc mask behind.
-    ln -sf /dev/null /usr/lib/systemd/system/portmaster.service
 fi

@@ -1,4 +1,0 @@
-Cloison variant image -- M1 scaffold only. This image adds a marker file and
-parent-digest provenance on top of the daily bazzite-tower image and nothing
-else: no packages, daemon, units, kernel arguments or VFIO/USBGuard setup.
-See docs/CODEMAPS/cloison.md in the source repository.

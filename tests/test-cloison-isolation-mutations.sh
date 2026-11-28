@@ -19,7 +19,7 @@ bad() { printf '  FAIL %s\n' "$1"; fail=1; }
 fresh() {
     local d="${tmp}/$1"
     mkdir -p "${d}/tests" "${d}/.github" || exit 1
-    cp -R "${root}/Containerfile" "${root}/Containerfile.cloison" "${root}/Justfile" \
+    cp -R "${root}/Containerfile" "${root}/Justfile" \
         "${root}/build_files" "${root}/system_files" "${d}/" || exit 1
     cp -R "${root}/.github/workflows" "${d}/.github/" || exit 1
     cp "${root}/tests/test-cloison-isolation.sh" "${d}/tests/" || exit 1
@@ -46,10 +46,6 @@ echo "== mutations (temp copies only) =="
 fresh m1
 printf '# cloison\n' >> "${tmp}/m1/Containerfile"
 expect_fail m1 "cloison reference in daily Containerfile"
-
-fresh m2
-sed -i 's|^FROM .*|FROM ghcr.io/example/base:latest|' "${tmp}/m2/Containerfile.cloison"
-expect_fail m2 "registry FROM in Containerfile.cloison"
 
 fresh m3
 printf 'jobs:\n  b:\n    steps:\n      - run: podman build -f Containerfile.cloison .\n' > "${tmp}/m3/.github/workflows/cloison-ci.yml"

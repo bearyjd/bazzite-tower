@@ -107,6 +107,18 @@ jobs:
       - name: Install workflow static-check dependency
         run: sudo apt-get update -qq && sudo apt-get install -y python3-yaml
 
+      - name: Install just
+        env:
+          JUST_VERSION: "1.40.0"
+          JUST_SHA256: 181b91d0ceebe8a57723fb648ed2ce1a44d849438ce2e658339df4f8db5f1263
+        run: |
+          set -euo pipefail
+          curl -fsSL -o just.tgz "https://github.com/casey/just/releases/download/${JUST_VERSION}/just-${JUST_VERSION}-x86_64-unknown-linux-musl.tar.gz"
+          echo "${JUST_SHA256}  just.tgz" | sha256sum -c -
+          sudo tar -xzf just.tgz -C /usr/local/bin just
+          rm just.tgz
+          just --version
+
       - name: Validate source safety contracts
         run: |
           tests/check-supply-chain.sh
@@ -131,6 +143,11 @@ jobs:
           python3 tests/test-opensnitch-ebpf-runtime.py
           python3 tests/test-snitchwatch-resources.py
           python3 tests/test-smoke-motd-tag.py
+          python3 tests/test-snitchwatch-deny.py
+          python3 tests/test-repin-snitchwatch.py
+          python3 tests/test-endpoint-events-packages.py
+          python3 tests/test-agent-token-report.py
+          tests/test-titanoboa-pin.sh
           tests/test-container-templates.sh
           tests/test-docker-libvirt-forwarding.sh
           tests/test-libvirt-polkit-rule.sh
@@ -236,6 +253,18 @@ jobs:
       - name: Install workflow static-check dependency
         run: sudo apt-get update -qq && sudo apt-get install -y python3-yaml
 
+      - name: Install just
+        env:
+          JUST_VERSION: "1.40.0"
+          JUST_SHA256: 181b91d0ceebe8a57723fb648ed2ce1a44d849438ce2e658339df4f8db5f1263
+        run: |
+          set -euo pipefail
+          curl -fsSL -o just.tgz "https://github.com/casey/just/releases/download/${JUST_VERSION}/just-${JUST_VERSION}-x86_64-unknown-linux-musl.tar.gz"
+          echo "${JUST_SHA256}  just.tgz" | sha256sum -c -
+          sudo tar -xzf just.tgz -C /usr/local/bin just
+          rm just.tgz
+          just --version
+
       - name: Validate source safety contracts
         run: |
           tests/check-supply-chain.sh
@@ -260,6 +289,11 @@ jobs:
           python3 tests/test-opensnitch-ebpf-runtime.py
           python3 tests/test-snitchwatch-resources.py
           python3 tests/test-smoke-motd-tag.py
+          python3 tests/test-snitchwatch-deny.py
+          python3 tests/test-repin-snitchwatch.py
+          python3 tests/test-endpoint-events-packages.py
+          python3 tests/test-agent-token-report.py
+          tests/test-titanoboa-pin.sh
           tests/test-container-templates.sh
           tests/test-docker-libvirt-forwarding.sh
           tests/test-libvirt-polkit-rule.sh

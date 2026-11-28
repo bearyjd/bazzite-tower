@@ -352,9 +352,10 @@ Three channels use the same `Containerfile`, with separate accepted product
 profiles. `.github/base-refresh-policy.json` freezes the product source at
 `dba334c2352f33d106faaa2499c2788b5890da29`.
 
-The r16.1 policy transition must merge only after protected fixed-digest promotion
-completes and independent destination signature/SPDX checks pass. Host runtime
-acceptance remains unverified; the owner authorized the CI-based release path.
+Historically, the r16.1 policy transition merged only after protected
+fixed-digest promotion and independent destination signature/SPDX checks. Host
+runtime acceptance was not established; the owner authorized the CI-based
+release path.
 
 **`stable` — automatic Bazzite refresh of the accepted legacy product**
 
@@ -391,9 +392,9 @@ acceptance remains unverified; the owner authorized the CI-based release path.
 
 Each base refresh must pass image build, smoke/runtime checks, signing, SPDX,
 provenance and host signature policy checks before its tags advance. No owner
-click is required for each base refresh. Accepting new Snitchwatch features still
-requires owner runtime acceptance and the protected release promoter, followed
-by a reviewed policy update. The weekly base-bump PR maintains the historical
+click is required for each base refresh. New Snitchwatch features are accepted
+through a merged pin PR followed by a reviewed policy update; laptop runtime
+testing is not required before that update (owner decision 2026-11-27). The weekly base-bump PR maintains the historical
 `Containerfile` default pin. Automatic accepted-product refresh always overrides
 that pin with the separately resolved immutable upstream base; the reviewed
 refresh policy determines the product source.

@@ -1,14 +1,13 @@
 # Release playbook (snitchwatch-system image)
 
-How a release gets from merged code to the laptop. Proven end to end on r14
-(2026-10-13). The mechanics of each gate live in `docs/r13-publication.md`; this
-file is the order of operations and the testing method. The release promoter is
-`release.yml` (**Release Snitchwatch System**). Candidate workflow, control
-variable, branch and GHCR package names retain their historical `r13` identities:
-they name the pipeline, so reuse them across rounds. Only the Snitchwatch GUI
-candidate target is per round
-(`r14-candidate` …), because its fixed-name publish refuses to replace an existing
-release.
+How the snitchwatch-system image reaches the laptop. **The r13 candidate and
+`release.yml` (**Release Snitchwatch System**) pipeline was retired on 2026-11-27**
+(owner decision): `r13-candidate.yml`, `release.yml`, `ci/r13-candidate-data.py`
+and `docs/r13-publication.md` are removed. What remains live is the base-refresh
+publication path (below), the pin procedure and the policy repin. Sections marked
+*Retired* are kept as history only; their steps cannot be run any more. The
+`ci/r13-publication.py` library and its tests remain because `ci/base-refresh.py`
+imports it.
 
 **Scope:** this applies only when the owner has explicitly authorized release
 work. Otherwise the `AGENTS.md` rule stands: no push, merge or PR without an
@@ -25,15 +24,15 @@ The workflow resolves a fresh immutable Bazzite base, enforces the
 `45.20261105` / `7.2.15-ogc1.1.fc45` floor and rejects stale policy, then requires
 build/test/signing/SPDX/provenance/host-policy gates before publication.
 
-The r16.1 refresh-policy transition must merge only after protected promotion
-completes successfully, independent destination signature/SPDX checks pass, and
-the exact policy PR head has green CI and independent review. Its sole system
+Historically, the r16.1 refresh-policy transition merged only after protected
+promotion, independent destination signature/SPDX checks, green CI on the exact
+policy PR head and independent review. Its sole system
 release-baseline exception is `sha256:3f9a0d238e69917a33a23710a53963e70b64526cc8e44f9d24787944dcca1f27`,
 verified with the repository key before use. The prior r15.1 digest receives no
 exception. Normal destination-bound signed refresh provenance still enforces
 monotonic Bazzite/kernel versions. A missing system tag always fails closed.
-Host runtime acceptance remains unverified; the owner authorized this CI-based
-release path. This does not establish runtime or host eBPF compatibility.
+Host runtime acceptance was not established; the owner
+authorized that CI-based release path. This does not establish runtime or host eBPF compatibility.
 
 The missing-`:stable` recovery is authorized only for server-assigned workflow
 run 2, attempt 1, on the exact `main` workflow identity. Run 1
@@ -57,25 +56,26 @@ tower tag/digest/child scopes are refused. Its full bytes and hash are recorded,
 bound by provenance, and independently re-extracted by the credential-free
 validator; unrelated upstream policy rules remain intact.
 
-The release sequence below remains the feature-acceptance path. A newly accepted
-feature digest still needs owner runtime acceptance and the protected `release`
-environment promoter. Only a subsequent independently reviewed policy update may
-make that product the source of automatic refreshes. A weekly base-bump PR
-updates the candidate `Containerfile` pin; merging it does not accept features.
+Feature acceptance is now only: merge the pin PR (below), then make the new
+product source the automatic-refresh source with an independently reviewed
+`.github/base-refresh-policy.json` repin. The retired candidate/promoter
+sequence is no longer available. Laptop runtime testing is not required before
+the repin (owner decision 2026-11-27). A weekly base-bump PR updates the candidate
+`Containerfile` pin; merging it does not accept features.
 
 Automatic refresh updates registry tags sequentially. `stable` and `latest` are verified to resolve to the same digest on success, but the registry has no transaction spanning both tags. A partial transport failure reports attempted tags, confirmed tags and the expected digest in the run summary; an attempted write may have completed despite a lost response. Rerun the refresh workflow with the same reviewed policy to verify the signed baseline and repair the aliases.
 
 ## Roles
 
-- **Primary agent**: one orchestrator. Plans, sets repository variables, pushes
-  candidate refs, merges PRs that pass the merge rule, dispatches workflows.
+- **Primary agent**: one orchestrator. Plans, pushes branches, merges PRs that
+  pass the merge rule and dispatches workflows, each as the owner authorizes.
 - **Executor sub-agents**: write each change in its own worktree and open a PR.
 - **Independent reviewers**: separate read-only sub-agents (opus for release and
   security review) that
-  never authored the change. Every PR, every candidate identity and every control
-  commit gets one. First line of output is `VERDICT: PASS` or `VERDICT: FAIL`.
-- **Owner**: runtime acceptance on the laptop (sudo + reboot) and the approval click
-  on the `release` environment. Agents never do either.
+  never authored the change. Every PR gets one. First line of output is `VERDICT: PASS` or `VERDICT: FAIL`.
+- **Owner**: anything on the laptop that needs sudo or a reboot. Agents never do
+  it. Laptop runtime testing is not required before a policy repin (owner
+  decision 2026-11-27).
 
 Merge rule: merge only when CI is green on the exact PR head AND an independent
 review reports no CRITICAL/HIGH. Use `gh pr merge --merge --match-head-commit <sha>`.
@@ -97,56 +97,40 @@ Never force-push (including `--force-with-lease`); to update a branch, merge mai
 4. Recompute every pinned value from git bytes, never by hand:
    `git rev-parse <sha>^{tree}`, `sha256` of `git show <sha>:<path>`, and the
    Snitchwatch submodule gitlink with `git ls-tree`.
-5. Run the real gate code locally with a simulated Actions environment before any
-   remote effect, and confirm a wrong head is refused (a merge commit with the same
-   tree must fail on commit identity).
+5. For a policy repin, run `python3 ci/repin-snitchwatch.py policy --commit <main
+   sha>` (dry run), then add `--write`. It sets `sourceCommit`, `sourceTree` and
+   `sourceCreated`, and refuses a `nativeSource` or pins-hash mismatch. It does
+   not check `daemonSource` or `daemonPatchSha256`: compare them with
+   `snitchwatch-system-daemon-pins.json` at that commit, because
+   `ci/base-refresh.py` refuses a mismatch only at refresh time. It also does
+   not compare the trust files (`cosign.pub`, the containers `policy.json` and
+   `registries.d/bazzite-tower.yaml`) with that commit; check them, because the
+   refresh refuses a difference. Replace the old source commit in each file the
+   tool lists for hand review, including the hardcoded value in
+   `tests/test-base-refresh.py`, which fails until it is updated. Then run
+   `python3 tests/test-base-refresh.py`.
 6. Watch CI in the background (`gh run watch … --exit-status` or an until-loop on
    `gh run view --json status`); read only `--log-failed | grep` excerpts.
-7. Runtime acceptance by the owner on the laptop (below). Nothing is promoted first.
+7. No laptop runtime acceptance is required before a policy repin (owner decision
+   2026-11-27). CI and independent review are the gates before publication.
 
-## Order of operations
+## Order of operations (steps 3-9 retired)
 
 1. **Source**: Snitchwatch changes merge to its `main` with green CI + review.
 2. **Pin**: tower PR updates `build_files/firewall/snitchwatch-system-pins.json`
    (`sourceCommit`, `sourceTree`; every `sourceFiles` hash re-checked) and
    `EXPECTED_PINS_SHA256` in `snitchwatch-system-verify.py`, plus doc mentions.
    Gates, review, merge.
-3. **GUI candidate** (Snitchwatch). First, for a new round, a Snitchwatch PR renames
-   the hard-coded target in `.github/workflows/candidate-gui.yml`, `ci.yml` and
-   `packaging/flatpak/build-candidate.py` (branch, tag, release, packet target,
-   concurrency group, `R<NN>_CANDIDATE_REVIEWED_SHA`) to `r<NN>`; review, merge, and
-   re-pin the tower to that commit (step 2). Pushing `r15-candidate` while the
-   workflow still says `r14-candidate` triggers nothing. Then confirm green CI on main at the source commit and
-   that the round's branch/tag/release do not exist. Set
-   `R<NN>_CANDIDATE_REVIEWED_SHA` FIRST, then push the source commit to the
-   `r<NN>-candidate` branch. Pushing an identical head emits no event, so ordering
-   matters: a push before the variable only runs the hold job.
-4. **Candidate identity**: compute the eight identity fields from the tower candidate
-   head (PR head with green PR CI). Independent workflow review of that identity.
-5. **Control commit**: on top of the candidate head, write `.github/r13/authority.json`,
-   `receipts/<sha>.json` and `evidence/<sha>.json` with `ci/r13-publication.py`'s
-   `canonical()` bytes (script it; never hand-edit). `accepted` stays null. Run the
-   approval gate locally, push to a new `ci/r<NN>-primary-control-<date>` branch,
-   then a second independent review of the control commit.
-6. **Arm and fire**: set `R13_CONTROL_HEAD`, then `R13_CANDIDATE_HEAD`, then
-   fast-forward `ci/r13-candidate-hold-promotion` to the candidate head (check
-   `git merge-base --is-ancestor` first; never delete/recreate the branch).
-7. **Record**: digest from the `r13-candidate-<run>` tag in GHCR, cross-checked
-   against the run log.
-8. **Promoter PR**: change only `env.DIGEST` (the image digest) and
-   `--source-digest` (the candidate head *commit* SHA, not an image digest) in
-   `release.yml` (+ tests/docs). Review, CI, merge. Merging arms; it does not
-   publish.
-9. **Owner acceptance** (below), then dispatch
-   `gh workflow run release.yml -R bearyjd/bazzite-tower --ref main -f digest=<digest>`; the owner
-   approves the `release` deployment. Then publish the stable GUI release as a byte
-   copy of the candidate prerelease assets, with release notes.
+3. **Retired (2026-11-27)**: GUI candidate, candidate identity, control commit,
+   arm-and-fire, record and promoter PR/dispatch (formerly `r13-candidate.yml`,
+   `release.yml` and `docs/r13-publication.md`) no longer exist. After step 2,
+   continue with the policy repin described under "Base refresh versus feature
+   acceptance".
 
-If a candidate run fails after the gate, the fix needs a new reviewed head and a
-new identity/control commit (the gate requires run attempt 1). Re-pinning or a
-workflow fix changes `workflowSha256`/pins hashes, so redo steps 4-6.
+## Owner runtime acceptance (laptop) - Retired (historical)
 
-## Owner runtime acceptance (laptop)
+The candidate package named below is no longer produced; kept as a record of the
+method.
 
 The host policy (`default: reject`) does not list the candidate registry, and
 `bootc switch` without `--enforce-container-sigpolicy` does not apply it. So the
@@ -176,7 +160,7 @@ ghcr.io/bearyjd/bazzite-tower:snitchwatch-system` (same digest, nothing to downl
 The original r15 system release used `DefaultAction deny`; r15.1 and subsequent
 products retain `DefaultAction allow` in both profiles with `ProcMonitorMethod ebpf` and the pinned `Ebpf.ModulesPath` (from the eBPF-enable release on; earlier products used `proc`). Deny
 enforcement requires explicit operator opt-in. The system profile uses a root-only
-`unix:opensnitchd.sock`. Extra owner acceptance steps:
+`unix:opensnitchd.sock`. Owner steps when deploying an image (not a gate before a policy repin):
 
 - Before the reboot: `sudo ostree admin config-diff | grep opensnitchd` (copy the
   `/usr/etc` version over only after reviewing local changes), and retain a console
@@ -189,13 +173,12 @@ enforcement requires explicit operator opt-in. The system profile uses a root-on
   the reserved `000-snitchwatch-` prefix, so the bridge treats them as read-only;
   RUNBOOK has the restore command.
 
-Cut rule: a round is Snitchwatch `main` as merged when the previous round is promoted.
-At the cut, re-pin to that head (also `git grep 000-snitchwatch-tower <sha>` for a
-name collision), set the new `R<NN>_CANDIDATE_REVIEWED_SHA`, review, merge, then run
-the pipeline above. Packaging, daemon-config, unit or socket changes after the cut
-go to the next round.
+Cut rule: at a cut, re-pin to the Snitchwatch `main` head (also `git grep
+000-snitchwatch-tower <sha>` for a name collision), review, merge, then repin the
+policy. Packaging, daemon-config, unit or socket changes after the cut go to the
+next round.
 
-## Lessons from r14
+## Lessons from r14 (historical)
 
 - Fixed-name publication refuses replacement: give the GUI candidate per-round names.
 - `actions/attest-build-provenance` puts certificate provenance on the image, so

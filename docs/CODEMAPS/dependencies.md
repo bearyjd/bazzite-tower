@@ -78,8 +78,9 @@ The r15 bridge candidate source is pinned at
 `b404c4c6316760fa7bc415509d3f8d747f7dc9cc`; r13/r14 used `bf15bb5`). Bridge
 packaging input hashes (15, adding upstream's `opensnitch.service` drop-in and
 daemon config) and the pins verifier are refreshed from that committed snapshot. Source and
-workflow review/runtime acceptance remain publication gates; the candidate pin
-confers no stable release authority. See [r13 publication](../r13-publication.md).
+workflow review remain publication gates (laptop runtime testing is not required
+before a policy repin, owner decision 2026-11-27); the candidate pin
+confers no stable release authority.
 
 ## KDE Plasma package-family pin
 

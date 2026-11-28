@@ -105,7 +105,8 @@ verify.
   catches each failure mode.
 - `docs/release-playbook.md` — order of operations, testing method and roles
   for getting a snitchwatch-system release from merged code to the laptop
-  (proven on r14; gate mechanics are in `docs/r13-publication.md`).
+  (the r13 candidate/`release.yml` pipeline is retired; the pin and policy
+  repin procedures remain).
 - `docs/research/i915-bug-report/` — a worked example of a hardware bug
   investigation (`REPORT.md`, `BISECT-RUNBOOK.md`, raw log captures). Use this
   as the template for any future hardware investigation.

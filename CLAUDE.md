@@ -32,7 +32,7 @@ any of it.
 | `just run-vm-qcow2` | Boot the qcow2 in qemu; browser console at `localhost:8006` |
 | `just run-vm-ssh` | Boot a login/SSH-capable VM (e.g. the Portmaster spike gate); prints the `ssh` command |
 | `just spawn-vm` | Boot via `systemd-vmspawn` instead (no browser console) |
-| `just build-iso-live` | Build the `installer/` payload + titanoboa live/installer ISO → `./output/` (UNVERIFIED path per `.claude/PRPs/reports/titanoboa-iso-workflow-report.md` — the runtime boot-in-VM gate has not been run) |
+| `just build-iso-live` | Build the `installer/` payload + titanoboa live/installer ISO → `./output/` (VERIFIED: the live ISO booted to the KDE desktop under enforcing Secure Boot on 2026-06-04; see `.claude/PRPs/reports/titanoboa-iso-workflow-report.md` and `docs/CODEMAPS/iso-build.md`) |
 | `just lint` | `shellcheck` every `*.sh` in the repo |
 | `just lint-containerfile [file]` | `hadolint` the `Containerfile` (or the given file) via a digest-pinned container — seconds, no image build. Run it after any `Containerfile` edit; it is **not** a CI gate |
 | `just format` | `shfmt --write` every `*.sh` — **not** a required gate; do not run it over existing files (see "Code style") |

@@ -64,7 +64,7 @@ manifest. The recipe is in the `AUTO-GENERATED:commands` block of
 
 `build.sh` is now a thin runner that `bash`-executes `build_files/build.d/*.sh` in
 filename order (12 scripts at the time; the set has grown since). Plan:
-`.claude/PRPs/plans/build-sh-split.plan.md`. The extraction was proven lossless
+`.claude/PRPs/plans/build-sh-split.plan.md` (since deleted). The extraction was proven lossless
 (concatenated bodies matched the old file byte for byte), and contiguous ranges
 were used because order is load-bearing (`40-sysusers-fixup.sh` after
 `30-docker-ce.sh`, before `60-libvirt-services.sh`). Docs now cite `build.d/`

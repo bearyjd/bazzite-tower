@@ -18,8 +18,8 @@ set -euo pipefail
 # the Containerfile passes it as a command-prefix on the RUN instruction, so it
 # is in this shell's environment and every child bash inherits it.
 #
-# Extraction rationale, file map and hazards:
-# .claude/PRPs/plans/build-sh-split.plan.md
+# Extraction rationale, file map and hazards: see docs/CODEMAPS/image-build.md
+# (the original split plan was deleted once the split shipped).
 build_d="$(dirname "${BASH_SOURCE[0]}")/build.d"
 
 shopt -s nullglob

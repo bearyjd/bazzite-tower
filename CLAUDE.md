@@ -27,18 +27,14 @@ any of it.
 | `just build` | Build the container image locally with podman (adds `SHA_HEAD_SHORT` build-arg when the git tree is clean) |
 | `just smoke` | Offline-assert the built image — **this is the exact CI gate** run in `build.yml` before push (`tests/smoke.sh`) |
 | `just build-portmaster-spike` | Build the disabled Portmaster VM-spike image; never a default/host image |
-| `just build-cloison <parent_image@sha256:…>` | Build the Cloison M1 scaffold variant locally from `Containerfile.cloison`; refuses a non-digest parent and verifies the parent label. Local only, no CI/publish (`docs/CODEMAPS/cloison.md`) |
-| `just smoke-cloison` | Offline-assert the built Cloison image with the M1-specific `tests/smoke-cloison.sh`; not a CI gate |
 | `just build-qcow2` | Turn the image into a bootable qcow2 via bootc-image-builder (needs sudo + KVM + tens of GB free) |
-| `just build-raw` / `rebuild-qcow2` / `rebuild-raw` | RAW disk image via bootc-image-builder; `rebuild-*` runs `just build` first (needs sudo + KVM + disk space, like `build-qcow2`) |
-| `just build-iso` / `rebuild-iso` | Anaconda ISO via bootc-image-builder: **BROKEN upstream**, use `build-iso-live` |
+| `just rebuild-qcow2` | `just build` first, then the qcow2 (needs sudo + KVM + disk space, like `build-qcow2`) |
 | `just run-vm-qcow2` | Boot the qcow2 in qemu; browser console at `localhost:8006` |
-| `just run-vm-raw` / `run-vm-iso` | Boot the RAW image / ISO in qemu (same console as `run-vm-qcow2`) |
 | `just run-vm-ssh` | Boot a login/SSH-capable VM (e.g. the Portmaster spike gate); prints the `ssh` command |
 | `just spawn-vm` | Boot via `systemd-vmspawn` instead (no browser console) |
 | `just build-iso-live` | Build the `installer/` payload + titanoboa live/installer ISO → `./output/` (VERIFIED: the live ISO booted to the KDE desktop under enforcing Secure Boot on 2026-06-04; see `.claude/PRPs/reports/titanoboa-iso-workflow-report.md` and `docs/CODEMAPS/iso-build.md`) |
 | `just lint` | `shellcheck` every `*.sh` in the repo |
-| `just lint-containerfile [file]` | `hadolint` the `Containerfile` (or the given file, e.g. `Containerfile.cloison`) via a digest-pinned container — seconds, no image build. Run it after any `Containerfile` edit; it is **not** a CI gate |
+| `just lint-containerfile [file]` | `hadolint` the `Containerfile` (or the given file) via a digest-pinned container — seconds, no image build. Run it after any `Containerfile` edit; it is **not** a CI gate |
 | `just format` | `shfmt --write` every `*.sh` — **not** a required gate; do not run it over existing files (see "Code style") |
 | `just test-snitchwatch-daemon-patch` | Apply the pinned OpenSnitch patch to upstream and run its Go tests (with `-race`) and C harness tests in throwaway containers (network to fetch, `--network=none` to test). No image build; minutes. Run it after touching `build_files/firewall/snitchwatch-system-daemon-*`. CI runs it as `snitchwatch-daemon-patch.yml` (path-filtered, not required) |
 | `just build-snitchwatch-system[-vm]` | Build the opt-in system-bridge candidate image locally (`-vm` adds the disposable SSH gate); same caveats as `just build` |
@@ -82,7 +78,7 @@ verify.
   Follow this pattern for any new fragment.
 - `installer/` — separate payload builder for the live/installer ISO
   (titanoboa input); has its own `Containerfile`.
-- `disk_config/*.toml` — bootc-image-builder configs (qcow2/raw/iso).
+- `disk_config/*.toml` — bootc-image-builder configs (`disk.toml` qcow2; `vm-test.toml` SSH-gate VM).
 - `ci/base-diff.py` — diffs the upstream base image's package manifest against
   the last-seen one, filtered to a "blast radius" regex of packages our
   customizations depend on. Powers `base-watch.yml`.
@@ -109,7 +105,8 @@ verify.
   catches each failure mode.
 - `docs/release-playbook.md` — order of operations, testing method and roles
   for getting a snitchwatch-system release from merged code to the laptop
-  (proven on r14; gate mechanics are in `docs/r13-publication.md`).
+  (the r13 candidate/`release.yml` pipeline is retired; the pin and policy
+  repin procedures remain).
 - `docs/research/i915-bug-report/` — a worked example of a hardware bug
   investigation (`REPORT.md`, `BISECT-RUNBOOK.md`, raw log captures). Use this
   as the template for any future hardware investigation.
@@ -258,8 +255,8 @@ that shape for any new hardware investigation.
   `BASE_IMAGE` arg (`safe-pin` and the `snitchwatch-system` verify leg) plus
   local `just build`. (`build.yml`'s `latest-kernel` legs pass
   `BASE_IMAGE=...:stable` and so ignore the pin.) See
-  `.agent_native/agent_roadmap.md` item 1 for a known gap in the "is it safe
-  yet" verification story. The owner stated on 2026-10-21 that the
+  `.agent_native/agent_roadmap.md` item 8 for why the old "is it safe yet"
+  watcher was removed. The owner stated on 2026-10-21 that the
   i915 fix is in, so the weekly `base-bump.yml` PRs (`ci/base-bump.sh`) are
   authorized; merge each one only when CI is green and not mid-release, and
   still do not hand-edit the pin on a hunch. Note: the owner reports `base-bump.yml`

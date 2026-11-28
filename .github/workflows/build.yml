@@ -25,24 +25,15 @@ env:
   DEFAULT_TAG: "latest"
 
 concurrency:
-  # Every stable OCI writer, including r13 promotion, shares this lock.
+  # Every stable OCI writer shares this lock.
   group: ${{ github.event_name == 'pull_request' && format('verify-{0}', github.ref) || 'bazzite-tower-stable-writers' }}
   cancel-in-progress: false
 
 jobs:
-  immutable-r13:
-    name: Verify immutable candidate (PR 107 only)
-    if: github.event_name == 'pull_request' && github.repository == 'bearyjd/bazzite-tower' && github.event.pull_request.number == 107 && github.event.pull_request.head.repo.full_name == 'bearyjd/bazzite-tower'
-    permissions:
-      contents: read
-      actions: read
-      packages: read
-    uses: ./.github/workflows/r13-immutable-ci.yml
-  # Required contexts are dependency gates. PR107 verifies the original immutable
-  # product; its historical variant checks remain b2 evidence, not new builds.
+  # Required contexts are dependency gates over the build matrix.
   verify-required:
     name: Verify image (${{ matrix.variant }})
-    needs: [verify, immutable-r13]
+    needs: [verify]
     if: always() && github.event_name == 'pull_request'
     runs-on: ubuntu-24.04
     permissions: {}
@@ -52,20 +43,13 @@ jobs:
     steps:
       - name: Require the selected verification dependency to succeed
         env:
-          IMMUTABLE_MODE: ${{ github.event_name == 'pull_request' && github.repository == 'bearyjd/bazzite-tower' && github.event.pull_request.number == 107 && github.event.pull_request.head.repo.full_name == 'bearyjd/bazzite-tower' }}
-          IMMUTABLE_RESULT: ${{ needs.immutable-r13.result }}
           BUILD_RESULT: ${{ needs.verify.result }}
         run: |
           set -euo pipefail
-          if [[ "$IMMUTABLE_MODE" == true ]]; then
-            [[ "$IMMUTABLE_RESULT" == success && "$BUILD_RESULT" == skipped ]]
-            echo 'Verified original digest88; historical b2 variant evidence retained; no new variant build.' >> "$GITHUB_STEP_SUMMARY"
-          else
-            [[ "$BUILD_RESULT" == success && "$IMMUTABLE_RESULT" == skipped ]]
-          fi
+          [[ "$BUILD_RESULT" == success ]]
   verify:
     name: Build and test image (${{ matrix.variant }})
-    if: github.event_name == 'pull_request' && !(github.event_name == 'pull_request' && github.repository == 'bearyjd/bazzite-tower' && github.event.pull_request.number == 107 && github.event.pull_request.head.repo.full_name == 'bearyjd/bazzite-tower')
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-24.04
 
     # Pull requests receive no token capable of publishing, attesting, signing,
@@ -83,8 +67,8 @@ jobs:
           - variant: latest-kernel
             build_args: "BASE_IMAGE=ghcr.io/ublue-os/bazzite-nvidia-open:stable"
             tag_base: verify-latest-kernel
-          # Opt-in system bridge: a local, credential-free PR candidate. The
-          # r13 candidate flow builds the accepted `:snitchwatch-system` target;
+          # Opt-in system bridge: a local, credential-free PR candidate.
+          # base-refresh.yml publishes the accepted `:snitchwatch-system` target;
           # IMAGE_TAG matches it so this leg also exercises the MOTD assertion.
           - variant: snitchwatch-system
             build_args: |
@@ -123,6 +107,18 @@ jobs:
       - name: Install workflow static-check dependency
         run: sudo apt-get update -qq && sudo apt-get install -y python3-yaml
 
+      - name: Install just
+        env:
+          JUST_VERSION: "1.40.0"
+          JUST_SHA256: 181b91d0ceebe8a57723fb648ed2ce1a44d849438ce2e658339df4f8db5f1263
+        run: |
+          set -euo pipefail
+          curl -fsSL -o just.tgz "https://github.com/casey/just/releases/download/${JUST_VERSION}/just-${JUST_VERSION}-x86_64-unknown-linux-musl.tar.gz"
+          echo "${JUST_SHA256}  just.tgz" | sha256sum -c -
+          sudo tar -xzf just.tgz -C /usr/local/bin just
+          rm just.tgz
+          just --version
+
       - name: Validate source safety contracts
         run: |
           tests/check-supply-chain.sh
@@ -147,6 +143,11 @@ jobs:
           python3 tests/test-opensnitch-ebpf-runtime.py
           python3 tests/test-snitchwatch-resources.py
           python3 tests/test-smoke-motd-tag.py
+          python3 tests/test-snitchwatch-deny.py
+          python3 tests/test-repin-snitchwatch.py
+          python3 tests/test-endpoint-events-packages.py
+          python3 tests/test-agent-token-report.py
+          tests/test-titanoboa-pin.sh
           tests/test-container-templates.sh
           tests/test-docker-libvirt-forwarding.sh
           tests/test-libvirt-polkit-rule.sh
@@ -228,8 +229,8 @@ jobs:
               IMAGE_TAG=latest-kernel
             tag_base: latest-kernel
             tag_prefix: "latest-kernel-"
-          # r13 HOLD: the system variant has no automatic stable writer.
-          # Candidate builds and accepted-digest promotion have separate workflows.
+          # The system variant is not published here: base-refresh.yml publishes
+          # `:snitchwatch-system` from the policy-pinned source.
 
     steps:
       - name: Prepare environment
@@ -251,6 +252,18 @@ jobs:
 
       - name: Install workflow static-check dependency
         run: sudo apt-get update -qq && sudo apt-get install -y python3-yaml
+
+      - name: Install just
+        env:
+          JUST_VERSION: "1.40.0"
+          JUST_SHA256: 181b91d0ceebe8a57723fb648ed2ce1a44d849438ce2e658339df4f8db5f1263
+        run: |
+          set -euo pipefail
+          curl -fsSL -o just.tgz "https://github.com/casey/just/releases/download/${JUST_VERSION}/just-${JUST_VERSION}-x86_64-unknown-linux-musl.tar.gz"
+          echo "${JUST_SHA256}  just.tgz" | sha256sum -c -
+          sudo tar -xzf just.tgz -C /usr/local/bin just
+          rm just.tgz
+          just --version
 
       - name: Validate source safety contracts
         run: |
@@ -276,6 +289,11 @@ jobs:
           python3 tests/test-opensnitch-ebpf-runtime.py
           python3 tests/test-snitchwatch-resources.py
           python3 tests/test-smoke-motd-tag.py
+          python3 tests/test-snitchwatch-deny.py
+          python3 tests/test-repin-snitchwatch.py
+          python3 tests/test-endpoint-events-packages.py
+          python3 tests/test-agent-token-report.py
+          tests/test-titanoboa-pin.sh
           tests/test-container-templates.sh
           tests/test-docker-libvirt-forwarding.sh
           tests/test-libvirt-polkit-rule.sh

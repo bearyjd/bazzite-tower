@@ -248,7 +248,7 @@ Containerfile.cloison  (new)        ARG PARENT_IMAGE   # exact digest of the ima
 | Smoke | `tests/smoke.sh` | `just smoke-cloison` locally: `tests/smoke.sh` (every daily assertion), then `tests/smoke-cloison.sh` for the current milestone contract | same, as the CI gate |
 | Boot test | `boot-test.yml` → `tests/boot-check.sh` | local `podman run --systemd=always` with `tests/boot-check-cloison.sh` | the `boot-test.yml` harness |
 | VM-level | n/a | `tests/vm/*.sh` on the laptop | same (CI only if a KVM runner exists; *verify*) |
-| Publish | `release.yml` → cosign sign + SBOM | none | three separately authorised steps (§4.4): (a) `trust-test-*` images only, (b) bootstrap + tests on the laptop, (c) only then the real image: own candidate tag, cosign sign by digest with the same key, `release` environment. Each release records its digest; the laptop moves to it by a verified digest switch (§4.3 Operation 2), never by `bootc upgrade` |
+| Publish | a release workflow (the former `release.yml` is retired) → cosign sign + SBOM | none | three separately authorised steps (§4.4): (a) `trust-test-*` images only, (b) bootstrap + tests on the laptop, (c) only then the real image: own candidate tag, cosign sign by digest with the same key, `release` environment. Each release records its digest; the laptop moves to it by a verified digest switch (§4.3 Operation 2), never by `bootc upgrade` |
 
 The publish leg is added only in the M3 PR. Adding it changes a workflow, so it needs the owner's explicit release authorisation (`docs/release-playbook.md`).
 
@@ -684,7 +684,7 @@ backend = ["vfio", "host-netns"]                    # tried in order
 
 ## 7. Hardware discovery (M0) and hardware acceptance (M9/M13)
 
-**Script:** `scripts/cloison-hw-report.sh` (merged with PR #200; read-only, no root needed, `sudo` adds the kernel log). The variant will also ship it as `/usr/libexec/bazzite-tower-iommu-report` with `ujust iommu-report`. Rev 0 embedded the script here; the repo copy is now the source of truth.
+**Script:** `scripts/cloison-hw-report.sh` (now in the private `bearyjd/cloison` repo; originally merged here with PR #200; read-only, no root needed, `sudo` adds the kernel log). The variant will also ship it as `/usr/libexec/bazzite-tower-iommu-report` with `ujust iommu-report`. Rev 0 embedded the script here; the repo copy is now the source of truth.
 
 **M0 is topology, not acceptance.** `docs/research/iommu-groups-p1g7-2026-11-16.md` is a **preliminary, non-root** snapshot. It covers groups, endpoints and `reset_method` strings. It cannot answer any step that needs the kernel log or a device test, so it decides neither D3 nor D4. Hardware acceptance happens per device inside M9 (H-net) and M13 (H-usb), and only after the owner approves touching device bindings.
 

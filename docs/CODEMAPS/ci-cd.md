@@ -11,11 +11,9 @@ Workflows, highlighted test scripts and the base-change diff filter. Full failur
 |---|---|---|---|
 | `build.yml` | push main (ignores README/docs/**), PR, Sun 06:00 UTC, dispatch | PR-only **verify** retains all three contexts (`safe-pin`, `latest-kernel`, `snitchwatch-system`), credential-free actual-head checkout/tree proof and local smoke/runtime checks. Default-branch **release** publishes only opt-in `:latest-kernel` after build/test/signing/SPDX/provenance gates. A separate **notify** job reads each release leg's actual conclusion from the Actions API | `ci-failure-<variant>` |
 | `base-refresh.yml` | daily, dispatch; `main` only | policy-pinned accepted product source + fresh immutable upstream base → read-only resolve/build/validate jobs → checkout-free publisher → verified signature, SPDX, build provenance, GitHub attestation and host signature policy → recheck current main policy hash immediately before public pointers. Legacy moves `:stable` and compatibility `:latest`; reviewed r16.1 system moves only `:snitchwatch-system`. No per-base owner approval | — |
-| `r13-candidate.yml` | reviewed exact-head candidate branch push; optional dispatch after main registration | read-only approval/build/test/OCI validation jobs → checkout-free fixed candidate-package publisher → existing automated signing/SPDX/provenance and scoped destination policy verification; no stable tag input | — |
-| `release.yml` (**Release Snitchwatch System**) | main dispatch, one `digest` input that must equal the digest hard-coded in the workflow | one checkout-free job in the `release` environment (owner attaches reviewer/main-only protection): verify candidate key signature + SPDX → `skopeo copy --all --preserve-digests` to a staging tag → `cosign sign` + re-attest SPDX → verify + host `policy.json` skopeo check → move only `:snitchwatch-system` → re-resolve and re-check. Staging tag is never deleted (GHCR deletes whole versions). No rebuild | — |
 | `boot-test.yml` | PR (build paths), Sun 07:00 UTC, dispatch | actual PR-head SHA checkout + head/tree proof in read-only boot job → build → `podman run --systemd=always /sbin/init` → wait running/degraded → exec `tests/boot-check.sh` | `boot-test-failure` (separate non-PR notifier only; no candidate code or checkout) |
 | `base-watch.yml` | daily 05:00 UTC, dispatch | pull `bazzite-nvidia-open:stable` → `rpm -qa` manifest → `ci/base-diff.py` vs last-seen baseline in `docs/manifests/` (written on first run) → commit refreshed manifest (and fail if every push retry fails) | `base-bump` |
-| `base-bump.yml` | Sat 05:30 UTC, dispatch | needs `BUMP_TOKEN` secret (else no-op: GITHUB_TOKEN PRs don't trigger CI) → `ci/base-bump.sh` resolves `bazzite-nvidia-open:stable` digest, rewrites the candidate `Containerfile` pin (automatic refresh resolves its base separately) → `ci/base-bump-guard.py` (reuses `ci/base-refresh.py` version/kernel parsing + `base-refresh-policy.json` floor; kernel from the image `ostree.linux` label of old and new digest) emits `automerge=true` only if Fedora major unchanged, kernel same-or-newer, policy floor met **and the blast-radius package diff (`ci/base-blast-diff.sh`: `podman pull` + `rpm -qa` of the old and new digest one at a time, same manifest as `base-watch.yml`, filtered by `ci/base-diff.py`'s `BLAST_RADIUS`) is empty**, else `false` + reason (fail closed; non-empty diff names the first 5 packages, an uncomputable/implausible diff says "not computed"); the sanitized full diff goes in the PR body → branch `base-bump/<digest>` + PR (guard decision in body); if `true` and no `r13-candidate`/`r13-immutable-ci`/`release` run is in flight **at arm time only** (not enforced at merge time; a release started later is not blocked, owner runs `gh pr merge --disable-auto <n>`), `gh pr merge --auto --merge` (needs repo "Allow auto-merge"; re-armed on rerun); superseded PRs get auto-merge disabled before closing. Never builds. Renovate is disabled for this image so only this workflow bumps it | — |
+| `base-bump.yml` | Sat 05:30 UTC, dispatch | needs `BUMP_TOKEN` secret (else no-op: GITHUB_TOKEN PRs don't trigger CI) → `ci/base-bump.sh` resolves `bazzite-nvidia-open:stable` digest, rewrites the candidate `Containerfile` pin (automatic refresh resolves its base separately) → `ci/base-bump-guard.py` (reuses `ci/base-refresh.py` version/kernel parsing + `base-refresh-policy.json` floor; kernel from the image `ostree.linux` label of old and new digest) emits `automerge=true` only if Fedora major unchanged, kernel same-or-newer, policy floor met **and the blast-radius package diff (`ci/base-blast-diff.sh`: `podman pull` + `rpm -qa` of the old and new digest one at a time, same manifest as `base-watch.yml`, filtered by `ci/base-diff.py`'s `BLAST_RADIUS`) is empty**, else `false` + reason (fail closed; non-empty diff names the first 5 packages, an uncomputable/implausible diff says "not computed"); the sanitized full diff goes in the PR body → branch `base-bump/<digest>` + PR (guard decision in body); if `true`, `gh pr merge --auto --merge` (needs repo "Allow auto-merge"; re-armed on rerun); superseded PRs get auto-merge disabled before closing. Never builds. Renovate is disabled for this image so only this workflow bumps it | — |
 | `lint.yml` | PR to main (paths: `Containerfile*`, `**.sh`, `Justfile`, itself), dispatch | **advisory** (continue-on-error): `just lint` (shellcheck) + `just lint-containerfile` (hadolint pinned by digest in the Justfile); read-only, 10 min cap |
 | `ci/repin-snitchwatch.py` (tool, not a workflow) | manual: `pins --source DIR --commit SHA`, then `policy --commit TOWER_SHA`; dry-run unless `--write` | computes pins JSON commit/tree/submodule/file hashes (incl. every tracked file of the two built scanner crates)/finish-args, `EXPECTED_PINS_SHA256`, fixtures, policy `nativeSource`; policy source fields with UTC `sourceCreated`; refuses (exit 2) on pins≠nativeSource or non-ancestor; tested by `tests/test-repin-snitchwatch.py` | — |
 | `build-disk.yml` | dispatch (platform amd64/arm64), PR (disk.toml path) | resolve `:latest` once to an immutable digest → verify it with `cosign.pub` → `sudo podman pull` that digest and run the digest-pinned bootc-image-builder container directly (no third-party action; `tests/test-build-disk-workflow.py` asserts this and runs in `build.yml`'s source-safety step; resets rootful storage + forces overlay first per BIB#446) → qcow2 disk image (rootfs=btrfs) → artifact or S3. anaconda-iso disabled: upstream BIB#1188 + bazzite#3418 | — |
@@ -46,7 +44,7 @@ auto-closes — each leg's labelled tracking issue, independently of whether
 `base-refresh.yml` permits missing-stable initialization only through the
 reviewed, API-verified run2/attempt1 recovery described below; other missing
 baselines hold for independently reviewed recovery. It reads `.github/base-refresh-policy.json`: both product
-profiles pin reviewed source `fe35a4f39574f1610c5f5d5842cf9029945a3e6c`.
+profiles pin reviewed source `dba334c2352f33d106faaa2499c2788b5890da29`.
 Legacy retains `IMAGE_TAG=latest`; system retains
 `IMAGE_TAG=snitchwatch-system`. Source SHA/tree/cleanliness and profile contracts
 are checked before the build; independent validation checks image/RPM/SPDX
@@ -55,8 +53,8 @@ identity and actual Bazzite/kernel floors (`45.20261105` /
 optional `.N` revision (N 1-9999, since 2026-11-17: `45.20261117.1`); anything
 else fails closed. The publisher fetches trusted code from the GitHub API at
 the dispatched main SHA, with no source checkout. Policy staleness blocks tag
-movement. Features still need owner runtime acceptance, protected fixed-digest
-promotion and a subsequent reviewed policy update.
+movement. New features need a merged pin PR and a reviewed policy update; owner
+laptop testing is not required first (owner decision 2026-11-27).
 
 The r16.1 transition changes only the global source identity and exact system
 release-baseline digest, retaining the profile schema and all native pins. The
@@ -65,10 +63,10 @@ only direct system baseline is
 and only after successful repository-key signature verification. Old/arbitrary
 digests require destination-bound signed refresh provenance and monotonic version
 checks; missing system tags fail closed. Regression tests cover these boundaries
-and source tree/timestamp substitution. Merge only after protected promotion
-succeeds, independent destination signature/SPDX checks pass, and exact-head CI
-and independent policy review pass. Host runtime acceptance remains unverified;
-the owner authorized the CI-based release path.
+and source tree/timestamp substitution. Historically, that transition merged only
+after protected promotion, independent destination signature/SPDX checks,
+exact-head CI and independent policy review. Host runtime acceptance was not
+established; the owner authorized the CI-based release path.
 
 All four refresh artifact consumers (legacy/system validators and publishers)
 use SHA-pinned download-artifact v8.0.2, strict digest mismatch errors and explicit
@@ -86,29 +84,20 @@ failed run `40062419690` at `d8407c60f74ceafbcbc2e333198c9fd23ce4e260`;
 GitHub API metadata and complete attempt-1 jobs must prove both publishers were
 skipped. Run3+, reruns, API failure and identity mismatches HOLD.
 
-The r16.1 promoter binds candidate run `40118265705` to image digest
-`sha256:3f9a0d238e69917a33a23710a53963e70b64526cc8e44f9d24787944dcca1f27` and
-provenance source `1c01f086f58bd33a5d7651254671e57723d45561`. Merging only arms
-this digest; owner runtime acceptance remains unverified. This fixed-digest feature-acceptance path retains the owner `release` environment
-and all signature, attestation and policy gates; automatic base refresh uses its
-separate policy-pinned path above. Before the r16.1 policy transition merges,
-system refresh holds after promotion because the prior policy cannot accept that
-digest. The transition advances source and exact baseline together, after the
-promotion and independent destination checks pass; fixed-digest promotion does
-not fabricate signed base-refresh provenance. Both profile contracts stay exact.
+Historical (r16.1): the promoter bound candidate run `40118265705` to image
+digest `sha256:3f9a0d238e69917a33a23710a53963e70b64526cc8e44f9d24787944dcca1f27`
+with provenance source `1c01f086f58bd33a5d7651254671e57723d45561`. The promoter,
+its owner `release` environment and fixed-digest promotion are retired. Automatic
+base refresh uses the policy-pinned path above; fixed-digest promotion never
+fabricated signed base-refresh provenance.
 
-All stable OCI workflows share `bazzite-tower-stable-writers` with cancellation disabled. The promoter's runtime evidence and review are recorded in the PR and release notes, not workflow variables; its steps are in [r13-publication.md](../r13-publication.md), which also covers the candidate trust bootstrap and artifact identities. `ci/r13-publication.py` is the read-only gate and `ci/r13-candidate-data.py` captures installed/OCI/RPM identity only in the credential-free builder. The primary-reviewed control store starts with null authority. Final tower heads first receive independent review and actual-head green PR CI on a separate review branch; only then may the primary record variables and fast-forward the existing fixed candidate branch to that exact tested head. Same-head pushes and detached dispatch do not supply fresh verify/artifact CI; no force/delete/main-registration shortcut. The full sequence is in the publication document.
+All stable OCI workflows share `bazzite-tower-stable-writers` with cancellation disabled. The r13 candidate/promoter pipeline (`r13-candidate.yml`, `release.yml`, `ci/r13-candidate-data.py`, `docs/r13-publication.md`) was retired on 2026-11-27; `ci/r13-publication.py` remains as the read-only gate library imported by `ci/base-refresh.py`.
 
-The candidate collector creates its extraction container with an explicit
-`/usr/bin/true` command, supporting bootc images without CMD/ENTRYPOINT. It
-never starts that container and removes it in `finally`; the separate RPM
-inventory run and digest-preserving OCI export are unchanged. Full collector
-regressions execute the real artifact validation and SPDX generation with
-offline Podman/Skopeo fixtures, including removal after collection failures.
+
 
 ## Test scripts (`tests/`)
 
-- `test-r13-publication.py` — hash/ref/target/source/profile/receipt and OCI tamper refusals, privilege boundaries, automatic system hold, and promoter invariants (dispatch-only, main+repo guard, fixed digest, `release` environment, no checkout, no staging-tag delete, SHA-pinned actions, preserve-digests, tag moves last and only `:snitchwatch-system`; trust-fetch/SPDX steps run against fake `gh`/`cosign`); actual PR-head proof rejects synthetic-merge/missing identities and boot PR tokens cannot write issues. Offline fixtures only.
+- `test-r13-publication.py` — digest, bounded-read, duplicate-JSON, output-injection and OCI tamper refusals, absence of the retired pipeline entrypoints, and the `build.yml` privilege boundaries; actual PR-head proof rejects synthetic-merge/missing identities and boot PR tokens cannot write issues. Offline fixtures only.
 
 - `test-snitchwatch-image-stages.py` — H1 stage split: Containerfile stage names/FROM chain, no bridge build in the ancestry of scanner/daemon/assembly, the sibling `snitchwatch-bridge-rebuild` (same build lines and paths as the bridge stage, ancestor of nothing, tarball-only handoff) and assembly's byte comparison of the two tarballs before use (`handoff.py compare-bridge`, behavioural: identical/one byte/extra or missing member/links/special files), `stage.py` deriving `reproducible`, `--network=none` only and always on the scanner/bridge/bridge-rebuild/assembly RUNs (exact offline/online stage sets), the bridge stage's offline probe first, allowlisted fresh `CARGO_HOME`, exported `CARGO_NET_OFFLINE` and offline fetch preflight, exact `COPY --from` handoffs, assembly tooling only from `ctx`/the re-hashed prep checkout, no CI layer/remote cache; behavioural handoff allowlist/merge/network-probe and unprivileged bridge-execution tests. Both Validate source safety contracts blocks run it.
 
@@ -122,7 +111,8 @@ offline Podman/Skopeo fixtures, including removal after collection failures.
 - `test-rpm-inventory-spdx.sh` — fixture contract for `ci/rpm-inventory-spdx.py`, the standard-library SPDX 2.3 generator (installed-RPM TSV in, deterministic predicate out): deterministic ordering and valid EVRA/SPDX structure, while malformed, empty, and duplicate RPM inventories fail closed.
 - `test-opensnitch-readiness.sh` — behavioral legacy readiness/dispatch tests. `test-snitchwatch-system.sh` covers read-only system preflight and transactional migration, refusal and rollback with fixtures; `test-snitchwatch-image-build.py` covers selector/refusal and immutable artifact/overlay provenance. `test-snitchwatch-image-build-daemon.py` checks the separate patched-daemon source/patch/build inventory and actual installed-binary identity. Both verify/release jobs run these checks. `test-snitchwatch-daemon-patch.sh` (own workflow, above) is the only place the patch's Go and C harness tests run. None of these checks exercise a GUI or prove NFQUEUE/SELinux behavior.
 - `test-docker-libvirt-forwarding.sh` — hard mocked contract: exact `virbr0` `192.168.122.0/24` / `wlp9s0f0` stateful tagged rule pair, multi-NAT discovery, idempotence, discovery failures, and safe stale-rule pruning that leaves unowned rules untouched. `test-docker-libvirt-forwarding-hooks.sh` verifies the trigger contracts (libvirt path unit + service, no libvirt hook, NetworkManager dispatcher, Docker drop-in). `test-docker-libvirt-forwarding-integration.sh` is a separate privileged, opt-in host probe because nested Docker firewall support is runner-dependent.
-- `test-docker-ce-gpg-pin.sh` — Docker CE key pin: static checks (comments stripped) plus functional cases with throwaway keys and no network (match passes; wrong, short and off-by-one pins, a two-key file, empty/garbage/missing files fail; `$HOME/.gnupg` untouched). Listed in `build.yml` (both lists), `base-refresh.yml`, `r13-immutable-ci.yml`
+- `test-docker-ce-gpg-pin.sh` — Docker CE key pin: static checks (comments stripped) plus functional cases with throwaway keys and no network (match passes; wrong, short and off-by-one pins, a two-key file, empty/garbage/missing files fail; `$HOME/.gnupg` untouched). Listed in `build.yml` (both lists), `base-refresh.yml`
+- `test-snitchwatch-deny.py` (deny opt-in helper, fake root, no systemd), `test-repin-snitchwatch.py` (`ci/repin-snitchwatch.py` against throwaway git repos), `test-endpoint-events-packages.py` (`build.d/64-endpoint-events-packages.sh` with PATH shims), `test-agent-token-report.py` (synthetic logs) and `test-titanoboa-pin.sh` (Justfile `titanoboa_rev` is a pinned SHA) — hermetic, no network/root. Listed in `build.yml` (both lists) only; not in `just test-ci` (ci/base tests only). The `verify` and `release` jobs install the same pinned `just` as `lint.yml`, which `test-agent-token-report.py` needs
 
 ## Snitchwatch VM evidence scope
 
@@ -139,11 +129,12 @@ native loader, named-account, socket/token and resolved-unit checks. The
 separate patched-daemon verifier checks the installed executable even when
 rootless boot containers cannot start NFQUEUE; an active daemon additionally
 requires the reviewed process hash, arguments and root UID. Fresh
-enforcing-SELinux image VM evidence remains a separate gate. Default release
-variants retain legacy TCP `127.0.0.1:50051`/`allow`; the opt-in
-r13 candidate flow selects new system bridge/daemon features for protected
-acceptance. Automatic base refresh uses the separately pinned accepted system
-product; it does not accept candidate features.
+enforcing-SELinux image VM evidence is a separate manual check
+that no workflow enforces. Default release
+variants retain legacy TCP `127.0.0.1:50051`/`allow`; new system bridge/daemon features reach publication only through a
+reviewed policy repin (the r13 candidate flow is retired). Automatic base
+refresh uses the separately pinned accepted system product; it does not accept
+features on its own.
 
 ## Diff filter (`ci/base-diff.py`)
 
@@ -161,17 +152,12 @@ SSH gate. Neither recipe publishes an image or installs a GUI.
 `just run-vm-qcow2`, `just spawn-vm`, `just build-iso-live` (payload + titanoboa
 ISO), `just check`/`lint`/`format`.
 
-The candidate collector exports the current user's containers-storage image
-through `podman unshare skopeo copy --all --preserve-digests`. This uses the
-existing Podman user namespace and image store, without sudo or runner security
-changes. The full collector regression models direct Skopeo unshare refusal and
-checks namespace-export failure cleanup. Actual runner success requires fresh CI.
-See [Podman unshare](https://docs.podman.io/en/latest/markdown/podman-unshare.1.html).
+
 
 ## OpenSnitch resource and eBPF packaging fixtures
 
 The source-contract gates in `build.yml` (legacy and system candidate) and
-`r13-candidate.yml` run `python3 tests/test-snitchwatch-resources.py` alongside
+`base-refresh.yml` run `python3 tests/test-snitchwatch-resources.py` alongside
 the daemon/image fixtures. It checks interval CPU accounting using monotonic
 elapsed time, RSS/thread series, identity changes, missing/permission/timeouts,
 and rejects absent/nonregular/wrong-format BPF object fixtures. It also executes
@@ -181,25 +167,4 @@ without privileged host actions. The installed
 reporting-only sampler is `bazzite-tower-snitchwatch-resources`; owner A/B tests
 are documented in RUNBOOK and remain separate from CI. The built-image smoke
 gate requires all three ELF BPF objects while retaining the allow/proc baseline;
-no CI fixture establishes live kernel probe compatibility. Historical
-`r13-immutable-ci.yml` stays unchanged to preserve its original publication proof.
-
-## Candidate artifact consumption recovery
-
-The two candidate consumers in `r13-candidate.yml` pin the official Node24
-`download-artifact` v8.0.2 action (`9000827ccba6bdab643e8b6fd33ac0654aef8333`),
-require archive digest mismatch to error and decompression to run, then require
-its completion-only `download-path` output to equal the expected data directory.
-The trusted candidate/publisher gates retain the exact nine-file inventory,
-source/head/run identity, per-file hashes, installed manifests and trust policy.
-Failures print bounded free-space and top-level name/type/size diagnostics only;
-no file contents, recursion or symlink following. Inventory rejection includes
-bounded escaped missing/extra names without accepting incomplete or extra data.
-
-Candidate40110051327 built and uploaded a ZIP64 archive with the exact nine root
-entries, but the consuming gate rejected its downloaded inventory. The old action
-emitted no completion message/output in the completed log; a forced runtime
-compatibility warning was observed. The precise downloader failure is unproven;
-this recovery replaces its legacy runtime/client and explicitly checks completion.
-It requires a fresh reviewed head/control and a new attempt-one run, never a rerun
-or relaxation of the failed candidate's contract.
+no CI fixture establishes live kernel probe compatibility.

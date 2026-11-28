@@ -61,6 +61,4 @@ steam-deck polish intentionally omitted.
 
 ## Local mirror
 
-`just build-iso-live` builds the payload + ISO locally. (`just build-iso` is a
-different, bootc-image-builder anaconda path using `disk_config/iso-kde.toml` —
-the CI ISO uses titanoboa, not that.)
+`just build-iso-live` builds the payload + ISO locally.

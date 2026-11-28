@@ -825,8 +825,8 @@ class WorkflowCacheSettings(unittest.TestCase):
                 self.assertIsNone(re.search(r'--layers|--cache-from|--cache-to', block), workflow.name)
             for command in re.findall(r'podman build[^\n]*(?:\\\n[^\n]*)*', text):
                 self.assertIsNone(re.search(r'--cache-from|--cache-to|--layers=true', command), workflow.name)
-        # build.yml (verify + release), base-refresh.yml and r13-candidate.yml.
-        self.assertGreaterEqual(checked, 4)
+        # build.yml (verify + release) and base-refresh.yml.
+        self.assertGreaterEqual(checked, 3)
 
     def test_new_stage_tests_run_in_both_source_safety_blocks(self):
         build = (ROOT / '.github/workflows/build.yml').read_text()

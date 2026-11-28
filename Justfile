@@ -146,39 +146,6 @@ smoke $target_image=image_name $tag=default_tag:
     set -euo pipefail
     podman run --rm -i "${target_image}:${tag}" bash -s < tests/smoke.sh
 
-# Build the Cloison M1 scaffold variant, local only (no publish). parent_image
-# must be a digest reference of the daily image, e.g. ghcr.io/bearyjd/bazzite-tower@sha256:<64 hex>.
-[group('Build')]
-build-cloison $parent_image $parent_source_commit="unknown" $parent_profile="unknown" $target_image=("localhost/" + image_name + "-cloison") $tag="m1-scaffold":
-    #!/usr/bin/env bash
-    set -euo pipefail
-    if ! [[ "${parent_image}" =~ ^[^[:space:]@]+@sha256:[0-9a-f]{64}$ ]]; then
-        echo "build-cloison: parent_image must be a digest reference <repo>@sha256:<64 hex>, got '${parent_image}'" >&2
-        exit 1
-    fi
-    podman build \
-        --build-arg "PARENT_IMAGE=${parent_image}" \
-        --build-arg "PARENT_SOURCE_COMMIT=${parent_source_commit}" \
-        --build-arg "PARENT_PROFILE=${parent_profile}" \
-        --tag "${target_image}:${tag}" \
-        -f Containerfile.cloison \
-        .
-    # Host-side check: the recorded parent label must equal the digest we were given.
-    label="$(podman inspect --format '{{ "{{" }} index .Config.Labels "io.github.bearyjd.cloison.parent" {{ "}}" }}' "${target_image}:${tag}")"
-    # A podman wrapper that goes through a pty (toolbox host-spawn) appends a CR; strip only that.
-    label="${label%$'\r'}"
-    if [[ "${label}" != "${parent_image}" ]]; then
-        echo "build-cloison: label io.github.bearyjd.cloison.parent is '${label}', expected '${parent_image}'" >&2
-        exit 1
-    fi
-
-# Smoke-test a built Cloison image offline (M1-specific assertions, tests/smoke-cloison.sh)
-[group('Build')]
-smoke-cloison $target_image=("localhost/" + image_name + "-cloison") $tag="m1-scaffold":
-    #!/usr/bin/env bash
-    set -euo pipefail
-    podman run --rm -i "${target_image}:${tag}" bash -s < tests/smoke-cloison.sh
-
 # Command: _rootful_load_image
 # Description: This script checks if the current user is root or running under sudo. If not, it attempts to resolve the image tag using podman inspect.
 #              If the image is found, it loads it into rootful podman. If the image is not found, it pulls it from the repository.
@@ -271,7 +238,7 @@ _rootful_load_image $target_image=image_name $tag=default_tag:
 # Parameters:
 #   target_image: The name of the image to build (ex. localhost/fedora)
 #   tag: The tag of the image to build (ex. latest)
-#   type: The type of image to build (ex. qcow2, raw, iso)
+#   type: The type of image to build (ex. qcow2)
 #   config: The configuration file to use for the build (default: disk_config/disk.toml)
 
 # Example: just _rebuild-bib localhost/fedora latest qcow2 disk_config/disk.toml
@@ -318,7 +285,7 @@ _build-bib $target_image $tag $type $config: (_rootful_load_image target_image t
 # Parameters:
 #   target_image: The name of the image to build (ex. localhost/fedora)
 #   tag: The tag of the image to build (ex. latest)
-#   type: The type of image to build (ex. qcow2, raw, iso)
+#   type: The type of image to build (ex. qcow2)
 #   config: The configuration file to use for the build (deafult: disk_config/disk.toml)
 
 # Example: just _rebuild-bib localhost/fedora latest qcow2 disk_config/disk.toml
@@ -327,16 +294,6 @@ _rebuild-bib $target_image $tag $type $config: (build target_image tag) && (_bui
 # Build a QCOW2 virtual machine image
 [group('Build Virtal Machine Image')]
 build-qcow2 $target_image=("localhost/" + image_name) $tag=default_tag: && (_build-bib target_image tag "qcow2" "disk_config/disk.toml")
-
-# Build a RAW virtual machine image
-[group('Build Virtal Machine Image')]
-build-raw $target_image=("localhost/" + image_name) $tag=default_tag: && (_build-bib target_image tag "raw" "disk_config/disk.toml")
-
-# Build an anaconda installer ISO via bootc-image-builder.
-# BROKEN: upstream blockers (bootc-image-builder#1188 + bazzite#3418). Prefer
-# `build-iso-live` (titanoboa) below. Kept for if/when upstream is fixed.
-[group('Build Virtal Machine Image')]
-build-iso $target_image=("localhost/" + image_name) $tag=default_tag: && (_build-bib target_image tag "iso" "disk_config/iso-kde.toml")
 
 # Build a bootable live installer ISO with titanoboa (the working ISO path).
 # Builds the installer/ payload image FROM the base, then feeds it to titanoboa.
@@ -383,14 +340,6 @@ build-iso-live $base_image=("ghcr.io/bearyjd/" + image_name) $tag=default_tag:
 [group('Build Virtal Machine Image')]
 rebuild-qcow2 $target_image=("localhost/" + image_name) $tag=default_tag: && (_rebuild-bib target_image tag "qcow2" "disk_config/disk.toml")
 
-# Rebuild a RAW virtual machine image
-[group('Build Virtal Machine Image')]
-rebuild-raw $target_image=("localhost/" + image_name) $tag=default_tag: && (_rebuild-bib target_image tag "raw" "disk_config/disk.toml")
-
-# Rebuild an ISO virtual machine image
-[group('Build Virtal Machine Image')]
-rebuild-iso $target_image=("localhost/" + image_name) $tag=default_tag: && (_rebuild-bib target_image tag "iso" "disk_config/iso-kde.toml")
-
 # Run a virtual machine with the specified image type and configuration
 _run-vm $target_image $tag $type $config:
     #!/usr/bin/bash
@@ -398,9 +347,6 @@ _run-vm $target_image $tag $type $config:
 
     # Determine the image file based on the type
     image_file="output/${type}/disk.${type}"
-    if [[ $type == iso ]]; then
-        image_file="output/bootiso/install.iso"
-    fi
 
     # Build the image if it does not exist
     if [[ ! -f "${image_file}" ]]; then
@@ -436,14 +382,6 @@ _run-vm $target_image $tag $type $config:
 # Run a virtual machine from a QCOW2 image
 [group('Run Virtal Machine')]
 run-vm-qcow2 $target_image=("localhost/" + image_name) $tag=default_tag: && (_run-vm target_image tag "qcow2" "disk_config/disk.toml")
-
-# Run a virtual machine from a RAW image
-[group('Run Virtal Machine')]
-run-vm-raw $target_image=("localhost/" + image_name) $tag=default_tag: && (_run-vm target_image tag "raw" "disk_config/disk.toml")
-
-# Run a virtual machine from an ISO
-[group('Run Virtal Machine')]
-run-vm-iso $target_image=("localhost/" + image_name) $tag=default_tag: && (_run-vm target_image tag "iso" "disk_config/iso-kde.toml")
 
 # Run a virtual machine using systemd-vmspawn
 [group('Run Virtal Machine')]

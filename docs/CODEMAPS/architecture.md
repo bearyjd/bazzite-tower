@@ -48,7 +48,7 @@ build_files/build.d/ ─RUN────┘        │
 
 - `Containerfile` — build entry: FROM base → COPY system_files → RUN build.sh → lint
 - `build_files/build.sh` — thin runner; executes `build_files/build.d/*.sh` in filename order
-- `build_files/build.d/` — all image customization, one concern per script (13 scripts)
+- `build_files/build.d/` — all image customization, one concern per script (20 scripts)
 - `system_files/` — static content baked verbatim into the image (units, recipes, kargs, helpers)
 - `installer/` — separate payload builder for the live/installer ISO (titanoboa input)
 - `Justfile` — local build / VM / test recipes
@@ -87,4 +87,3 @@ enforcing-SELinux VM gates. See [system bridge research](../research/snitchwatch
 - [iso-build.md](iso-build.md) — the live/installer ISO (separate `installer/` payload)
 - [ci-cd.md](ci-cd.md) — workflows, promotion gate, tests
 - [dependencies.md](dependencies.md) — base image, repos, packages, actions
-- [cloison.md](cloison.md) — Cloison variant image: M1 scaffold only, local builds, plan rev 3 (recommendations pending owner approval)

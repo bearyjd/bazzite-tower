@@ -46,7 +46,7 @@ auto-closes — each leg's labelled tracking issue, independently of whether
 `base-refresh.yml` permits missing-stable initialization only through the
 reviewed, API-verified run2/attempt1 recovery described below; other missing
 baselines hold for independently reviewed recovery. It reads `.github/base-refresh-policy.json`: both product
-profiles pin reviewed source `fe35a4f39574f1610c5f5d5842cf9029945a3e6c`.
+profiles pin reviewed source `dba334c2352f33d106faaa2499c2788b5890da29`.
 Legacy retains `IMAGE_TAG=latest`; system retains
 `IMAGE_TAG=snitchwatch-system`. Source SHA/tree/cleanliness and profile contracts
 are checked before the build; independent validation checks image/RPM/SPDX

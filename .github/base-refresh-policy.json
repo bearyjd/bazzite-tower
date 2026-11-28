@@ -7,9 +7,9 @@
   "upstreamTag": "stable",
   "minimumBaseVersion": "45.20261105",
   "minimumKernel": "7.2.15-ogc1.1.fc45",
-  "sourceCommit": "fe35a4f39574f1610c5f5d5842cf9029945a3e6c",
-  "sourceTree": "861e2b90113402323113fef8419a0ad8219ed058",
-  "sourceCreated": "2026-11-25T23:28:57Z",
+  "sourceCommit": "dba334c2352f33d106faaa2499c2788b5890da29",
+  "sourceTree": "e5196edd1639687ff9609cba857e8a22a1a4366b",
+  "sourceCreated": "2026-11-28T01:32:05Z",
   "profiles": {
     "legacy": {
       "imageTag": "latest",

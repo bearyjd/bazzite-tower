@@ -684,7 +684,7 @@ backend = ["vfio", "host-netns"]                    # tried in order
 
 ## 7. Hardware discovery (M0) and hardware acceptance (M9/M13)
 
-**Script:** `scripts/cloison-hw-report.sh` (merged with PR #200; read-only, no root needed, `sudo` adds the kernel log). The variant will also ship it as `/usr/libexec/bazzite-tower-iommu-report` with `ujust iommu-report`. Rev 0 embedded the script here; the repo copy is now the source of truth.
+**Script:** `scripts/cloison-hw-report.sh` (now in the private `bearyjd/cloison` repo; originally merged here with PR #200; read-only, no root needed, `sudo` adds the kernel log). The variant will also ship it as `/usr/libexec/bazzite-tower-iommu-report` with `ujust iommu-report`. Rev 0 embedded the script here; the repo copy is now the source of truth.
 
 **M0 is topology, not acceptance.** `docs/research/iommu-groups-p1g7-2026-11-16.md` is a **preliminary, non-root** snapshot. It covers groups, endpoints and `reset_method` strings. It cannot answer any step that needs the kernel log or a device test, so it decides neither D3 nor D4. Hardware acceptance happens per device inside M9 (H-net) and M13 (H-usb), and only after the owner approves touching device bindings.
 

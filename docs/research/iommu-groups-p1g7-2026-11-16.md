@@ -1,7 +1,7 @@
 # IOMMU groups, ThinkPad P1 Gen 7: M0 report (2026-11-16, non-root run + sudo run)
 
 Input to the Cloison plan (`docs/prp/cloison-kvm-compartments.md` section 7). Produced with
-`scripts/cloison-hw-report.sh`, run **without root** on kernel `7.2.15-ogc1.1.fc45`, so the kernel-log section
+`scripts/cloison-hw-report.sh` (now in the private `bearyjd/cloison` repo), run **without root** on kernel `7.2.15-ogc1.1.fc45`, so the kernel-log section
 (DMAR, interrupt remapping, iwlwifi faults) is EMPTY. This is a topology snapshot, not an acceptance result.
 No device was bound, unbound or reset. Raw output is not committed (the cmdline carries LUKS UUIDs).
 
@@ -27,7 +27,7 @@ No device was bound, unbound or reset. Raw output is not committed (the cmdline 
   needs a deliberate call (plan step 3). Neither xHCI exposes `reset_method`; under plan rev 1 (§7.2 step 4a, no boot-once mode) that rejects passthrough unless new evidence appears.
 
 ## Update: sudo run (owner, 2026-11-16 21:50 local), same topology, kernel log now present
-Source: `sudo bash scripts/cloison-hw-report.sh` on kernel `7.2.15-ogc1.1.fc45` (booted 2026-11-13). Raw output not committed (cmdline carries LUKS UUIDs).
+Source: `sudo bash scripts/cloison-hw-report.sh` (in the private `bearyjd/cloison` repo) on kernel `7.2.15-ogc1.1.fc45` (booted 2026-11-13). Raw output not committed (cmdline carries LUKS UUIDs).
 - **Decision-tree step 1 passes:** IOMMU enabled (`dmar0`, `dmar1`, queued invalidation), `DMAR-IR: Enabled IRQ remapping in x2apic mode`, no RMRR/ATSR table, no `pcie_acs_override`, no DMAR or iwlwifi fault lines in the boot-time log (21 matching lines, not truncated). `pci 0000:00:02.0: DMAR: Skip IOMMU disabling for graphics` is expected for i915.
 - Thunderbolt domain0 `iommu_dma_protection=1` (firmware-reported kernel DMA protection), `security=user`.
 - **xHCI 0000:00:14.0 (group 12)** serves the external USB-A style ports (usb3 ports 1, 3, 4, 6 and usb4 ports 1, 2 report `hotplug`; a film scanner on port 3) AND devices marked fixed: `8087:0036` (an Intel wireless-class device, almost certainly the internal Bluetooth: UNVERIFIED inference), `27c6:6594` Goodix fingerprint, `30c9:00cd` integrated camera. Passing it through to a `sys-usb` VM would remove host Bluetooth, fingerprint and camera, and it shares group 12 with Shared SRAM.

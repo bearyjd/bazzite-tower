@@ -25,8 +25,6 @@ pieces fit together read [docs/CODEMAPS/](./CODEMAPS/architecture.md).
 | `just build-snitchwatch-system-vm` | Same candidate plus the disposable SSH gate (`VM_GATE_SSH`); never the ordinary candidate |
 | `just build-portmaster-spike` | Build the disabled Portmaster VM-spike image; never a default/host image |
 | `just smoke` | Offline-assert the built image — **the exact CI gate** (`tests/smoke.sh`) |
-| `just build-cloison <parent_image@sha256:…>` | Build the Cloison M1 scaffold variant locally (`Containerfile.cloison`); refuses a non-digest parent and verifies the parent label; no CI, no publish |
-| `just smoke-cloison` | Offline-assert the built Cloison image (`tests/smoke-cloison.sh`, M1-specific) — not a CI gate |
 | `just build-qcow2` | Turn the image into a bootable qcow2 via bootc-image-builder |
 | `just rebuild-qcow2` | `just build` first, then the qcow2 |
 | `just run-vm-qcow2` | Boot the qcow2 in qemu; browser console at `localhost:8006` |

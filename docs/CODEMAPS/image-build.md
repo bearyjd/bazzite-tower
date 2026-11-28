@@ -374,7 +374,7 @@ pin did not by itself establish independent review or runtime acceptance.
 
 The system profile remains PR-tested; `build.yml` does not automatically publish it. Accepted-product base refresh uses the separate policy-pinned path described above. The r13 candidate/promoter pipeline (`r13-candidate.yml`, `release.yml`, `ci/r13-candidate-data.py`) was retired on 2026-11-27; `ci/r13-publication.py` remains as the trusted-gate library for `ci/base-refresh.py`. Base-image/toolchain pins and smoke/boot assertions are preserved.
 
-`tests/test-r13-publication.py` executes the `ci/r13-publication.py` gates; remote CI and runtime still require independent evidence.
+`tests/test-r13-publication.py` exercises the `ci/r13-publication.py` helpers; remote CI and runtime still require independent evidence.
 
 ## Diagnostic package defaults (r16.1 source preparation)
 

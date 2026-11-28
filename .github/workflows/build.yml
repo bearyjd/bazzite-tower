@@ -25,7 +25,7 @@ env:
   DEFAULT_TAG: "latest"
 
 concurrency:
-  # Every stable OCI writer, including r13 promotion, shares this lock.
+  # Every stable OCI writer shares this lock.
   group: ${{ github.event_name == 'pull_request' && format('verify-{0}', github.ref) || 'bazzite-tower-stable-writers' }}
   cancel-in-progress: false
 
@@ -83,8 +83,8 @@ jobs:
           - variant: latest-kernel
             build_args: "BASE_IMAGE=ghcr.io/ublue-os/bazzite-nvidia-open:stable"
             tag_base: verify-latest-kernel
-          # Opt-in system bridge: a local, credential-free PR candidate. The
-          # r13 candidate flow builds the accepted `:snitchwatch-system` target;
+          # Opt-in system bridge: a local, credential-free PR candidate.
+          # base-refresh.yml publishes the accepted `:snitchwatch-system` target;
           # IMAGE_TAG matches it so this leg also exercises the MOTD assertion.
           - variant: snitchwatch-system
             build_args: |
@@ -228,8 +228,8 @@ jobs:
               IMAGE_TAG=latest-kernel
             tag_base: latest-kernel
             tag_prefix: "latest-kernel-"
-          # r13 HOLD: the system variant has no automatic stable writer.
-          # Candidate builds and accepted-digest promotion have separate workflows.
+          # The system variant is not published here: base-refresh.yml publishes
+          # `:snitchwatch-system` from the policy-pinned source.
 
     steps:
       - name: Prepare environment

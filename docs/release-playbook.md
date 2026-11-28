@@ -102,7 +102,12 @@ Never force-push (including `--force-with-lease`); to update a branch, merge mai
    `sourceCreated`, and refuses a `nativeSource` or pins-hash mismatch. It does
    not check `daemonSource` or `daemonPatchSha256`: compare them with
    `snitchwatch-system-daemon-pins.json` at that commit, because
-   `ci/base-refresh.py` refuses a mismatch only at refresh time. Then run
+   `ci/base-refresh.py` refuses a mismatch only at refresh time. It also does
+   not compare the trust files (`cosign.pub`, the containers `policy.json` and
+   `registries.d/bazzite-tower.yaml`) with that commit; check them, because the
+   refresh refuses a difference. Replace the old source commit in each file the
+   tool lists for hand review, including the hardcoded value in
+   `tests/test-base-refresh.py`, which fails until it is updated. Then run
    `python3 tests/test-base-refresh.py`.
 6. Watch CI in the background (`gh run watch … --exit-status` or an until-loop on
    `gh run view --json status`); read only `--log-failed | grep` excerpts.

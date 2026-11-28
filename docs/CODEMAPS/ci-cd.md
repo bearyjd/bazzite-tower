@@ -53,8 +53,8 @@ identity and actual Bazzite/kernel floors (`45.20261105` /
 optional `.N` revision (N 1-9999, since 2026-11-17: `45.20261117.1`); anything
 else fails closed. The publisher fetches trusted code from the GitHub API at
 the dispatched main SHA, with no source checkout. Policy staleness blocks tag
-movement. Features still need owner runtime acceptance, protected fixed-digest
-promotion and a subsequent reviewed policy update.
+movement. New features need a merged pin PR and a reviewed policy update; owner
+laptop testing is not required first (owner decision 2026-11-27).
 
 The r16.1 transition changes only the global source identity and exact system
 release-baseline digest, retaining the profile schema and all native pins. The
@@ -63,10 +63,10 @@ only direct system baseline is
 and only after successful repository-key signature verification. Old/arbitrary
 digests require destination-bound signed refresh provenance and monotonic version
 checks; missing system tags fail closed. Regression tests cover these boundaries
-and source tree/timestamp substitution. Merge only after protected promotion
-succeeds, independent destination signature/SPDX checks pass, and exact-head CI
-and independent policy review pass. Host runtime acceptance remains unverified;
-the owner authorized the CI-based release path.
+and source tree/timestamp substitution. Historically, that transition merged only
+after protected promotion, independent destination signature/SPDX checks,
+exact-head CI and independent policy review. Host runtime acceptance was not
+established; the owner authorized the CI-based release path.
 
 All four refresh artifact consumers (legacy/system validators and publishers)
 use SHA-pinned download-artifact v8.0.2, strict digest mismatch errors and explicit
@@ -84,16 +84,12 @@ failed run `40062419690` at `d8407c60f74ceafbcbc2e333198c9fd23ce4e260`;
 GitHub API metadata and complete attempt-1 jobs must prove both publishers were
 skipped. Run3+, reruns, API failure and identity mismatches HOLD.
 
-The r16.1 promoter binds candidate run `40118265705` to image digest
-`sha256:3f9a0d238e69917a33a23710a53963e70b64526cc8e44f9d24787944dcca1f27` and
-provenance source `1c01f086f58bd33a5d7651254671e57723d45561`. Merging only arms
-this digest; owner runtime acceptance remains unverified. This fixed-digest feature-acceptance path retains the owner `release` environment
-and all signature, attestation and policy gates; automatic base refresh uses its
-separate policy-pinned path above. Before the r16.1 policy transition merges,
-system refresh holds after promotion because the prior policy cannot accept that
-digest. The transition advances source and exact baseline together, after the
-promotion and independent destination checks pass; fixed-digest promotion does
-not fabricate signed base-refresh provenance. Both profile contracts stay exact.
+Historical (r16.1): the promoter bound candidate run `40118265705` to image
+digest `sha256:3f9a0d238e69917a33a23710a53963e70b64526cc8e44f9d24787944dcca1f27`
+with provenance source `1c01f086f58bd33a5d7651254671e57723d45561`. The promoter,
+its owner `release` environment and fixed-digest promotion are retired. Automatic
+base refresh uses the policy-pinned path above; fixed-digest promotion never
+fabricated signed base-refresh provenance.
 
 All stable OCI workflows share `bazzite-tower-stable-writers` with cancellation disabled. The r13 candidate/promoter pipeline (`r13-candidate.yml`, `release.yml`, `ci/r13-candidate-data.py`, `docs/r13-publication.md`) was retired on 2026-11-27; `ci/r13-publication.py` remains as the read-only gate library imported by `ci/base-refresh.py`.
 

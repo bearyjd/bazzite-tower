@@ -24,9 +24,9 @@ The workflow resolves a fresh immutable Bazzite base, enforces the
 `45.20261105` / `7.2.15-ogc1.1.fc45` floor and rejects stale policy, then requires
 build/test/signing/SPDX/provenance/host-policy gates before publication.
 
-The r16.1 refresh-policy transition must merge only after protected promotion
-completes successfully, independent destination signature/SPDX checks pass, and
-the exact policy PR head has green CI and independent review. Its sole system
+Historically, the r16.1 refresh-policy transition merged only after protected
+promotion, independent destination signature/SPDX checks, green CI on the exact
+policy PR head and independent review. Its sole system
 release-baseline exception is `sha256:3f9a0d238e69917a33a23710a53963e70b64526cc8e44f9d24787944dcca1f27`,
 verified with the repository key before use. The prior r15.1 digest receives no
 exception. Normal destination-bound signed refresh provenance still enforces
@@ -59,22 +59,23 @@ validator; unrelated upstream policy rules remain intact.
 Feature acceptance is now only: merge the pin PR (below), then make the new
 product source the automatic-refresh source with an independently reviewed
 `.github/base-refresh-policy.json` repin. The retired candidate/promoter
-sequence is no longer available. A weekly base-bump PR updates the candidate
+sequence is no longer available. Laptop runtime testing is not required before
+the repin (owner decision 2026-11-27). A weekly base-bump PR updates the candidate
 `Containerfile` pin; merging it does not accept features.
 
 Automatic refresh updates registry tags sequentially. `stable` and `latest` are verified to resolve to the same digest on success, but the registry has no transaction spanning both tags. A partial transport failure reports attempted tags, confirmed tags and the expected digest in the run summary; an attempted write may have completed despite a lost response. Rerun the refresh workflow with the same reviewed policy to verify the signed baseline and repair the aliases.
 
 ## Roles
 
-- **Primary agent**: one orchestrator. Plans, sets repository variables, pushes
-  candidate refs, merges PRs that pass the merge rule, dispatches workflows.
+- **Primary agent**: one orchestrator. Plans, pushes branches, merges PRs that
+  pass the merge rule and dispatches workflows, each as the owner authorizes.
 - **Executor sub-agents**: write each change in its own worktree and open a PR.
 - **Independent reviewers**: separate read-only sub-agents (opus for release and
   security review) that
-  never authored the change. Every PR, every candidate identity and every control
-  commit gets one. First line of output is `VERDICT: PASS` or `VERDICT: FAIL`.
-- **Owner**: runtime acceptance on the laptop (sudo + reboot) and the approval click
-  on the `release` environment. Agents never do either.
+  never authored the change. Every PR gets one. First line of output is `VERDICT: PASS` or `VERDICT: FAIL`.
+- **Owner**: anything on the laptop that needs sudo or a reboot. Agents never do
+  it. Laptop runtime testing is not required before a policy repin (owner
+  decision 2026-11-27).
 
 Merge rule: merge only when CI is green on the exact PR head AND an independent
 review reports no CRITICAL/HIGH. Use `gh pr merge --merge --match-head-commit <sha>`.
@@ -96,12 +97,12 @@ Never force-push (including `--force-with-lease`); to update a branch, merge mai
 4. Recompute every pinned value from git bytes, never by hand:
    `git rev-parse <sha>^{tree}`, `sha256` of `git show <sha>:<path>`, and the
    Snitchwatch submodule gitlink with `git ls-tree`.
-5. Run the real gate code locally with a simulated Actions environment before any
-   remote effect, and confirm a wrong head is refused (a merge commit with the same
-   tree must fail on commit identity).
+5. For a policy repin, run `python3 tests/test-base-refresh.py` and check the new
+   source commit and tree against git.
 6. Watch CI in the background (`gh run watch … --exit-status` or an until-loop on
    `gh run view --json status`); read only `--log-failed | grep` excerpts.
-7. Runtime acceptance by the owner on the laptop (below). Nothing is promoted first.
+7. No laptop runtime acceptance is required before a policy repin (owner decision
+   2026-11-27). CI and independent review are the gates before publication.
 
 ## Order of operations (steps 3-9 retired)
 
@@ -149,7 +150,7 @@ ghcr.io/bearyjd/bazzite-tower:snitchwatch-system` (same digest, nothing to downl
 The original r15 system release used `DefaultAction deny`; r15.1 and subsequent
 products retain `DefaultAction allow` in both profiles with `ProcMonitorMethod ebpf` and the pinned `Ebpf.ModulesPath` (from the eBPF-enable release on; earlier products used `proc`). Deny
 enforcement requires explicit operator opt-in. The system profile uses a root-only
-`unix:opensnitchd.sock`. Extra owner acceptance steps:
+`unix:opensnitchd.sock`. Optional owner checks when deploying an image:
 
 - Before the reboot: `sudo ostree admin config-diff | grep opensnitchd` (copy the
   `/usr/etc` version over only after reviewing local changes), and retain a console
@@ -162,11 +163,10 @@ enforcement requires explicit operator opt-in. The system profile uses a root-on
   the reserved `000-snitchwatch-` prefix, so the bridge treats them as read-only;
   RUNBOOK has the restore command.
 
-Cut rule: a round is Snitchwatch `main` as merged when the previous round is promoted.
-At the cut, re-pin to that head (also `git grep 000-snitchwatch-tower <sha>` for a
-name collision), set the new `R<NN>_CANDIDATE_REVIEWED_SHA`, review, merge, then run
-the pipeline above. Packaging, daemon-config, unit or socket changes after the cut
-go to the next round.
+Cut rule: at a cut, re-pin to the Snitchwatch `main` head (also `git grep
+000-snitchwatch-tower <sha>` for a name collision), review, merge, then repin the
+policy. Packaging, daemon-config, unit or socket changes after the cut go to the
+next round.
 
 ## Lessons from r14 (historical)
 

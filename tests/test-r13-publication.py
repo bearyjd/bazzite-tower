@@ -110,8 +110,10 @@ class Publication(unittest.TestCase):
         result = subprocess.run(['python3', str(ROOT / 'ci/r13-publication.py'), 'promote', '--control', str(self.root)],
                                 capture_output=True, text=True)
         self.assertNotEqual(result.returncode, 0); self.assertIn('invalid choice', result.stderr)
-        for name in ('build.yml', 'base-refresh.yml'):
-            self.assertNotIn('R13_PROMOTION_HEAD', (ROOT / '.github/workflows' / name).read_text())
+        workflows = sorted((ROOT / '.github/workflows').glob('*.yml'))
+        self.assertTrue({'build.yml', 'base-refresh.yml'} <= {path.name for path in workflows})
+        for path in workflows:
+            self.assertNotIn('R13_PROMOTION_HEAD', path.read_text(), path.name)
 
     def test_output_names_and_values_refuse_injection(self):
         output = Path(self.tmp.name) / 'output'; output.write_text('')

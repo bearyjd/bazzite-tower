@@ -31,9 +31,9 @@ Full detail lives in `CLAUDE.md` (same rules, longer), `README.md`, `docs/RUNBOO
 ## Releases (snitchwatch-system image)
 Follow `docs/release-playbook.md` (proven on r14). Applies only when the owner has authorized release work. In short:
 - Every change: own worktree + PR; local offline gates; green CI on the exact PR head; independent read-only review (`VERDICT: PASS`, no CRITICAL/HIGH) by an agent that did not write it; then `gh pr merge --merge --match-head-commit <sha>`.
-- Recompute every pin/identity hash from git bytes and run the real gate (`ci/r13-publication.py approval`) locally before any remote effect; confirm a wrong head is refused.
-- Control data is generated with `canonical()` by script, reviewed independently, and only then are variables set — variables BEFORE pushing a trigger ref.
-- Agents never boot/reboot the host, never use sudo, never approve the `release` environment. The owner does runtime acceptance (cosign verify, `bootc switch` by digest, checks, rollback) and the approval click.
+- Recompute every pin/identity hash from git bytes before any remote effect.
+- A release is a merged pin PR followed by a reviewed `.github/base-refresh-policy.json` repin. Laptop runtime testing is not required before the repin (owner decision 2026-11-27).
+- Agents never boot/reboot the host and never use sudo.
 
 ## Token discipline (measured: cost = context size x turns)
 - One task per thread. Stop near ~300 turns or ~250k context; write a new `.omc/STATE.md` and start fresh.

@@ -1051,7 +1051,7 @@ the change and rebuild, or `sudo bootc rollback` and reboot.
 and passes it to `verify_gpg_key` (`build_files/lib/verify-gpg-key.sh`), which
 requires **exactly one** key whose full primary fingerprint equals `DOCKER_GPG_FPR`
 (set at the top of `30-docker-ce.sh`). Only that verified key is installed, to
-`/etc/pki/rpm-gpg/RPM-GPG-KEY-docker-ce`; every `docker-ce.repo` section uses
+`/etc/pki/rpm-gpg/RPM-GPG-KEY-docker-ce`; the single `[docker-ce-stable]` section of `docker-ce.repo` uses
 `gpgkey=file://` with `gpgcheck=1`. `tests/smoke.sh` asserts the key file exists and
 that no docker repo file points at a remote key.
 

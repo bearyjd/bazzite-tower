@@ -34,6 +34,11 @@ assert_no_code "no gpgkey=http remains" '^gpgkey=http'
 assert_no_code "no || true on verification" 'verify_gpg_key.*\|\|'
 assert_no_code "no gpgcheck=0" 'gpgcheck=0'
 n_sections=$(grep -c '^\[docker-ce-' "${code}")
+if [[ ${n_sections} -eq 1 ]] && grep -qx '\[docker-ce-stable\]' "${code}" && grep -qx 'enabled=0' "${code}"; then
+    ok "exactly one repo section, [docker-ce-stable], enabled=0"
+else
+    bad "expected only [docker-ce-stable] with enabled=0 (sections=${n_sections})"
+fi
 n_gpgkey=$(grep -c '^gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-docker-ce$' "${code}")
 n_check=$(grep -c '^gpgcheck=1$' "${code}")
 if [[ ${n_sections} -gt 0 && ${n_sections} -eq ${n_gpgkey} && ${n_sections} -eq ${n_check} ]]; then

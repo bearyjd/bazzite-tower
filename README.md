@@ -57,7 +57,7 @@ Docker CE is installed from the upstream `download.docker.com` repo (not Fedora'
 - `docker-ce`, `docker-ce-cli`, `containerd.io`
 - `docker-buildx-plugin`, `docker-compose-plugin`
 
-The Docker repo file ships with **every section disabled**. Packages are pulled in via `--enablerepo=docker-ce-stable` only during the image-build transaction, so the repo never participates in runtime updates.
+The Docker repo file carries only the `[docker-ce-stable]` section, **disabled**. Packages are pulled in via `--enablerepo=docker-ce-stable` only during the image-build transaction, so the repo never participates in runtime updates.
 
 Docker is installed but its daemon/socket and group membership are **off by
 default**. Opt in per host with `ujust enable-docker`; it loads `iptable_nat`

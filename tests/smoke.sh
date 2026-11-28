@@ -257,6 +257,13 @@ fi
 check "KDE Plasma dnf exclude present in dnf.conf" \
     grep -q '^exclude=.*kwin' /etc/dnf/dnf.conf
 
+echo "== Python Qt (PySide6 for the system python3) =="
+# build.d/22-python-qt.sh. An rpm -q alone would pass with a broken ABI match,
+# so import the bindings with the system interpreter as well.
+check "python3-pyside6 package" rpm -q python3-pyside6
+check "PySide6 QML/Quick import" /usr/bin/python3 -c 'import PySide6.QtQml, PySide6.QtQuick, PySide6.QtWidgets'
+check "Kirigami QML module present" test -d /usr/lib64/qt6/qml/org/kde/kirigami
+
 echo "== Audio (SOF bypass) =="
 # SOF/DSP is bypassed via snd_intel_dspcfg.dsp_driver=1 (legacy HDA): the kernel's
 # SOF ABI (3.23) can't load stock firmware's ABI-3.29 topology, and no ABI-≤3.23
